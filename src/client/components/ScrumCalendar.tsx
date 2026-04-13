@@ -54,6 +54,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
   const [selectedState, setSelectedState] = useState<string>('');
   const [selectedIteration, setSelectedIteration] = useState<string>('');
   const [isUnscheduledCollapsed, setIsUnscheduledCollapsed] = useState<boolean>(false);
+  const [isOverdueExpanded, setIsOverdueExpanded] = useState<boolean>(false);
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const eventsRef = useRef<CalendarEvent[]>([]);
 
@@ -192,6 +193,33 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
       return true;
     });
   }, [unscheduledItems, selectedAssignedTo, selectedWorkItemType, selectedState, selectedIteration]);
+
+  const overdueItems = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    return workItems.filter(item => {
+      const overdueStates = ['Committed', 'In Progress', 'In Pull Request'];
+      if (!overdueStates.includes(item.state)) return false;
+
+      let dateToCheck: string | undefined;
+      if (item.workItemType === 'Epic' || item.workItemType === 'Feature' || item.workItemType === 'Bug') {
+        dateToCheck = item.targetDate;
+      } else {
+        dateToCheck = item.dueDate;
+      }
+      if (!dateToCheck) return false;
+
+      const [year, month, day] = dateToCheck.split('-').map(Number);
+      const deadline = new Date(year, month - 1, day);
+      deadline.setHours(0, 0, 0, 0);
+      return deadline < now;
+    }).sort((a, b) => {
+      const dateA = a.targetDate || a.dueDate || '';
+      const dateB = b.targetDate || b.dueDate || '';
+      return dateA.localeCompare(dateB);
+    });
+  }, [workItems]);
 
   // Update the ref when events change
   useEffect(() => {
@@ -559,6 +587,68 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
 
   return (
     <div className="scrum-calendar-container">
+      {overdueItems.length > 0 && (
+        <div className="overdue-panel">
+          <button
+            className="overdue-toggle-btn"
+            onClick={() => setIsOverdueExpanded(!isOverdueExpanded)}
+          >
+            <span className="overdue-badge">{overdueItems.length}</span>
+            <span className="overdue-toggle-label">
+              Overdue Work Items
+            </span>
+            <span className="overdue-chevron">{isOverdueExpanded ? '▲' : '▼'}</span>
+          </button>
+          {isOverdueExpanded && (
+            <div className="overdue-items-list">
+              <div className="overdue-table-header">
+                <span className="overdue-col-item">Work Item</span>
+                <span className="overdue-col-date">Due Date</span>
+                <span className="overdue-col-assignee">Assigned To</span>
+                <span className="overdue-col-state">State</span>
+              </div>
+              {overdueItems.map((item) => {
+                const dueDate = (item.workItemType === 'Epic' || item.workItemType === 'Feature' || item.workItemType === 'Bug')
+                  ? item.targetDate
+                  : item.dueDate;
+                const now = new Date();
+                now.setHours(0, 0, 0, 0);
+                let daysOverdue = 0;
+                if (dueDate) {
+                  const [y, m, d] = dueDate.split('-').map(Number);
+                  const deadline = new Date(y, m - 1, d);
+                  deadline.setHours(0, 0, 0, 0);
+                  daysOverdue = Math.floor((now.getTime() - deadline.getTime()) / (1000 * 60 * 60 * 24));
+                }
+                const colors = getAssigneeColor(item.assignedTo);
+
+                return (
+                  <div
+                    key={item.id}
+                    className="overdue-item-row"
+                    onClick={() => onSelectItem(item)}
+                  >
+                    <span className="overdue-col-item">
+                      <span className="overdue-item-id">#{item.id}</span>
+                      <span className="overdue-item-title">{item.title}</span>
+                    </span>
+                    <span className="overdue-col-date">
+                      <span className="overdue-date-value">{dueDate}</span>
+                      <span className="overdue-days-badge">{daysOverdue}d overdue</span>
+                    </span>
+                    <span className="overdue-col-assignee" style={{ color: colors.text }}>
+                      {item.assignedTo || 'Unassigned'}
+                    </span>
+                    <span className="overdue-col-state">
+                      <span className="status-badge">{item.state}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       <div className="calendar-filters">
         <div className="filter-group">
           <label htmlFor="workItemType">Type:</label>

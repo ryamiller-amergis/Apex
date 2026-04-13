@@ -448,3 +448,159 @@
   color: var(--text-secondary);
 }
 
+/* Overdue work items panel */
+.overdue-panel {
+  margin-bottom: 16px;
+  border: 1px solid var(--error-color, #E74C3C);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+
+.overdue-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 20px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+  transition: background 0.2s ease;
+  text-align: left;
+  box-sizing: border-box;
+  min-height: 54px;
+}
+
+.overdue-toggle-btn:hover {
+  background: var(--bg-tertiary);
+}
+
+.overdue-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 13px;
+  background: var(--error-color, #E74C3C);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  animation: pulse 1.5s infinite;
+}
+
+.overdue-toggle-label {
+  flex: 1;
+}
+
+.overdue-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.overdue-items-list {
+  border-top: 1px solid var(--border-color);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.overdue-table-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 0.6fr;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--bg-tertiary);
+  font-size: 0.8em;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.overdue-item-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 0.6fr;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color-light, var(--border-color));
+  cursor: pointer;
+  transition: all 0.2s ease;
+  align-items: center;
+}
+
+.overdue-item-row:last-child {
+  border-bottom: none;
+}
+
+.overdue-item-row:hover {
+  background: var(--bg-tertiary);
+  transform: translateX(2px);
+}
+
+.overdue-col-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.overdue-item-id {
+  font-weight: 600;
+  font-size: 0.85em;
+  color: var(--accent-color);
+  white-space: nowrap;
+}
+
+.overdue-item-title {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overdue-col-date {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.overdue-date-value {
+  font-size: 0.9em;
+  color: var(--text-secondary);
+}
+
+.overdue-days-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.75em;
+  font-weight: 600;
+  background: var(--error-color, #E74C3C);
+  color: #fff;
+  width: fit-content;
+}
+
+.overdue-col-assignee {
+  font-size: 0.9em;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overdue-col-state {
+  display: flex;
+  align-items: center;
+}
+
