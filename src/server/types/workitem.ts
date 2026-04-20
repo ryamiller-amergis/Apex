@@ -113,6 +113,22 @@ export interface QABugStats {
   }>;
 }
 
+export interface DesignDocKickoffStats {
+  developer: string;
+  totalWorkItems: number;
+  kickoffCount: number;
+  adoptionRate: number;
+  kickoffDetails: Array<{
+    workItemId: number;
+    title: string;
+    workItemType: 'Product Backlog Item' | 'Technical Backlog Item' | 'Bug';
+    filePath: string;
+    commitDate: string;
+    prId?: number;
+    prUrl?: string;
+  }>;
+}
+
 export interface InProgressTimeStats {
   developer: string;
   totalItemsInProgress: number;

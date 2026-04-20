@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
+// DesignDocKickoffStats is returned directly by the service - no import needed here
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
 import { DeploymentTrackingService } from '../services/deploymentTracking';
 
@@ -405,6 +406,26 @@ router.get('/in-progress-stats', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error fetching in-progress stats:', error);
     res.status(500).json({ error: 'Failed to fetch in-progress statistics' });
+  }
+});
+
+// GET /api/design-doc-kickoff-stats - Get design-doc kickoff usage stats per developer
+router.get('/design-doc-kickoff-stats', async (req: Request, res: Response) => {
+  try {
+    console.log('=== API: /design-doc-kickoff-stats called ===');
+    const { from, to, developer, areaPath: areaPathParam } = req.query as {
+      from?: string; to?: string; developer?: string; areaPath?: string;
+    };
+
+    // Always query the MaxView project where the design-doc folder lives
+    const adoService = new AzureDevOpsService('MaxView', areaPathParam || '');
+    const stats = await adoService.getDesignDocKickoffStats(from, to, developer);
+
+    console.log(`=== API: Returning design-doc kickoff stats for ${stats.length} developers ===`);
+    res.json(stats);
+  } catch (error: any) {
+    console.error('Error fetching design-doc kickoff stats:', error);
+    res.status(500).json({ error: 'Failed to fetch design-doc kickoff statistics' });
   }
 });
 

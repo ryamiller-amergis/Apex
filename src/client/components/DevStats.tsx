@@ -1,4 +1,4 @@
-import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats } from '../types/workitem';
+import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats, DesignDocKickoffStats } from '../types/workitem';
 import './DevStats.css';
 import { useState, useMemo, useEffect } from 'react';
 
@@ -20,6 +20,8 @@ const QA_BUG_DATA_KEY = 'devStatsQABugData';
 const QA_BUG_LOADING_STATE_KEY = 'devStatsQABugLoadingState';
 const IN_PROGRESS_DATA_KEY = 'devStatsInProgressData';
 const IN_PROGRESS_LOADING_STATE_KEY = 'devStatsInProgressLoadingState';
+const KICKOFF_DATA_KEY = 'devStatsKickoffData';
+const KICKOFF_LOADING_STATE_KEY = 'devStatsKickoffLoadingState';
 const SESSION_INITIALIZED_KEY = 'devStatsSessionInitialized';
 
 // Check for page refresh once - this runs before component render
@@ -39,6 +41,8 @@ const checkAndClearOnRefresh = () => {
     sessionStorage.removeItem(PR_TIME_LOADING_STATE_KEY);
     sessionStorage.removeItem(IN_PROGRESS_DATA_KEY);
     sessionStorage.removeItem(IN_PROGRESS_LOADING_STATE_KEY);
+    sessionStorage.removeItem(KICKOFF_DATA_KEY);
+    sessionStorage.removeItem(KICKOFF_LOADING_STATE_KEY);
     sessionStorage.setItem(SESSION_INITIALIZED_KEY, 'true');
     return true;
   }
@@ -190,12 +194,41 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     return savedLoading ? 'Loading in-progress stats in background...' : '';
   });
   
+  // Design Doc Kickoff stats state
+  const [kickoffStats, setKickoffStats] = useState<DesignDocKickoffStats[]>(() => {
+    if (isPageRefresh) return [];
+    const savedData = sessionStorage.getItem(KICKOFF_DATA_KEY);
+    return savedData ? JSON.parse(savedData).stats : [];
+  });
+  const [kickoffLoading, setKickoffLoading] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(KICKOFF_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [kickoffHasLoaded, setKickoffHasLoaded] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedData = sessionStorage.getItem(KICKOFF_DATA_KEY);
+    return savedData ? JSON.parse(savedData).hasLoaded : false;
+  });
+  const [kickoffError, setKickoffError] = useState<string | null>(null);
+  const [showKickoffNotification, setShowKickoffNotification] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(KICKOFF_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [kickoffNotificationMessage, setKickoffNotificationMessage] = useState(() => {
+    if (isPageRefresh) return '';
+    const savedLoading = sessionStorage.getItem(KICKOFF_LOADING_STATE_KEY);
+    return savedLoading ? 'Loading design doc kickoff stats in background...' : '';
+  });
+
   // Info tooltip state
   const [showChangesInfo, setShowChangesInfo] = useState(false);
   const [showHitRateInfo, setShowHitRateInfo] = useState(false);
   const [showPrTimeInfo, setShowPrTimeInfo] = useState(false);
   const [showQaBugInfo, setShowQaBugInfo] = useState(false);
   const [showInProgressInfo, setShowInProgressInfo] = useState(false);
+  const [showKickoffInfo, setShowKickoffInfo] = useState(false);
   
   // Collapse state for sections — all default to collapsed for better visibility
   const [isChangesCollapsed, setIsChangesCollapsed] = useState(true);
@@ -203,6 +236,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   const [isPrTimeCollapsed, setIsPrTimeCollapsed] = useState(true);
   const [isQaBugCollapsed, setIsQaBugCollapsed] = useState(true);
   const [isInProgressCollapsed, setIsInProgressCollapsed] = useState(true);
+  const [isKickoffCollapsed, setIsKickoffCollapsed] = useState(true);
   const [collapsedReasons, setCollapsedReasons] = useState<Set<string>>(new Set());
   const [collapsedQaBug, setCollapsedQaBug] = useState<Set<string>>(new Set());
   
@@ -433,6 +467,34 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
           setPrTimeHasLoaded(dataHasLoaded);
         }
       }
+
+      // Check loading state for kickoff
+      const savedKickoffLoadingState = sessionStorage.getItem(KICKOFF_LOADING_STATE_KEY);
+      if (savedKickoffLoadingState) {
+        const { loading: isLoading } = JSON.parse(savedKickoffLoadingState);
+        if (isLoading && !kickoffLoading) {
+          setKickoffLoading(true);
+          setShowKickoffNotification(true);
+          setKickoffNotificationMessage('Loading design doc kickoff stats in background...');
+        } else if (!isLoading && kickoffLoading) {
+          setKickoffLoading(false);
+        }
+      } else if (kickoffLoading) {
+        setKickoffLoading(false);
+        setShowKickoffNotification(false);
+      }
+
+      // Check for kickoff data updates
+      const savedKickoffData = sessionStorage.getItem(KICKOFF_DATA_KEY);
+      if (savedKickoffData) {
+        const { stats, hasLoaded: dataHasLoaded } = JSON.parse(savedKickoffData);
+        if (JSON.stringify(stats) !== JSON.stringify(kickoffStats)) {
+          setKickoffStats(stats);
+        }
+        if (dataHasLoaded !== kickoffHasLoaded) {
+          setKickoffHasLoaded(dataHasLoaded);
+        }
+      }
     };
 
     // Check immediately on mount
@@ -442,7 +504,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     const interval = setInterval(checkState, 500);
 
     return () => clearInterval(interval);
-  }, [loading, dueDateStats, hasLoaded, hitRateLoading, hitRateStats, hitRateHasLoaded, prTimeLoading, prTimeStats, prTimeHasLoaded]);
+  }, [loading, dueDateStats, hasLoaded, hitRateLoading, hitRateStats, hitRateHasLoaded, prTimeLoading, prTimeStats, prTimeHasLoaded, kickoffLoading, kickoffStats, kickoffHasLoaded]);
 
   // Persist filter selections to sessionStorage whenever they change
   useEffect(() => {
@@ -486,6 +548,11 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     });
     sessionStorage.setItem(PR_TIME_DATA_KEY, JSON.stringify(data));
   }, [prTimeStats, prTimeHasLoaded]);
+
+  // Persist kickoff data to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem(KICKOFF_DATA_KEY, JSON.stringify({ stats: kickoffStats, hasLoaded: kickoffHasLoaded }));
+  }, [kickoffStats, kickoffHasLoaded]);
 
   const fetchDueDateStats = async () => {
     setLoading(true);
@@ -873,6 +940,53 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     }
   };
 
+  const fetchDesignDocKickoffStats = async () => {
+    setKickoffLoading(true);
+    setKickoffError(null);
+    setShowKickoffNotification(true);
+    setKickoffNotificationMessage('Loading design doc kickoff statistics in background...');
+    sessionStorage.setItem(KICKOFF_LOADING_STATE_KEY, JSON.stringify({ loading: true, timestamp: Date.now() }));
+
+    try {
+      let fromDate = '';
+      let toDate = new Date().toISOString().split('T')[0];
+
+      if (timeFrame === 'custom') {
+        fromDate = customFromDate;
+        toDate = customToDate;
+      } else {
+        const daysBack = parseInt(timeFrame);
+        const from = new Date();
+        from.setDate(from.getDate() - daysBack);
+        fromDate = from.toISOString().split('T')[0];
+      }
+
+      const params = new URLSearchParams();
+      if (fromDate) params.append('from', fromDate);
+      if (toDate) params.append('to', toDate);
+      if (selectedDeveloper !== 'all') params.append('developer', selectedDeveloper);
+      const selectedTeamDef = teams.find(t => t.id === selectedTeam);
+      if (selectedTeamDef?.areaPath) params.append('areaPath', selectedTeamDef.areaPath);
+
+      const response = await fetch(`/api/design-doc-kickoff-stats?${params.toString()}`, { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to fetch design doc kickoff statistics');
+
+      const data: DesignDocKickoffStats[] = await response.json();
+      sessionStorage.setItem(KICKOFF_DATA_KEY, JSON.stringify({ stats: data, hasLoaded: true }));
+      setKickoffStats(data);
+      setKickoffHasLoaded(true);
+      setKickoffNotificationMessage('Design doc kickoff statistics loaded successfully!');
+      setTimeout(() => setShowKickoffNotification(false), 3000);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setKickoffError(errorMsg);
+      setKickoffNotificationMessage(`Error: ${errorMsg}`);
+    } finally {
+      setKickoffLoading(false);
+      sessionStorage.setItem(KICKOFF_LOADING_STATE_KEY, JSON.stringify({ loading: false, timestamp: Date.now() }));
+    }
+  };
+
   // Active member allow-list: allTeamMembers for "all", teamMembers for a specific team.
   // null means the list is still loading — don't filter yet.
   const activeMemberSet = useMemo((): Set<string> | null => {
@@ -922,6 +1036,14 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     if (selectedDeveloper !== 'all') stats = stats.filter(s => s.developer === selectedDeveloper);
     return stats;
   }, [inProgressStats, selectedDeveloper, activeMemberSet]);
+
+  const filteredKickoffStats = useMemo(() => {
+    let stats = activeMemberSet
+      ? kickoffStats.filter(s => activeMemberSet.has(s.developer))
+      : kickoffStats;
+    if (selectedDeveloper !== 'all') stats = stats.filter(s => s.developer === selectedDeveloper);
+    return stats;
+  }, [kickoffStats, selectedDeveloper, activeMemberSet]);
 
   const getWorkItemTypeIcon = (type: string): string => {
     switch (type) {
@@ -1708,6 +1830,150 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Design Doc Kickoff Usage Section */}
+      <div className="stats-section">
+        <h3>
+          <button
+            className="collapse-button"
+            onClick={() => setIsKickoffCollapsed(!isKickoffCollapsed)}
+            aria-label={isKickoffCollapsed ? 'Expand section' : 'Collapse section'}
+          >
+            {isKickoffCollapsed ? '▶' : '▼'}
+          </button>
+          Design Doc Kickoff Usage
+          <div
+            className="info-icon"
+            onClick={() => setShowKickoffInfo(!showKickoffInfo)}
+            role="button"
+            aria-label="Show information about this section"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+              <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+            </svg>
+          </div>
+        </h3>
+
+        {showKickoffInfo && (
+          <div className="info-tooltip">
+            <button className="info-close" onClick={() => setShowKickoffInfo(false)} aria-label="Close information">×</button>
+            <p>
+              <strong>What this section shows:</strong><br />
+              How many PBIs, TBIs, and Bugs each developer had in the selected window, and how many of those had a design document kicked off via <code>/design-doc-kickoff</code> (detected by markdown files committed under <code>design-doc/</code> in the MaxView repository).
+            </p>
+            <p>
+              <strong>How to interpret:</strong><br />
+              • <strong>Kickoffs Used:</strong> Work items with a design-doc file committed in the time window<br />
+              • <strong>Total Work Items:</strong> All PBI/TBI/Bug items changed in the window for this developer<br />
+              • <strong>Adoption bar:</strong> Percentage of work items that went through /design-doc-kickoff<br />
+              • Developer is inferred from the PR linked to the work item, falling back to Assigned To
+            </p>
+          </div>
+        )}
+
+        {!isKickoffCollapsed && (
+          <div className="filter-actions">
+            <button
+              onClick={fetchDesignDocKickoffStats}
+              disabled={kickoffLoading || (timeFrame === 'custom' && (!customFromDate || !customToDate))}
+              className="load-stats-button"
+            >
+              {kickoffLoading ? 'Loading...' : kickoffHasLoaded ? 'Refresh Kickoff Stats' : 'Load Kickoff Stats'}
+            </button>
+          </div>
+        )}
+
+        {!isKickoffCollapsed && (showKickoffNotification || kickoffLoading) && (
+          <div className={`background-notification ${kickoffLoading ? 'loading' : kickoffError ? 'error' : 'success'}`}>
+            {kickoffLoading && <div className="notification-spinner"></div>}
+            <span className="notification-text">
+              {kickoffLoading ? 'Loading design doc kickoff statistics in background...' : kickoffNotificationMessage}
+            </span>
+            {!kickoffLoading && (
+              <button className="notification-close" onClick={() => setShowKickoffNotification(false)} aria-label="Close notification">×</button>
+            )}
+          </div>
+        )}
+
+        {!isKickoffCollapsed && !kickoffHasLoaded && !kickoffLoading && (
+          <p className="placeholder-text">Click "Load Kickoff Stats" to view /design-doc-kickoff usage per developer.</p>
+        )}
+
+        {!isKickoffCollapsed && kickoffHasLoaded && !kickoffLoading && filteredKickoffStats.length === 0 && (
+          <p className="placeholder-text">No design-doc kickoff events found for the selected filters.</p>
+        )}
+
+        {!isKickoffCollapsed && kickoffHasLoaded && !kickoffLoading && filteredKickoffStats.length > 0 && (
+          <div className="developer-stats-list">
+            {filteredKickoffStats.map((stats, index) => (
+              <div key={index} className="developer-stat-card">
+                <div className="developer-header">
+                  <span className="developer-name">{stats.developer}</span>
+                  <span className="total-changes">{stats.kickoffCount} / {stats.totalWorkItems} items</span>
+                </div>
+
+                <div className="hit-rate-summary">
+                  <div className="hit-rate-bar-container">
+                    <div
+                      className="hit-rate-bar hit"
+                      style={{ width: `${Math.min(stats.adoptionRate, 100)}%` }}
+                    >
+                      {stats.adoptionRate > 15 && `${stats.adoptionRate.toFixed(1)}%`}
+                    </div>
+                    <div
+                      className="hit-rate-bar in-progress"
+                      style={{ width: `${Math.max(0, 100 - stats.adoptionRate)}%` }}
+                    />
+                  </div>
+
+                  <div className="hit-rate-details">
+                    <div className="hit-rate-stat">
+                      <span className="stat-label hit">Kickoffs Used:</span>
+                      <span className="stat-value">{stats.kickoffCount}</span>
+                    </div>
+                    <div className="hit-rate-stat">
+                      <span className="stat-label">Total Work Items:</span>
+                      <span className="stat-value">{stats.totalWorkItems}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {stats.kickoffDetails.length > 0 && (
+                  <details className="work-item-details">
+                    <summary>View Kickoffs ({stats.kickoffDetails.length})</summary>
+                    <ul className="work-item-list">
+                      {stats.kickoffDetails.map((detail, idx) => {
+                        const fullWorkItem = workItems.find(wi => wi.id === detail.workItemId);
+                        const typeIcon = getWorkItemTypeIcon(detail.workItemType);
+                        return (
+                          <li
+                            key={idx}
+                            className={`work-item${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
+                            onClick={() => { if (onSelectItem && fullWorkItem) onSelectItem(fullWorkItem); }}
+                            role={onSelectItem && fullWorkItem ? 'button' : undefined}
+                            tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
+                          >
+                            <span className="work-item-id">
+                              <span className="work-item-type-icon" title={detail.workItemType}>{typeIcon}</span>
+                              #{detail.workItemId}
+                            </span>
+                            <span className="work-item-title">{detail.title}</span>
+                            <span className="work-item-dates">Kicked off: {detail.commitDate}</span>
+                            {detail.prId && (
+                              <span className="work-item-pr-time">PR #{detail.prId}</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>

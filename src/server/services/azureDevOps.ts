@@ -1,6 +1,6 @@
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
-import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary } from '../types/workitem';
+import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import { retryWithBackoff } from '../utils/retry';
 
 export class AzureDevOpsService {
@@ -3374,6 +3374,7 @@ export class AzureDevOpsService {
       let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}'`;
       wiql += ` AND ([System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item')`;
       wiql += ` AND [System.Tags] CONTAINS 'ai-code'`;
+      wiql += ` AND [System.State] <> 'Removed'`;
 
       if (this.areaPath) {
         wiql += ` AND [System.AreaPath] UNDER '${this.areaPath}'`;
@@ -3622,6 +3623,258 @@ export class AzureDevOpsService {
     } catch (error) {
       console.error('Error in getAIWorkItemHealthMetrics:', error);
       return empty;
+    }
+  }
+
+  async getDesignDocKickoffStats(from?: string, to?: string, developerFilter?: string): Promise<DesignDocKickoffStats[]> {
+    try {
+      console.log('=== AzureDevOpsService.getDesignDocKickoffStats START ===', { from, to, developerFilter });
+
+      const gitApi = await this.connection.getGitApi();
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      const streamToString = (stream: NodeJS.ReadableStream): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          stream.on('data', (chunk: Buffer | string) =>
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+          );
+          stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+          stream.on('error', reject);
+        });
+
+      // Find the MaxView repository
+      const repos = await gitApi.getRepositories(this.project);
+      console.log(`Found ${repos.length} repositories in project '${this.project}':`, repos.map(r => r.name));
+      const maxViewRepo = repos.find(r => r.name === 'MaxView');
+      if (!maxViewRepo?.id) {
+        console.log('MaxView repository not found in project', this.project, '— available repos:', repos.map(r => r.name));
+        return [];
+      }
+      console.log(`Using repo: ${maxViewRepo.name} (${maxViewRepo.id})`);
+      const repoId = maxViewRepo.id;
+
+      // List all items under /design-doc recursively (120 = Full recursion)
+      let designDocItems: any[] = [];
+      try {
+        designDocItems = await gitApi.getItems(
+          repoId,
+          this.project,
+          '/design-doc',
+          120 as any, // VersionControlRecursionType.Full
+          true,
+          false,
+        ) || [];
+      } catch (err) {
+        console.log('Could not list design-doc/ items (folder may not exist):', (err as Error).message);
+        return [];
+      }
+
+      console.log(`getItems returned ${designDocItems.length} items under /design-doc`);
+      if (designDocItems.length > 0) {
+        console.log('Sample item (first):', JSON.stringify(designDocItems[0]));
+      }
+
+      // gitObjectType may be the enum number (3 = blob) OR the string 'blob' depending on
+      // the azure-devops-node-api version — filter by isFolder=false and path ending in .md
+      // to avoid relying on the gitObjectType representation.
+      const mdFiles = designDocItems.filter(
+        (item: any) =>
+          typeof item.path === 'string' &&
+          item.path.toLowerCase().endsWith('.md') &&
+          item.isFolder !== true
+      );
+      console.log(`Found ${mdFiles.length} markdown files in /design-doc (total items: ${designDocItems.length})`);
+
+      // For each .md file: read content and get latest commit date
+      const wiIdToFile = new Map<number, { filePath: string; commitDate: string }>();
+      const CONCURRENCY = 5;
+
+      for (let i = 0; i < mdFiles.length; i += CONCURRENCY) {
+        const batch = mdFiles.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (item: any) => {
+          try {
+            console.log(`Processing design-doc file: ${item.path}`);
+
+            const [contentStream, commits] = await Promise.all([
+              gitApi.getItemContent(repoId, item.path, this.project),
+              gitApi.getCommits(repoId, { itemPath: item.path, $top: 1 }, this.project),
+            ]);
+            const content = await streamToString(contentStream as any);
+            const commitDate = commits?.[0]?.author?.date
+              ? new Date(commits[0].author!.date!).toISOString().split('T')[0]
+              : new Date().toISOString().split('T')[0];
+
+            console.log(`  commitDate=${commitDate}, contentLength=${content.length}`);
+
+            // Extract work item ID from the markdown table: [45681](https://.../_workitems/edit/45681)
+            const match = content.match(/_workitems\/edit\/(\d+)/i);
+            if (!match) {
+              console.log(`  No WI ID found in ${item.path}`);
+              return;
+            }
+            const wiId = parseInt(match[1], 10);
+            if (!isNaN(wiId)) {
+              console.log(`  Mapped WI #${wiId} → ${item.path} (${commitDate})`);
+              wiIdToFile.set(wiId, { filePath: item.path, commitDate });
+            }
+          } catch (err) {
+            console.log(`Error processing design-doc file ${item.path}:`, (err as Error).message);
+          }
+        }));
+      }
+
+      console.log(`Extracted ${wiIdToFile.size} unique work item IDs from design-doc files`);
+      if (wiIdToFile.size === 0) return [];
+
+      // Apply time-frame filter on commit date
+      const fromDate = from || '1900-01-01';
+      const toDate = to || '2999-12-31';
+
+      const filteredWiIds: number[] = [];
+      for (const [wiId, { commitDate }] of wiIdToFile.entries()) {
+        if (commitDate >= fromDate && commitDate <= toDate) {
+          filteredWiIds.push(wiId);
+        }
+      }
+      console.log(`${filteredWiIds.length} kickoff events within the date window`);
+      if (filteredWiIds.length === 0) return [];
+
+      // Fetch the referenced work items with relations to find linked PRs.
+      // ADO rejects requests that have BOTH a fields list and an expand parameter —
+      // pass undefined for fields so Relations expand is honoured.
+      let kickoffItems: any[] = [];
+      const batchSize = 200;
+      for (let i = 0; i < filteredWiIds.length; i += batchSize) {
+        const batch = filteredWiIds.slice(i, i + batchSize);
+        const items = await witApi.getWorkItems(
+          batch,
+          undefined,          // cannot combine fields with expand
+          undefined,
+          WorkItemExpand.Relations,
+        );
+        kickoffItems.push(...items.filter(wi => wi != null));
+      }
+
+      // Restrict to PBI/TBI/Bug
+      const allowedTypes = new Set(['Product Backlog Item', 'Technical Backlog Item', 'Bug']);
+      kickoffItems = kickoffItems.filter(wi =>
+        allowedTypes.has(wi.fields?.['System.WorkItemType'])
+      );
+
+      // Parse PR artifact links from each work item's relations
+      const wiToPrId = new Map<number, number>();
+      for (const wi of kickoffItems) {
+        if (!wi.id || !wi.relations) continue;
+        for (const rel of wi.relations) {
+          if (rel.rel !== 'ArtifactLink') continue;
+          const relName: string = rel.attributes?.name ?? '';
+          if (!relName.toLowerCase().includes('pull request')) continue;
+          // URL: vstfs:///Git/PullRequestId/org%2Fproject%2Frepo%2F{prId}
+          try {
+            const decoded = decodeURIComponent(rel.url ?? '');
+            const parts = decoded.split('/');
+            const prId = parseInt(parts[parts.length - 1], 10);
+            if (!isNaN(prId) && prId > 0) {
+              wiToPrId.set(wi.id, prId);
+            }
+          } catch { /* ignore */ }
+          break; // first PR link only
+        }
+      }
+
+      // Fetch PR creators
+      const prIdToCreator = new Map<number, string>();
+      const uniquePrIds = Array.from(new Set(wiToPrId.values()));
+      for (let i = 0; i < uniquePrIds.length; i += CONCURRENCY) {
+        const batch = uniquePrIds.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (prId) => {
+          try {
+            const pr = await gitApi.getPullRequestById(prId, this.project);
+            if (pr?.createdBy?.displayName) {
+              prIdToCreator.set(prId, pr.createdBy.displayName);
+            }
+          } catch { /* ignore */ }
+        }));
+      }
+
+      // Compute denominator: all PBI/TBI/Bug changed within the time window, grouped by developer
+      let wiqlDenominator = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND ([System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
+      if (this.areaPath) {
+        wiqlDenominator += ` AND [System.AreaPath] UNDER '${this.areaPath}'`;
+      }
+      wiqlDenominator += ` AND [System.ChangedDate] >= '${fromDate}' AND [System.ChangedDate] <= '${toDate}'`;
+
+      const denomQueryResult = await witApi.queryByWiql({ query: wiqlDenominator }, { project: this.project });
+      const denomIds = (denomQueryResult.workItems ?? []).map(wi => wi.id!);
+      const denomDevMap = new Map<string, number>();
+
+      for (let i = 0; i < denomIds.length; i += batchSize) {
+        const batch = denomIds.slice(i, i + batchSize);
+        const denomItems = await witApi.getWorkItems(batch, ['System.AssignedTo']);
+        for (const wi of denomItems) {
+          if (!wi?.fields) continue;
+          const assignedTo = wi.fields['System.AssignedTo'];
+          const dev: string | undefined = typeof assignedTo === 'object' ? assignedTo?.displayName : assignedTo;
+          if (dev) denomDevMap.set(dev, (denomDevMap.get(dev) ?? 0) + 1);
+        }
+      }
+
+      // Build per-developer kickoff map
+      const devKickoffMap = new Map<string, DesignDocKickoffStats['kickoffDetails']>();
+
+      for (const wi of kickoffItems) {
+        if (!wi.id || !wi.fields) continue;
+        const fileInfo = wiIdToFile.get(wi.id);
+        if (!fileInfo) continue;
+
+        // Prefer PR creator, fall back to Assigned To
+        const prId = wiToPrId.get(wi.id);
+        let developer: string | undefined = prId !== undefined ? prIdToCreator.get(prId) : undefined;
+        if (!developer) {
+          const assignedTo = wi.fields['System.AssignedTo'];
+          developer = typeof assignedTo === 'object' ? assignedTo?.displayName : assignedTo;
+        }
+        if (!developer) continue;
+        if (developerFilter && developer !== developerFilter) continue;
+
+        if (!devKickoffMap.has(developer)) devKickoffMap.set(developer, []);
+        const workItemType = wi.fields['System.WorkItemType'] as 'Product Backlog Item' | 'Technical Backlog Item' | 'Bug';
+        devKickoffMap.get(developer)!.push({
+          workItemId: wi.id,
+          title: wi.fields['System.Title'] ?? '',
+          workItemType,
+          filePath: fileInfo.filePath,
+          commitDate: fileInfo.commitDate,
+          prId,
+        });
+      }
+
+      // Assemble final results (only developers with at least one kickoff)
+      const result: DesignDocKickoffStats[] = [];
+      for (const [developer, kickoffDetails] of devKickoffMap.entries()) {
+        if (developerFilter && developer !== developerFilter) continue;
+        const totalWorkItems = denomDevMap.get(developer) ?? 0;
+        const kickoffCount = kickoffDetails.length;
+        const adoptionRate = totalWorkItems > 0
+          ? Math.round((kickoffCount / totalWorkItems) * 1000) / 10
+          : 0;
+
+        result.push({
+          developer,
+          totalWorkItems,
+          kickoffCount,
+          adoptionRate,
+          kickoffDetails: kickoffDetails.sort((a, b) => b.commitDate.localeCompare(a.commitDate)),
+        });
+      }
+
+      result.sort((a, b) => b.kickoffCount - a.kickoffCount || a.developer.localeCompare(b.developer));
+      console.log(`=== getDesignDocKickoffStats RESULT: ${result.length} developers ===`);
+      return result;
+    } catch (error) {
+      console.error('Error in getDesignDocKickoffStats:', error);
+      return [];
     }
   }
 }

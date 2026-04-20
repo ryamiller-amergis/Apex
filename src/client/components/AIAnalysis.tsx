@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { WorkItem, AIWorkItemHealthSummary } from '../types/workitem';
 import { WorkItemHealthSection } from './WorkItemHealthSection';
 import './AIAnalysis.css';
+import './DevStats.css';
 
 interface AIAnalysisProps {
   workItems: WorkItem[];
@@ -44,6 +45,7 @@ export const AIAnalysis: React.FC<AIAnalysisProps> = ({
   workItems,
 }) => {
   const [isPageRefresh] = useState(() => checkAndClearOnRefresh());
+  const [showHealthInfo, setShowHealthInfo] = useState(false);
 
   // ── Filter state ─────────────────────────────────────────────────────────────
   const [timeFrame, setTimeFrame] = useState<string>(() => {
@@ -218,9 +220,52 @@ export const AIAnalysis: React.FC<AIAnalysisProps> = ({
       {/* ── Section 1: Work Item Health ──────────────────────────────────────── */}
       <div className="ai-analysis-section">
         <div className="ai-analysis-section-header">
-          <h3>Work Item Health</h3>
+          <h3>
+            Work Item Health
+            <div
+              className="info-icon"
+              onClick={() => setShowHealthInfo(!showHealthInfo)}
+              role="button"
+              aria-label="Show information about this section"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+              </svg>
+            </div>
+          </h3>
           <span className="ai-section-badge active">Active</span>
         </div>
+
+        {showHealthInfo && (
+          <div className="info-tooltip">
+            <button
+              className="info-close"
+              onClick={() => setShowHealthInfo(false)}
+              aria-label="Close information"
+            >
+              ×
+            </button>
+            <p>
+              <strong>What this section shows:</strong><br />
+              Health of work items tagged <strong>ai-code</strong> within the selected time frame.
+            </p>
+            <p>
+              <strong>Metrics tracked:</strong><br />
+              • <strong>Dev Time:</strong> Average days from In Progress → In Pull Request<br />
+              • <strong>Bugs to UAT:</strong> Average linked bugs before UAT Ready for Test<br />
+              • <strong>PR Modifications:</strong> Average re-submission rounds after initial PR<br />
+              • <strong>Full Cycle Time:</strong> Average days from In Progress → UAT Ready for Test<br />
+              • <strong>Rework Rate:</strong> Percentage of items with backward state regressions<br />
+              • <strong>First-Pass Success:</strong> Items reaching UAT with zero bugs and no regressions
+            </p>
+            <p>
+              <strong>Aggregate Score:</strong><br />
+              A weighted composite of the six dimensions above (Dev Time 20%, Bug Count 25%,
+              PR Mods 15%, Cycle Time 15%, Rework 10%, First-Pass 15%).
+            </p>
+          </div>
+        )}
 
         {!hasLoaded && !loading ? (
           <div className="ai-placeholder-card">
