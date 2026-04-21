@@ -236,3 +236,5 @@ export interface AIWorkItemHealthSummary {
   itemsWithCleanPRMerge: number;
   items: AIWorkItemMetric[];
 }
+
+export * from '../../shared/types/backlog';

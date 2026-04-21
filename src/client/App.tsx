@@ -24,6 +24,7 @@ const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ d
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
+const BacklogView = lazy(() => import('./components/BacklogView'));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
 
@@ -31,11 +32,13 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const currentView: 'calendar' | 'planning' | 'cloudcost' = location.pathname.startsWith('/planning')
+  const currentView: 'calendar' | 'planning' | 'cloudcost' | 'backlog' = location.pathname.startsWith('/planning')
     ? 'planning'
     : location.pathname === '/cloud-cost'
       ? 'cloudcost'
-      : 'calendar';
+      : location.pathname.startsWith('/backlog')
+        ? 'backlog'
+        : 'calendar';
 
   const planningTab = (location.pathname.split('/')[2] as PlanningTab) || 'dev-stats';
 
@@ -105,6 +108,7 @@ function App() {
             onNavigateCalendar={() => navigate('/')}
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
+            onNavigateBacklog={() => navigate('/backlog')}
             onChangeProject={changeProject}
             onChangeAreaPath={changeAreaPath}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -166,6 +170,14 @@ function App() {
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="cloudcost-view">
                   <CloudCost project={selectedProject} areaPath={selectedAreaPath} />
+                </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : !isLoading && currentView === 'backlog' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <div className="backlog-view">
+                  <BacklogView project={selectedProject} areaPath={selectedAreaPath} />
                 </div>
               </Suspense>
             </ErrorBoundary>

@@ -1247,4 +1247,507 @@ router.get('/ai-work-item-details', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/backlog/drafts - Fetch wiki draft backlog documents
+router.get('/backlog/drafts', async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs();
+    res.json(docs);
+  } catch (error: any) {
+    console.error('Error fetching draft backlog docs:', error);
+    res.status(500).json({ error: 'Failed to fetch draft backlog documents' });
+  }
+});
+
+// POST /api/backlog/create-ado-items - Create ADO work items from an approved Epic and its Accepted children
+router.post('/backlog/create-ado-items', async (req: Request, res: Response) => {
+  try {
+    const { epicId, document, project, areaPath } = req.body as {
+      epicId?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!epicId || typeof epicId !== 'string') {
+      return res.status(400).json({ error: 'epicId is required' });
+    }
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+
+    const epic = (document.epics ?? []).find((e: any) => e.id === epicId);
+    if (!epic) {
+      return res.status(404).json({ error: `Epic ${epicId} not found in document` });
+    }
+    if (epic.status !== 'Approved') {
+      return res.status(422).json({ error: 'Epic must be Approved before creating ADO backlog items' });
+    }
+
+    const isReady = (s: string) => s === 'Approved' || s === 'Accepted';
+
+    const acceptedFeatures = (document.features ?? []).filter(
+      (f: any) => f.parentId === epicId && isReady(f.status)
+    );
+    const acceptedFeatureIds = new Set(acceptedFeatures.map((f: any) => f.id));
+    const acceptedPBIs = (document.pbis ?? []).filter(
+      (p: any) => acceptedFeatureIds.has(p.parentId) && isReady(p.status)
+    );
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const result = await adoService.createBacklogItemsInADO(epic, acceptedFeatures, acceptedPBIs);
+
+    res.json({
+      success: true,
+      epicAdoId: result.epicAdoId,
+      epicAdoUrl: result.epicAdoUrl,
+      featuresCreated: Object.keys(result.featureMap).length,
+      pbisCreated: Object.keys(result.pbiMap).length,
+      featureMap: result.featureMap,
+      pbiMap: result.pbiMap,
+    });
+  } catch (error: any) {
+    console.error('Error creating ADO backlog items:', error);
+    res.status(500).json({ error: 'Failed to create ADO backlog items', details: error.message });
+  }
+});
+
+// POST /api/backlog/generate-feature - Generate a Feature + PBIs via Bedrock AI
+router.post('/backlog/generate-feature', async (req: Request, res: Response) => {
+  try {
+    const { epicId, document, userRequest } = req.body as {
+      epicId?: string;
+      document?: any;
+      userRequest?: string;
+    };
+
+    if (!epicId || typeof epicId !== 'string') {
+      return res.status(400).json({ error: 'epicId is required' });
+    }
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+    if (!userRequest || typeof userRequest !== 'string' || !userRequest.trim()) {
+      return res.status(400).json({ error: 'userRequest is required' });
+    }
+
+    const epic = (document.epics ?? []).find((e: any) => e.id === epicId);
+    if (!epic) {
+      return res.status(404).json({ error: `Epic ${epicId} not found in document` });
+    }
+
+    const existingFeatures = (document.features ?? []).filter((f: any) => f.parentId === epicId);
+
+    const { generateFeatureFromBedrock } = await import('../services/bedrockService');
+    const generated = await generateFeatureFromBedrock({
+      epicTitle: epic.title,
+      epicDescription: epic.description,
+      epicTags: epic.tags,
+      existingFeatures,
+      userRequest: userRequest.trim(),
+    });
+
+    res.json(generated);
+  } catch (error: any) {
+    console.error('Error generating Feature via Bedrock:', error);
+    res.status(500).json({ error: 'Failed to generate Feature', details: error.message });
+  }
+});
+
+// POST /api/backlog/generate-pbi - Generate a PBI via Bedrock AI
+router.post('/backlog/generate-pbi', async (req: Request, res: Response) => {
+  try {
+    const { featureId, document, userRequest } = req.body as {
+      featureId?: string;
+      document?: any;
+      userRequest?: string;
+    };
+
+    if (!featureId || typeof featureId !== 'string') {
+      return res.status(400).json({ error: 'featureId is required' });
+    }
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+    if (!userRequest || typeof userRequest !== 'string' || !userRequest.trim()) {
+      return res.status(400).json({ error: 'userRequest is required' });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) {
+      return res.status(404).json({ error: `Feature ${featureId} not found in document` });
+    }
+
+    const existingPBIs = (document.pbis ?? []).filter((p: any) => p.parentId === featureId);
+
+    const { generatePBIFromBedrock } = await import('../services/bedrockService');
+    const generated = await generatePBIFromBedrock({
+      featureTitle: feature.title,
+      featureDescription: feature.description,
+      featureTags: feature.tags,
+      existingPBIs,
+      userRequest: userRequest.trim(),
+    });
+
+    res.json(generated);
+  } catch (error: any) {
+    console.error('Error generating PBI via Bedrock:', error);
+    res.status(500).json({ error: 'Failed to generate PBI', details: error.message });
+  }
+});
+
+// POST /api/backlog/resolve-clarification - Answer a clarification question via Bedrock AI
+router.post('/backlog/resolve-clarification', async (req: Request, res: Response) => {
+  try {
+    const {
+      nodeId,
+      workItemType,
+      pagePath,
+      document,
+      project,
+      areaPath,
+      clarificationQuestion,
+      userAnswer,
+    } = req.body as {
+      nodeId?: string;
+      workItemType?: 'Epic' | 'Feature' | 'PBI';
+      pagePath?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+      clarificationQuestion?: string;
+      userAnswer?: string;
+    };
+
+    if (!nodeId || !workItemType || !pagePath || !document) {
+      return res.status(400).json({ error: 'nodeId, workItemType, pagePath, and document are required' });
+    }
+    if (!clarificationQuestion || !userAnswer?.trim()) {
+      return res.status(400).json({ error: 'clarificationQuestion and userAnswer are required' });
+    }
+
+    // ── Locate the node and build context for Bedrock ──────────────
+    let node: any;
+    let parentType: string | undefined;
+    let parentTitle: string | undefined;
+    let existingChildren: Array<{ id: string; title: string; workItemType: string }> = [];
+
+    if (workItemType === 'Epic') {
+      node = (document.epics ?? []).find((e: any) => e.id === nodeId);
+      existingChildren = (document.features ?? [])
+        .filter((f: any) => f.parentId === nodeId)
+        .map((f: any) => ({ id: f.id, title: f.title, workItemType: 'Feature' }));
+    } else if (workItemType === 'Feature') {
+      node = (document.features ?? []).find((f: any) => f.id === nodeId);
+      const parentEpic = (document.epics ?? []).find((e: any) => e.id === node?.parentId);
+      if (parentEpic) { parentType = 'Epic'; parentTitle = parentEpic.title; }
+      existingChildren = (document.pbis ?? [])
+        .filter((p: any) => p.parentId === nodeId)
+        .map((p: any) => ({ id: p.id, title: p.title, workItemType: 'PBI' }));
+    } else {
+      // PBI — pass sibling PBIs so Bedrock understands the landscape
+      node = (document.pbis ?? []).find((p: any) => p.id === nodeId);
+      const parentFeature = (document.features ?? []).find((f: any) => f.id === node?.parentId);
+      if (parentFeature) { parentType = 'Feature'; parentTitle = parentFeature.title; }
+      existingChildren = (document.pbis ?? [])
+        .filter((p: any) => p.parentId === node?.parentId && p.id !== nodeId)
+        .map((p: any) => ({ id: p.id, title: p.title, workItemType: 'PBI' }));
+    }
+
+    if (!node) {
+      return res.status(404).json({ error: `${workItemType} ${nodeId} not found in document` });
+    }
+
+    // ── Call Bedrock ───────────────────────────────────────────────
+    const { resolveClarificationWithBedrock } = await import('../services/bedrockService');
+    const result = await resolveClarificationWithBedrock({
+      workItemType,
+      title: node.title,
+      description: node.description,
+      clarificationQuestion,
+      userAnswer: userAnswer.trim(),
+      parentType,
+      parentTitle,
+      existingChildren,
+    });
+
+    // ── Helpers ────────────────────────────────────────────────────
+    const nextFeatId = (): string => {
+      const nums = (document.features ?? [])
+        .map((f: any) => parseInt(f.id.replace(/^FEAT-/, ''), 10))
+        .filter((n: number) => !isNaN(n));
+      const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+      return `FEAT-${String(next).padStart(3, '0')}`;
+    };
+
+    const nextPBIId = (existingPBIs: any[]): string => {
+      const nums = existingPBIs
+        .map((p: any) => parseInt(p.id.replace(/^PBI-/, ''), 10))
+        .filter((n: number) => !isNaN(n));
+      const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+      return `PBI-${String(next).padStart(3, '0')}`;
+    };
+
+    const clearClarification = (n: any) => ({ ...n, clarificationNeeded: undefined });
+
+    // ── Apply result ───────────────────────────────────────────────
+    let updatedDoc = { ...document };
+    let responsePayload: any = { success: true, action: result.action, reasoning: result.reasoning };
+
+    // ── update ──────────────────────────────────────────────────────
+    if (result.action === 'update' && result.updatedFields) {
+      const f = result.updatedFields;
+      const updatedNode = {
+        ...node,
+        ...(f.description !== undefined && { description: f.description }),
+        ...(f.clarificationNeeded !== undefined && { clarificationNeeded: f.clarificationNeeded || undefined }),
+        ...(f.priority !== undefined && { priority: f.priority }),
+        ...(f.confidence !== undefined && { confidence: f.confidence }),
+        ...(f.tags !== undefined && { tags: f.tags }),
+        ...(f.acceptanceCriteria !== undefined && workItemType === 'PBI' && {
+          acceptanceCriteria: f.acceptanceCriteria.length > 0 ? f.acceptanceCriteria : undefined,
+        }),
+      };
+
+      if (workItemType === 'Epic') {
+        updatedDoc = { ...document, epics: document.epics.map((e: any) => e.id === nodeId ? updatedNode : e) };
+      } else if (workItemType === 'Feature') {
+        updatedDoc = { ...document, features: document.features.map((f2: any) => f2.id === nodeId ? updatedNode : f2) };
+      } else {
+        updatedDoc = { ...document, pbis: document.pbis.map((p: any) => p.id === nodeId ? updatedNode : p) };
+      }
+    }
+
+    // ── create-feature (Epic only) ───────────────────────────────────
+    else if (result.action === 'create-feature' && result.newFeature) {
+      const feat = result.newFeature;
+      const newFeatId = nextFeatId();
+
+      const newFeature = {
+        id: newFeatId,
+        parentId: nodeId,
+        workItemType: 'Feature',
+        status: 'Draft',
+        title: feat.title,
+        description: feat.description || undefined,
+        priority: feat.priority || undefined,
+        confidence: feat.confidence || undefined,
+        tags: feat.tags?.length > 0 ? feat.tags : undefined,
+        clarificationNeeded: feat.clarificationNeeded || undefined,
+      };
+
+      // Build PBIs that come bundled with the new feature
+      const bundledPBIs: any[] = [];
+      if (feat.pbis && feat.pbis.length > 0) {
+        let runningPBIs = [...(document.pbis ?? [])];
+        for (const pbiDef of feat.pbis) {
+          const newPBIId = nextPBIId(runningPBIs);
+          const newPBI = {
+            id: newPBIId,
+            parentId: newFeatId,
+            workItemType: 'PBI',
+            status: 'Draft',
+            title: pbiDef.title,
+            description: pbiDef.description || undefined,
+            acceptanceCriteria: pbiDef.acceptanceCriteria?.length ? pbiDef.acceptanceCriteria : undefined,
+            priority: pbiDef.priority || undefined,
+            confidence: pbiDef.confidence || undefined,
+            tags: pbiDef.tags?.length > 0 ? pbiDef.tags : undefined,
+          };
+          bundledPBIs.push(newPBI);
+          runningPBIs = [...runningPBIs, newPBI];
+        }
+      }
+
+      // Clear clarification on the epic
+      const clearedEpic = clearClarification(node);
+      updatedDoc = {
+        ...document,
+        epics: document.epics.map((e: any) => e.id === nodeId ? clearedEpic : e),
+        features: [...(document.features ?? []), newFeature],
+        pbis: [...(document.pbis ?? []), ...bundledPBIs],
+      };
+
+      responsePayload = {
+        ...responsePayload,
+        featureTitle: newFeature.title,
+        featureId: newFeatId,
+        pbisCreated: bundledPBIs.length,
+      };
+    }
+
+    // ── create-pbi ───────────────────────────────────────────────────
+    else if (result.action === 'create-pbi' && result.newPBI) {
+      const pbiDef = result.newPBI;
+
+      // Determine the parent Feature ID:
+      //   Epic level  → targetFeatureId from Bedrock (falls back to first feature under this epic)
+      //   Feature level → current node (nodeId)
+      //   PBI level   → the PBI's own parentId (sibling under same feature)
+      let pbiParentId: string;
+      if (workItemType === 'Epic') {
+        pbiParentId = pbiDef.targetFeatureId
+          ?? (document.features ?? []).find((f: any) => f.parentId === nodeId)?.id
+          ?? nodeId;
+      } else if (workItemType === 'Feature') {
+        pbiParentId = nodeId;
+      } else {
+        // PBI-level: sibling
+        pbiParentId = node.parentId ?? nodeId;
+      }
+
+      const newPBIId = nextPBIId(document.pbis ?? []);
+      const newPBI = {
+        id: newPBIId,
+        parentId: pbiParentId,
+        workItemType: 'PBI',
+        status: 'Draft',
+        title: pbiDef.title,
+        description: pbiDef.description || undefined,
+        acceptanceCriteria: pbiDef.acceptanceCriteria?.length ? pbiDef.acceptanceCriteria : undefined,
+        priority: pbiDef.priority || undefined,
+        confidence: pbiDef.confidence || undefined,
+        tags: pbiDef.tags?.length > 0 ? pbiDef.tags : undefined,
+      };
+
+      // Clear clarification on the current node
+      const clearedNode = clearClarification(node);
+      let updatedEpics = document.epics;
+      let updatedFeatures = document.features ?? [];
+      let updatedPBIs = [...(document.pbis ?? []), newPBI];
+
+      if (workItemType === 'Epic') {
+        updatedEpics = document.epics.map((e: any) => e.id === nodeId ? clearedNode : e);
+      } else if (workItemType === 'Feature') {
+        updatedFeatures = updatedFeatures.map((f: any) => f.id === nodeId ? clearedNode : f);
+      } else {
+        updatedPBIs = updatedPBIs.map((p: any) => p.id === nodeId ? clearedNode : p);
+      }
+
+      updatedDoc = { ...document, epics: updatedEpics, features: updatedFeatures, pbis: updatedPBIs };
+
+      // Find the parent feature title for the response
+      const parentFeat = (document.features ?? []).find((f: any) => f.id === pbiParentId);
+      responsePayload = {
+        ...responsePayload,
+        pbiTitle: newPBI.title,
+        pbiId: newPBIId,
+        parentFeatureTitle: parentFeat?.title,
+      };
+    }
+
+    // ── Save to wiki ───────────────────────────────────────────────
+    const adoService = new AzureDevOpsService(project, areaPath);
+    await adoService.updateDraftBacklogDoc(pagePath, updatedDoc);
+
+    res.json(responsePayload);
+  } catch (error: any) {
+    console.error('Error resolving clarification via Bedrock:', error);
+    if (error.message?.startsWith('WIKI_CONFLICT')) {
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to resolve clarification', details: error.message });
+  }
+});
+
+// DELETE /api/backlog/item - Remove a work item (and its children) from the wiki draft; optionally delete from ADO
+router.delete('/backlog/item', async (req: Request, res: Response) => {
+  try {
+    const { itemId, workItemType, pagePath, document, project, areaPath, deleteFromADO, adoWorkItemId } = req.body as {
+      itemId?: string;
+      workItemType?: 'Epic' | 'Feature' | 'PBI';
+      pagePath?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+      deleteFromADO?: boolean;
+      adoWorkItemId?: number;
+    };
+
+    if (!itemId || !workItemType || !pagePath || !document) {
+      return res.status(400).json({ error: 'itemId, workItemType, pagePath, and document are required' });
+    }
+
+    // Build the updated document by removing the item and any cascading children
+    let updatedDoc: any;
+
+    if (workItemType === 'Epic') {
+      const removedFeatureIds = new Set<string>(
+        (document.features ?? []).filter((f: any) => f.parentId === itemId).map((f: any) => f.id)
+      );
+      updatedDoc = {
+        epics: (document.epics ?? []).filter((e: any) => e.id !== itemId),
+        features: (document.features ?? []).filter((f: any) => f.parentId !== itemId),
+        pbis: (document.pbis ?? []).filter((p: any) => !removedFeatureIds.has(p.parentId)),
+      };
+    } else if (workItemType === 'Feature') {
+      updatedDoc = {
+        ...document,
+        features: (document.features ?? []).filter((f: any) => f.id !== itemId),
+        pbis: (document.pbis ?? []).filter((p: any) => p.parentId !== itemId),
+      };
+    } else {
+      updatedDoc = {
+        ...document,
+        pbis: (document.pbis ?? []).filter((p: any) => p.id !== itemId),
+      };
+    }
+
+    // Save updated document to wiki
+    const adoService = new AzureDevOpsService(project, areaPath);
+    await adoService.updateDraftBacklogDoc(pagePath, updatedDoc);
+
+    // Optionally delete from ADO
+    if (deleteFromADO && adoWorkItemId && typeof adoWorkItemId === 'number') {
+      try {
+        await adoService.deleteWorkItem(adoWorkItemId);
+        console.log(`[DELETE /backlog/item] Deleted ADO work item ${adoWorkItemId}`);
+      } catch (adoErr: any) {
+        // ADO delete failed — wiki save already succeeded; surface as a warning, not a hard failure
+        console.error(`[DELETE /backlog/item] Wiki updated but ADO delete failed for ${adoWorkItemId}:`, adoErr.message);
+        return res.json({ success: true, adoDeleteError: adoErr.message });
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting backlog item:', error);
+    if (error.message?.startsWith('WIKI_CONFLICT')) {
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to delete backlog item', details: error.message });
+  }
+});
+
+// PUT /api/backlog/drafts - Save updated backlog document back to the wiki
+router.put('/backlog/drafts', async (req: Request, res: Response) => {
+  try {
+    const { pagePath, document, project, areaPath } = req.body as {
+      pagePath?: string;
+      document?: unknown;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!pagePath || typeof pagePath !== 'string') {
+      return res.status(400).json({ error: 'pagePath is required' });
+    }
+
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const updated = await adoService.updateDraftBacklogDoc(pagePath, document as any);
+    res.json(updated);
+  } catch (error: any) {
+    console.error('Error updating draft backlog doc:', error);
+    if (error.message?.startsWith('WIKI_CONFLICT')) {
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to update draft backlog document' });
+  }
+});
+
 export default router;

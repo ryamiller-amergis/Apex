@@ -3877,4 +3877,386 @@ export class AzureDevOpsService {
       return [];
     }
   }
+
+  /**
+   * Fetch wiki subpages under the requirement-drafts root, parse embedded JSON
+   * code blocks, and return only documents whose Epic layer contains a Draft item.
+   *
+   * Strategy:
+   *  1. GET root page with recursionLevel=Full to collect all subpage paths (no content yet).
+   *  2. For each path, GET the page individually with includeContent=true.
+   *     (The bulk recursion endpoint does NOT include content for subpages.)
+   *  3. Extract the first ```json block, parse — all items are returned regardless of status.
+   */
+  async getDraftBacklogDocs(): Promise<import('../types/workitem').BacklogDocument[]> {
+    const wikiId = process.env.ADO_WIKI_ID || 'MaxView.wiki';
+    // Comma-separated list of wiki paths — each may be a folder (scanned recursively)
+    // or a direct page path (fetched as-is when it has no subpages).
+    const rootPathsRaw = process.env.ADO_WIKI_ROOT_PATH || '/requirement-drafts';
+    const rootPaths = rootPathsRaw.split(',').map(p => p.trim()).filter(Boolean);
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const project = this.project;
+    const auth = `Basic ${Buffer.from(':' + process.env.ADO_PAT).toString('base64')}`;
+
+    const baseWikiUrl = `${orgUrl}/${encodeURIComponent(project)}/_apis/wiki/wikis/${encodeURIComponent(wikiId)}/pages`;
+
+    console.log(`[BacklogDocs] Fetching wiki pages from ${baseWikiUrl} roots=${rootPaths.join(' | ')}`);
+
+    // Collect all candidate page refs across every configured root path
+    const pagePaths: Array<{ id: number; path: string }> = [];
+    const seenPaths = new Set<string>();
+
+    for (const rootPath of rootPaths) {
+      const listUrl = `${baseWikiUrl}?path=${encodeURIComponent(rootPath)}&recursionLevel=Full&api-version=7.0`;
+      const listRes = await fetch(listUrl, { headers: { Authorization: auth } });
+
+      if (!listRes.ok) {
+        const body = await listRes.text();
+        console.error(`[BacklogDocs] List pages failed for "${rootPath}" ${listRes.status}: ${body}`);
+        // Skip this root instead of aborting — other roots may still succeed
+        continue;
+      }
+
+      const listData = await listRes.json() as any;
+
+      // Collect the root page AND all descendants — JSON parsing later will
+      // silently skip any page that has no valid ```json block.
+      const collected: Array<{ id: number; path: string }> = [];
+      const collectPaths = (page: any) => {
+        collected.push({ id: page.id, path: page.path });
+        if (Array.isArray(page.subPages)) {
+          page.subPages.forEach((sub: any) => collectPaths(sub));
+        }
+      };
+      collectPaths(listData);
+
+      for (const ref of collected) {
+        if (!seenPaths.has(ref.path)) {
+          seenPaths.add(ref.path);
+          pagePaths.push(ref);
+        }
+      }
+    }
+
+    console.log(`[BacklogDocs] Found ${pagePaths.length} page(s): ${pagePaths.map(p => p.path).join(', ')}`);
+
+    const results: import('../types/workitem').BacklogDocument[] = [];
+
+    // Step 2: fetch each page individually with content
+    for (const pageRef of pagePaths) {
+      const pageUrl = `${baseWikiUrl}?path=${encodeURIComponent(pageRef.path)}&includeContent=true&api-version=7.0`;
+      const pageRes = await fetch(pageUrl, { headers: { Authorization: auth } });
+
+      if (!pageRes.ok) {
+        console.warn(`[BacklogDocs] Failed to fetch page ${pageRef.path}: ${pageRes.status}`);
+        continue;
+      }
+
+      const pageData = await pageRes.json() as any;
+      const content: string = pageData.content || '';
+
+      console.log(`[BacklogDocs] Page ${pageRef.path} content length=${content.length}`);
+
+      if (!content) continue;
+
+      // Extract first ```json fenced block — handle both LF and CRLF line endings.
+      // ADO wiki often inserts a zero-width space (U+200B) or BOM after "json",
+      // so we match any non-newline characters between "json" and the line break.
+      const normalised = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const match = normalised.match(/```json[^\n]*\n([\s\S]*?)\n```/);
+
+      if (!match) {
+        console.log(`[BacklogDocs] No \`\`\`json block found in page ${pageRef.path}`);
+        continue;
+      }
+
+      let parsed: any;
+      const rawJson = match[1];
+      try {
+        parsed = JSON.parse(rawJson);
+      } catch (firstErr) {
+        // Wiki pages often have a missing closing `]` or `]}` when the content is
+        // long (truncation, editor bugs). Try progressively repairing the tail.
+        const repairs = [']', ']}', ']]', ']]}', ']]}', ']]]}}'];
+        let repaired = false;
+        for (const suffix of repairs) {
+          try {
+            parsed = JSON.parse(rawJson + suffix);
+            console.warn(`[BacklogDocs] Repaired JSON for page ${pageRef.path} by appending "${suffix}"`);
+            repaired = true;
+            break;
+          } catch { /* try next */ }
+        }
+        if (!repaired) {
+          console.warn(`[BacklogDocs] JSON parse failed for page ${pageRef.path}: ${firstErr}`);
+          continue;
+        }
+      }
+
+      const epics: any[] = Array.isArray(parsed.epics) ? parsed.epics : [];
+      console.log(`[BacklogDocs] Page ${pageRef.path} has ${epics.length} epics`);
+
+      if (epics.length === 0) continue;
+
+      const pathLeaf = pageRef.path.split('/').filter(Boolean).pop() || pageRef.path;
+      const title = epics[0]?.title || pathLeaf;
+
+      results.push({
+        id: pageRef.id,
+        title,
+        path: pageRef.path,
+        url: `${orgUrl}/${encodeURIComponent(project)}/_wiki/wikis/${encodeURIComponent(wikiId)}?pagePath=${encodeURIComponent(pageRef.path)}`,
+        document: {
+          epics,
+          features: Array.isArray(parsed.features) ? parsed.features : [],
+          pbis: Array.isArray(parsed.pbis) ? parsed.pbis : [],
+        },
+      });
+    }
+
+    console.log(`[BacklogDocs] Returning ${results.length} draft document(s)`);
+    return results;
+  }
+
+  /**
+   * Update a wiki page's embedded JSON block with the supplied BacklogDocumentPayload,
+   * preserving all other markdown content on the page.
+   *
+   * Strategy:
+   *  1. GET the page with includeContent=true — capture content AND the ETag header.
+   *  2. Replace the first ```json … ``` block with the serialised newDocument.
+   *     If no block exists one is appended.
+   *  3. PUT the page back using If-Match: <etag> to guard against concurrent edits.
+   *  4. Parse the updated content and return a fresh BacklogDocument.
+   */
+  async updateDraftBacklogDoc(
+    pagePath: string,
+    newDocument: import('../../shared/types/backlog').BacklogDocumentPayload
+  ): Promise<import('../types/workitem').BacklogDocument> {
+    const wikiId = process.env.ADO_WIKI_ID || 'MaxView.wiki';
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const project = this.project;
+    const auth = `Basic ${Buffer.from(':' + process.env.ADO_PAT).toString('base64')}`;
+    const baseWikiUrl = `${orgUrl}/${encodeURIComponent(project)}/_apis/wiki/wikis/${encodeURIComponent(wikiId)}/pages`;
+
+    // Step 1: GET current content + ETag
+    const getUrl = `${baseWikiUrl}?path=${encodeURIComponent(pagePath)}&includeContent=true&api-version=7.0`;
+    console.log(`[BacklogDocs] updateDraftBacklogDoc GET ${pagePath}`);
+    const getRes = await fetch(getUrl, { headers: { Authorization: auth } });
+
+    if (!getRes.ok) {
+      const body = await getRes.text();
+      console.error(`[BacklogDocs] GET page failed ${getRes.status}: ${body}`);
+      throw new Error(`Wiki GET failed ${getRes.status}: ${body}`);
+    }
+
+    const etag = getRes.headers.get('etag') || '*';
+    const pageData = await getRes.json() as any;
+    const originalContent: string = pageData.content || '';
+    const pageId: number = pageData.id;
+
+    console.log(`[BacklogDocs] Got page id=${pageId} etag=${etag} contentLen=${originalContent.length}`);
+
+    // Step 2: Replace (or append) the first ```json block
+    const jsonBlock = '```json\n' + JSON.stringify(newDocument, null, 4) + '\n```';
+    const normalised = originalContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    let newContent: string;
+
+    if (/```json\s*\n[\s\S]*?\n```/.test(normalised)) {
+      newContent = normalised.replace(/```json\s*\n[\s\S]*?\n```/, jsonBlock);
+    } else {
+      newContent = normalised + '\n\n' + jsonBlock;
+    }
+
+    // Step 3: PUT updated content back
+    const putUrl = `${baseWikiUrl}?path=${encodeURIComponent(pagePath)}&api-version=7.0`;
+    console.log(`[BacklogDocs] updateDraftBacklogDoc PUT ${pagePath}`);
+    const putRes = await fetch(putUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: auth,
+        'Content-Type': 'application/json',
+        'If-Match': etag,
+      },
+      body: JSON.stringify({ content: newContent }),
+    });
+
+    if (!putRes.ok) {
+      const body = await putRes.text();
+      console.error(`[BacklogDocs] PUT page failed ${putRes.status}: ${body}`);
+      if (putRes.status === 412) {
+        throw new Error('WIKI_CONFLICT: The wiki page was updated by someone else. Please refresh and try again.');
+      }
+      throw new Error(`Wiki PUT failed ${putRes.status}: ${body}`);
+    }
+
+    // Step 4: Return a fresh BacklogDocument from the saved document
+    const pathLeaf = pagePath.split('/').filter(Boolean).pop() || pagePath;
+    const title = newDocument.epics[0]?.title || pathLeaf;
+
+    console.log(`[BacklogDocs] updateDraftBacklogDoc success for ${pagePath}`);
+
+    return {
+      id: pageId,
+      title,
+      path: pagePath,
+      url: `${orgUrl}/${encodeURIComponent(project)}/_wiki/wikis/${encodeURIComponent(wikiId)}?pagePath=${encodeURIComponent(pagePath)}`,
+      document: newDocument,
+    };
+  }
+
+  /**
+   * Create ADO work items from an approved backlog Epic and its Accepted children.
+   * Returns the ADO IDs for the created Epic, Features, and PBIs.
+   */
+  async createBacklogItemsInADO(
+    epic: { id: string; title: string; description?: string; priority?: string; tags?: string[] },
+    acceptedFeatures: Array<{ id: string; title: string; description?: string; priority?: string; tags?: string[] }>,
+    acceptedPBIs: Array<{ id: string; parentId: string; title: string; description?: string; acceptanceCriteria?: string[] }>
+  ): Promise<{ epicAdoId: number; epicAdoUrl: string; featureMap: Record<string, number>; pbiMap: Record<string, number> }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      // Convert plain-text backlog descriptions to ADO-friendly HTML.
+      // Handles: section headers ending with ':', bullet lists starting with '- ',
+      // rule prefixes (BR-NNN:, NFR-NNN:), labelled items (Word:), and
+      // Given/When/Then acceptance-criteria sentences.
+      const toHtml = (raw: string): string => {
+        if (!raw) return '';
+
+        const esc = (s: string) =>
+          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // Bold "BR-001:", "NFR-001:", or "Label:" prefixes inside list items
+        const fmtItem = (s: string): string =>
+          esc(s).replace(
+            /^((?:BR|NFR|AC)-\d+:|[A-Z][A-Za-z/\s]{1,30}:)\s*/,
+            '<strong>$1</strong>&nbsp;'
+          );
+
+        // Bold Given / When / Then keywords in AC sentences
+        const fmtAC = (s: string): string =>
+          esc(s)
+            .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+            .replace(/\b(When)\b/g, '<strong>When</strong>')
+            .replace(/\b(Then)\b/g, '<strong>Then</strong>');
+
+        const isHeader = (l: string) => /^[A-Z][^:\n]{1,50}:$/.test(l);
+        const isList   = (l: string) => l.startsWith('- ');
+
+        let html = '';
+        for (const block of raw.split(/\n{2,}/)) {
+          const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+          if (!lines.length) continue;
+
+          let i = 0;
+          if (isHeader(lines[i])) {
+            html += `<p><strong>${esc(lines[i])}</strong></p>`;
+            i++;
+          }
+
+          const rest       = lines.slice(i);
+          const listLines  = rest.filter(isList);
+          const textLines  = rest.filter(l => !isList(l));
+
+          if (textLines.length) {
+            html += `<p>${textLines.map(fmtAC).join('<br/>')}</p>`;
+          }
+          if (listLines.length) {
+            html += `<ul>${listLines.map(l => `<li>${fmtItem(l.slice(2))}</li>`).join('')}</ul>`;
+          }
+        }
+        return html;
+      };
+
+      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[]): any[] => {
+        const fields: any[] = [
+          { op: 'add', path: '/fields/System.Title', value: title },
+        ];
+        if (description) {
+          fields.push({ op: 'add', path: '/fields/System.Description', value: toHtml(description) });
+        }
+        if (priority) {
+          const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
+          const numericPriority = priorityMap[priority];
+          if (numericPriority) {
+            fields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: numericPriority });
+          }
+        }
+        if (tags && tags.length > 0) {
+          fields.push({ op: 'add', path: '/fields/System.Tags', value: tags.join('; ') });
+        }
+        if (this.areaPath) {
+          fields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+        }
+        return fields;
+      };
+
+      const buildParentRelation = (parentAdoId: number): any => ({
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'System.LinkTypes.Hierarchy-Reverse',
+          url: `${this.organization}/${this.project}/_apis/wit/workItems/${parentAdoId}`,
+          attributes: { comment: 'Created from AI Pilot backlog draft' },
+        },
+      });
+
+      // 1. Create the Epic
+      const epicFields = buildBaseFields(epic.title, epic.description, epic.priority, epic.tags);
+      const epicItem = await witApi.createWorkItem({}, epicFields, this.project, 'Epic');
+      if (!epicItem?.id) throw new Error('Failed to create Epic in ADO');
+      const epicAdoId = epicItem.id;
+      const orgUrl = this.organization.replace(/\/$/, '');
+      const epicAdoUrl = `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${epicAdoId}`;
+      console.log(`[BacklogADO] Created Epic "${epic.title}" → ADO #${epicAdoId}`);
+
+      // 2. Create Features as children of the Epic
+      const featureMap: Record<string, number> = {};
+      for (const feature of acceptedFeatures) {
+        const featureFields = [
+          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags),
+          buildParentRelation(epicAdoId),
+        ];
+        const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
+        if (!featureItem?.id) throw new Error(`Failed to create Feature "${feature.title}" in ADO`);
+        featureMap[feature.id] = featureItem.id;
+        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureItem.id}`);
+      }
+
+      // 3. Create PBIs as children of their respective Features
+      const pbiMap: Record<string, number> = {};
+      for (const pbi of acceptedPBIs) {
+        const parentAdoId = featureMap[pbi.parentId];
+        if (!parentAdoId) {
+          console.warn(`[BacklogADO] Skipping PBI "${pbi.title}": parent feature ${pbi.parentId} was not created (not Accepted)`);
+          continue;
+        }
+        const acHtml = pbi.acceptanceCriteria && pbi.acceptanceCriteria.length > 0
+          ? `<ul>${pbi.acceptanceCriteria.map(ac => {
+              const escaped = ac
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              return `<li>${escaped
+                .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+                .replace(/\b(When)\b/g, '<strong>When</strong>')
+                .replace(/\b(Then)\b/g, '<strong>Then</strong>')
+              }</li>`;
+            }).join('')}</ul>`
+          : undefined;
+        const pbiFields = [
+          ...buildBaseFields(pbi.title, pbi.description),
+          buildParentRelation(parentAdoId),
+        ];
+        if (acHtml) {
+          pbiFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acHtml });
+        }
+        const pbiItem = await witApi.createWorkItem({}, pbiFields, this.project, 'Product Backlog Item');
+        if (!pbiItem?.id) throw new Error(`Failed to create PBI "${pbi.title}" in ADO`);
+        pbiMap[pbi.id] = pbiItem.id;
+        console.log(`[BacklogADO] Created PBI "${pbi.title}" → ADO #${pbiItem.id}`);
+      }
+
+      return { epicAdoId, epicAdoUrl, featureMap, pbiMap };
+    });
+  }
 }

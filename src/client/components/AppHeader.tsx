@@ -2,7 +2,7 @@ import React from 'react';
 import { UserMenu } from './UserMenu';
 
 interface AppHeaderProps {
-  currentView: 'calendar' | 'planning' | 'cloudcost';
+  currentView: 'calendar' | 'planning' | 'cloudcost' | 'backlog';
   planningTab: string;
   availableProjects: string[];
   availableAreaPaths: string[];
@@ -14,6 +14,7 @@ interface AppHeaderProps {
   onNavigateCalendar: () => void;
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
+  onNavigateBacklog: () => void;
   onChangeProject: (project: string) => void;
   onChangeAreaPath: (areaPath: string) => void;
   onOpenChangelog: () => void;
@@ -33,6 +34,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateCalendar,
   onNavigatePlanning,
   onNavigateCloudCost,
+  onNavigateBacklog,
   onChangeProject,
   onChangeAreaPath,
   onOpenChangelog,
@@ -58,6 +60,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         onClick={onNavigateCloudCost}
       >
         Cloud Cost
+      </button>
+      <button
+        className={`view-btn ${currentView === 'backlog' ? 'active' : ''}`}
+        onClick={onNavigateBacklog}
+      >
+        Backlog
       </button>
     </div>
     <div className="header-controls">
