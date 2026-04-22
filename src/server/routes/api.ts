@@ -1351,7 +1351,11 @@ router.post('/backlog/generate-feature', async (req: Request, res: Response) => 
     res.json(generated);
   } catch (error: any) {
     console.error('Error generating Feature via Bedrock:', error);
-    res.status(500).json({ error: 'Failed to generate Feature', details: error.message });
+    res.status(500).json({
+      error: 'Failed to generate Feature',
+      details: error.message,
+      code: error.name ?? error.Code,
+    });
   }
 });
 
@@ -1393,7 +1397,11 @@ router.post('/backlog/generate-pbi', async (req: Request, res: Response) => {
     res.json(generated);
   } catch (error: any) {
     console.error('Error generating PBI via Bedrock:', error);
-    res.status(500).json({ error: 'Failed to generate PBI', details: error.message });
+    res.status(500).json({
+      error: 'Failed to generate PBI',
+      details: error.message,
+      code: error.name ?? error.Code,
+    });
   }
 });
 
@@ -1647,7 +1655,11 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
     if (error.message?.startsWith('WIKI_CONFLICT')) {
       return res.status(409).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to resolve clarification', details: error.message });
+    res.status(500).json({
+      error: 'Failed to resolve clarification',
+      details: error.message,
+      code: error.name ?? error.Code,
+    });
   }
 });
 

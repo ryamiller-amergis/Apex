@@ -120,7 +120,11 @@ jobs:
               AZURE_COST_CLIENT_SECRET="${{ secrets.AZURE_COST_CLIENT_SECRET }}" \
               SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
               PORT=8080 \
-              POLL_INTERVAL=30
+              POLL_INTERVAL=30 \
+              AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+              AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+              AWS_REGION="${{ secrets.AWS_REGION }}" \
+              BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}"
 
           # Bypass npm start/package.json resolution issues by setting an explicit startup command.
           # Using an absolute path ensures it works even if the current working directory isn't wwwroot.
