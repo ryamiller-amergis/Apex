@@ -6,7 +6,7 @@ const client = new BedrockRuntimeClient({
 });
 
 const MODEL_ID =
-  process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-3-5-haiku-20241022-v1:0';
+  process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 /* ── SDLC skill content cache ─────────────────────────────── */
 
@@ -150,6 +150,42 @@ export interface GeneratedPBIData {
   tags: string[];
 }
 
+/* ── JSON extraction helper ───────────────────────────────── */
+
+/**
+ * Try several strategies to pull a JSON object out of a model response.
+ * Models sometimes omit the language tag, use single backticks, or return
+ * bare JSON with no fences at all.
+ */
+/** Thrown when the model returns plain text instead of the expected JSON. */
+export class BedrockModelRefusalError extends Error {
+  constructor(public readonly modelText: string) {
+    super(modelText);
+    this.name = 'BedrockModelRefusalError';
+  }
+}
+
+function extractJson(text: string, label: string): string {
+  // 1. Fenced block with ```json … ```
+  const fencedJson = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (fencedJson) return fencedJson[1].trim();
+
+  // 2. Fenced block with no language tag ``` … ```
+  const fencedPlain = text.match(/```\s*([\s\S]*?)\s*```/);
+  if (fencedPlain) {
+    const candidate = fencedPlain[1].trim();
+    if (candidate.startsWith('{') || candidate.startsWith('[')) return candidate;
+  }
+
+  // 3. First top-level JSON object in the text
+  const bare = text.match(/(\{[\s\S]*\})/);
+  if (bare) return bare[1].trim();
+
+  // Model returned plain text (clarification request, refusal, etc.) — surface it directly.
+  console.warn(`[bedrockService] ${label} — model returned non-JSON response:\n${text}`);
+  throw new BedrockModelRefusalError(text.trim());
+}
+
 /* ── Main generation function ─────────────────────────────── */
 
 export async function generatePBIFromBedrock(
@@ -177,15 +213,7 @@ export async function generatePBIFromBedrock(
   };
 
   const text = body.content[0]?.text ?? '';
-
-  const jsonMatch =
-    text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/(\{[\s\S]*\})/);
-
-  if (!jsonMatch) {
-    throw new Error('Could not parse structured PBI from AI response');
-  }
-
-  const parsed = JSON.parse(jsonMatch[1]) as GeneratedPBIData;
+  const parsed = JSON.parse(extractJson(text, 'PBI')) as GeneratedPBIData;
 
   return {
     title: parsed.title ?? '',
@@ -226,15 +254,7 @@ export async function generateFeatureFromBedrock(
   };
 
   const text = body.content[0]?.text ?? '';
-
-  const jsonMatch =
-    text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/(\{[\s\S]*\})/);
-
-  if (!jsonMatch) {
-    throw new Error('Could not parse structured Feature from AI response');
-  }
-
-  const parsed = JSON.parse(jsonMatch[1]) as GeneratedFeatureWithPBIs;
+  const parsed = JSON.parse(extractJson(text, 'Feature')) as GeneratedFeatureWithPBIs;
 
   const feature: GeneratedFeatureData = {
     title: parsed.feature?.title ?? '',
@@ -435,15 +455,7 @@ export async function resolveClarificationWithBedrock(
   };
 
   const text = body.content[0]?.text ?? '';
-
-  const jsonMatch =
-    text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/(\{[\s\S]*\})/);
-
-  if (!jsonMatch) {
-    throw new Error('Could not parse structured clarification resolution from AI response');
-  }
-
-  const parsed = JSON.parse(jsonMatch[1]) as ResolveClarificationResult;
+  const parsed = JSON.parse(extractJson(text, 'clarification resolution')) as ResolveClarificationResult;
 
   const validActions: ClarificationAction[] = ['update', 'create-feature', 'create-pbi'];
   const action: ClarificationAction = validActions.includes(parsed.action as ClarificationAction)

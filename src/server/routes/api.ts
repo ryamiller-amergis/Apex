@@ -1350,6 +1350,9 @@ router.post('/backlog/generate-feature', async (req: Request, res: Response) => 
 
     res.json(generated);
   } catch (error: any) {
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
     console.error('Error generating Feature via Bedrock:', error);
     res.status(500).json({
       error: 'Failed to generate Feature',
@@ -1396,6 +1399,9 @@ router.post('/backlog/generate-pbi', async (req: Request, res: Response) => {
 
     res.json(generated);
   } catch (error: any) {
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
     console.error('Error generating PBI via Bedrock:', error);
     res.status(500).json({
       error: 'Failed to generate PBI',
@@ -1654,6 +1660,9 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
     console.error('Error resolving clarification via Bedrock:', error);
     if (error.message?.startsWith('WIKI_CONFLICT')) {
       return res.status(409).json({ error: error.message });
+    }
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
     }
     res.status(500).json({
       error: 'Failed to resolve clarification',

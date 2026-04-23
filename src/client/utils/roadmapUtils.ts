@@ -11,6 +11,9 @@ export interface RoadmapItem {
   completionPercentage: number;
   childCount: number;
   completedCount: number;
+  greenCount: number;
+  amberCount: number;
+  redCount: number;
   healthStatus: 'on-track' | 'in-progress' | 'behind' | 'ahead';
   daysRemaining: number;
   timeElapsedPercentage: number;
@@ -175,6 +178,38 @@ export function calculateCompletionPercentage(children: WorkItem[]): number {
 }
 
 /**
+ * Calculate green/amber/red segment counts for a work item's children,
+ * mirroring the same state classifications used by the Release tab progress bar.
+ */
+export function calculateSegmentedCounts(children: WorkItem[]): {
+  greenCount: number;
+  amberCount: number;
+  redCount: number;
+  activeTotal: number;
+} {
+  const activeChildren = children.filter(child => child.state !== 'Removed');
+
+  const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
+  const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
+
+  let greenCount = 0;
+  let amberCount = 0;
+  let redCount = 0;
+
+  activeChildren.forEach(child => {
+    if (greenStates.includes(child.state)) {
+      greenCount++;
+    } else if (amberStates.includes(child.state)) {
+      amberCount++;
+    } else {
+      redCount++;
+    }
+  });
+
+  return { greenCount, amberCount, redCount, activeTotal: activeChildren.length };
+}
+
+/**
  * Generate monthly timeline columns for a given date range
  * @param startDate - Start of the timeline
  * @param endDate - End of the timeline
@@ -301,6 +336,9 @@ export function prepareRoadmapItems(
         completionPercentage,
         childCount: 0,
         completedCount: 0,
+        greenCount: 0,
+        amberCount: 0,
+        redCount: 0,
         healthStatus: calculateHealthStatus(completionPercentage, timeElapsedPercentage, daysRemaining, remainingItems),
         daysRemaining,
         timeElapsedPercentage,

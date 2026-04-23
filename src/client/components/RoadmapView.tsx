@@ -7,6 +7,7 @@ import {
   generateQuarterlyTimeline,
   isDateInColumn,
   calculateCompletionPercentage,
+  calculateSegmentedCounts,
   calculateHealthStatus,
   calculateTimeElapsed,
   calculateDaysRemaining,
@@ -96,6 +97,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
               completionPercentage: 0,
               childCount: 0,
               completedCount: 0,
+              greenCount: 0,
+              amberCount: 0,
+              redCount: 0,
               healthStatus: 'on-track',
               daysRemaining: 0,
               timeElapsedPercentage: 0,
@@ -145,6 +149,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
         completionPercentage,
         childCount: 0,
         completedCount: 0,
+        greenCount: 0,
+        amberCount: 0,
+        redCount: 0,
         healthStatus: calculateHealthStatus(completionPercentage, timeElapsedPercentage, daysRemaining, 0) as 'on-track' | 'in-progress' | 'behind' | 'ahead',
         daysRemaining,
         timeElapsedPercentage,
@@ -223,21 +230,18 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
     
     // Filter out "Removed" items from calculations
     const activeChildren = children.filter(child => child.state !== 'Removed');
-    
-    // Determine completed states based on child type
-    const isFeatureLevel = activeChildren.some(child => child.workItemType === 'Feature');
-    const completedStates = isFeatureLevel 
-      ? ['Done', 'Closed']
-      : ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-    
-    const completedCount = activeChildren.filter(child => completedStates.includes(child.state)).length;
+
+    // Segmented counts (green/amber/red) matching Release tab state classifications
+    const { greenCount, amberCount, redCount } = calculateSegmentedCounts(children);
+
     const daysRemaining = calculateDaysRemaining(item.targetDate);
     
     // Calculate remaining work - count in-progress items as 0.5 remaining since they're already half done
     const inProgressStates = ['In Progress', 'In Pull Request', 'Ready For Test', 'In Test'];
+    const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
     const inProgressCount = activeChildren.filter(child => inProgressStates.includes(child.state)).length;
     const notStartedCount = activeChildren.filter(child => 
-      !completedStates.includes(child.state) && !inProgressStates.includes(child.state)
+      !greenStates.includes(child.state) && !inProgressStates.includes(child.state)
     ).length;
     const remainingItems = (inProgressCount * 0.5) + notStartedCount;
     
@@ -252,7 +256,10 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
       ...item,
       completionPercentage,
       childCount: activeChildren.length,
-      completedCount,
+      completedCount: greenCount,
+      greenCount,
+      amberCount,
+      redCount,
       healthStatus,
       daysRemaining,
       timeElapsedPercentage: actualTimeElapsed,
@@ -281,6 +288,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
             completionPercentage: 0,
             childCount: 0,
             completedCount: 0,
+            greenCount: 0,
+            amberCount: 0,
+            redCount: 0,
             healthStatus: 'on-track',
             daysRemaining: 0,
             timeElapsedPercentage: 0,
@@ -519,18 +529,32 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
                             
                             <div className="progress-section">
                               <div className="progress-bar-container">
-                                <div 
-                                  className="progress-bar-fill"
-                                  style={{ 
-                                    width: `${item.completionPercentage}%`,
-                                    backgroundColor: getHealthStatusColor(item.healthStatus)
-                                  }}
-                                ></div>
+                                {item.childCount > 0 && (
+                                  <>
+                                    <div
+                                      className="progress-bar-segment segment-green"
+                                      style={{ width: `${(item.greenCount / item.childCount) * 100}%` }}
+                                      title={`Ready / Done: ${item.greenCount}`}
+                                    ></div>
+                                    <div
+                                      className="progress-bar-segment segment-amber"
+                                      style={{ width: `${(item.amberCount / item.childCount) * 100}%` }}
+                                      title={`UAT Ready for Test: ${item.amberCount}`}
+                                    ></div>
+                                    <div
+                                      className="progress-bar-segment segment-red"
+                                      style={{ width: `${(item.redCount / item.childCount) * 100}%` }}
+                                      title={`Other: ${item.redCount}`}
+                                    ></div>
+                                  </>
+                                )}
                               </div>
                               <div className="progress-stats">
-                                <span className="completion-percentage">{item.completionPercentage}%</span>
+                                <span className="completion-percentage">
+                                  {item.childCount > 0 ? Math.round((item.greenCount / item.childCount) * 100) : 0}%
+                                </span>
                                 <span className="completion-count">
-                                  {item.completedCount}/{item.childCount} items
+                                  {item.greenCount}/{item.childCount} items
                                 </span>
                               </div>
                             </div>
@@ -676,54 +700,47 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
                                         </span>
                                       </div>
                                       
-                                      <div className="progress-section">
-                                        <div className="progress-bar-container">
-                                          <div 
-                                            className="progress-bar-fill"
-                                            style={{ 
-                                              width: `${(() => {
-                                                if (!grandChildren || grandChildren.length === 0) return 0;
-                                                const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                                const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                                return grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                              })()}%`,
-                                              backgroundColor: (() => {
-                                                if (!grandChildren || grandChildren.length === 0) {
-                                                  const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                                  const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                                  const healthStatus = calculateHealthStatus(0, timeElapsed, daysRemaining);
-                                                  return getHealthStatusColor(healthStatus);
-                                                }
-                                                const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                                const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                                const percentage = grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                                const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                                const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                                const healthStatus = calculateHealthStatus(percentage, timeElapsed, daysRemaining);
-                                                return getHealthStatusColor(healthStatus);
-                                              })()
-                                            }}
-                                          ></div>
-                                        </div>
-                                        <div className="progress-stats">
-                                          <span className="completion-percentage">
-                                            {(() => {
-                                              if (!grandChildren || grandChildren.length === 0) return 0;
-                                              const completedStates = ['UAT - Test Done', 'Done', 'Closed'];
-                                              const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                              return grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                            })()}%
-                                          </span>
-                                          <span className="completion-count">
-                                            {(() => {
-                                              if (!grandChildren || grandChildren.length === 0) return '0/0 items';
-                                              const completedStates = ['UAT - Test Done', 'Done', 'Closed'];
-                                              const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                              return `${completedCount}/${grandChildren.length} items`;
-                                            })()}
-                                          </span>
-                                        </div>
-                                      </div>
+                                      {(() => {
+                                        const activeGC = grandChildren
+                                          ? grandChildren.filter(gc => gc.state !== 'Removed')
+                                          : [];
+                                        const gcGreenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
+                                        const gcAmberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
+                                        const gcGreen = activeGC.filter(gc => gcGreenStates.includes(gc.state)).length;
+                                        const gcAmber = activeGC.filter(gc => gcAmberStates.includes(gc.state)).length;
+                                        const gcRed = activeGC.length - gcGreen - gcAmber;
+                                        const gcTotal = activeGC.length;
+                                        const gcGreenPct = gcTotal > 0 ? Math.round((gcGreen / gcTotal) * 100) : 0;
+                                        return (
+                                          <div className="progress-section">
+                                            <div className="progress-bar-container">
+                                              {gcTotal > 0 && (
+                                                <>
+                                                  <div
+                                                    className="progress-bar-segment segment-green"
+                                                    style={{ width: `${(gcGreen / gcTotal) * 100}%` }}
+                                                    title={`Ready / Done: ${gcGreen}`}
+                                                  ></div>
+                                                  <div
+                                                    className="progress-bar-segment segment-amber"
+                                                    style={{ width: `${(gcAmber / gcTotal) * 100}%` }}
+                                                    title={`UAT Ready for Test: ${gcAmber}`}
+                                                  ></div>
+                                                  <div
+                                                    className="progress-bar-segment segment-red"
+                                                    style={{ width: `${(gcRed / gcTotal) * 100}%` }}
+                                                    title={`Other: ${gcRed}`}
+                                                  ></div>
+                                                </>
+                                              )}
+                                            </div>
+                                            <div className="progress-stats">
+                                              <span className="completion-percentage">{gcGreenPct}%</span>
+                                              <span className="completion-count">{gcGreen}/{gcTotal} items</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })()}
 
                                       <div className="days-remaining">
                                         {child.state === 'Done' || child.state === 'Closed' 
