@@ -41,6 +41,7 @@ function findNodeInDoc(doc: BacklogDocument, id: string): BacklogNode | null {
   );
 }
 
+
 const BacklogView: React.FC<BacklogViewProps> = ({ project, areaPath }) => {
   const queryClient = useQueryClient();
 
@@ -266,26 +267,18 @@ const BacklogView: React.FC<BacklogViewProps> = ({ project, areaPath }) => {
                             onSelect={() => handleSelectNode(feature)}
                           />
 
-                          {featureExpanded && featurePBIs.map((pbi, pbiIdx) => {
-                            const pbiCanStartDev =
-                              pbi.status === 'Approved' &&
-                              feature.status === 'Approved' &&
-                              epic.status === 'Approved';
-                            return (
-                              <BacklogTreeRow
-                                key={`${featureKey}:p${pbiIdx}`}
-                                node={pbi}
-                                depth={2}
-                                isExpanded={false}
-                                hasChildren={false}
-                                isSelected={selectedNodeId === pbi.id}
-                                onToggle={() => {}}
-                                onSelect={() => handleSelectNode(pbi)}
-                                canStartDev={pbiCanStartDev}
-                                onStartDev={() => {}}
-                              />
-                            );
-                          })}
+                          {featureExpanded && featurePBIs.map((pbi, pbiIdx) => (
+                            <BacklogTreeRow
+                              key={`${featureKey}:p${pbiIdx}`}
+                              node={pbi}
+                              depth={2}
+                              isExpanded={false}
+                              hasChildren={false}
+                              isSelected={selectedNodeId === pbi.id}
+                              onToggle={() => {}}
+                              onSelect={() => handleSelectNode(pbi)}
+                            />
+                          ))}
                         </div>
                       );
                     })}
@@ -296,6 +289,7 @@ const BacklogView: React.FC<BacklogViewProps> = ({ project, areaPath }) => {
           ))}
         </div>
       </div>
+
 
       {selectedNode && selectedDoc && (
         <BacklogDetailsPanel
@@ -308,6 +302,7 @@ const BacklogView: React.FC<BacklogViewProps> = ({ project, areaPath }) => {
           onSelectNode={handleSelectNode}
         />
       )}
+
     </div>
   );
 };
@@ -320,8 +315,6 @@ interface TreeRowProps {
   isSelected: boolean;
   onToggle: () => void;
   onSelect: () => void;
-  canStartDev?: boolean;
-  onStartDev?: () => void;
 }
 
 const BacklogTreeRow: React.FC<TreeRowProps> = ({
@@ -332,8 +325,6 @@ const BacklogTreeRow: React.FC<TreeRowProps> = ({
   isSelected,
   onToggle,
   onSelect,
-  canStartDev,
-  onStartDev,
 }) => {
   const typeClass = node.workItemType.toLowerCase();
   const statusClass = STATUS_CLASSES[node.status] ?? 'status-draft';
@@ -370,15 +361,17 @@ const BacklogTreeRow: React.FC<TreeRowProps> = ({
             {node.status.charAt(0).toUpperCase() + node.status.slice(1)}
           </span>
         )}
-        {node.workItemType === 'PBI' && canStartDev !== undefined && (
-          <button
-            className={`btn-begin-dev-inline${canStartDev ? ' btn-begin-dev-inline--ready' : ''}`}
-            disabled={!canStartDev}
-            onClick={e => { e.stopPropagation(); if (canStartDev && onStartDev) onStartDev(); }}
-            title={canStartDev ? 'Begin Development' : 'Epic, Feature, and PBI must all be Approved'}
+        {(node as any).adoWorkItemId && (node as any).adoWorkItemUrl && (
+          <a
+            className="tree-ado-badge"
+            href={(node as any).adoWorkItemUrl as string}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            title={`View ${node.workItemType} #${(node as any).adoWorkItemId} in Azure DevOps`}
           >
-            ▶ Begin Dev
-          </button>
+            ADO #{(node as any).adoWorkItemId} ↗
+          </a>
         )}
       </div>
     </div>

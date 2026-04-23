@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { generateBacklogId } from '../../shared/utils/backlogId';
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
 // DesignDocKickoffStats is returned directly by the service - no import needed here
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
@@ -1248,6 +1249,25 @@ router.get('/ai-work-item-details', async (req: Request, res: Response) => {
 });
 
 // GET /api/backlog/drafts - Fetch wiki draft backlog documents
+// GET /api/backlog/ado-work-item-tags?workItemId=X&project=Y - Fetch System.Tags from a single ADO work item
+router.get('/backlog/ado-work-item-tags', async (req: Request, res: Response) => {
+  try {
+    const { workItemId, project, areaPath } = req.query as { workItemId?: string; project?: string; areaPath?: string };
+    if (!workItemId || isNaN(Number(workItemId))) {
+      return res.status(400).json({ error: 'workItemId is required and must be a number' });
+    }
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const witApi = await (adoService as any).connection.getWorkItemTrackingApi();
+    const workItem = await witApi.getWorkItem(Number(workItemId), ['System.Tags'], undefined, undefined, project);
+    const raw: string = workItem.fields?.['System.Tags'] ?? '';
+    const tags = raw ? raw.split(';').map((t: string) => t.trim()).filter(Boolean) : [];
+    res.json({ tags });
+  } catch (error: any) {
+    console.error('Error fetching ADO work item tags:', error);
+    res.status(500).json({ error: 'Failed to fetch work item tags', details: error.message });
+  }
+});
+
 router.get('/backlog/drafts', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
@@ -1310,6 +1330,61 @@ router.post('/backlog/create-ado-items', async (req: Request, res: Response) => 
   } catch (error: any) {
     console.error('Error creating ADO backlog items:', error);
     res.status(500).json({ error: 'Failed to create ADO backlog items', details: error.message });
+  }
+});
+
+// POST /api/backlog/create-pbi-ado-item - Create a single ADO PBI (and its Feature if needed) from an approved Feature
+router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) => {
+  try {
+    const { pbiId, document, project, areaPath } = req.body as {
+      pbiId?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!pbiId || typeof pbiId !== 'string') {
+      return res.status(400).json({ error: 'pbiId is required' });
+    }
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+
+    const pbi = (document.pbis ?? []).find((p: any) => p.id === pbiId);
+    if (!pbi) return res.status(404).json({ error: `PBI ${pbiId} not found in document` });
+    if (pbi.adoWorkItemId) return res.status(422).json({ error: 'PBI already has an ADO work item' });
+
+    const isReady = (s: string) => s === 'Approved' || s === 'Merged';
+    if (!isReady(pbi.status)) {
+      return res.status(422).json({ error: 'PBI must be Approved or Merged before creating in ADO' });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === pbi.parentId);
+    if (!feature) return res.status(404).json({ error: `Parent feature ${pbi.parentId} not found in document` });
+    if (!isReady(feature.status)) {
+      return res.status(422).json({ error: 'Parent Feature must be Approved or Merged before creating ADO PBI' });
+    }
+
+    // Resolve the parent Epic's ADO ID if the Feature needs to be created
+    let parentEpicAdoId: number | undefined;
+    if (!feature.adoWorkItemId) {
+      const parentEpic = (document.epics ?? []).find((e: any) => e.id === feature.parentId);
+      if (parentEpic?.adoWorkItemId) parentEpicAdoId = parentEpic.adoWorkItemId;
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const result = await adoService.createSinglePbiInADO(feature, pbi, parentEpicAdoId);
+
+    res.json({
+      success: true,
+      pbiAdoId: result.pbiAdoId,
+      pbiAdoUrl: result.pbiAdoUrl,
+      featureAdoId: result.featureAdoId,
+      featureAdoUrl: result.featureAdoUrl,
+    });
+  } catch (error: any) {
+    console.error('Error creating ADO PBI:', error);
+    res.status(500).json({ error: 'Failed to create ADO PBI', details: error.message });
   }
 });
 
@@ -1487,21 +1562,11 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
     });
 
     // ── Helpers ────────────────────────────────────────────────────
-    const nextFeatId = (): string => {
-      const nums = (document.features ?? [])
-        .map((f: any) => parseInt(f.id.replace(/^FEAT-/, ''), 10))
-        .filter((n: number) => !isNaN(n));
-      const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-      return `FEAT-${String(next).padStart(3, '0')}`;
-    };
+    const nextFeatId = (): string =>
+      generateBacklogId('FEAT', (document.features ?? []).map((f: any) => f.id));
 
-    const nextPBIId = (existingPBIs: any[]): string => {
-      const nums = existingPBIs
-        .map((p: any) => parseInt(p.id.replace(/^PBI-/, ''), 10))
-        .filter((n: number) => !isNaN(n));
-      const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-      return `PBI-${String(next).padStart(3, '0')}`;
-    };
+    const nextPBIId = (existingPBIs: any[]): string =>
+      generateBacklogId('PBI', existingPBIs.map((p: any) => p.id));
 
     const clearClarification = (n: any) => ({ ...n, clarificationNeeded: undefined });
 
@@ -1738,6 +1803,61 @@ router.delete('/backlog/item', async (req: Request, res: Response) => {
       return res.status(409).json({ error: error.message });
     }
     res.status(500).json({ error: 'Failed to delete backlog item', details: error.message });
+  }
+});
+
+// POST /api/backlog/unlink-ado-item - Delete an ADO work item and reset the backlog item back to Draft
+router.post('/backlog/unlink-ado-item', async (req: Request, res: Response) => {
+  try {
+    const { itemId, workItemType, pagePath, document, project, areaPath } = req.body as {
+      itemId?: string;
+      workItemType?: 'Epic' | 'Feature' | 'PBI';
+      pagePath?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!itemId || !workItemType || !pagePath || !document || !project) {
+      return res.status(400).json({ error: 'itemId, workItemType, pagePath, document, and project are required' });
+    }
+
+    const arrayKey = workItemType === 'Epic' ? 'epics' : workItemType === 'Feature' ? 'features' : 'pbis';
+    const items: any[] = document[arrayKey] ?? [];
+    const item = items.find((i: any) => i.id === itemId);
+    if (!item) return res.status(404).json({ error: `${workItemType} ${itemId} not found in document` });
+
+    const adoWorkItemId: number | undefined = item.adoWorkItemId;
+
+    // Clear ADO link and reset status to Draft
+    const updatedItems = items.map((i: any) =>
+      i.id === itemId
+        ? { ...i, status: 'Draft', adoWorkItemId: undefined, adoWorkItemUrl: undefined }
+        : i
+    );
+    const updatedDoc = { ...document, [arrayKey]: updatedItems };
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    await adoService.updateDraftBacklogDoc(pagePath, updatedDoc);
+
+    // Delete from ADO — best-effort; wiki save already committed
+    if (adoWorkItemId && typeof adoWorkItemId === 'number') {
+      try {
+        await adoService.deleteWorkItem(adoWorkItemId);
+        console.log(`[POST /backlog/unlink-ado-item] Deleted ADO work item ${adoWorkItemId}`);
+      } catch (adoErr: any) {
+        console.error(`[POST /backlog/unlink-ado-item] Wiki updated but ADO delete failed for ${adoWorkItemId}:`, adoErr.message);
+        return res.json({ success: true, adoDeleteError: adoErr.message });
+      }
+    }
+
+    res.json({ success: true, updatedDoc });
+  } catch (error: any) {
+    console.error('Error unlinking ADO item:', error);
+    if (error.message?.startsWith('WIKI_CONFLICT')) {
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to unlink ADO item', details: error.message });
   }
 });
 

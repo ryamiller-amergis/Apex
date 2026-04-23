@@ -4259,4 +4259,114 @@ export class AzureDevOpsService {
       return { epicAdoId, epicAdoUrl, featureMap, pbiMap };
     });
   }
+
+  /**
+   * Creates a single PBI in ADO, linked to the given parent Feature ADO item.
+   * If the Feature does not yet have an ADO work item ID, pass `parentEpicAdoId`
+   * and the Feature will be created first (linked to the Epic if provided).
+   */
+  async createSinglePbiInADO(
+    feature: { id: string; title: string; description?: string; priority?: string; tags?: string[]; adoWorkItemId?: number },
+    pbi: { id: string; title: string; description?: string; priority?: string; tags?: string[]; acceptanceCriteria?: string[] },
+    parentEpicAdoId?: number
+  ): Promise<{ featureAdoId?: number; featureAdoUrl?: string; pbiAdoId: number; pbiAdoUrl: string }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      const esc = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      const toHtml = (raw: string): string => {
+        if (!raw) return '';
+        const fmtItem = (s: string): string =>
+          esc(s).replace(/^((?:BR|NFR|AC)-\d+:|[A-Z][A-Za-z/\s]{1,30}:)\s*/, '<strong>$1</strong>&nbsp;');
+        const fmtAC = (s: string): string =>
+          esc(s)
+            .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+            .replace(/\b(When)\b/g, '<strong>When</strong>')
+            .replace(/\b(Then)\b/g, '<strong>Then</strong>');
+        const isHeader = (l: string) => /^[A-Z][^:\n]{1,50}:$/.test(l);
+        const isList   = (l: string) => l.startsWith('- ');
+        let html = '';
+        for (const block of raw.split(/\n{2,}/)) {
+          const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+          if (!lines.length) continue;
+          let i = 0;
+          if (isHeader(lines[i])) { html += `<p><strong>${esc(lines[i])}</strong></p>`; i++; }
+          const rest      = lines.slice(i);
+          const listLines = rest.filter(isList);
+          const textLines = rest.filter(l => !isList(l));
+          if (textLines.length) html += `<p>${textLines.map(fmtAC).join('<br/>')}</p>`;
+          if (listLines.length) html += `<ul>${listLines.map(l => `<li>${fmtItem(l.slice(2))}</li>`).join('')}</ul>`;
+        }
+        return html;
+      };
+
+      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[]): any[] => {
+        const fields: any[] = [{ op: 'add', path: '/fields/System.Title', value: title }];
+        if (description) fields.push({ op: 'add', path: '/fields/System.Description', value: toHtml(description) });
+        if (priority) {
+          const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
+          const num = priorityMap[priority];
+          if (num) fields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
+        }
+        if (tags && tags.length > 0) fields.push({ op: 'add', path: '/fields/System.Tags', value: tags.join('; ') });
+        if (this.areaPath) fields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+        return fields;
+      };
+
+      const buildParentRelation = (parentAdoId: number): any => ({
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'System.LinkTypes.Hierarchy-Reverse',
+          url: `${this.organization}/${this.project}/_apis/wit/workItems/${parentAdoId}`,
+          attributes: { comment: 'Created from AI Pilot backlog draft' },
+        },
+      });
+
+      const orgUrl = this.organization.replace(/\/$/, '');
+
+      // 1. Resolve or create the Feature
+      let featureAdoId: number | undefined = feature.adoWorkItemId;
+      let featureAdoUrl: string | undefined;
+      if (!featureAdoId) {
+        const featureFields = [
+          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags),
+          ...(parentEpicAdoId ? [buildParentRelation(parentEpicAdoId)] : []),
+        ];
+        const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
+        if (!featureItem?.id) throw new Error(`Failed to create Feature "${feature.title}" in ADO`);
+        featureAdoId = featureItem.id;
+        featureAdoUrl = `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${featureAdoId}`;
+        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureAdoId}`);
+      }
+
+      // 2. Create the PBI under the Feature
+      const acHtml = pbi.acceptanceCriteria && pbi.acceptanceCriteria.length > 0
+        ? `<ul>${pbi.acceptanceCriteria.map(ac => {
+            const escaped = ac.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `<li>${escaped
+              .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+              .replace(/\b(When)\b/g, '<strong>When</strong>')
+              .replace(/\b(Then)\b/g, '<strong>Then</strong>')
+            }</li>`;
+          }).join('')}</ul>`
+        : undefined;
+
+      const pbiFields = [
+        ...buildBaseFields(pbi.title, pbi.description, pbi.priority, pbi.tags),
+        buildParentRelation(featureAdoId),
+      ];
+      if (acHtml) pbiFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acHtml });
+
+      const pbiItem = await witApi.createWorkItem({}, pbiFields, this.project, 'Product Backlog Item');
+      if (!pbiItem?.id) throw new Error(`Failed to create PBI "${pbi.title}" in ADO`);
+      const pbiAdoId = pbiItem.id;
+      const pbiAdoUrl = `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${pbiAdoId}`;
+      console.log(`[BacklogADO] Created PBI "${pbi.title}" → ADO #${pbiAdoId}`);
+
+      return { featureAdoId: featureAdoUrl ? featureAdoId : undefined, featureAdoUrl, pbiAdoId, pbiAdoUrl };
+    });
+  }
 }

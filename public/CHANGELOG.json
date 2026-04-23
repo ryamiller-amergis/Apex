@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.10.0",
+    "date": "2026-04-23",
+    "title": "Selective PBI Creation in Azure DevOps",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added '⊕ ADO' button directly on PBI rows in the backlog tree — BAs can now push individual approved PBIs to Azure DevOps without creating the entire epic hierarchy at once"
+      },
+      {
+        "type": "feature",
+        "description": "Added '⊕ Create ADO' button in the PBI details panel action bar, available whenever the PBI and its parent Feature are Approved or Accepted and the item hasn't been pushed to ADO yet"
+      },
+      {
+        "type": "feature",
+        "description": "Confirmation modal summarises exactly what will be created (PBI only, or Feature + PBI if the Feature is not yet in ADO) before committing to Azure DevOps"
+      },
+      {
+        "type": "improvement",
+        "description": "If a parent Feature is Approved but not yet in ADO, it is automatically created and linked to its Epic (when the Epic already exists in ADO) as part of the PBI creation flow"
+      },
+      {
+        "type": "improvement",
+        "description": "After a PBI is successfully created in ADO, the draft wiki document is updated in-place — the PBI and any newly created Feature receive their ADO IDs, URLs, and Merged status without a full page reload"
+      }
+    ]
+  },
+  {
     "version": "1.9.0",
     "date": "2026-02-16",
     "title": "Planning Roadmap Dynamic Layout & Scrolling",

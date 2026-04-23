@@ -33,6 +33,8 @@ export interface BacklogFeature {
   sourceEvidence?: string;
   clarificationNeeded?: string;
   featureFlag?: FeatureFlag;
+  adoWorkItemId?: number;
+  adoWorkItemUrl?: string;
 }
 
 export interface BacklogPBI {
@@ -48,6 +50,8 @@ export interface BacklogPBI {
   sourceEvidence?: string;
   clarificationNeeded?: string;
   acceptanceCriteria?: string[];
+  adoWorkItemId?: number;
+  adoWorkItemUrl?: string;
 }
 
 export type BacklogNode = BacklogEpic | BacklogFeature | BacklogPBI;

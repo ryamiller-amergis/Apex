@@ -3,7 +3,7 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import type { UseFieldArrayAppend, UseFieldArrayRemove, FieldArrayWithId, Control, UseFormRegister, FieldErrors } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   BacklogNode,
   BacklogDocumentPayload,
@@ -12,6 +12,8 @@ import type {
   BacklogPBI,
 } from '../types/workitem';
 import './BacklogDetailsPanel.css';
+import BeginDevKickoffModal from './BeginDevKickoffModal';
+import { generateBacklogId } from '../../shared/utils/backlogId';
 
 interface GeneratedPBIData {
   title: string;
@@ -246,11 +248,27 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
-  const [createResult, setCreateResult] = useState<{ epicAdoId: number; epicAdoUrl: string; featuresCreated: number; pbisCreated: number } | null>(null);
+  const [createResult, setCreateResult] = useState<{
+    epicAdoId: number;
+    epicAdoUrl: string;
+    featuresCreated: number;
+    pbisCreated: number;
+    featureMap: Record<string, number>;
+    pbiMap: Record<string, number>;
+  } | null>(null);
+  const [showCreatePbiConfirm, setShowCreatePbiConfirm] = useState(false);
+  const [showUnlinkAdoConfirm, setShowUnlinkAdoConfirm] = useState(false);
+  const [pbiCreateResult, setPbiCreateResult] = useState<{
+    pbiAdoId: number;
+    pbiAdoUrl: string;
+    featureAdoId?: number;
+    featureAdoUrl?: string;
+  } | null>(null);
   const [showGeneratePBI, setShowGeneratePBI] = useState(false);
   const [showGenerateFeature, setShowGenerateFeature] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [clarificationResult, setClarificationResult] = useState<ClarificationResolution | null>(null);
+  const [showKickoffModal, setShowKickoffModal] = useState(false);
 
   const form = useForm<EditFormValues>({
     resolver: zodResolver(editSchema),
@@ -336,22 +354,132 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
         const body = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(body?.error ?? `Failed: ${res.status}`);
       }
-      return res.json() as Promise<{ epicAdoId: number; epicAdoUrl: string; featuresCreated: number; pbisCreated: number }>;
+      return res.json() as Promise<{
+        epicAdoId: number;
+        epicAdoUrl: string;
+        featuresCreated: number;
+        pbisCreated: number;
+        featureMap: Record<string, number>;
+        pbiMap: Record<string, number>;
+      }>;
     },
     onSuccess: (data) => {
       setShowCreateConfirm(false);
       setCreateResult(data);
       setSaveError(null);
-      // Mark epic as Merged and persist the ADO link in the wiki document
-      mutation.mutate({
-        ...node,
+
+      // Build the ADO URL for any work item id using the ADO org + project from env
+      const adoBase = `https://dev.azure.com/${import.meta.env.VITE_ADO_ORG ?? 'amergis'}`;
+      const buildUrl = (adoId: number) =>
+        `${adoBase}/${encodeURIComponent(project)}/_workitems/edit/${adoId}`;
+
+      // Stamp the Epic with Merged + ADO link
+      const updatedEpic: BacklogEpic = {
+        ...(node as BacklogEpic),
         status: 'Merged',
         adoWorkItemId: data.epicAdoId,
         adoWorkItemUrl: data.epicAdoUrl,
-      } as BacklogNode);
+      };
+
+      // Stamp every Feature and PBI that was pushed to ADO
+      const updatedFeatures: BacklogFeature[] = document.features.map(f => {
+        const adoId = data.featureMap[f.id];
+        if (!adoId) return f;
+        return { ...f, status: 'Merged', adoWorkItemId: adoId, adoWorkItemUrl: buildUrl(adoId) };
+      });
+      const updatedPBIs: BacklogPBI[] = document.pbis.map(p => {
+        const adoId = data.pbiMap[p.id];
+        if (!adoId) return p;
+        return { ...p, status: 'Merged', adoWorkItemId: adoId, adoWorkItemUrl: buildUrl(adoId) };
+      });
+
+      const updatedPayload: BacklogDocumentPayload = {
+        ...document,
+        epics: document.epics.map(e => (e.id === node.id ? updatedEpic : e)),
+        features: updatedFeatures,
+        pbis: updatedPBIs,
+      };
+
+      saveDraftDoc(pagePath, updatedPayload, project, areaPath)
+        .then(() => queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] }))
+        .catch((err: Error) => setSaveError(err.message));
     },
     onError: (err: Error) => {
       setShowCreateConfirm(false);
+      setSaveError(err.message);
+    },
+  });
+
+  const createPbiAdoMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/backlog/create-pbi-ado-item', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pbiId: node.id, document, project, areaPath }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body?.error ?? `Failed: ${res.status}`);
+      }
+      return res.json() as Promise<{
+        pbiAdoId: number;
+        pbiAdoUrl: string;
+        featureAdoId?: number;
+        featureAdoUrl?: string;
+      }>;
+    },
+    onSuccess: (data) => {
+      setShowCreatePbiConfirm(false);
+      setSaveError(null);
+      setPbiCreateResult(data);
+
+      const updatedPBIs: BacklogPBI[] = document.pbis.map(p =>
+        p.id === node.id
+          ? { ...p, status: 'Merged', adoWorkItemId: data.pbiAdoId, adoWorkItemUrl: data.pbiAdoUrl }
+          : p
+      );
+
+      const updatedFeatures: BacklogFeature[] = data.featureAdoId
+        ? document.features.map(f =>
+            f.id === (node as BacklogPBI).parentId
+              ? { ...f, status: 'Merged', adoWorkItemId: data.featureAdoId, adoWorkItemUrl: data.featureAdoUrl }
+              : f
+          )
+        : document.features;
+
+      const updatedPayload: BacklogDocumentPayload = { ...document, features: updatedFeatures, pbis: updatedPBIs };
+      saveDraftDoc(pagePath, updatedPayload, project, areaPath)
+        .then(() => queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] }))
+        .catch((err: Error) => setSaveError(err.message));
+    },
+    onError: (err: Error) => {
+      setShowCreatePbiConfirm(false);
+      setSaveError(err.message);
+    },
+  });
+
+  const unlinkAdoMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/backlog/unlink-ado-item', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: node.id, workItemType: node.workItemType, pagePath, document, project, areaPath }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body?.error ?? `Failed: ${res.status}`);
+      }
+      return res.json() as Promise<{ success: boolean; adoDeleteError?: string }>;
+    },
+    onSuccess: () => {
+      setShowUnlinkAdoConfirm(false);
+      setSaveError(null);
+      queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] });
+    },
+    onError: (err: Error) => {
+      setShowUnlinkAdoConfirm(false);
       setSaveError(err.message);
     },
   });
@@ -375,11 +503,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   });
 
   const handleAddGeneratedPBI = (generated: GeneratedPBIData) => {
-    const allNumericIds = document.pbis
-      .map(p => parseInt(p.id.replace(/^PBI-/, ''), 10))
-      .filter(n => !isNaN(n));
-    const nextNum = allNumericIds.length > 0 ? Math.max(...allNumericIds) + 1 : 1;
-    const newId = `PBI-${String(nextNum).padStart(3, '0')}`;
+    const newId = generateBacklogId('PBI', document.pbis.map(p => p.id));
 
     const newPBI: BacklogPBI = {
       id: newId,
@@ -417,11 +541,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   });
 
   const handleAddGeneratedFeature = (data: GeneratedFeatureWithPBIs) => {
-    const allFeatNums = document.features
-      .map(f => parseInt(f.id.replace(/^FEAT-/, ''), 10))
-      .filter(n => !isNaN(n));
-    const nextFeatNum = allFeatNums.length > 0 ? Math.max(...allFeatNums) + 1 : 1;
-    const newFeatId = `FEAT-${String(nextFeatNum).padStart(3, '0')}`;
+    const newFeatId = generateBacklogId('FEAT', document.features.map(f => f.id));
 
     const newFeature: BacklogFeature = {
       id: newFeatId,
@@ -436,15 +556,9 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
       clarificationNeeded: data.feature.clarificationNeeded || undefined,
     };
 
-    const basePBINum = (() => {
-      const nums = document.pbis
-        .map(p => parseInt(p.id.replace(/^PBI-/, ''), 10))
-        .filter(n => !isNaN(n));
-      return nums.length > 0 ? Math.max(...nums) : 0;
-    })();
-
+    const existingPbiIds = document.pbis.map(p => p.id);
     const newPBIs: BacklogPBI[] = data.pbis.map((pbi, i) => ({
-      id: `PBI-${String(basePBINum + i + 1).padStart(3, '0')}`,
+      id: generateBacklogId('PBI', existingPbiIds, i),
       parentId: newFeatId,
       workItemType: 'PBI',
       status: 'Draft',
@@ -534,6 +648,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
       queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] });
       setClarificationResult({
         action: data.action,
+        reasoning: data.reasoning,
         featureTitle: data.featureTitle,
         pbisCreated: data.pbisCreated,
         pbiTitle: data.pbiTitle,
@@ -566,6 +681,14 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
     mutation.mutate({ ...node, status: 'Draft' } as BacklogNode);
   };
 
+  const handleKickoffInitiated = () => {
+    if (node.workItemType !== 'PBI') return;
+    // Invalidate cached ADO tags so the button re-checks the live value
+    if (pbiAdoWorkItemId) {
+      queryClient.invalidateQueries({ queryKey: ['ado-work-item-tags', pbiAdoWorkItemId, project] });
+    }
+  };
+
   const handleSaveEdit = (values: EditFormValues) => {
     const updatedNode = formValuesToNode(values, node);
     mutation.mutate(updatedNode);
@@ -587,29 +710,67 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   const featureNode = node.workItemType === 'Feature' ? (node as BacklogFeature) : null;
   const isSaving = mutation.isPending;
 
-  // Begin Development eligibility — PBI only, all three levels must be Approved
+  // Fetch the live ADO tags for this PBI to check if kickoff was already initiated
+  const pbiAdoWorkItemId = node.workItemType === 'PBI' ? (node as BacklogPBI).adoWorkItemId : undefined;
+  const { data: adoTagsData } = useQuery({
+    queryKey: ['ado-work-item-tags', pbiAdoWorkItemId, project],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/backlog/ado-work-item-tags?workItemId=${pbiAdoWorkItemId}&project=${encodeURIComponent(project)}`,
+        { credentials: 'include' }
+      );
+      if (!res.ok) return { tags: [] as string[] };
+      return res.json() as Promise<{ tags: string[] }>;
+    },
+    enabled: !!pbiAdoWorkItemId,
+    staleTime: 30_000,
+  });
+
+  // Begin Development eligibility — PBI only, all three levels must be Merged
+  const isDevReady = (s: string) => s === 'Merged';
+  const kickoffAlreadyInitiated =
+    node.workItemType === 'PBI' && !!(adoTagsData?.tags ?? []).includes('ai-code');
   const startDevBlocker = (() => {
     if (node.workItemType !== 'PBI') return null;
-    if (node.status !== 'Approved') return 'This PBI must be Approved';
+    if (kickoffAlreadyInitiated) return 'Design doc kickoff already initiated';
+    if (!isDevReady(node.status)) return 'This PBI must be Merged';
     const parentFeat = document.features.find(f => f.id === (node as BacklogPBI).parentId);
-    if (!parentFeat || parentFeat.status !== 'Approved') return 'Parent Feature must be Approved';
+    if (!parentFeat || !isDevReady(parentFeat.status)) return 'Parent Feature must be Merged';
     const parentEpic = document.epics.find(e => e.id === parentFeat.parentId);
-    if (!parentEpic || parentEpic.status !== 'Approved') return 'Parent Epic must be Approved';
+    if (!parentEpic || !isDevReady(parentEpic.status)) return 'Parent Epic must be Merged';
     return null;
   })();
   const canStartDev = node.workItemType === 'PBI' && startDevBlocker === null;
   const isCreating = createAdoMutation.isPending;
+  const isCreatingPbi = createPbiAdoMutation.isPending;
   const isDeleting = deleteMutation.isPending;
   const isEpic = node.workItemType === 'Epic';
 
-  // ADO link: prefer the value persisted in the wiki document; fall back to current-session result
-  const epicNode = isEpic ? (node as BacklogEpic) : null;
-  const adoLink: { id: number; url: string } | null =
-    epicNode?.adoWorkItemUrl
-      ? { id: epicNode.adoWorkItemId!, url: epicNode.adoWorkItemUrl }
-      : createResult
-        ? { id: createResult.epicAdoId, url: createResult.epicAdoUrl }
-        : null;
+  // PBI-level ADO creation: eligible when parent Feature is Approved/Merged and PBI not yet in ADO
+  const isAdoReady = (s: string) => s === 'Approved' || s === 'Merged';
+  const pbiAdoBlocker = (() => {
+    if (node.workItemType !== 'PBI') return null;
+    if ((node as BacklogPBI).adoWorkItemId) return 'This PBI is already in ADO';
+    if (!isAdoReady(node.status)) return 'PBI must be Approved or Merged';
+    const parentFeat = document.features.find(f => f.id === (node as BacklogPBI).parentId);
+    if (!parentFeat) return 'Parent Feature not found';
+    if (!isAdoReady(parentFeat.status)) return 'Parent Feature must be Approved or Merged';
+    return null;
+  })();
+  const canCreatePbiAdo = node.workItemType === 'PBI' && pbiAdoBlocker === null;
+
+  // ADO link: prefer the value persisted in the wiki document for any type;
+  // fall back to current-session createResult for the Epic.
+  const adoLink: { id: number; url: string } | null = (() => {
+    const n = node as any;
+    if (n.adoWorkItemUrl && typeof n.adoWorkItemId === 'number') {
+      return { id: n.adoWorkItemId as number, url: n.adoWorkItemUrl as string };
+    }
+    if (isEpic && createResult) {
+      return { id: createResult.epicAdoId, url: createResult.epicAdoUrl };
+    }
+    return null;
+  })();
 
   return (
     <div
@@ -706,20 +867,39 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
                     className={`btn-begin-dev${canStartDev ? ' btn-begin-dev--ready' : ''}`}
                     disabled={!canStartDev || isSaving}
                     title={canStartDev ? 'Begin Development for this PBI' : (startDevBlocker ?? '')}
-                    onClick={() => {}}
+                    onClick={() => setShowKickoffModal(true)}
                   >
                     ▶ Begin Development
                   </button>
                 )}
-                {isEpic && (
+                {node.workItemType === 'PBI' && (
                   <button
-                    className="btn-create-ado"
-                    onClick={() => { setCreateResult(null); setShowCreateConfirm(true); }}
-                    disabled={isSaving || isCreating || isDeleting}
+                    className={`btn-create-ado${canCreatePbiAdo ? ' btn-create-ado--ready' : ''}`}
+                    disabled={!canCreatePbiAdo || isSaving || isCreatingPbi || isDeleting}
+                    title={canCreatePbiAdo ? 'Create this PBI in Azure DevOps' : (pbiAdoBlocker ?? '')}
+                    onClick={() => setShowCreatePbiConfirm(true)}
                   >
-                    ⊕ Create ADO Items
+                    {isCreatingPbi ? 'Creating…' : '⊕ Create ADO'}
                   </button>
                 )}
+                {isEpic && (() => {
+                  const epicAdoBlocker = (node as BacklogEpic).adoWorkItemId
+                    ? 'This Epic is already in ADO'
+                    : !isAdoReady(node.status)
+                      ? 'Epic must be Approved or Merged'
+                      : null;
+                  const canCreateEpicAdo = epicAdoBlocker === null;
+                  return (
+                    <button
+                      className={`btn-create-ado${canCreateEpicAdo ? ' btn-create-ado--ready' : ''}`}
+                      onClick={() => { setCreateResult(null); setShowCreateConfirm(true); }}
+                      disabled={!canCreateEpicAdo || isSaving || isCreating || isDeleting}
+                      title={canCreateEpicAdo ? 'Create ADO items for this Epic' : (epicAdoBlocker ?? '')}
+                    >
+                      ⊕ Create ADO Items
+                    </button>
+                  );
+                })()}
                 <button
                   className="btn-delete-item"
                   onClick={() => setShowDeleteConfirm(true)}
@@ -756,23 +936,93 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
           </div>
         )}
 
-        {createResult && (
+        {createResult && (() => {
+          const adoBase = `https://dev.azure.com/${import.meta.env.VITE_ADO_ORG ?? 'amergis'}`;
+          const buildAdoUrl = (adoId: number) =>
+            `${adoBase}/${encodeURIComponent(project)}/_workitems/edit/${adoId}`;
+          const featureEntries = Object.entries(createResult.featureMap);
+          const pbiEntries = Object.entries(createResult.pbiMap);
+          return (
+            <div className="bdp-create-success" role="status">
+              <div className="bdp-create-success-body">
+                <div className="bdp-create-success-row">
+                  <strong>ADO items created —</strong>
+                  <a
+                    className="bdp-ado-link"
+                    href={createResult.epicAdoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Epic #{createResult.epicAdoId} ↗
+                  </a>
+                </div>
+                {featureEntries.length > 0 && (
+                  <div className="bdp-create-success-row bdp-create-success-sub">
+                    <span className="bdp-create-success-label">Features:</span>
+                    {featureEntries.map(([, adoId]) => (
+                      <a
+                        key={adoId}
+                        className="bdp-ado-link"
+                        href={buildAdoUrl(adoId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        #{adoId} ↗
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {pbiEntries.length > 0 && (
+                  <div className="bdp-create-success-row bdp-create-success-sub">
+                    <span className="bdp-create-success-label">PBIs:</span>
+                    {pbiEntries.map(([, adoId]) => (
+                      <a
+                        key={adoId}
+                        className="bdp-ado-link"
+                        href={buildAdoUrl(adoId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        #{adoId} ↗
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button className="bdp-create-success-close" onClick={() => setCreateResult(null)}>✕</button>
+            </div>
+          );
+        })()}
+
+        {pbiCreateResult && (
           <div className="bdp-create-success" role="status">
-            <span>
-              ADO items created —{' '}
-              <a
-                className="bdp-ado-link"
-                href={createResult.epicAdoUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Epic #{createResult.epicAdoId}
-              </a>
-              ,{' '}
-              {createResult.featuresCreated} Feature{createResult.featuresCreated !== 1 ? 's' : ''},{' '}
-              {createResult.pbisCreated} PBI{createResult.pbisCreated !== 1 ? 's' : ''}.
-            </span>
-            <button className="bdp-create-success-close" onClick={() => setCreateResult(null)}>✕</button>
+            <div className="bdp-create-success-body">
+              <div className="bdp-create-success-row">
+                <strong>PBI created in ADO —</strong>
+                <a
+                  className="bdp-ado-link"
+                  href={pbiCreateResult.pbiAdoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  PBI #{pbiCreateResult.pbiAdoId} ↗
+                </a>
+              </div>
+              {pbiCreateResult.featureAdoId && pbiCreateResult.featureAdoUrl && (
+                <div className="bdp-create-success-row bdp-create-success-sub">
+                  <span className="bdp-create-success-label">Feature also created:</span>
+                  <a
+                    className="bdp-ado-link"
+                    href={pbiCreateResult.featureAdoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    #{pbiCreateResult.featureAdoId} ↗
+                  </a>
+                </div>
+              )}
+            </div>
+            <button className="bdp-create-success-close" onClick={() => setPbiCreateResult(null)}>✕</button>
           </div>
         )}
       </div>
@@ -787,6 +1037,37 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
           isCreating={isCreating}
           onConfirm={() => createAdoMutation.mutate()}
           onCancel={() => setShowCreateConfirm(false)}
+        />
+      )}
+
+      {/* Create single PBI in ADO confirmation modal */}
+      {showCreatePbiConfirm && node.workItemType === 'PBI' && (
+        <CreatePbiAdoConfirmModal
+          pbi={node as BacklogPBI}
+          document={document}
+          isCreating={isCreatingPbi}
+          onConfirm={() => createPbiAdoMutation.mutate()}
+          onCancel={() => setShowCreatePbiConfirm(false)}
+        />
+      )}
+
+      {/* Unlink ADO work item confirmation modal */}
+      {showUnlinkAdoConfirm && adoLink && (
+        <UnlinkAdoConfirmModal
+          node={node}
+          adoId={adoLink.id}
+          isDeleting={unlinkAdoMutation.isPending}
+          onConfirm={() => unlinkAdoMutation.mutate()}
+          onCancel={() => setShowUnlinkAdoConfirm(false)}
+        />
+      )}
+
+      {/* Design doc kickoff modal */}
+      {showKickoffModal && node.workItemType === 'PBI' && (
+        <BeginDevKickoffModal
+          pbi={node as BacklogPBI}
+          onClose={() => setShowKickoffModal(false)}
+          onKickoffInitiated={handleKickoffInitiated}
         />
       )}
 
@@ -836,6 +1117,8 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
             featureNode={featureNode}
             onSelectNode={onSelectNode}
             adoLink={adoLink}
+            onUnlinkAdo={adoLink ? () => setShowUnlinkAdoConfirm(true) : undefined}
+            isUnlinkingAdo={unlinkAdoMutation.isPending}
             onGeneratePBI={node.workItemType === 'Feature' ? () => setShowGeneratePBI(true) : undefined}
             onGenerateFeature={node.workItemType === 'Epic' ? () => setShowGenerateFeature(true) : undefined}
             onAnswerClarification={handleAnswerClarification}
@@ -861,6 +1144,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
 
 interface ClarificationResolution {
   action: 'update' | 'create-feature' | 'create-pbi';
+  reasoning?: string;
   /** create-feature */
   featureTitle?: string;
   pbisCreated?: number;
@@ -878,6 +1162,8 @@ interface ViewBodyProps {
   featureNode: BacklogFeature | null;
   onSelectNode: (n: BacklogNode) => void;
   adoLink?: { id: number; url: string } | null;
+  onUnlinkAdo?: () => void;
+  isUnlinkingAdo?: boolean;
   onGeneratePBI?: () => void;
   onGenerateFeature?: () => void;
   onAnswerClarification?: (answer: string) => void;
@@ -913,20 +1199,31 @@ const ClarificationSection: React.FC<ClarificationSectionProps> = ({
 
       {result ? (
         <div className="bdp-clarification-resolved">
-          {result.action === 'update' && '✓ Work item updated with your answer'}
-          {result.action === 'create-feature' && (
-            <>
-              {'✓ Created new Feature: '}
-              <strong>{result.featureTitle}</strong>
-              {result.pbisCreated ? ` with ${result.pbisCreated} PBI${result.pbisCreated !== 1 ? 's' : ''}` : ''}
-            </>
-          )}
-          {result.action === 'create-pbi' && (
-            <>
-              {'✓ Created new PBI: '}
-              <strong>{result.pbiTitle}</strong>
-              {result.parentFeatureTitle ? <> {' under '}<em>{result.parentFeatureTitle}</em></> : ''}
-            </>
+          <div className="bdp-clarification-resolved-summary">
+            <span className="bdp-clarification-resolved-check">✓</span>
+            <span>
+              {result.action === 'update' && 'Work item updated with your answer'}
+              {result.action === 'create-feature' && (
+                <>
+                  {'Created new Feature: '}
+                  <strong>{result.featureTitle}</strong>
+                  {result.pbisCreated ? ` with ${result.pbisCreated} PBI${result.pbisCreated !== 1 ? 's' : ''}` : ''}
+                </>
+              )}
+              {result.action === 'create-pbi' && (
+                <>
+                  {'Created new PBI: '}
+                  <strong>{result.pbiTitle}</strong>
+                  {result.parentFeatureTitle ? <> {' under '}<em>{result.parentFeatureTitle}</em></> : ''}
+                </>
+              )}
+            </span>
+          </div>
+          {result.reasoning && (
+            <div className="bdp-clarification-reasoning">
+              <span className="bdp-clarification-reasoning-label">AI reasoning</span>
+              <p className="bdp-clarification-reasoning-text">{result.reasoning}</p>
+            </div>
           )}
         </div>
       ) : (
@@ -986,6 +1283,8 @@ const ViewBody: React.FC<ViewBodyProps> = ({
   featureNode,
   onSelectNode,
   adoLink,
+  onUnlinkAdo,
+  isUnlinkingAdo,
   onGeneratePBI,
   onGenerateFeature,
   onAnswerClarification,
@@ -1117,19 +1416,31 @@ const ViewBody: React.FC<ViewBodyProps> = ({
       />
     )}
 
-    {/* ADO link — shown after backlog items have been created this session */}
-    {adoLink && node.workItemType === 'Epic' && (
+    {/* ADO link — shown for any work item type once created in ADO */}
+    {adoLink && (
       <div className="bdp-section">
         <h3 className="bdp-section-title">Azure DevOps</h3>
-        <a
-          className="bdp-ado-workitem-link"
-          href={adoLink.url}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <span className="bdp-ado-workitem-icon">↗</span>
-          <span>View Epic #{adoLink.id} in Azure DevOps</span>
-        </a>
+        <div className="bdp-ado-section-row">
+          <a
+            className="bdp-ado-workitem-link"
+            href={adoLink.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span className="bdp-ado-workitem-icon">↗</span>
+            <span>View {node.workItemType} #{adoLink.id} in Azure DevOps</span>
+          </a>
+          {onUnlinkAdo && (
+            <button
+              className="btn-unlink-ado"
+              onClick={onUnlinkAdo}
+              disabled={isUnlinkingAdo}
+              title="Delete this work item from Azure DevOps and reset status to Draft"
+            >
+              {isUnlinkingAdo ? 'Deleting…' : '⊗ Delete from ADO'}
+            </button>
+          )}
+        </div>
       </div>
     )}
   </>
@@ -2461,6 +2772,76 @@ const GeneratePBIModal: React.FC<GeneratePBIModalProps> = ({
   );
 };
 
+/* ── Create PBI ADO Confirm Modal ────────────────────────── */
+
+interface CreatePbiAdoConfirmModalProps {
+  pbi: BacklogPBI;
+  document: BacklogDocumentPayload;
+  isCreating: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const CreatePbiAdoConfirmModal: React.FC<CreatePbiAdoConfirmModalProps> = ({
+  pbi,
+  document,
+  isCreating,
+  onConfirm,
+  onCancel,
+}) => {
+  const parentFeature = document.features.find(f => f.id === pbi.parentId);
+  const parentEpic = parentFeature ? document.epics.find(e => e.id === parentFeature.parentId) : undefined;
+
+  const featureAlreadyInAdo = !!parentFeature?.adoWorkItemId;
+
+  return (
+    <div className="bdp-modal-overlay" onClick={onCancel}>
+      <div className="bdp-modal" onClick={e => e.stopPropagation()}>
+        <div className="bdp-modal-header">
+          <h3 className="bdp-modal-title">Create PBI in Azure DevOps</h3>
+          <button className="bdp-modal-close" onClick={onCancel} disabled={isCreating}>✕</button>
+        </div>
+
+        <div className="bdp-modal-body">
+          <p className="bdp-modal-epic-name">&ldquo;{pbi.title}&rdquo;</p>
+
+          <div className="bdp-modal-info">
+            This will create <strong>one Product Backlog Item</strong> in Azure DevOps.
+            {!featureAlreadyInAdo && parentFeature && (
+              <> The parent Feature &ldquo;{parentFeature.title}&rdquo; will also be created
+              {parentEpic?.adoWorkItemId ? ' and linked to its Epic' : ''} since it is not yet in ADO.</>
+            )}
+          </div>
+
+          <div className="bdp-modal-summary">
+            {!featureAlreadyInAdo && parentFeature && (
+              <div className="bdp-modal-summary-row">
+                <span className="bdp-type-chip type-feature" style={{ fontSize: '10px' }}>Feature</span>
+                <span>1 Feature will be created</span>
+              </div>
+            )}
+            <div className="bdp-modal-summary-row">
+              <span className="bdp-type-chip type-pbi" style={{ fontSize: '10px' }}>PBI</span>
+              <span>1 PBI will be created</span>
+            </div>
+          </div>
+
+          <p className="bdp-modal-confirm-text">
+            Are you sure you want to proceed? This will create live work items in Azure DevOps.
+          </p>
+        </div>
+
+        <div className="bdp-modal-footer">
+          <button className="btn-cancel" onClick={onCancel} disabled={isCreating}>Cancel</button>
+          <button className="btn-create-ado-confirm" onClick={onConfirm} disabled={isCreating}>
+            {isCreating ? 'Creating…' : '⊕ Create in ADO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ── Create ADO Confirm Modal ─────────────────────────────── */
 
 interface CreateAdoConfirmModalProps {
@@ -2584,3 +2965,48 @@ const CreateAdoConfirmModal: React.FC<CreateAdoConfirmModalProps> = ({
     </div>
   );
 };
+
+/* ── Unlink ADO Confirm Modal ─────────────────────────────── */
+
+interface UnlinkAdoConfirmModalProps {
+  node: BacklogNode;
+  adoId: number;
+  isDeleting: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const UnlinkAdoConfirmModal: React.FC<UnlinkAdoConfirmModalProps> = ({
+  node,
+  adoId,
+  isDeleting,
+  onConfirm,
+  onCancel,
+}) => (
+  <div className="bdp-modal-overlay" onClick={onCancel}>
+    <div className="bdp-modal" onClick={e => e.stopPropagation()}>
+      <div className="bdp-modal-header">
+        <h3 className="bdp-modal-title">Delete ADO Work Item</h3>
+        <button className="bdp-modal-close" onClick={onCancel} disabled={isDeleting}>✕</button>
+      </div>
+
+      <div className="bdp-modal-body">
+        <p className="bdp-modal-epic-name">&ldquo;{node.title}&rdquo;</p>
+        <div className="bdp-modal-info">
+          This will <strong>permanently delete</strong> {node.workItemType} #{adoId} from Azure DevOps
+          and reset this item&apos;s status back to <strong>Draft</strong>.
+        </div>
+        <p className="bdp-modal-confirm-text bdp-modal-confirm-text--danger">
+          This action cannot be undone. Are you sure you want to proceed?
+        </p>
+      </div>
+
+      <div className="bdp-modal-footer">
+        <button className="btn-cancel" onClick={onCancel} disabled={isDeleting}>Cancel</button>
+        <button className="btn-unlink-ado-confirm" onClick={onConfirm} disabled={isDeleting}>
+          {isDeleting ? 'Deleting…' : '⊗ Delete from ADO'}
+        </button>
+      </div>
+    </div>
+  </div>
+);
