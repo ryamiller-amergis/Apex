@@ -375,6 +375,22 @@ export class AzureDevOpsService {
     });
   }
 
+  /**
+   * Append a tag to an ADO work item's System.Tags field (semicolon-separated).
+   * No-ops if the tag is already present. Case-insensitive duplicate check.
+   */
+  async addTagToWorkItem(id: number, tag: string): Promise<void> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const workItem = await witApi.getWorkItem(id, ['System.Tags'], undefined, undefined, this.project);
+      const existing: string = workItem.fields?.['System.Tags'] ?? '';
+      const currentTags = existing.split(';').map(t => t.trim()).filter(Boolean);
+      if (currentTags.some(t => t.toLowerCase() === tag.toLowerCase())) return;
+      const newTags = [...currentTags, tag].join('; ');
+      await witApi.updateWorkItem({}, [{ op: 'add', path: '/fields/System.Tags', value: newTags }], id, this.project);
+    });
+  }
+
   async healthCheck(): Promise<boolean> {
     try {
       const coreApi = await this.connection.getCoreApi();

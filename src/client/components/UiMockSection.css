@@ -1,0 +1,567 @@
+/* ── UiMockSection ─────────────────────────────────────────── */
+
+.ui-mock-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  margin-top: 4px;
+}
+
+/* ── Tab bar ── */
+
+.ui-mock-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 2px solid var(--border-color);
+  margin-bottom: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ui-mock-tabs::-webkit-scrollbar { display: none; }
+
+.ui-mock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 180px;
+  transition: color 0.15s, border-color 0.15s;
+  border-radius: 4px 4px 0 0;
+}
+
+.ui-mock-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.ui-mock-tab--active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+  font-weight: 600;
+}
+
+.ui-mock-tab__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+  display: block;
+}
+
+/* Status dots on tab labels */
+.ui-mock-tab__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ui-mock-tab__dot--approved {
+  background: var(--success-color, #22c55e);
+}
+
+.ui-mock-tab__dot--ready {
+  background: #059669;
+}
+
+/* ── MockViewPanel (inner panel body per tab) ── */
+
+.mock-view-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mock-view-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 24px;
+}
+
+/* ── Header ── */
+
+.ui-mock-section__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ui-mock-section__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ui-mock-generate-all-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-secondary, #f8f9fb);
+  border: 1px solid var(--border-color, #e2e6ea);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.ui-mock-generate-all-panel__context {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+.ui-mock-generate-all-panel__context::placeholder {
+  color: var(--text-muted, #aaa);
+  font-style: italic;
+}
+.ui-mock-generate-all-panel__context:focus {
+  outline: none;
+  border-color: var(--color-primary, #2563eb);
+}
+
+.ui-mock-section__btn-generate-all {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border: 1px solid var(--color-primary, #2563eb);
+  border-radius: 5px;
+  background: none;
+  color: var(--color-primary, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.ui-mock-section__btn-generate-all:hover:not(:disabled) {
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+}
+.ui-mock-section__btn-generate-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-mock-section__generate-all-progress {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.ui-mock-section__generate-all-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-color, #ddd);
+  border-top-color: var(--color-primary, #2563eb);
+  border-radius: 50%;
+  animation: ui-mock-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes ui-mock-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Decision badge ── */
+
+.ui-mock-decision-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.decision-new-page {
+  background: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #90caf9;
+}
+
+.decision-update-page {
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #a5d6a7;
+}
+
+.decision-no-ui {
+  background: #f3e5f5;
+  color: #6a1b9a;
+  border: 1px solid #ce93d8;
+}
+
+[data-theme="dark"] .decision-new-page {
+  background: #1a3a52;
+  color: #90caf9;
+  border-color: #4a9eff;
+}
+
+[data-theme="dark"] .decision-update-page {
+  background: #1b3a1f;
+  color: #a5d6a7;
+  border-color: #66bb6a;
+}
+
+[data-theme="dark"] .decision-no-ui {
+  background: #3a1a52;
+  color: #ce93d8;
+  border-color: #ab47bc;
+}
+
+.ui-mock-decision-badge__route {
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* ── Approved badge ── */
+
+.ui-mock-approved-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--success-color);
+  color: #fff;
+  margin-left: auto;
+}
+
+/* ── Error ── */
+
+.ui-mock-section__error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(211, 47, 47, 0.1);
+  border: 1px solid rgba(211, 47, 47, 0.3);
+  color: var(--error-color);
+  font-size: 13px;
+}
+
+/* ── Rationale ── */
+
+.ui-mock-section__rationale {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* ── Empty state ── */
+
+.ui-mock-section__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.ui-mock-section__empty-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ── No-UI notice ── */
+
+.ui-mock-section__no-ui-notice {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ── Feedback block (always visible when mock exists) ── */
+
+.ui-mock-section__feedback-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ui-mock-section__feedback-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ui-mock-section__feedback-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.15s;
+}
+
+.ui-mock-section__feedback-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.ui-mock-section__feedback-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ── Action row ── */
+
+.ui-mock-section__action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Buttons ── */
+
+.ui-mock-section__btn-generate,
+.ui-mock-section__btn-regenerate,
+.ui-mock-section__btn-approve {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  border: none;
+}
+
+.ui-mock-section__btn-generate {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.ui-mock-section__btn-generate:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.ui-mock-section__btn-regenerate {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.ui-mock-section__btn-regenerate:hover:not(:disabled) {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+.ui-mock-section__btn-approve {
+  background: var(--success-color);
+  color: #fff;
+}
+
+.ui-mock-section__btn-approve:hover:not(:disabled) {
+  background: var(--success-hover);
+}
+
+
+.ui-mock-section__btn-discard {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--error-color);
+  margin-left: auto;
+}
+
+.ui-mock-section__btn-discard:hover:not(:disabled) {
+  background: rgba(211, 47, 47, 0.08);
+  border-color: var(--error-color);
+}
+
+/* Disabled state for all buttons */
+.ui-mock-section__btn-generate:disabled,
+.ui-mock-section__btn-regenerate:disabled,
+.ui-mock-section__btn-approve:disabled,
+.ui-mock-section__btn-discard:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
+/* "View in Figma" — primary action button with Figma branding */
+.ui-mock-section__btn-figma {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  background: #f5f3ff;
+  color: #6d28d9;
+  border: 1.5px solid #c4b5fd;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ui-mock-section__btn-figma:hover {
+  background: #7c3aed;
+  color: #fff;
+  border-color: #7c3aed;
+}
+
+.ui-mock-section__btn-figma-arrow {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 1px;
+}
+
+[data-theme="dark"] .ui-mock-section__btn-figma {
+  background: #2e1f5e;
+  color: #c4b5fd;
+  border-color: #5b21b6;
+}
+
+[data-theme="dark"] .ui-mock-section__btn-figma:hover {
+  background: #7c3aed;
+  color: #fff;
+  border-color: #7c3aed;
+}
+
+/* "Send to Figma" / "Re-send to Figma" — secondary outlined variant */
+.ui-mock-section__btn-send-figma {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1.5px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.ui-mock-section__btn-send-figma:hover:not(:disabled) {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border-color: #c4b5fd;
+}
+
+.ui-mock-section__btn-send-figma:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-mock-section__figma-queued {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.ui-mock-figma-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.ui-mock-figma-pending__reset {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.ui-mock-figma-pending__reset:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--error-color);
+}
+
+/* Design Ready badge — shown in header once the UX designer marks it ready */
+.ui-mock-design-ready-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #059669;
+  background: #d1fae5;
+  border: 1px solid #6ee7b7;
+  border-radius: 12px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* Mark Design Ready button — shown in action bar when figmaUrl exists and not yet ready */
+.ui-mock-section__btn-design-ready {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #059669;
+  background: #d1fae5;
+  border: 1px solid #6ee7b7;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.ui-mock-section__btn-design-ready:hover:not(:disabled) {
+  background: #a7f3d0;
+  border-color: #34d399;
+}
+
+.ui-mock-section__btn-design-ready:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

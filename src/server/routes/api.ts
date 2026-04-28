@@ -1,6 +1,9 @@
 import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { generateBacklogId } from '../../shared/utils/backlogId';
+import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
+// figmaExportService intentionally unused — Figma design creation is handled
+// by the .cursor/hooks.json sessionStart hook running inside Cursor Desktop.
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
 // DesignDocKickoffStats is returned directly by the service - no import needed here
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
@@ -1318,6 +1321,20 @@ router.post('/backlog/create-ado-items', async (req: Request, res: Response) => 
     const adoService = new AzureDevOpsService(project, areaPath);
     const result = await adoService.createBacklogItemsInADO(epic, acceptedFeatures, acceptedPBIs);
 
+    // Tag any newly-created feature ADO items that have an approved AI-generated UI mock
+    for (const feature of acceptedFeatures) {
+      if (feature.uiMock?.status === 'approved') {
+        const newAdoId = result.featureMap[feature.id];
+        if (newAdoId) {
+          try {
+            await adoService.addTagToWorkItem(newAdoId, 'ai-generated-ui');
+          } catch (tagErr) {
+            console.warn(`Could not add ai-generated-ui tag to new ADO item ${newAdoId}:`, tagErr);
+          }
+        }
+      }
+    }
+
     res.json({
       success: true,
       epicAdoId: result.epicAdoId,
@@ -1374,6 +1391,18 @@ router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) 
 
     const adoService = new AzureDevOpsService(project, areaPath);
     const result = await adoService.createSinglePbiInADO(feature, pbi, parentEpicAdoId);
+
+    // Tag the feature ADO item if it has an approved AI-generated UI mock
+    if (feature.uiMock?.status === 'approved') {
+      const featureAdoId = result.featureAdoId ?? (feature.adoWorkItemId as number | undefined);
+      if (featureAdoId) {
+        try {
+          await adoService.addTagToWorkItem(featureAdoId, 'ai-generated-ui');
+        } catch (tagErr) {
+          console.warn(`Could not add ai-generated-ui tag to ADO item ${featureAdoId}:`, tagErr);
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -1734,6 +1763,840 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       details: error.message,
       code: error.name ?? error.Code,
     });
+  }
+});
+
+// POST /api/backlog/generate-ui-mock - Generate a UI mock for a Feature via Bedrock AI
+router.post('/backlog/generate-ui-mock', async (req: Request, res: Response) => {
+  try {
+    const { featureId, document, project, areaPath, additionalContext } = req.body as {
+      featureId?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+      additionalContext?: string;
+    };
+
+    if (!featureId || !document) {
+      return res.status(400).json({ error: 'featureId and document are required' });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) {
+      return res.status(404).json({ error: `Feature ${featureId} not found in document` });
+    }
+
+    const parentEpic = (document.epics ?? []).find((e: any) => e.id === feature.parentId);
+    const childPBIs = (document.pbis ?? []).filter((p: any) => p.parentId === featureId);
+    const allAC: string[] = childPBIs.flatMap((p: any) => p.acceptanceCriteria ?? []);
+
+    const { getDesignSystemCatalog } = await import('../services/designSystemService');
+    const { generateUiMockFromBedrock } = await import('../services/bedrockService');
+    const { sanitizeMockHtml } = await import('../utils/htmlSanitizer');
+
+    const catalog = await getDesignSystemCatalog();
+    const result = await generateUiMockFromBedrock({
+      featureTitle: feature.title,
+      featureDescription: feature.description,
+      featureTags: feature.tags,
+      acceptanceCriteria: allAC,
+      epicTitle: parentEpic?.title,
+      catalog,
+      additionalContext: additionalContext?.trim() || undefined,
+    });
+
+    if (result.mockHtml) {
+      result.mockHtml = sanitizeMockHtml(result.mockHtml);
+    }
+
+    res
+      .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:;")
+      .json(result);
+  } catch (error: any) {
+    if (error.name === 'BedrockModelTruncatedError') {
+      return res.status(422).json({
+        error: `The model's response exceeded the output token limit (${error.maxTokens}). Set BEDROCK_UI_MOCK_MAX_TOKENS to a higher value (e.g. 32000) and try again.`,
+      });
+    }
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
+    console.error('Error generating UI mock via Bedrock:', error);
+    res.status(500).json({ error: 'Failed to generate UI mock', details: error.message });
+  }
+});
+
+// POST /api/backlog/regenerate-ui-mock - Regenerate UI mock with BA/PO feedback
+router.post('/backlog/regenerate-ui-mock', async (req: Request, res: Response) => {
+  try {
+    const { featureId, document, feedback, priorHtml, priorDecision, priorTargetRoute, priorPageTitle, priorSubTabs, priorActiveSubTab } = req.body as {
+      featureId?: string;
+      document?: any;
+      feedback?: string;
+      priorHtml?: string;
+      priorDecision?: string;
+      priorTargetRoute?: string;
+      priorPageTitle?: string;
+      priorSubTabs?: string[];
+      priorActiveSubTab?: string;
+    };
+
+    if (!featureId || !document || !feedback?.trim() || !priorDecision) {
+      return res.status(400).json({
+        error: 'featureId, document, feedback, and priorDecision are required',
+      });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) {
+      return res.status(404).json({ error: `Feature ${featureId} not found in document` });
+    }
+
+    const childPBIs = (document.pbis ?? []).filter((p: any) => p.parentId === featureId);
+    const allAC: string[] = childPBIs.flatMap((p: any) => p.acceptanceCriteria ?? []);
+
+    const { getDesignSystemCatalog } = await import('../services/designSystemService');
+    const { regenerateUiMockFromBedrock } = await import('../services/bedrockService');
+    const { sanitizeMockHtml } = await import('../utils/htmlSanitizer');
+
+    const catalog = await getDesignSystemCatalog();
+    const result = await regenerateUiMockFromBedrock({
+      featureTitle: feature.title,
+      featureDescription: feature.description,
+      featureTags: feature.tags,
+      acceptanceCriteria: allAC,
+      catalog,
+      priorHtml: priorHtml ?? '',
+      priorDecision: priorDecision as any,
+      priorTargetRoute,
+      priorPageTitle,
+      priorSubTabs,
+      priorActiveSubTab,
+      feedback,
+    });
+
+    if (result.mockHtml) {
+      result.mockHtml = sanitizeMockHtml(result.mockHtml);
+    }
+
+    res
+      .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:;")
+      .json(result);
+  } catch (error: any) {
+    if (error.name === 'BedrockModelTruncatedError') {
+      return res.status(422).json({
+        error: `The model's response exceeded the output token limit (${error.maxTokens}). Set BEDROCK_UI_MOCK_MAX_TOKENS to a higher value (e.g. 32000) and try again.`,
+      });
+    }
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
+    console.error('Error regenerating UI mock via Bedrock:', error);
+    res.status(500).json({ error: 'Failed to regenerate UI mock', details: error.message });
+  }
+});
+
+// POST /api/backlog/generate-pbi-view
+// Generates a UI mock scoped to a single PBI and stores it in feature.uiMock.views[].
+// The PBI's own title/description/AC are used as primary context so the AI focuses on
+// that one user story rather than the whole feature.
+router.post('/backlog/generate-pbi-view', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, document, project, areaPath, additionalContext, featureOverviewHtml } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+      additionalContext?: string;
+      featureOverviewHtml?: string;
+    };
+
+    if (!featureId || !pbiId || !document) {
+      return res.status(400).json({ error: 'featureId, pbiId, and document are required' });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) return res.status(404).json({ error: `Feature ${featureId} not found` });
+
+    const pbi = (document.pbis ?? []).find((p: any) => p.id === pbiId);
+    if (!pbi) return res.status(404).json({ error: `PBI ${pbiId} not found` });
+
+    const parentEpic = (document.epics ?? []).find((e: any) => e.id === feature.parentId);
+
+    const { getDesignSystemCatalog } = await import('../services/designSystemService');
+    const { generateUiMockFromBedrock } = await import('../services/bedrockService');
+    const { sanitizeMockHtml } = await import('../utils/htmlSanitizer');
+
+    // Build page context from the feature-level mock so this PBI view stays within
+    // the same page/tab structure as the overview and sibling views.
+    const featureMock = feature.uiMock as any | undefined;
+    const siblingViews: any[] = featureMock?.views ?? [];
+    const featureContext = featureMock?.decision
+      ? {
+          decision: featureMock.decision,
+          targetPageRoute: featureMock.targetPageRoute,
+          targetPageTitle: featureMock.targetPageTitle,
+          existingSubTabs: featureMock.targetPageSubTabs ?? [],
+          siblingViewTitles: siblingViews
+            .filter((v: any) => v.pbiId !== pbiId)
+            .map((v: any) => v.pbiTitle as string),
+        }
+      : undefined;
+
+    const catalog = await getDesignSystemCatalog();
+    const result = await generateUiMockFromBedrock({
+      featureTitle: `${feature.title} — ${pbi.title}`,
+      featureDescription: pbi.description ?? feature.description,
+      featureTags: feature.tags,
+      acceptanceCriteria: pbi.acceptanceCriteria ?? [],
+      epicTitle: parentEpic?.title,
+      catalog,
+      featureContext,
+      additionalContext: additionalContext?.trim() || undefined,
+      featureOverviewHtml: featureOverviewHtml?.trim() || undefined,
+    });
+
+    if (result.mockHtml) {
+      result.mockHtml = sanitizeMockHtml(result.mockHtml);
+    }
+
+    res
+      .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:;")
+      .json({ ...result, pbiId, pbiTitle: pbi.title });
+  } catch (error: any) {
+    if (error.name === 'BedrockModelTruncatedError') {
+      return res.status(422).json({
+        error: `The model's response exceeded the output token limit (${error.maxTokens}). Set BEDROCK_UI_MOCK_MAX_TOKENS to a higher value (e.g. 32000) and try again.`,
+      });
+    }
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
+    console.error('Error generating PBI view:', error);
+    res.status(500).json({ error: 'Failed to generate PBI view', details: error.message });
+  }
+});
+
+// POST /api/backlog/regenerate-pbi-view
+// Regenerates a PBI-scoped view with BA/UX feedback.
+router.post('/backlog/regenerate-pbi-view', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, document, feedback, priorHtml, priorDecision, priorTargetRoute, priorPageTitle, priorSubTabs, priorActiveSubTab } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      document?: any;
+      feedback?: string;
+      priorHtml?: string;
+      priorDecision?: string;
+      priorTargetRoute?: string;
+      priorPageTitle?: string;
+      priorSubTabs?: string[];
+      priorActiveSubTab?: string;
+    };
+
+    if (!featureId || !pbiId || !document || !feedback?.trim() || !priorDecision) {
+      return res.status(400).json({
+        error: 'featureId, pbiId, document, feedback, and priorDecision are required',
+      });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) return res.status(404).json({ error: `Feature ${featureId} not found` });
+
+    const pbi = (document.pbis ?? []).find((p: any) => p.id === pbiId);
+    if (!pbi) return res.status(404).json({ error: `PBI ${pbiId} not found` });
+
+    const { getDesignSystemCatalog } = await import('../services/designSystemService');
+    const { regenerateUiMockFromBedrock } = await import('../services/bedrockService');
+    const { sanitizeMockHtml } = await import('../utils/htmlSanitizer');
+
+    // Pass the same feature page context so regeneration also stays within the established structure
+    const featureMock = feature.uiMock as any | undefined;
+    const siblingViews: any[] = featureMock?.views ?? [];
+    const featureContext = featureMock?.decision
+      ? {
+          decision: featureMock.decision,
+          targetPageRoute: featureMock.targetPageRoute,
+          targetPageTitle: featureMock.targetPageTitle,
+          existingSubTabs: featureMock.targetPageSubTabs ?? [],
+          siblingViewTitles: siblingViews
+            .filter((v: any) => v.pbiId !== pbiId)
+            .map((v: any) => v.pbiTitle as string),
+        }
+      : undefined;
+
+    /* Fall back to feature-level subtabs/title if the client didn't send
+       prior view-level state (PBI views inherit page structure from the feature). */
+    const effectiveSubTabs = priorSubTabs ?? featureMock?.targetPageSubTabs;
+    const effectivePageTitle = priorPageTitle ?? featureMock?.targetPageTitle;
+
+    const catalog = await getDesignSystemCatalog();
+    const result = await regenerateUiMockFromBedrock({
+      featureTitle: `${feature.title} — ${pbi.title}`,
+      featureDescription: pbi.description ?? feature.description,
+      featureTags: feature.tags,
+      acceptanceCriteria: pbi.acceptanceCriteria ?? [],
+      catalog,
+      priorHtml: priorHtml ?? '',
+      priorDecision: priorDecision as any,
+      priorTargetRoute,
+      priorPageTitle: effectivePageTitle,
+      priorSubTabs: effectiveSubTabs,
+      priorActiveSubTab,
+      feedback,
+      featureContext,
+    });
+
+    if (result.mockHtml) {
+      result.mockHtml = sanitizeMockHtml(result.mockHtml);
+    }
+
+    res
+      .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:;")
+      .json({ ...result, pbiId, pbiTitle: pbi.title });
+  } catch (error: any) {
+    if (error.name === 'BedrockModelTruncatedError') {
+      return res.status(422).json({
+        error: `The model's response exceeded the output token limit (${error.maxTokens}). Set BEDROCK_UI_MOCK_MAX_TOKENS to a higher value (e.g. 32000) and try again.`,
+      });
+    }
+    if (error.name === 'BedrockModelRefusalError') {
+      return res.status(422).json({ error: error.message });
+    }
+    console.error('Error regenerating PBI view:', error);
+    res.status(500).json({ error: 'Failed to regenerate PBI view', details: error.message });
+  }
+});
+
+// GET /api/backlog/mock-html/:featureId
+// Returns the approved mock as a standalone HTML page so generate_figma_design can capture it.
+router.get('/backlog/mock-html/:featureId', async (req: Request, res: Response) => {
+  try {
+    const { featureId } = req.params;
+    const { pagePath, project, areaPath, pbiId } = req.query as {
+      pagePath?: string;
+      project?: string;
+      areaPath?: string;
+      pbiId?: string;
+    };
+
+    if (!pagePath) {
+      return res.status(400).send('pagePath query param is required');
+    }
+
+    // When the request was authorized via an agent token (production path),
+    // ensure the token's claims match the requested resource. Localhost-bypassed
+    // requests have no token and skip this check (it's a same-machine dev call).
+    const claims = (req as Request & { agentToken?: AgentTokenClaims }).agentToken;
+    if (claims) {
+      if (claims.featureId !== featureId) {
+        return res.status(403).send('Agent token featureId mismatch');
+      }
+      if ((claims.pbiId ?? undefined) !== (pbiId ?? undefined)) {
+        return res.status(403).send('Agent token pbiId mismatch');
+      }
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) {
+      return res.status(404).send(`Backlog page "${pagePath}" not found`);
+    }
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature) {
+      return res.status(404).send(`Feature ${featureId} not found`);
+    }
+
+    // When pbiId is supplied, serve the PBI-scoped view's HTML instead
+    let html: string | undefined;
+    if (pbiId) {
+      const view = (feature.uiMock?.views ?? []).find((v: any) => v.pbiId === pbiId);
+      html = view?.mockHtml as string | undefined;
+      if (!html) return res.status(404).send(`No mock HTML for PBI view ${pbiId}`);
+    } else {
+      html = feature.uiMock?.mockHtml as string | undefined;
+      if (!html) return res.status(404).send('No mock HTML for this feature');
+    }
+
+    // Inject the Figma capture script so generate_figma_design can capture this page.
+    // The script is a no-op unless the #figmacapture hash param is present.
+    const captureScript = '<script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>';
+    const htmlWithCapture = html.includes('</head>')
+      ? html.replace('</head>', `${captureScript}</head>`)
+      : html.includes('<body')
+        ? html.replace('<body', `${captureScript}<body`)
+        : captureScript + html;
+
+    res
+      .set('Content-Type', 'text/html; charset=utf-8')
+      .set('Cache-Control', 'no-store')
+      .send(htmlWithCapture);
+  } catch (error: any) {
+    console.error('Error serving mock HTML:', error);
+    res.status(500).send('Failed to serve mock HTML');
+  }
+});
+
+// GET /api/backlog/pending-figma-exports?project=...&areaPath=...
+// Returns all features with pendingFigmaExport=true across all backlog docs.
+// Called by the Cursor sessionStart hook to auto-push approved mocks to Figma.
+router.get('/backlog/pending-figma-exports', async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+
+    const pending: Array<{
+      featureId: string;
+      featureTitle: string;
+      pagePath: string;
+      mockHtmlUrl: string;
+      targetPageTitle: string | null;
+      pbiId: string | null;
+      pbiTitle?: string;
+    }> = [];
+
+    const serverPort = process.env.PORT ?? 3001;
+    const baseUrl = process.env.PUBLIC_URL ?? `http://localhost:${serverPort}`;
+
+    for (const doc of docs) {
+      for (const feature of (doc.document?.features ?? []) as any[]) {
+        // Feature-level mock
+        if (feature.uiMock?.pendingFigmaExport && feature.uiMock?.mockHtml) {
+          pending.push({
+            featureId: feature.id,
+            featureTitle: feature.title,
+            pagePath: doc.path,
+            mockHtmlUrl: `${baseUrl}/api/backlog/mock-html/${encodeURIComponent(feature.id)}?pagePath=${encodeURIComponent(doc.path)}&project=${encodeURIComponent(project ?? '')}&areaPath=${encodeURIComponent(areaPath ?? '')}`,
+            targetPageTitle: feature.uiMock.targetPageTitle ?? null,
+            pbiId: null,
+          });
+        }
+        // PBI-scoped views
+        for (const view of (feature.uiMock?.views ?? []) as any[]) {
+          if (view.pendingFigmaExport && view.mockHtml) {
+            pending.push({
+              featureId: feature.id,
+              featureTitle: feature.title,
+              pagePath: doc.path,
+              mockHtmlUrl: `${baseUrl}/api/backlog/mock-html/${encodeURIComponent(feature.id)}?pagePath=${encodeURIComponent(doc.path)}&project=${encodeURIComponent(project ?? '')}&areaPath=${encodeURIComponent(areaPath ?? '')}&pbiId=${encodeURIComponent(view.pbiId)}`,
+              targetPageTitle: view.targetPageTitle ?? null,
+              pbiId: view.pbiId,
+              pbiTitle: view.pbiTitle,
+            });
+          }
+        }
+      }
+    }
+
+    res.json({ pending });
+  } catch (error: any) {
+    console.error('Error fetching pending Figma exports:', error);
+    res.status(500).json({ error: 'Failed to fetch pending Figma exports', details: error.message });
+  }
+});
+
+// POST /api/backlog/approve-mock
+// Approves a UI mock, persists pendingFigmaExport=true, then fires the
+// Cursor headless agent to create the Figma design automatically.
+// The agent calls /api/backlog/update-figma-url when done.
+router.post('/backlog/approve-mock', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pagePath, project, areaPath, approvedVersion } = req.body as {
+      featureId?: string;
+      pagePath?: string;
+      project?: string;
+      areaPath?: string;
+      approvedVersion?: number;
+    };
+
+    if (!featureId || !pagePath) {
+      return res.status(400).json({ error: 'featureId and pagePath are required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) return res.status(404).json({ error: `Page "${pagePath}" not found` });
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+
+    // If approving a specific historical version, promote its HTML so Figma export uses it
+    if (approvedVersion != null && approvedVersion !== feature.uiMock.mockVersion) {
+      const entry = (feature.uiMock.history ?? []).find((h: any) => h.version === approvedVersion);
+      if (!entry) return res.status(400).json({ error: `Version ${approvedVersion} not found in mock history` });
+      feature.uiMock.mockHtml = entry.mockHtml;
+      feature.uiMock.decision = entry.decision;
+      feature.uiMock.rationale = entry.rationale;
+      feature.uiMock.targetPageRoute = entry.targetPageRoute;
+      feature.uiMock.targetPageTitle = entry.targetPageTitle;
+    }
+
+    // Mark as approved. The Figma import is now an explicit, user-initiated
+    // action via the "Import to Figma" button, so we no longer auto-queue
+    // it here. Existing pendingFigmaExport flags remain backward-compatible.
+    feature.uiMock.status = 'approved';
+    feature.uiMock.approvedVersion = approvedVersion ?? feature.uiMock.mockVersion;
+    feature.uiMock.pendingFigmaExport = false;
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+
+    // If this feature already has an ADO work item, tag it now — the mock has been approved
+    const adoWorkItemId = feature.adoWorkItemId as number | undefined;
+    if (adoWorkItemId) {
+      try {
+        await adoService.addTagToWorkItem(adoWorkItemId, 'ai-generated-ui');
+      } catch (tagErr) {
+        console.warn(`Could not add ai-generated-ui tag to ADO item ${adoWorkItemId}:`, tagErr);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error approving mock:', error);
+    res.status(500).json({ error: 'Failed to approve mock', details: error.message });
+  }
+});
+
+// POST /api/backlog/delete-mock-version
+// Removes a specific version from a mock's history array.
+// If the deleted version is the current (latest) version, the most recent remaining
+// history entry is promoted to become the new current version.
+// Returns the updated mock object so the client can sync state without a full reload.
+router.post('/backlog/delete-mock-version', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, pagePath, version, project, areaPath } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      pagePath?: string;
+      version?: number;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!featureId || !pagePath || version == null) {
+      return res.status(400).json({ error: 'featureId, pagePath, and version are required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) return res.status(404).json({ error: `Page "${pagePath}" not found` });
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+
+    // Target the feature-level mock or a PBI view
+    const target: any = pbiId
+      ? (feature.uiMock.views ?? []).find((v: any) => v.pbiId === pbiId)
+      : feature.uiMock;
+
+    if (!target) return res.status(404).json({ error: pbiId ? `PBI view ${pbiId} not found` : 'uiMock not found' });
+
+    const history: any[] = target.history ?? [];
+
+    const entryIdx = history.findIndex((h: any) => h.version === version);
+    if (entryIdx === -1) return res.status(404).json({ error: `Version ${version} not found in history` });
+
+    // If this is the only version, discard the entire mock
+    if (history.length === 1) {
+      if (pbiId) {
+        feature.uiMock.views = (feature.uiMock.views ?? []).filter((v: any) => v.pbiId !== pbiId);
+      } else {
+        feature.uiMock = undefined;
+      }
+      await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+      return res.json({ success: true, discarded: true });
+    }
+
+    // Remove the entry
+    history.splice(entryIdx, 1);
+    target.history = history;
+
+    // If we just deleted the current version, promote the most recent remaining entry
+    if (version === target.mockVersion) {
+      const promoted = [...history].sort((a: any, b: any) => b.version - a.version)[0];
+      target.mockVersion = promoted.version;
+      target.mockHtml = promoted.mockHtml;
+      target.decision = promoted.decision;
+      target.rationale = promoted.rationale;
+      target.targetPageRoute = promoted.targetPageRoute;
+      target.targetPageTitle = promoted.targetPageTitle;
+      target.status = 'draft';
+      target.approvedVersion = undefined;
+      target.pendingFigmaExport = false;
+    }
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+    res.json({ success: true, discarded: false, mock: pbiId ? target : feature.uiMock });
+  } catch (error: any) {
+    console.error('Error deleting mock version:', error);
+    res.status(500).json({ error: 'Failed to delete mock version', details: error.message });
+  }
+});
+
+// POST /api/backlog/clear-figma-pending
+// Clears pendingFigmaExport on a feature's uiMock (used by the ✕ reset button).
+router.post('/backlog/clear-figma-pending', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pagePath, project, areaPath } = req.body as {
+      featureId?: string;
+      pagePath?: string;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!featureId || !pagePath) {
+      return res.status(400).json({ error: 'featureId and pagePath are required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) return res.status(404).json({ error: `Page "${pagePath}" not found` });
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+
+    feature.uiMock.pendingFigmaExport = false;
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error clearing Figma pending:', error);
+    res.status(500).json({ error: 'Failed to clear Figma pending', details: error.message });
+  }
+});
+
+// POST /api/backlog/approve-pbi-view
+// Approves a PBI-scoped view within feature.uiMock.views[], setting pendingFigmaExport=true.
+router.post('/backlog/approve-pbi-view', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, pagePath, project, areaPath, approvedVersion } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      pagePath?: string;
+      project?: string;
+      areaPath?: string;
+      approvedVersion?: number;
+    };
+
+    if (!featureId || !pbiId || !pagePath) {
+      return res.status(400).json({ error: 'featureId, pbiId, and pagePath are required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) return res.status(404).json({ error: `Page "${pagePath}" not found` });
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+
+    const view = (feature.uiMock.views ?? []).find((v: any) => v.pbiId === pbiId);
+    if (!view) return res.status(404).json({ error: `PBI view ${pbiId} not found on feature ${featureId}` });
+
+    // If approving a specific historical version, promote its HTML so Figma export uses it
+    if (approvedVersion != null && approvedVersion !== view.mockVersion) {
+      const entry = (view.history ?? []).find((h: any) => h.version === approvedVersion);
+      if (!entry) return res.status(400).json({ error: `Version ${approvedVersion} not found in PBI view history` });
+      view.mockHtml = entry.mockHtml;
+      view.decision = entry.decision;
+      view.rationale = entry.rationale;
+      view.targetPageRoute = entry.targetPageRoute;
+      view.targetPageTitle = entry.targetPageTitle;
+    }
+
+    // Figma import is now user-initiated via the "Import to Figma" button,
+    // not auto-queued — see /approve-mock for context.
+    view.status = 'approved';
+    view.approvedVersion = approvedVersion ?? view.mockVersion;
+    view.pendingFigmaExport = false;
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error approving PBI view:', error);
+    res.status(500).json({ error: 'Failed to approve PBI view', details: error.message });
+  }
+});
+
+// POST /api/backlog/mint-agent-token
+// Auth-required. Mints two short-lived HMAC-signed tokens scoped to a single
+// feature (and optional PBI) so the Cursor agent — which runs on the user's
+// local machine and has no browser session cookie — can call:
+//   - GET  /api/backlog/mock-html/:featureId   (read token)
+//   - POST /api/backlog/update-figma-url       (write token)
+// in production. In local dev the localhost bypass already covers the agent,
+// but minting still works there too so the same client code path is used in
+// both environments.
+router.post('/backlog/mint-agent-token', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, ttlSeconds } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      ttlSeconds?: number;
+    };
+
+    if (!featureId || typeof featureId !== 'string') {
+      return res.status(400).json({ error: 'featureId is required' });
+    }
+    if (pbiId !== undefined && typeof pbiId !== 'string') {
+      return res.status(400).json({ error: 'pbiId must be a string when provided' });
+    }
+    // Cap TTL to 2h so a leaked token has a bounded lifetime even if the
+    // client requests a longer one.
+    const safeTtl = typeof ttlSeconds === 'number' && ttlSeconds > 0
+      ? Math.min(ttlSeconds, 2 * 60 * 60)
+      : undefined;
+
+    const readToken = signAgentToken({ scope: 'read-mock', featureId, pbiId, ttlSeconds: safeTtl });
+    const writeToken = signAgentToken({ scope: 'write-figma-url', featureId, pbiId, ttlSeconds: safeTtl });
+
+    const expiresAt = Math.floor(Date.now() / 1000) + (safeTtl ?? 60 * 60);
+
+    const userInfo = (req.user as { displayName?: string; emails?: { value?: string }[] } | undefined);
+    console.log(
+      `[agent-tokens] minted tokens for feature=${featureId}${pbiId ? ` pbi=${pbiId}` : ''} ` +
+      `user=${userInfo?.emails?.[0]?.value ?? userInfo?.displayName ?? 'unknown'} ` +
+      `ttl=${safeTtl ?? 3600}s`
+    );
+
+    res.json({ readToken, writeToken, expiresAt });
+  } catch (error: any) {
+    console.error('Error minting agent token:', error);
+    res.status(500).json({ error: 'Failed to mint agent token', details: error.message });
+  }
+});
+
+// POST /api/backlog/update-figma-url
+// Called by the Cursor agent after generate_figma_design succeeds.
+// Saves the Figma URL and clears pendingFigmaExport. Pass pbiId to target a PBI view.
+router.post('/backlog/update-figma-url', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, pagePath, figmaUrl, project, areaPath } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      pagePath?: string;
+      figmaUrl?: string;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!featureId || !pagePath || !figmaUrl) {
+      return res.status(400).json({ error: 'featureId, pagePath, and figmaUrl are required' });
+    }
+
+    // When the request was authorized via an agent token (production path),
+    // ensure the token's claims match the body. Prevents a token minted for
+    // feature A from being used to write a Figma URL onto feature B.
+    const claims = (req as Request & { agentToken?: AgentTokenClaims }).agentToken;
+    if (claims) {
+      if (claims.featureId !== featureId) {
+        return res.status(403).json({ error: 'Agent token featureId mismatch' });
+      }
+      if ((claims.pbiId ?? undefined) !== (pbiId ?? undefined)) {
+        return res.status(403).json({ error: 'Agent token pbiId mismatch' });
+      }
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) {
+      return res.status(404).json({ error: `Backlog page "${pagePath}" not found` });
+    }
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) {
+      return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+    }
+
+    if (pbiId) {
+      // Update a PBI-scoped view
+      const view = (feature.uiMock.views ?? []).find((v: any) => v.pbiId === pbiId);
+      if (!view) return res.status(404).json({ error: `PBI view ${pbiId} not found` });
+      view.figmaUrl = figmaUrl;
+      view.figmaCreatedAt = new Date().toISOString();
+      view.pendingFigmaExport = false;
+    } else {
+      // Update the feature-level mock
+      feature.uiMock.figmaUrl = figmaUrl;
+      feature.uiMock.figmaCreatedAt = new Date().toISOString();
+      feature.uiMock.pendingFigmaExport = false;
+    }
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+
+    res.json({ success: true, figmaUrl, featureId, pbiId: pbiId ?? null });
+  } catch (error: any) {
+    console.error('Error updating Figma URL:', error);
+    res.status(500).json({ error: 'Failed to update Figma URL', details: error.message });
+  }
+});
+
+// POST /api/backlog/mark-design-ready
+// Called by the UX designer once their Figma refinement is done and the screen is ready for dev.
+// Sets designReady=true on the feature's uiMock (or a PBI view when pbiId is supplied)
+// and adds a 'design-ready' tag to the ADO work item.
+router.post('/backlog/mark-design-ready', async (req: Request, res: Response) => {
+  try {
+    const { featureId, pbiId, pagePath, project, areaPath } = req.body as {
+      featureId?: string;
+      pbiId?: string;
+      pagePath?: string;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!featureId || !pagePath) {
+      return res.status(400).json({ error: 'featureId and pagePath are required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const docs = await adoService.getDraftBacklogDocs() as any[];
+    const doc = docs.find((d: any) => d.path === pagePath);
+    if (!doc) {
+      return res.status(404).json({ error: `Backlog page "${pagePath}" not found` });
+    }
+
+    const feature = ((doc.document?.features ?? []) as any[]).find((f: any) => f.id === featureId);
+    if (!feature?.uiMock) {
+      return res.status(404).json({ error: `Feature ${featureId} or its uiMock not found` });
+    }
+
+    const now = new Date().toISOString();
+
+    if (pbiId) {
+      const view = (feature.uiMock.views ?? []).find((v: any) => v.pbiId === pbiId);
+      if (!view) return res.status(404).json({ error: `PBI view ${pbiId} not found` });
+      view.designReady = true;
+      view.designReadyAt = now;
+    } else {
+      feature.uiMock.designReady = true;
+      feature.uiMock.designReadyAt = now;
+    }
+
+    await adoService.updateDraftBacklogDoc(pagePath, doc.document);
+
+    // Tag the ADO work item so it surfaces in dev queries/boards (only once — for any view)
+    const adoWorkItemId = feature.adoWorkItemId as number | undefined;
+    if (adoWorkItemId) {
+      try {
+        await adoService.addTagToWorkItem(adoWorkItemId, 'design-ready');
+      } catch (tagErr) {
+        console.warn(`Could not add design-ready tag to ADO item ${adoWorkItemId}:`, tagErr);
+      }
+    }
+
+    res.json({ success: true, featureId, pbiId: pbiId ?? null, designReadyAt: now });
+  } catch (error: any) {
+    console.error('Error marking design ready:', error);
+    res.status(500).json({ error: 'Failed to mark design ready', details: error.message });
   }
 });
 

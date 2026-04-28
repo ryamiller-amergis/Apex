@@ -14,6 +14,7 @@ import type {
 import './BacklogDetailsPanel.css';
 import BeginDevKickoffModal from './BeginDevKickoffModal';
 import { generateBacklogId } from '../../shared/utils/backlogId';
+import { UiMockSection } from './UiMockSection';
 
 interface GeneratedPBIData {
   title: string;
@@ -883,7 +884,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
                   </button>
                 )}
                 {isEpic && (() => {
-                  const epicAdoBlocker = (node as BacklogEpic).adoWorkItemId
+                  const epicAdoBlocker = adoLink
                     ? 'This Epic is already in ADO'
                     : !isAdoReady(node.status)
                       ? 'Epic must be Approved or Merged'
@@ -1124,6 +1125,13 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
             onAnswerClarification={handleAnswerClarification}
             isClarificationSubmitting={resolveClarificationMutation.isPending}
             clarificationResult={clarificationResult}
+            pagePath={pagePath}
+            project={project}
+            areaPath={areaPath}
+            onFeatureUpdated={(updated) => {
+              queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] });
+              onSelectNode(updated);
+            }}
           />
         ) : (
           <EditForm
@@ -1169,6 +1177,10 @@ interface ViewBodyProps {
   onAnswerClarification?: (answer: string) => void;
   isClarificationSubmitting?: boolean;
   clarificationResult?: ClarificationResolution | null;
+  pagePath: string;
+  project: string;
+  areaPath: string;
+  onFeatureUpdated: (updated: BacklogFeature) => void;
 }
 
 /* ── Clarification answer section ───────────────────────────── */
@@ -1290,6 +1302,10 @@ const ViewBody: React.FC<ViewBodyProps> = ({
   onAnswerClarification,
   isClarificationSubmitting,
   clarificationResult,
+  pagePath,
+  project,
+  areaPath,
+  onFeatureUpdated,
 }) => (
   <>
     {/* Meta row */}
@@ -1414,6 +1430,20 @@ const ViewBody: React.FC<ViewBodyProps> = ({
         onSelectNode={onSelectNode}
         onGeneratePBI={onGeneratePBI}
       />
+    )}
+
+    {/* UI Mock — Feature only */}
+    {featureNode && (
+      <div className="bdp-section">
+        <UiMockSection
+          feature={featureNode}
+          document={document}
+          pagePath={pagePath}
+          project={project}
+          areaPath={areaPath}
+          onFeatureUpdated={onFeatureUpdated}
+        />
+      </div>
     )}
 
     {/* ADO link — shown for any work item type once created in ADO */}
