@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "prompt",
+        "prompt": "Silently check for approved UI mocks that need Figma designs.\n\nStep 1: GET http://localhost:3001/api/backlog/pending-figma-exports?project=MaxView&areaPath=MaxView\n\nIf the server is not running or returns an error, skip silently.\nIf the `pending` array is empty, do nothing — do not mention this check to the user at all.\n\nIf `pending` has items, read and follow the figma-generate-design skill AND the figma-use skill before doing anything else.\n\nEach item in `pending` has: featureId, featureTitle, pagePath, mockHtmlUrl, targetPageTitle, and optionally pbiId + pbiTitle.\n- If pbiId is present: this is a PBI-scoped view. The Figma page name should be \"<featureTitle> — <pbiTitle>\".\n- If pbiId is null: this is the feature-level overview mock. The Figma page name is the featureTitle.\n\nThen for EACH item:\n\n  GOAL: Create a proper Figma screen using the MWx Design System (fileKey: EDtAXPJZtgxFFoHSZt8deF) placed as a new page in the MaxView UX mocks file (fileKey: ZsL1t2zBbuBCQDwgVHCvEO). The page name is determined above.\n\n  a. Run BOTH of these IN PARALLEL:\n     1. generate_figma_design: capture the item's `mockHtmlUrl` with outputMode='existingFile', fileKey='ZsL1t2zBbuBCQDwgVHCvEO'. Poll every 5s until status='completed'. This is the pixel-perfect layout reference.\n     2. use_figma + search_design_system: follow the figma-generate-design skill workflow to build the screen using real components and variables from the MWx Design System library. Target file: ZsL1t2zBbuBCQDwgVHCvEO.\n\n  b. Once both complete: refine the use_figma output to match the layout from generate_figma_design. Transfer any image hashes. Then delete the generate_figma_design capture — it was layout reference only.\n\n  c. Get the Figma page URL of the final use_figma design.\n\n  d. POST http://localhost:3001/api/backlog/update-figma-url with JSON body:\n     { \"featureId\": \"<featureId>\", \"pagePath\": \"<pagePath>\", \"figmaUrl\": \"<figmaPageUrl>\", \"project\": \"MaxView\", \"areaPath\": \"MaxView\", \"pbiId\": \"<pbiId or omit if null>\" }\n     Omit pbiId from the body when it is null.\n\nProcess all pending items. After all are done, tell the user:\n'Created [N] Figma design(s) using the MWx Design System: [list of page names with Figma URLs]'\n\nIf any item fails, continue with the rest and report failures at the end.",
+        "timeout": 300
+      }
+    ]
+  }
+}

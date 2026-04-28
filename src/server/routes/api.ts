@@ -1318,8 +1318,24 @@ router.post('/backlog/create-ado-items', async (req: Request, res: Response) => 
       (p: any) => acceptedFeatureIds.has(p.parentId) && isReady(p.status)
     );
 
+    // Resolve each feature's Figma URL (design-ready mocks only) and each
+    // PBI's Figma URL from its parent feature's uiMock views.
+    const featuresWithFigma = acceptedFeatures.map((f: any) => ({
+      ...f,
+      figmaUrl: f.uiMock?.designReady && f.uiMock?.figmaUrl ? f.uiMock.figmaUrl : undefined,
+    }));
+    const featureUiMockMap = new Map<string, any>(acceptedFeatures.map((f: any) => [f.id, f.uiMock]));
+    const pbisWithFigma = acceptedPBIs.map((p: any) => {
+      const featureMock = featureUiMockMap.get(p.parentId) as any;
+      const view = ((featureMock?.views ?? []) as any[]).find((v: any) => v.pbiId === p.id);
+      return {
+        ...p,
+        figmaUrl: view?.designReady && view?.figmaUrl ? view.figmaUrl : undefined,
+      };
+    });
+
     const adoService = new AzureDevOpsService(project, areaPath);
-    const result = await adoService.createBacklogItemsInADO(epic, acceptedFeatures, acceptedPBIs);
+    const result = await adoService.createBacklogItemsInADO(epic, featuresWithFigma, pbisWithFigma);
 
     // Tag any newly-created feature ADO items that have an approved AI-generated UI mock
     for (const feature of acceptedFeatures) {
@@ -1389,8 +1405,20 @@ router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) 
       if (parentEpic?.adoWorkItemId) parentEpicAdoId = parentEpic.adoWorkItemId;
     }
 
+    // Resolve Figma URLs for the feature and the specific PBI view (design-ready only)
+    const featureFigmaUrl = feature.uiMock?.designReady && feature.uiMock?.figmaUrl
+      ? feature.uiMock.figmaUrl as string
+      : undefined;
+    const pbiView = (feature.uiMock?.views ?? []).find((v: any) => v.pbiId === pbi.id);
+    const pbiFigmaUrl = pbiView?.designReady && pbiView?.figmaUrl
+      ? pbiView.figmaUrl as string
+      : undefined;
+
+    const featureWithFigma = { ...feature, figmaUrl: featureFigmaUrl };
+    const pbiWithFigma = { ...pbi, figmaUrl: pbiFigmaUrl };
+
     const adoService = new AzureDevOpsService(project, areaPath);
-    const result = await adoService.createSinglePbiInADO(feature, pbi, parentEpicAdoId);
+    const result = await adoService.createSinglePbiInADO(featureWithFigma, pbiWithFigma, parentEpicAdoId);
 
     // Tag the feature ADO item if it has an approved AI-generated UI mock
     if (feature.uiMock?.status === 'approved') {
@@ -2571,25 +2599,46 @@ router.post('/backlog/mark-design-ready', async (req: Request, res: Response) =>
 
     const now = new Date().toISOString();
 
+    let targetFigmaUrl: string | undefined;
+
     if (pbiId) {
       const view = (feature.uiMock.views ?? []).find((v: any) => v.pbiId === pbiId);
       if (!view) return res.status(404).json({ error: `PBI view ${pbiId} not found` });
       view.designReady = true;
       view.designReadyAt = now;
+      targetFigmaUrl = view.figmaUrl as string | undefined;
     } else {
       feature.uiMock.designReady = true;
       feature.uiMock.designReadyAt = now;
+      targetFigmaUrl = feature.uiMock.figmaUrl as string | undefined;
     }
 
     await adoService.updateDraftBacklogDoc(pagePath, doc.document);
 
-    // Tag the ADO work item so it surfaces in dev queries/boards (only once — for any view)
-    const adoWorkItemId = feature.adoWorkItemId as number | undefined;
-    if (adoWorkItemId) {
+    // Resolve the ADO work item ID for the target (feature or PBI)
+    let targetAdoWorkItemId: number | undefined;
+    if (pbiId) {
+      const pbi = ((doc.document?.pbis ?? []) as any[]).find((p: any) => p.id === pbiId);
+      targetAdoWorkItemId = pbi?.adoWorkItemId as number | undefined;
+    } else {
+      targetAdoWorkItemId = feature.adoWorkItemId as number | undefined;
+    }
+
+    if (targetAdoWorkItemId) {
+      // Tag the work item so it surfaces in dev queries/boards
       try {
-        await adoService.addTagToWorkItem(adoWorkItemId, 'design-ready');
+        await adoService.addTagToWorkItem(targetAdoWorkItemId, 'design-ready');
       } catch (tagErr) {
-        console.warn(`Could not add design-ready tag to ADO item ${adoWorkItemId}:`, tagErr);
+        console.warn(`Could not add design-ready tag to ADO item ${targetAdoWorkItemId}:`, tagErr);
+      }
+      // Append the Figma URL to the work item description
+      if (targetFigmaUrl) {
+        try {
+          await adoService.appendFigmaLinkToDescription(targetAdoWorkItemId, targetFigmaUrl);
+          console.log(`[mark-design-ready] Appended Figma link to ADO item ${targetAdoWorkItemId}`);
+        } catch (figmaErr) {
+          console.warn(`Could not append Figma link to ADO item ${targetAdoWorkItemId}:`, figmaErr);
+        }
       }
     }
 

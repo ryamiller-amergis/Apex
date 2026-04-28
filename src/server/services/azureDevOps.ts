@@ -4122,13 +4122,34 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Appends a Figma design link to an existing ADO work item's System.Description.
+   * No-ops if the URL is already present in the description (idempotent).
+   */
+  async appendFigmaLinkToDescription(workItemId: number, figmaUrl: string): Promise<void> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const workItem = await witApi.getWorkItem(workItemId, ['System.Description'], undefined, undefined, this.project);
+      const currentDesc: string = workItem.fields?.['System.Description'] ?? '';
+      if (currentDesc.includes(figmaUrl)) return;
+      const figmaHtml = `<p><strong>Figma Design:</strong> <a href="${figmaUrl}" target="_blank">View in Figma ↗</a></p>`;
+      const newDesc = currentDesc + figmaHtml;
+      await witApi.updateWorkItem(
+        {},
+        [{ op: 'add', path: '/fields/System.Description', value: newDesc }],
+        workItemId,
+        this.project
+      );
+    });
+  }
+
+  /**
    * Create ADO work items from an approved backlog Epic and its Accepted children.
    * Returns the ADO IDs for the created Epic, Features, and PBIs.
    */
   async createBacklogItemsInADO(
     epic: { id: string; title: string; description?: string; priority?: string; tags?: string[] },
-    acceptedFeatures: Array<{ id: string; title: string; description?: string; priority?: string; tags?: string[] }>,
-    acceptedPBIs: Array<{ id: string; parentId: string; title: string; description?: string; acceptanceCriteria?: string[] }>
+    acceptedFeatures: Array<{ id: string; title: string; description?: string; priority?: string; tags?: string[]; figmaUrl?: string }>,
+    acceptedPBIs: Array<{ id: string; parentId: string; title: string; description?: string; acceptanceCriteria?: string[]; figmaUrl?: string }>
   ): Promise<{ epicAdoId: number; epicAdoUrl: string; featureMap: Record<string, number>; pbiMap: Record<string, number> }> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
@@ -4185,12 +4206,16 @@ export class AzureDevOpsService {
         return html;
       };
 
-      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[]): any[] => {
+      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[], figmaUrl?: string): any[] => {
         const fields: any[] = [
           { op: 'add', path: '/fields/System.Title', value: title },
         ];
-        if (description) {
-          fields.push({ op: 'add', path: '/fields/System.Description', value: toHtml(description) });
+        if (description || figmaUrl) {
+          const descHtml = description ? toHtml(description) : '';
+          const figmaHtml = figmaUrl
+            ? `<p><strong>Figma Design:</strong> <a href="${figmaUrl}" target="_blank">View in Figma ↗</a></p>`
+            : '';
+          fields.push({ op: 'add', path: '/fields/System.Description', value: descHtml + figmaHtml });
         }
         if (priority) {
           const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
@@ -4231,13 +4256,13 @@ export class AzureDevOpsService {
       const featureMap: Record<string, number> = {};
       for (const feature of acceptedFeatures) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
           buildParentRelation(epicAdoId),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
         if (!featureItem?.id) throw new Error(`Failed to create Feature "${feature.title}" in ADO`);
         featureMap[feature.id] = featureItem.id;
-        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureItem.id}`);
+        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureItem.id}${feature.figmaUrl ? ' (with Figma link)' : ''}`);
       }
 
       // 3. Create PBIs as children of their respective Features
@@ -4260,7 +4285,7 @@ export class AzureDevOpsService {
             }).join('')}</ul>`
           : undefined;
         const pbiFields = [
-          ...buildBaseFields(pbi.title, pbi.description),
+          ...buildBaseFields(pbi.title, pbi.description, undefined, undefined, pbi.figmaUrl),
           buildParentRelation(parentAdoId),
         ];
         if (acHtml) {
@@ -4269,7 +4294,7 @@ export class AzureDevOpsService {
         const pbiItem = await witApi.createWorkItem({}, pbiFields, this.project, 'Product Backlog Item');
         if (!pbiItem?.id) throw new Error(`Failed to create PBI "${pbi.title}" in ADO`);
         pbiMap[pbi.id] = pbiItem.id;
-        console.log(`[BacklogADO] Created PBI "${pbi.title}" → ADO #${pbiItem.id}`);
+        console.log(`[BacklogADO] Created PBI "${pbi.title}" → ADO #${pbiItem.id}${pbi.figmaUrl ? ' (with Figma link)' : ''}`);
       }
 
       return { epicAdoId, epicAdoUrl, featureMap, pbiMap };
@@ -4282,8 +4307,8 @@ export class AzureDevOpsService {
    * and the Feature will be created first (linked to the Epic if provided).
    */
   async createSinglePbiInADO(
-    feature: { id: string; title: string; description?: string; priority?: string; tags?: string[]; adoWorkItemId?: number },
-    pbi: { id: string; title: string; description?: string; priority?: string; tags?: string[]; acceptanceCriteria?: string[] },
+    feature: { id: string; title: string; description?: string; priority?: string; tags?: string[]; adoWorkItemId?: number; figmaUrl?: string },
+    pbi: { id: string; title: string; description?: string; priority?: string; tags?: string[]; acceptanceCriteria?: string[]; figmaUrl?: string },
     parentEpicAdoId?: number
   ): Promise<{ featureAdoId?: number; featureAdoUrl?: string; pbiAdoId: number; pbiAdoUrl: string }> {
     return retryWithBackoff(async () => {
@@ -4318,9 +4343,15 @@ export class AzureDevOpsService {
         return html;
       };
 
-      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[]): any[] => {
+      const buildBaseFields = (title: string, description?: string, priority?: string, tags?: string[], figmaUrl?: string): any[] => {
         const fields: any[] = [{ op: 'add', path: '/fields/System.Title', value: title }];
-        if (description) fields.push({ op: 'add', path: '/fields/System.Description', value: toHtml(description) });
+        if (description || figmaUrl) {
+          const descHtml = description ? toHtml(description) : '';
+          const figmaHtml = figmaUrl
+            ? `<p><strong>Figma Design:</strong> <a href="${figmaUrl}" target="_blank">View in Figma ↗</a></p>`
+            : '';
+          fields.push({ op: 'add', path: '/fields/System.Description', value: descHtml + figmaHtml });
+        }
         if (priority) {
           const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
           const num = priorityMap[priority];
@@ -4348,14 +4379,14 @@ export class AzureDevOpsService {
       let featureAdoUrl: string | undefined;
       if (!featureAdoId) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
           ...(parentEpicAdoId ? [buildParentRelation(parentEpicAdoId)] : []),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
         if (!featureItem?.id) throw new Error(`Failed to create Feature "${feature.title}" in ADO`);
         featureAdoId = featureItem.id;
         featureAdoUrl = `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${featureAdoId}`;
-        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureAdoId}`);
+        console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureAdoId}${feature.figmaUrl ? ' (with Figma link)' : ''}`);
       }
 
       // 2. Create the PBI under the Feature
@@ -4371,7 +4402,7 @@ export class AzureDevOpsService {
         : undefined;
 
       const pbiFields = [
-        ...buildBaseFields(pbi.title, pbi.description, pbi.priority, pbi.tags),
+        ...buildBaseFields(pbi.title, pbi.description, pbi.priority, pbi.tags, pbi.figmaUrl),
         buildParentRelation(featureAdoId),
       ];
       if (acHtml) pbiFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acHtml });

@@ -1,0 +1,19 @@
+{
+  "updatedAt": "2026-04-24T20:00:00.000Z",
+  "_figmaFiles": {
+    "designSystem": "EDtAXPJZtgxFFoHSZt8deF",
+    "uxMocks": "ZsL1t2zBbuBCQDwgVHCvEO"
+  },
+  "_referenceFrames": {
+    "tablePageDefault": "4984:35898",
+    "listViewFilled": "4984:36040"
+  },
+  "_refreshInstructions": "To refresh: ask the Cursor AI 'Refresh the MaxView Figma reference'. It will call get_screenshot on the frames above, download the PNGs to src/server/assets/, and update updatedAt here.",
+  "navItems": [
+    { "label": "Dashboard",        "route": "/dashboard",        "icon": "grid_view" },
+    { "label": "Document Manager", "route": "/document-manager", "icon": "folder_open" },
+    { "label": "Assignments",      "route": "/assignments",       "icon": "assignment" },
+    { "label": "Shift Scheduler",  "route": "/shift-scheduler",  "icon": "calendar_month" },
+    { "label": "Timecards",        "route": "/timecards",         "icon": "timer" }
+  ]
+}
