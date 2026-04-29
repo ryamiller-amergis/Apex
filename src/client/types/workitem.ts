@@ -70,6 +70,8 @@ export interface DueDateHitRateStats {
 export interface PullRequestTimeStats {
   developer: string;
   totalItemsInPullRequest: number;
+  totalActivePullRequests: number;
+  totalCompletedPullRequests: number;
   averageTimeInPullRequest: number;
   totalTimeInPullRequest: number;
   workItemDetails: Array<{
@@ -78,6 +80,9 @@ export interface PullRequestTimeStats {
     timeInPullRequestDays: number;
     enteredPullRequestDate: string;
     exitedPullRequestDate: string;
+    prUrl?: string;
+    repositoryName?: string;
+    isActive?: boolean;
   }>;
 }
 
@@ -127,6 +132,24 @@ export interface InProgressTimeStats {
     enteredInProgressDate: string;
     exitedInProgressDate: string | null;
     isCurrentlyInProgress: boolean;
+  }>;
+}
+
+export interface PullRequestFeedbackStats {
+  developer: string;
+  totalPRsReviewed: number;
+  totalCommentsGiven: number;
+  totalApprovalsGiven: number;
+  totalRejectionsGiven: number;
+  prDetails: Array<{
+    prId: number;
+    title: string;
+    prUrl: string;
+    creator: string;
+    repositoryName: string;
+    commentsGiven: number;
+    vote: number; // -10 rejected, -5 waiting, 0 none, 5 approved with suggestions, 10 approved
+    createdDate: string;
   }>;
 }
 

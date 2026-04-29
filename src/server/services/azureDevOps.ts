@@ -2536,6 +2536,7 @@ export class AzureDevOpsService {
       console.log('=== AzureDevOpsService.getPullRequestTimeStats START ===');
       console.log('Fetching Git pull requests...', {
         project: this.project,
+        areaPath: this.areaPath,
         from,
         to,
         developerFilter
@@ -2543,46 +2544,70 @@ export class AzureDevOpsService {
 
       const gitApi = await this.connection.getGitApi();
 
+      // When an area path is selected, preload all work item IDs under that path with a
+      // single WIQL query. This set is used to filter PRs to only those linked to work
+      // items that belong to the selected team — no per-PR extra API calls needed.
+      let areaPathWorkItemIds: Set<number> | null = null;
+      if (this.areaPath) {
+        try {
+          const witApi = await this.connection.getWorkItemTrackingApi();
+          const wiql = `SELECT [System.Id] FROM WorkItems `
+            + `WHERE [System.TeamProject] = '${this.project}' `
+            + `AND [System.AreaPath] UNDER '${this.areaPath}'`;
+          const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+          areaPathWorkItemIds = new Set(
+            (queryResult.workItems ?? []).map(wi => wi.id!).filter(id => id != null)
+          );
+          console.log(`Area path "${this.areaPath}": preloaded ${areaPathWorkItemIds.size} work item IDs`);
+        } catch (err) {
+          console.error('Failed to preload work item IDs for area path filter:', err);
+          // Fall through without area path filtering rather than returning nothing
+          areaPathWorkItemIds = null;
+        }
+      }
+
       // Get all repositories in the project
       const repos = await gitApi.getRepositories(this.project);
       console.log(`Found ${repos.length} repositories in ${this.project}`);
 
-      const developerMap = new Map<string, { items: any[], totalTime: number }>();
+      const developerMap = new Map<string, { items: any[], totalTime: number, activeCount: number, completedCount: number }>();
       let totalPRsProcessed = 0;
+      let totalPRsSkipped = 0;
+      const fromDate = from || '1900-01-01';
+      const toDate = to || '2999-12-31';
+      const now = new Date();
+
+      // Build date bounds for the ADO search criteria so the API filters server-side.
+      // queryTimeRangeType defaults to Created (0), which is exactly what we want.
+      const minTime = from ? new Date(`${from}T00:00:00Z`) : undefined;
+      const maxTime = to   ? new Date(`${to}T23:59:59Z`)   : undefined;
 
       for (const repo of repos) {
         if (!repo.id || !repo.name) continue;
 
         try {
-          // Get completed pull requests
-          const pullRequests = await gitApi.getPullRequests(
-            repo.id,
-            {
-              status: 'completed' as any,  // Only completed PRs
-            },
-            this.project
-          );
+          // Fetch completed PRs within the date range, and all active PRs
+          // (active PRs have no close date so we include them regardless and
+          //  filter by creation date below).
+          const [completedPRs, activePRs] = await Promise.all([
+            gitApi.getPullRequests(repo.id, { status: 3 as any, minTime, maxTime } as any, this.project, undefined, undefined, 1000),
+            gitApi.getPullRequests(repo.id, { status: 1 as any, minTime } as any, this.project, undefined, undefined, 1000),
+          ]);
 
-          console.log(`Repository "${repo.name}": ${pullRequests.length} completed PRs`);
+          const pullRequests = [...completedPRs, ...activePRs];
+          console.log(`Repository "${repo.name}": ${completedPRs.length} completed, ${activePRs.length} active PRs`);
 
           for (const pr of pullRequests) {
-            if (!pr.createdBy?.displayName || !pr.creationDate || !pr.closedDate) continue;
+            if (!pr.createdBy?.displayName || !pr.creationDate) continue;
 
             const creator = pr.createdBy.displayName;
-            
-            // Handle dates - they might be Date objects or ISO strings
+
+            // Handle dates — they might be Date objects or ISO strings
             const createdDateStr = typeof pr.creationDate === 'string' ? pr.creationDate : new Date(pr.creationDate).toISOString();
-            const closedDateStr = typeof pr.closedDate === 'string' ? pr.closedDate : new Date(pr.closedDate).toISOString();
-            
-            const createdDate = new Date(createdDateStr);
-            const completedDate = new Date(closedDateStr);
-            const completedDateOnly = closedDateStr.split('T')[0];
+            const createdDateOnly = createdDateStr.split('T')[0];
 
-            // Apply date filter on completion date
-            const fromDate = from || '1900-01-01';
-            const toDate = to || '2999-12-31';
-
-            if (completedDateOnly < fromDate || completedDateOnly > toDate) {
+            // Secondary guard: keep only PRs whose creation date is within the window
+            if (createdDateOnly < fromDate || createdDateOnly > toDate) {
               continue;
             }
 
@@ -2591,13 +2616,40 @@ export class AzureDevOpsService {
               continue;
             }
 
+            // If an area path is active, check that at least one linked work item
+            // belongs to that area path. Uses the preloaded ID set — O(1) per check.
+            if (areaPathWorkItemIds !== null && pr.pullRequestId) {
+              try {
+                const refs = await gitApi.getPullRequestWorkItemRefs(repo.id!, pr.pullRequestId, this.project);
+                const hasMatchingWorkItem = (refs ?? []).some(ref => {
+                  const id = parseInt(ref.id ?? '', 10);
+                  return !isNaN(id) && areaPathWorkItemIds!.has(id);
+                });
+                if (!hasMatchingWorkItem) {
+                  totalPRsSkipped++;
+                  continue;
+                }
+              } catch (refErr) {
+                console.warn(`Could not get work item refs for PR #${pr.pullRequestId}:`, refErr);
+                // Skip on error to avoid polluting results with unconfirmed PRs
+                totalPRsSkipped++;
+                continue;
+              }
+            }
+
+            const isActive = !pr.closedDate;
+            const closedDate = isActive ? now : new Date(typeof pr.closedDate === 'string' ? pr.closedDate : new Date(pr.closedDate!).toISOString());
+            const exitedDateOnly = isActive ? 'present' : closedDate.toISOString().split('T')[0];
+
             totalPRsProcessed++;
 
-            // Calculate time in days
-            const timeInDays = (completedDate.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
+            // Calculate time in PR: from creation to close (or now for active)
+            const timeInDays = (closedDate.getTime() - new Date(createdDateStr).getTime()) / (1000 * 60 * 60 * 24);
+
+            const prUrl = `${this.organization}/${this.project}/_git/${repo.name}/pullrequest/${pr.pullRequestId}`;
 
             if (!developerMap.has(creator)) {
-              developerMap.set(creator, { items: [], totalTime: 0 });
+              developerMap.set(creator, { items: [], totalTime: 0, activeCount: 0, completedCount: 0 });
             }
 
             const devData = developerMap.get(creator)!;
@@ -2605,18 +2657,25 @@ export class AzureDevOpsService {
               id: pr.pullRequestId,
               title: pr.title || `PR #${pr.pullRequestId}`,
               timeInPullRequestDays: Math.round(timeInDays * 10) / 10,
-              enteredPullRequestDate: createdDateStr.split('T')[0],
-              exitedPullRequestDate: completedDateOnly,
+              enteredPullRequestDate: createdDateOnly,
+              exitedPullRequestDate: exitedDateOnly,
+              prUrl,
               repositoryName: repo.name,
-              sourceRefName: pr.sourceRefName,
-              targetRefName: pr.targetRefName,
+              isActive,
             });
             devData.totalTime += timeInDays;
+            if (isActive) {
+              devData.activeCount++;
+            } else {
+              devData.completedCount++;
+            }
           }
         } catch (repoError) {
           console.error(`Error fetching PRs for repository ${repo.name}:`, repoError);
         }
       }
+
+      console.log(`Area path filter "${this.areaPath || '(none)'}": included ${totalPRsProcessed}, skipped ${totalPRsSkipped} PRs`);
 
       console.log(`\nProcessed ${totalPRsProcessed} PRs in date range`);
 
@@ -2624,7 +2683,11 @@ export class AzureDevOpsService {
       const result = Array.from(developerMap.entries()).map(([developer, data]) => ({
         developer,
         totalItemsInPullRequest: data.items.length,
-        averageTimeInPullRequest: Math.round((data.totalTime / data.items.length) * 10) / 10,
+        totalActivePullRequests: data.activeCount,
+        totalCompletedPullRequests: data.completedCount,
+        averageTimeInPullRequest: data.items.length > 0
+          ? Math.round((data.totalTime / data.items.length) * 10) / 10
+          : 0,
         totalTimeInPullRequest: Math.round(data.totalTime * 10) / 10,
         workItemDetails: data.items.sort((a, b) => b.timeInPullRequestDays - a.timeInPullRequestDays),
       })).sort((a, b) => b.averageTimeInPullRequest - a.averageTimeInPullRequest);
@@ -2635,11 +2698,195 @@ export class AzureDevOpsService {
       console.log('Details:', result.map(r => ({
         developer: r.developer,
         items: r.totalItemsInPullRequest,
+        active: r.totalActivePullRequests,
+        completed: r.totalCompletedPullRequests,
         avgTime: r.averageTimeInPullRequest
       })));
       return result;
     } catch (error) {
       console.error('Error in getPullRequestTimeStats:', error);
+      return [];
+    }
+  }
+
+  async getPullRequestFeedbackStats(from?: string, to?: string, developerFilter?: string): Promise<any[]> {
+    try {
+      console.log('=== AzureDevOpsService.getPullRequestFeedbackStats START ===', {
+        project: this.project,
+        areaPath: this.areaPath,
+        from,
+        to,
+        developerFilter
+      });
+
+      const gitApi = await this.connection.getGitApi();
+
+      // Preload work item IDs under the area path so we can filter PRs by team
+      let areaPathWorkItemIds: Set<number> | null = null;
+      if (this.areaPath) {
+        try {
+          const witApi = await this.connection.getWorkItemTrackingApi();
+          const wiql = `SELECT [System.Id] FROM WorkItems `
+            + `WHERE [System.TeamProject] = '${this.project}' `
+            + `AND [System.AreaPath] UNDER '${this.areaPath}'`;
+          const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+          areaPathWorkItemIds = new Set(
+            (queryResult.workItems ?? []).map(wi => wi.id!).filter(id => id != null)
+          );
+          console.log(`Area path "${this.areaPath}": preloaded ${areaPathWorkItemIds.size} work item IDs for feedback filter`);
+        } catch (err) {
+          console.error('Failed to preload work item IDs for area path filter (feedback):', err);
+          areaPathWorkItemIds = null;
+        }
+      }
+
+      const repos = await gitApi.getRepositories(this.project);
+      console.log(`Found ${repos.length} repositories in ${this.project}`);
+
+      const fromDate = from || '1900-01-01';
+      const toDate = to || '2999-12-31';
+
+      const fbMinTime = from ? new Date(`${from}T00:00:00Z`) : undefined;
+      const fbMaxTime = to   ? new Date(`${to}T23:59:59Z`)   : undefined;
+
+      // reviewer → { prDetails, total comments, approvals, rejections }
+      type ReviewerData = {
+        prDetails: Map<number, {
+          prId: number; title: string; prUrl: string; creator: string;
+          repositoryName: string; commentsGiven: number; vote: number; createdDate: string;
+        }>;
+        totalComments: number;
+        totalApprovals: number;
+        totalRejections: number;
+      };
+      const reviewerMap = new Map<string, ReviewerData>();
+
+      const ensureReviewer = (name: string) => {
+        if (!reviewerMap.has(name)) {
+          reviewerMap.set(name, { prDetails: new Map(), totalComments: 0, totalApprovals: 0, totalRejections: 0 });
+        }
+        return reviewerMap.get(name)!;
+      };
+
+      for (const repo of repos) {
+        if (!repo.id || !repo.name) continue;
+
+        try {
+          const [completedPRs, activePRs] = await Promise.all([
+            gitApi.getPullRequests(repo.id, { status: 3 as any, minTime: fbMinTime, maxTime: fbMaxTime } as any, this.project, undefined, undefined, 1000),
+            gitApi.getPullRequests(repo.id, { status: 1 as any, minTime: fbMinTime } as any, this.project, undefined, undefined, 1000),
+          ]);
+          const pullRequests = [...completedPRs, ...activePRs];
+
+          for (const pr of pullRequests) {
+            if (!pr.creationDate || !pr.pullRequestId) continue;
+
+            const createdDateStr = typeof pr.creationDate === 'string'
+              ? pr.creationDate
+              : new Date(pr.creationDate).toISOString();
+            const createdDateOnly = createdDateStr.split('T')[0];
+
+            // Secondary guard in case the API returns slightly out-of-range results
+            if (createdDateOnly < fromDate || createdDateOnly > toDate) continue;
+
+            // Area path filter: skip PRs not linked to the selected team's work items
+            if (areaPathWorkItemIds !== null) {
+              try {
+                const refs = await gitApi.getPullRequestWorkItemRefs(repo.id!, pr.pullRequestId, this.project);
+                const hasMatch = (refs ?? []).some(ref => {
+                  const id = parseInt(ref.id ?? '', 10);
+                  return !isNaN(id) && areaPathWorkItemIds!.has(id);
+                });
+                if (!hasMatch) continue;
+              } catch {
+                continue;
+              }
+            }
+
+            const prCreator = pr.createdBy?.displayName ?? 'Unknown';
+            const prUrl = `${this.organization}/${this.project}/_git/${repo.name}/pullrequest/${pr.pullRequestId}`;
+
+            // Fetch comment threads — count Text (1) and CodeChange (2) comments only.
+            // System-generated comments (System = 3) are excluded.
+            // Only the first comment in each thread is a top-level review comment;
+            // replies are also counted since they represent actual engagement.
+            try {
+              const threads = await gitApi.getThreads(repo.id!, pr.pullRequestId, this.project);
+              for (const thread of threads ?? []) {
+                for (const comment of thread.comments ?? []) {
+                  const author = comment.author?.displayName;
+                  if (!author || author === prCreator) continue; // own-PR comments don't count
+                  if (comment.commentType === 3 /* System */) continue; // skip auto-generated entries
+                  if (!comment.content?.trim()) continue;
+                  if (developerFilter && author !== developerFilter) continue;
+
+                  const rd = ensureReviewer(author);
+                  rd.totalComments++;
+
+                  if (!rd.prDetails.has(pr.pullRequestId)) {
+                    rd.prDetails.set(pr.pullRequestId, {
+                      prId: pr.pullRequestId, title: pr.title ?? `PR #${pr.pullRequestId}`,
+                      prUrl, creator: prCreator, repositoryName: repo.name!,
+                      commentsGiven: 1, vote: 0, createdDate: createdDateOnly,
+                    });
+                  } else {
+                    rd.prDetails.get(pr.pullRequestId)!.commentsGiven++;
+                  }
+                }
+              }
+            } catch { /* thread fetch is best-effort */ }
+
+            // Fetch explicit votes (Approved = 10, Rejected = -10 only).
+            // vote = 5 ("Approved with suggestions") is intentionally excluded from
+            // the approvals counter because ADO sometimes auto-assigns it when a
+            // reviewer leaves a comment, making it indistinguishable from a real vote.
+            try {
+              const reviewers = await gitApi.getPullRequestReviewers(repo.id!, pr.pullRequestId, this.project);
+              for (const reviewer of reviewers ?? []) {
+                const name = reviewer.displayName;
+                if (!name || name === prCreator) continue;
+                if (developerFilter && name !== developerFilter) continue;
+                const vote = reviewer.vote ?? 0;
+                // Only count definitive approve (10) or reject (-10) votes
+                if (vote !== 10 && vote !== -10) continue;
+
+                const rd = ensureReviewer(name);
+                if (vote === 10) rd.totalApprovals++;
+                if (vote === -10) rd.totalRejections++;
+
+                if (!rd.prDetails.has(pr.pullRequestId)) {
+                  rd.prDetails.set(pr.pullRequestId, {
+                    prId: pr.pullRequestId, title: pr.title ?? `PR #${pr.pullRequestId}`,
+                    prUrl, creator: prCreator, repositoryName: repo.name!,
+                    commentsGiven: 0, vote, createdDate: createdDateOnly,
+                  });
+                } else {
+                  rd.prDetails.get(pr.pullRequestId)!.vote = vote;
+                }
+              }
+            } catch { /* vote fetch is best-effort */ }
+          }
+        } catch (repoError) {
+          console.error(`Error fetching feedback stats for repo ${repo.name}:`, repoError);
+        }
+      }
+
+      const result = Array.from(reviewerMap.entries())
+        .map(([developer, data]) => ({
+          developer,
+          totalPRsReviewed: data.prDetails.size,
+          totalCommentsGiven: data.totalComments,
+          totalApprovalsGiven: data.totalApprovals,
+          totalRejectionsGiven: data.totalRejections,
+          prDetails: Array.from(data.prDetails.values())
+            .sort((a, b) => b.commentsGiven - a.commentsGiven),
+        }))
+        .sort((a, b) => b.totalCommentsGiven - a.totalCommentsGiven);
+
+      console.log(`=== getPullRequestFeedbackStats: ${result.length} reviewers found ===`);
+      return result;
+    } catch (error) {
+      console.error('Error in getPullRequestFeedbackStats:', error);
       return [];
     }
   }
@@ -3987,7 +4234,12 @@ export class AzureDevOpsService {
       }
 
       let parsed: any;
-      const rawJson = match[1];
+      // ADO wiki uses non-breaking spaces (U+00A0) and zero-width characters for indentation.
+      // Node.js JSON.parse only accepts \t \n \r and space as whitespace — replace all
+      // non-standard Unicode spaces with regular spaces so parsing succeeds.
+      const rawJson = match[1]
+        .replace(/\u00A0/g, ' ')
+        .replace(/[\u0000\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
       try {
         parsed = JSON.parse(rawJson);
       } catch (firstErr) {
@@ -4139,6 +4391,122 @@ export class AzureDevOpsService {
         workItemId,
         this.project
       );
+    });
+  }
+
+  /**
+   * Creates a single Feature in ADO and any of its child PBIs that are
+   * Approved/Merged and do not yet have an ADO work item ID.
+   * Optionally links the Feature to its parent Epic.
+   */
+  async createSingleFeatureInADO(
+    feature: { id: string; title: string; description?: string; priority?: string; tags?: string[]; figmaUrl?: string },
+    eligiblePBIs: Array<{ id: string; title: string; description?: string; priority?: string; tags?: string[]; acceptanceCriteria?: string[]; figmaUrl?: string }>,
+    parentEpicAdoId?: number
+  ): Promise<{ featureAdoId: number; featureAdoUrl: string; pbiMap: Record<string, number> }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      const esc = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      const toHtml = (raw: string): string => {
+        if (!raw) return '';
+        const fmtItem = (s: string): string =>
+          esc(s).replace(/^((?:BR|NFR|AC)-\d+:|[A-Z][A-Za-z/\s]{1,30}:)\s*/, '<strong>$1</strong>&nbsp;');
+        const fmtAC = (s: string): string =>
+          esc(s)
+            .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+            .replace(/\b(When)\b/g, '<strong>When</strong>')
+            .replace(/\b(Then)\b/g, '<strong>Then</strong>');
+        const isHeader = (l: string) => /^[A-Z][^:\n]{1,50}:$/.test(l);
+        const isList = (l: string) => l.startsWith('- ');
+        let html = '';
+        for (const block of raw.split(/\n{2,}/)) {
+          const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+          if (!lines.length) continue;
+          let i = 0;
+          if (isHeader(lines[i])) { html += `<p><strong>${esc(lines[i])}</strong></p>`; i++; }
+          const rest = lines.slice(i);
+          const listLines = rest.filter(isList);
+          const textLines = rest.filter(l => !isList(l));
+          if (textLines.length) html += `<p>${textLines.map(fmtAC).join('<br/>')}</p>`;
+          if (listLines.length) html += `<ul>${listLines.map(l => `<li>${fmtItem(l.slice(2))}</li>`).join('')}</ul>`;
+        }
+        return html;
+      };
+
+      const buildDescField = (description?: string, figmaUrl?: string): string => {
+        const descHtml = description ? toHtml(description) : '';
+        const figmaHtml = figmaUrl
+          ? `<p><strong>Figma Design:</strong> <a href="${figmaUrl}" target="_blank">View in Figma ↗</a></p>`
+          : '';
+        return descHtml + figmaHtml;
+      };
+
+      const buildParentRelation = (parentAdoId: number): any => ({
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'System.LinkTypes.Hierarchy-Reverse',
+          url: `${this.organization}/${this.project}/_apis/wit/workItems/${parentAdoId}`,
+          attributes: { comment: 'Created from AI Pilot backlog draft' },
+        },
+      });
+
+      const orgUrl = this.organization.replace(/\/$/, '');
+
+      // 1. Create the Feature
+      const featureFields: any[] = [{ op: 'add', path: '/fields/System.Title', value: feature.title }];
+      const featureDescHtml = buildDescField(feature.description, feature.figmaUrl);
+      if (featureDescHtml) featureFields.push({ op: 'add', path: '/fields/System.Description', value: featureDescHtml });
+      if (feature.priority) {
+        const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
+        const num = priorityMap[feature.priority];
+        if (num) featureFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
+      }
+      if (feature.tags && feature.tags.length > 0) featureFields.push({ op: 'add', path: '/fields/System.Tags', value: feature.tags.join('; ') });
+      if (this.areaPath) featureFields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+      if (parentEpicAdoId) featureFields.push(buildParentRelation(parentEpicAdoId));
+
+      const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
+      if (!featureItem?.id) throw new Error(`Failed to create Feature "${feature.title}" in ADO`);
+      const featureAdoId = featureItem.id;
+      const featureAdoUrl = `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${featureAdoId}`;
+      console.log(`[BacklogADO] Created Feature "${feature.title}" → ADO #${featureAdoId}${feature.figmaUrl ? ' (with Figma link)' : ''}`);
+
+      // 2. Create eligible child PBIs
+      const pbiMap: Record<string, number> = {};
+      for (const pbi of eligiblePBIs) {
+        const pbiFields: any[] = [{ op: 'add', path: '/fields/System.Title', value: pbi.title }];
+        const pbiDescHtml = buildDescField(pbi.description, pbi.figmaUrl);
+        if (pbiDescHtml) pbiFields.push({ op: 'add', path: '/fields/System.Description', value: pbiDescHtml });
+        if (pbi.priority) {
+          const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4 };
+          const num = priorityMap[pbi.priority];
+          if (num) pbiFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
+        }
+        if (pbi.tags && pbi.tags.length > 0) pbiFields.push({ op: 'add', path: '/fields/System.Tags', value: pbi.tags.join('; ') });
+        if (this.areaPath) pbiFields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+        pbiFields.push(buildParentRelation(featureAdoId));
+        if (pbi.acceptanceCriteria && pbi.acceptanceCriteria.length > 0) {
+          const acHtml = `<ul>${pbi.acceptanceCriteria.map(ac => {
+            const escaped = ac.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `<li>${escaped
+              .replace(/\b(Given)\b/g, '<strong>Given</strong>')
+              .replace(/\b(When)\b/g, '<strong>When</strong>')
+              .replace(/\b(Then)\b/g, '<strong>Then</strong>')
+            }</li>`;
+          }).join('')}</ul>`;
+          pbiFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acHtml });
+        }
+        const pbiItem = await witApi.createWorkItem({}, pbiFields, this.project, 'Product Backlog Item');
+        if (!pbiItem?.id) throw new Error(`Failed to create PBI "${pbi.title}" in ADO`);
+        pbiMap[pbi.id] = pbiItem.id;
+        console.log(`[BacklogADO] Created PBI "${pbi.title}" → ADO #${pbiItem.id}${pbi.figmaUrl ? ' (with Figma link)' : ''}`);
+      }
+
+      return { featureAdoId, featureAdoUrl, pbiMap };
     });
   }
 

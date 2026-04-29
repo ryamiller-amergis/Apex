@@ -10,6 +10,9 @@ import type {
   BacklogEpic,
   BacklogFeature,
   BacklogPBI,
+  ClarificationQuestion,
+  ClarificationAnswer,
+  ClarificationResponses,
 } from '../types/workitem';
 import './BacklogDetailsPanel.css';
 import BeginDevKickoffModal from './BeginDevKickoffModal';
@@ -32,6 +35,8 @@ interface GeneratedFeatureData {
   confidence: string;
   tags: string[];
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
 }
 
 interface GeneratedFeatureWithPBIs {
@@ -258,12 +263,18 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
     pbiMap: Record<string, number>;
   } | null>(null);
   const [showCreatePbiConfirm, setShowCreatePbiConfirm] = useState(false);
+  const [showCreateFeatureConfirm, setShowCreateFeatureConfirm] = useState(false);
   const [showUnlinkAdoConfirm, setShowUnlinkAdoConfirm] = useState(false);
   const [pbiCreateResult, setPbiCreateResult] = useState<{
     pbiAdoId: number;
     pbiAdoUrl: string;
     featureAdoId?: number;
     featureAdoUrl?: string;
+  } | null>(null);
+  const [featureCreateResult, setFeatureCreateResult] = useState<{
+    featureAdoId: number;
+    featureAdoUrl: string;
+    pbiMap: Record<string, number>;
   } | null>(null);
   const [showGeneratePBI, setShowGeneratePBI] = useState(false);
   const [showGenerateFeature, setShowGenerateFeature] = useState(false);
@@ -460,6 +471,55 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
     },
   });
 
+  const createFeatureAdoMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/backlog/create-feature-ado-item', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ featureId: node.id, document, project, areaPath }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body?.error ?? `Failed: ${res.status}`);
+      }
+      return res.json() as Promise<{
+        featureAdoId: number;
+        featureAdoUrl: string;
+        pbiMap: Record<string, number>;
+      }>;
+    },
+    onSuccess: (data) => {
+      setShowCreateFeatureConfirm(false);
+      setSaveError(null);
+      setFeatureCreateResult(data);
+
+      const adoBase = `https://dev.azure.com/${import.meta.env.VITE_ADO_ORG ?? 'amergis'}`;
+      const buildUrl = (adoId: number) =>
+        `${adoBase}/${encodeURIComponent(project)}/_workitems/edit/${adoId}`;
+
+      const updatedFeatures = document.features.map(f =>
+        f.id === node.id
+          ? { ...f, status: 'Merged' as const, adoWorkItemId: data.featureAdoId, adoWorkItemUrl: data.featureAdoUrl }
+          : f
+      );
+      const updatedPBIs = document.pbis.map(p => {
+        const adoId = data.pbiMap[p.id];
+        if (!adoId) return p;
+        return { ...p, status: 'Merged' as const, adoWorkItemId: adoId, adoWorkItemUrl: buildUrl(adoId) };
+      });
+
+      const updatedPayload: BacklogDocumentPayload = { ...document, features: updatedFeatures, pbis: updatedPBIs };
+      saveDraftDoc(pagePath, updatedPayload, project, areaPath)
+        .then(() => queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] }))
+        .catch((err: Error) => setSaveError(err.message));
+    },
+    onError: (err: Error) => {
+      setShowCreateFeatureConfirm(false);
+      setSaveError(err.message);
+    },
+  });
+
   const unlinkAdoMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch('/api/backlog/unlink-ado-item', {
@@ -555,6 +615,8 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
       confidence: data.feature.confidence || undefined,
       tags: data.feature.tags?.length > 0 ? data.feature.tags : undefined,
       clarificationNeeded: data.feature.clarificationNeeded || undefined,
+      businessClarifications: data.feature.businessClarifications?.length ? data.feature.businessClarifications : undefined,
+      uiUxClarifications: data.feature.uiUxClarifications?.length ? data.feature.uiUxClarifications : undefined,
     };
 
     const existingPbiIds = document.pbis.map(p => p.id);
@@ -615,45 +677,82 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   });
 
   const resolveClarificationMutation = useMutation({
-    mutationFn: async (answer: string) => {
+    mutationFn: async (payload: ClarificationResponses | string) => {
+      const isLegacy = typeof payload === 'string';
+      const body = isLegacy
+        ? {
+            nodeId: node.id,
+            workItemType: node.workItemType,
+            pagePath,
+            document,
+            project,
+            areaPath,
+            clarificationQuestion: (node as any).clarificationNeeded,
+            userAnswer: payload,
+          }
+        : {
+            nodeId: node.id,
+            workItemType: node.workItemType,
+            pagePath,
+            document,
+            project,
+            areaPath,
+            clarificationResponses: payload,
+          };
+
       const res = await fetch('/api/backlog/resolve-clarification', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nodeId: node.id,
-          workItemType: node.workItemType,
-          pagePath,
-          document,
-          project,
-          areaPath,
-          clarificationQuestion: (node as any).clarificationNeeded,
-          userAnswer: answer,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body?.error ?? `Failed: ${res.status}`);
+        const errBody = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(errBody?.error ?? `Failed: ${res.status}`);
       }
-      return res.json() as Promise<{
+      const data = await res.json() as {
         success: boolean;
         action: 'update' | 'create-feature' | 'create-pbi';
         reasoning: string;
+        updatedItemType?: string;
+        updatedItemTitle?: string;
+        changedFields?: string[];
         featureTitle?: string;
+        featureId?: string;
+        featurePriority?: string;
         pbisCreated?: number;
+        bundledPbiTitles?: string[];
         pbiTitle?: string;
+        pbiId?: string;
+        pbiPriority?: string;
         parentFeatureTitle?: string;
-      }>;
+        clearedItemType?: string;
+        clearedItemTitle?: string;
+      };
+      return { data, submittedPayload: payload };
     },
-    onSuccess: (data) => {
+    onSuccess: ({ data, submittedPayload }) => {
       queryClient.invalidateQueries({ queryKey: ['backlog-drafts'] });
+      const isLegacy = typeof submittedPayload === 'string';
       setClarificationResult({
         action: data.action,
         reasoning: data.reasoning,
+        updatedItemType: data.updatedItemType,
+        updatedItemTitle: data.updatedItemTitle,
+        changedFields: data.changedFields,
         featureTitle: data.featureTitle,
+        featureId: data.featureId,
+        featurePriority: data.featurePriority,
         pbisCreated: data.pbisCreated,
+        bundledPbiTitles: data.bundledPbiTitles,
         pbiTitle: data.pbiTitle,
+        pbiId: data.pbiId,
+        pbiPriority: data.pbiPriority,
         parentFeatureTitle: data.parentFeatureTitle,
+        clearedItemType: data.clearedItemType,
+        clearedItemTitle: data.clearedItemTitle,
+        submittedResponses: isLegacy ? undefined : (submittedPayload as ClarificationResponses),
+        submittedLegacyAnswer: isLegacy ? (submittedPayload as string) : undefined,
       });
       setSaveError(null);
     },
@@ -662,9 +761,13 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
     },
   });
 
-  const handleAnswerClarification = (answer: string) => {
+  const handleAnswerClarification = (payload: ClarificationResponses | string) => {
     setSaveError(null);
-    resolveClarificationMutation.mutate(answer);
+    resolveClarificationMutation.mutate(payload);
+  };
+
+  const handleDismissClarificationResult = () => {
+    setClarificationResult(null);
   };
 
   const handleApprove = () => {
@@ -744,11 +847,13 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   const canStartDev = node.workItemType === 'PBI' && startDevBlocker === null;
   const isCreating = createAdoMutation.isPending;
   const isCreatingPbi = createPbiAdoMutation.isPending;
+  const isCreatingFeature = createFeatureAdoMutation.isPending;
   const isDeleting = deleteMutation.isPending;
   const isEpic = node.workItemType === 'Epic';
 
-  // PBI-level ADO creation: eligible when parent Feature is Approved/Merged and PBI not yet in ADO
   const isAdoReady = (s: string) => s === 'Approved' || s === 'Merged';
+
+  // PBI-level ADO creation: eligible when parent Feature is Approved/Merged and PBI not yet in ADO
   const pbiAdoBlocker = (() => {
     if (node.workItemType !== 'PBI') return null;
     if ((node as BacklogPBI).adoWorkItemId) return 'This PBI is already in ADO';
@@ -759,6 +864,15 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
     return null;
   })();
   const canCreatePbiAdo = node.workItemType === 'PBI' && pbiAdoBlocker === null;
+
+  // Feature-level ADO creation: eligible when Feature is Approved/Merged and not yet in ADO
+  const featureAdoBlocker = (() => {
+    if (node.workItemType !== 'Feature') return null;
+    if ((node as BacklogFeature).adoWorkItemId) return 'This Feature is already in ADO';
+    if (!isAdoReady(node.status)) return 'Feature must be Approved or Merged';
+    return null;
+  })();
+  const canCreateFeatureAdo = node.workItemType === 'Feature' && featureAdoBlocker === null;
 
   // ADO link: prefer the value persisted in the wiki document for any type;
   // fall back to current-session createResult for the Epic.
@@ -881,6 +995,16 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
                     onClick={() => setShowCreatePbiConfirm(true)}
                   >
                     {isCreatingPbi ? 'Creating…' : '⊕ Create ADO'}
+                  </button>
+                )}
+                {node.workItemType === 'Feature' && (
+                  <button
+                    className={`btn-create-ado${canCreateFeatureAdo ? ' btn-create-ado--ready' : ''}`}
+                    disabled={!canCreateFeatureAdo || isSaving || isCreatingFeature || isDeleting}
+                    title={canCreateFeatureAdo ? 'Create this Feature (and eligible PBIs) in Azure DevOps' : (featureAdoBlocker ?? '')}
+                    onClick={() => { setFeatureCreateResult(null); setShowCreateFeatureConfirm(true); }}
+                  >
+                    {isCreatingFeature ? 'Creating…' : '⊕ Create ADO'}
                   </button>
                 )}
                 {isEpic && (() => {
@@ -1026,6 +1150,47 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
             <button className="bdp-create-success-close" onClick={() => setPbiCreateResult(null)}>✕</button>
           </div>
         )}
+
+        {featureCreateResult && (() => {
+          const adoBase = `https://dev.azure.com/${import.meta.env.VITE_ADO_ORG ?? 'amergis'}`;
+          const buildAdoUrl = (adoId: number) =>
+            `${adoBase}/${encodeURIComponent(project)}/_workitems/edit/${adoId}`;
+          const pbiEntries = Object.entries(featureCreateResult.pbiMap);
+          return (
+            <div className="bdp-create-success" role="status">
+              <div className="bdp-create-success-body">
+                <div className="bdp-create-success-row">
+                  <strong>Feature created in ADO —</strong>
+                  <a
+                    className="bdp-ado-link"
+                    href={featureCreateResult.featureAdoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Feature #{featureCreateResult.featureAdoId} ↗
+                  </a>
+                </div>
+                {pbiEntries.length > 0 && (
+                  <div className="bdp-create-success-row bdp-create-success-sub">
+                    <span className="bdp-create-success-label">PBIs created:</span>
+                    {pbiEntries.map(([, adoId]) => (
+                      <a
+                        key={adoId}
+                        className="bdp-ado-link"
+                        href={buildAdoUrl(adoId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        #{adoId} ↗
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button className="bdp-create-success-close" onClick={() => setFeatureCreateResult(null)}>✕</button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Create ADO Items confirmation modal */}
@@ -1049,6 +1214,17 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
           isCreating={isCreatingPbi}
           onConfirm={() => createPbiAdoMutation.mutate()}
           onCancel={() => setShowCreatePbiConfirm(false)}
+        />
+      )}
+
+      {/* Create Feature (+ eligible PBIs) in ADO confirmation modal */}
+      {showCreateFeatureConfirm && node.workItemType === 'Feature' && (
+        <CreateFeatureAdoConfirmModal
+          feature={node as BacklogFeature}
+          document={document}
+          isCreating={isCreatingFeature}
+          onConfirm={() => createFeatureAdoMutation.mutate()}
+          onCancel={() => setShowCreateFeatureConfirm(false)}
         />
       )}
 
@@ -1125,6 +1301,7 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
             onAnswerClarification={handleAnswerClarification}
             isClarificationSubmitting={resolveClarificationMutation.isPending}
             clarificationResult={clarificationResult}
+            onDismissClarificationResult={handleDismissClarificationResult}
             pagePath={pagePath}
             project={project}
             areaPath={areaPath}
@@ -1148,17 +1325,193 @@ export const BacklogDetailsPanel: React.FC<BacklogDetailsPanelProps> = ({
   );
 };
 
+/* ── Clarification Result Banner ────────────────────────────── */
+
+interface ClarificationResultBannerProps {
+  result: ClarificationResolution;
+  onDismiss: () => void;
+}
+
+const ClarificationResultBanner: React.FC<ClarificationResultBannerProps> = ({ result, onDismiss }) => {
+  const { submittedResponses, submittedLegacyAnswer } = result;
+
+  const renderWhatChanged = () => {
+    if (result.action === 'update') {
+      return (
+        <div className="bdp-result-changes">
+          <div className="bdp-result-changes-label">What was updated</div>
+          <div className="bdp-result-change-item">
+            <span className={`bdp-type-chip ${result.updatedItemType === 'Epic' ? 'type-epic' : result.updatedItemType === 'Feature' ? 'type-feature' : 'type-pbi'}`} style={{ fontSize: '10px', padding: '1px 6px' }}>
+              {result.updatedItemType}
+            </span>
+            <span className="bdp-result-change-title">"{result.updatedItemTitle}"</span>
+          </div>
+          {result.changedFields && result.changedFields.length > 0 && (
+            <div className="bdp-result-changed-fields">
+              <span className="bdp-result-changed-fields-label">Fields changed: </span>
+              {result.changedFields.map(f => (
+                <span key={f} className="bdp-result-field-chip">{f}</span>
+              ))}
+            </div>
+          )}
+          {(!result.changedFields || result.changedFields.length === 0) && (
+            <div className="bdp-result-no-fields">Clarification question cleared — no other fields changed.</div>
+          )}
+        </div>
+      );
+    }
+
+    if (result.action === 'create-feature') {
+      return (
+        <div className="bdp-result-changes">
+          <div className="bdp-result-changes-label">What was created</div>
+          <div className="bdp-result-change-item">
+            <span className="bdp-type-chip type-feature" style={{ fontSize: '10px', padding: '1px 6px' }}>Feature</span>
+            <span className="bdp-result-change-title">"{result.featureTitle}"</span>
+            {result.featurePriority && <span className="bdp-result-priority-tag">{result.featurePriority}</span>}
+          </div>
+          {result.bundledPbiTitles && result.bundledPbiTitles.length > 0 && (
+            <div className="bdp-result-bundled-pbis">
+              <span className="bdp-result-changed-fields-label">With {result.bundledPbiTitles.length} PBI{result.bundledPbiTitles.length !== 1 ? 's' : ''}: </span>
+              <ul className="bdp-result-pbi-list">
+                {result.bundledPbiTitles.map((title, i) => (
+                  <li key={i} className="bdp-result-pbi-list-item">
+                    <span className="bdp-type-chip type-pbi" style={{ fontSize: '9px', padding: '1px 5px' }}>PBI</span>
+                    {title}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {result.clearedItemTitle && (
+            <div className="bdp-result-cleared">
+              Clarification cleared from <span className="bdp-result-cleared-name">{result.clearedItemType} "{result.clearedItemTitle}"</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (result.action === 'create-pbi') {
+      return (
+        <div className="bdp-result-changes">
+          <div className="bdp-result-changes-label">What was created</div>
+          <div className="bdp-result-change-item">
+            <span className="bdp-type-chip type-pbi" style={{ fontSize: '10px', padding: '1px 6px' }}>PBI</span>
+            <span className="bdp-result-change-title">"{result.pbiTitle}"</span>
+            {result.pbiPriority && <span className="bdp-result-priority-tag">{result.pbiPriority}</span>}
+          </div>
+          {result.parentFeatureTitle && (
+            <div className="bdp-result-parent-feature">
+              Added under Feature: <strong>"{result.parentFeatureTitle}"</strong>
+            </div>
+          )}
+          {result.clearedItemTitle && (
+            <div className="bdp-result-cleared">
+              Clarification cleared from <span className="bdp-result-cleared-name">{result.clearedItemType} "{result.clearedItemTitle}"</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderSubmittedAnswers = () => {
+    if (submittedLegacyAnswer) {
+      return (
+        <div className="bdp-result-answers">
+          <div className="bdp-result-answers-label">Your answer</div>
+          <div className="bdp-result-answer-text">{submittedLegacyAnswer}</div>
+        </div>
+      );
+    }
+    if (!submittedResponses) return null;
+    const { businessClarifications, uiUxClarifications } = submittedResponses;
+    const hasAny =
+      (businessClarifications && businessClarifications.length > 0) ||
+      (uiUxClarifications && uiUxClarifications.length > 0);
+    if (!hasAny) return null;
+
+    const renderSection = (label: string, answers: ClarificationAnswer[]) => {
+      if (!answers || answers.length === 0) return null;
+      return (
+        <div key={label} className="bdp-result-section">
+          <div className="bdp-result-section-label">{label}</div>
+          {answers.map((a, i) => (
+            <div key={i} className="bdp-result-qa-row">
+              <div className="bdp-result-question">{a.questionTitle}</div>
+              <div className="bdp-result-answer">
+                {a.selectedAnswer}
+                {a.freeformText && <span className="bdp-result-freeform"> — {a.freeformText}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    return (
+      <div className="bdp-result-answers">
+        <div className="bdp-result-answers-label">Submitted answers</div>
+        {renderSection('Business', businessClarifications ?? [])}
+        {renderSection('UI/UX', uiUxClarifications ?? [])}
+      </div>
+    );
+  };
+
+  return (
+    <div className="bdp-result-banner">
+      <div className="bdp-result-banner-header">
+        <div className="bdp-result-banner-title">
+          <span className="bdp-result-banner-check">✓</span>
+          Clarification Resolved
+        </div>
+        <button className="bdp-result-dismiss" onClick={onDismiss} title="Dismiss">✕</button>
+      </div>
+
+      {renderWhatChanged()}
+
+      {renderSubmittedAnswers()}
+
+      {result.reasoning && (
+        <div className="bdp-result-reasoning">
+          <div className="bdp-result-reasoning-label">AI reasoning</div>
+          <p className="bdp-result-reasoning-text">{result.reasoning}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ── View-mode body (extracted for clarity) ─────────────────── */
 
 interface ClarificationResolution {
   action: 'update' | 'create-feature' | 'create-pbi';
   reasoning?: string;
+  /** update */
+  updatedItemType?: string;
+  updatedItemTitle?: string;
+  changedFields?: string[];
   /** create-feature */
   featureTitle?: string;
+  featureId?: string;
+  featurePriority?: string;
   pbisCreated?: number;
+  bundledPbiTitles?: string[];
   /** create-pbi */
   pbiTitle?: string;
+  pbiId?: string;
+  pbiPriority?: string;
   parentFeatureTitle?: string;
+  /** Shared: which item had its clarification cleared */
+  clearedItemType?: string;
+  clearedItemTitle?: string;
+  /** The answers submitted by the user so the result banner can recap them */
+  submittedResponses?: ClarificationResponses;
+  /** Legacy single-question answer text */
+  submittedLegacyAnswer?: string;
 }
 
 interface ViewBodyProps {
@@ -1174,115 +1527,310 @@ interface ViewBodyProps {
   isUnlinkingAdo?: boolean;
   onGeneratePBI?: () => void;
   onGenerateFeature?: () => void;
-  onAnswerClarification?: (answer: string) => void;
+  onAnswerClarification?: (payload: ClarificationResponses | string) => void;
   isClarificationSubmitting?: boolean;
   clarificationResult?: ClarificationResolution | null;
+  onDismissClarificationResult?: () => void;
   pagePath: string;
   project: string;
   areaPath: string;
   onFeatureUpdated: (updated: BacklogFeature) => void;
 }
 
-/* ── Clarification answer section ───────────────────────────── */
+/* ── Clarification Wizard ───────────────────────────────────── */
 
-interface ClarificationSectionProps {
+type WizardStep = 'business' | 'uiux' | 'review';
+
+interface WizardSelections {
+  business: Record<number, { selected: string; freeform: string }>;
+  uiux: Record<number, { selected: string; freeform: string }>;
+}
+
+interface ClarificationWizardProps {
+  businessClarifications: ClarificationQuestion[];
+  uiUxClarifications: ClarificationQuestion[];
+  onSubmit: (responses: ClarificationResponses) => void;
+  isSubmitting: boolean;
+}
+
+const isOtherAnswer = (answer: string) =>
+  answer.toLowerCase().startsWith('e) other') || answer.toLowerCase().includes('other: (freeform)');
+
+const ClarificationWizard: React.FC<ClarificationWizardProps> = ({
+  businessClarifications,
+  uiUxClarifications,
+  onSubmit,
+  isSubmitting,
+}) => {
+  const hasBusiness = businessClarifications.length > 0;
+  const hasUiUx = uiUxClarifications.length > 0;
+
+  const initialStep: WizardStep = hasBusiness ? 'business' : hasUiUx ? 'uiux' : 'review';
+  const [step, setStep] = useState<WizardStep>(initialStep);
+  const [selections, setSelections] = useState<WizardSelections>({ business: {}, uiux: {} });
+
+  const setAnswer = (
+    group: 'business' | 'uiux',
+    idx: number,
+    selected: string,
+    freeform?: string
+  ) => {
+    setSelections(prev => ({
+      ...prev,
+      [group]: {
+        ...prev[group],
+        [idx]: { selected, freeform: freeform ?? prev[group][idx]?.freeform ?? '' },
+      },
+    }));
+  };
+
+  const setFreeform = (group: 'business' | 'uiux', idx: number, text: string) => {
+    setSelections(prev => ({
+      ...prev,
+      [group]: {
+        ...prev[group],
+        [idx]: { ...prev[group][idx], freeform: text },
+      },
+    }));
+  };
+
+  const isStepComplete = (s: WizardStep): boolean => {
+    if (s === 'business') {
+      return businessClarifications.every((_, i) => !!selections.business[i]?.selected);
+    }
+    if (s === 'uiux') {
+      return uiUxClarifications.every((_, i) => !!selections.uiux[i]?.selected);
+    }
+    return true;
+  };
+
+  const stepLabel = (s: WizardStep) => {
+    if (s === 'business') return 'Business';
+    if (s === 'uiux') return 'UI/UX';
+    return 'Review';
+  };
+
+  const steps: WizardStep[] = [
+    ...(hasBusiness ? ['business' as WizardStep] : []),
+    ...(hasUiUx ? ['uiux' as WizardStep] : []),
+    'review' as WizardStep,
+  ];
+
+  const currentIdx = steps.indexOf(step);
+  const nextStep = steps[currentIdx + 1] as WizardStep | undefined;
+  const prevStep = steps[currentIdx - 1] as WizardStep | undefined;
+
+  const buildResponses = (): ClarificationResponses => {
+    const mapAnswers = (
+      questions: ClarificationQuestion[],
+      group: 'business' | 'uiux'
+    ): ClarificationAnswer[] =>
+      questions.map((q, i) => ({
+        questionTitle: q.title,
+        selectedAnswer: selections[group][i]?.selected ?? '',
+        freeformText: isOtherAnswer(selections[group][i]?.selected ?? '')
+          ? selections[group][i]?.freeform || undefined
+          : undefined,
+      }));
+
+    return {
+      businessClarifications: hasBusiness ? mapAnswers(businessClarifications, 'business') : undefined,
+      uiUxClarifications: hasUiUx ? mapAnswers(uiUxClarifications, 'uiux') : undefined,
+    };
+  };
+
+  const renderQuestionGroup = (
+    questions: ClarificationQuestion[],
+    group: 'business' | 'uiux'
+  ) => (
+    <div className="bdp-wizard-questions">
+      {questions.map((q, i) => {
+        const sel = selections[group][i];
+        return (
+          <div key={i} className="bdp-wizard-question">
+            <div className="bdp-wizard-question-title">{q.title}</div>
+            <div className="bdp-wizard-options">
+              {q.answers.map((ans, j) => (
+                <label
+                  key={j}
+                  className={`bdp-wizard-option${sel?.selected === ans ? ' bdp-wizard-option--selected' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name={`${group}-q${i}`}
+                    value={ans}
+                    checked={sel?.selected === ans}
+                    onChange={() => setAnswer(group, i, ans)}
+                    className="bdp-wizard-radio"
+                  />
+                  <span className="bdp-wizard-option-label">{ans}</span>
+                </label>
+              ))}
+            </div>
+            {sel?.selected && isOtherAnswer(sel.selected) && (
+              <textarea
+                className="bdp-edit-textarea bdp-wizard-freeform"
+                rows={2}
+                placeholder="Please describe your answer…"
+                value={sel.freeform ?? ''}
+                onChange={e => setFreeform(group, i, e.target.value)}
+                autoFocus
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const renderReview = () => {
+    const renderGroup = (
+      label: string,
+      questions: ClarificationQuestion[],
+      group: 'business' | 'uiux'
+    ) => {
+      if (questions.length === 0) return null;
+      return (
+        <div className="bdp-wizard-review-group">
+          <div className="bdp-wizard-review-group-label">{label}</div>
+          {questions.map((q, i) => {
+            const sel = selections[group][i];
+            const answer = sel?.selected ?? '—';
+            const freeform = isOtherAnswer(answer) && sel?.freeform ? ` — ${sel.freeform}` : '';
+            return (
+              <div key={i} className="bdp-wizard-review-row">
+                <div className="bdp-wizard-review-question">{q.title}</div>
+                <div className="bdp-wizard-review-answer">{answer}{freeform}</div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    };
+
+    return (
+      <div className="bdp-wizard-review">
+        <div className="bdp-wizard-review-title">Review your answers</div>
+        {renderGroup('Business Clarifications', businessClarifications, 'business')}
+        {renderGroup('UI/UX Clarifications', uiUxClarifications, 'uiux')}
+      </div>
+    );
+  };
+
+  return (
+    <div className="bdp-wizard">
+      {/* Progress tabs */}
+      <div className="bdp-wizard-steps">
+        {steps.map((s, i) => (
+          <div
+            key={s}
+            className={`bdp-wizard-step${step === s ? ' bdp-wizard-step--active' : ''}${i < currentIdx ? ' bdp-wizard-step--done' : ''}`}
+          >
+            <span className="bdp-wizard-step-num">{i < currentIdx ? '✓' : i + 1}</span>
+            <span className="bdp-wizard-step-label">{stepLabel(s)}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="bdp-wizard-body">
+        {step === 'business' && renderQuestionGroup(businessClarifications, 'business')}
+        {step === 'uiux' && renderQuestionGroup(uiUxClarifications, 'uiux')}
+        {step === 'review' && renderReview()}
+      </div>
+
+      {/* Navigation */}
+      <div className="bdp-wizard-nav">
+        {prevStep && (
+          <button className="btn-cancel" onClick={() => setStep(prevStep)} disabled={isSubmitting}>
+            ← Back
+          </button>
+        )}
+        <div className="bdp-wizard-nav-spacer" />
+        {nextStep ? (
+          <button
+            className="bdp-clarification-submit"
+            onClick={() => setStep(nextStep)}
+            disabled={!isStepComplete(step)}
+          >
+            Next →
+          </button>
+        ) : (
+          <button
+            className="bdp-clarification-submit"
+            onClick={() => onSubmit(buildResponses())}
+            disabled={isSubmitting}
+          >
+            {isSubmitting
+              ? <><span className="bdp-gen-spinner bdp-gen-spinner--sm" aria-hidden="true" />{'  Resolving…'}</>
+              : '✦ Submit Answers'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ── Legacy single-question fallback ────────────────────────── */
+
+interface LegacyClarificationSectionProps {
   question: string;
   onSubmitAnswer: (answer: string) => void;
   isSubmitting: boolean;
-  result: ClarificationResolution | null | undefined;
 }
 
-const ClarificationSection: React.FC<ClarificationSectionProps> = ({
+const LegacyClarificationSection: React.FC<LegacyClarificationSectionProps> = ({
   question,
   onSubmitAnswer,
   isSubmitting,
-  result,
 }) => {
   const [showAnswer, setShowAnswer] = useState(false);
   const [answer, setAnswer] = useState('');
 
   return (
-    <div className="bdp-section bdp-clarification-section">
-      <h3 className="bdp-section-title">
-        <span className="bdp-clarification-icon">❓</span>
-        {' '}Clarification Needed
-      </h3>
+    <>
       <div className="bdp-clarification">{question}</div>
-
-      {result ? (
-        <div className="bdp-clarification-resolved">
-          <div className="bdp-clarification-resolved-summary">
-            <span className="bdp-clarification-resolved-check">✓</span>
-            <span>
-              {result.action === 'update' && 'Work item updated with your answer'}
-              {result.action === 'create-feature' && (
-                <>
-                  {'Created new Feature: '}
-                  <strong>{result.featureTitle}</strong>
-                  {result.pbisCreated ? ` with ${result.pbisCreated} PBI${result.pbisCreated !== 1 ? 's' : ''}` : ''}
-                </>
-              )}
-              {result.action === 'create-pbi' && (
-                <>
-                  {'Created new PBI: '}
-                  <strong>{result.pbiTitle}</strong>
-                  {result.parentFeatureTitle ? <> {' under '}<em>{result.parentFeatureTitle}</em></> : ''}
-                </>
-              )}
-            </span>
-          </div>
-          {result.reasoning && (
-            <div className="bdp-clarification-reasoning">
-              <span className="bdp-clarification-reasoning-label">AI reasoning</span>
-              <p className="bdp-clarification-reasoning-text">{result.reasoning}</p>
-            </div>
-          )}
-        </div>
+      {!showAnswer ? (
+        <button
+          className="bdp-clarification-answer-toggle"
+          onClick={() => setShowAnswer(true)}
+          disabled={isSubmitting}
+        >
+          ↩ Answer this question
+        </button>
       ) : (
-        <>
-          {!showAnswer ? (
+        <div className="bdp-clarification-answer-box">
+          <label className="bdp-edit-label">Your answer</label>
+          <textarea
+            className="bdp-edit-textarea bdp-clarification-answer-textarea"
+            rows={3}
+            placeholder="Type your answer here…"
+            value={answer}
+            onChange={e => setAnswer(e.target.value)}
+            disabled={isSubmitting}
+            autoFocus
+          />
+          <div className="bdp-clarification-answer-actions">
             <button
-              className="bdp-clarification-answer-toggle"
-              onClick={() => setShowAnswer(true)}
+              className="btn-cancel"
+              onClick={() => { setShowAnswer(false); setAnswer(''); }}
               disabled={isSubmitting}
             >
-              ↩ Answer this question
+              Cancel
             </button>
-          ) : (
-            <div className="bdp-clarification-answer-box">
-              <label className="bdp-edit-label">Your answer</label>
-              <textarea
-                className="bdp-edit-textarea bdp-clarification-answer-textarea"
-                rows={3}
-                placeholder="Type your answer here…"
-                value={answer}
-                onChange={e => setAnswer(e.target.value)}
-                disabled={isSubmitting}
-                autoFocus
-              />
-              <div className="bdp-clarification-answer-actions">
-                <button
-                  className="btn-cancel"
-                  onClick={() => { setShowAnswer(false); setAnswer(''); }}
-                  disabled={isSubmitting}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="bdp-clarification-submit"
-                  onClick={() => answer.trim() && onSubmitAnswer(answer.trim())}
-                  disabled={isSubmitting || !answer.trim()}
-                >
-                  {isSubmitting
-                    ? <><span className="bdp-gen-spinner bdp-gen-spinner--sm" aria-hidden="true" />{'  Resolving…'}</>
-                    : '✦ Submit Answer'}
-                </button>
-              </div>
-            </div>
-          )}
-        </>
+            <button
+              className="bdp-clarification-submit"
+              onClick={() => answer.trim() && onSubmitAnswer(answer.trim())}
+              disabled={isSubmitting || !answer.trim()}
+            >
+              {isSubmitting
+                ? <><span className="bdp-gen-spinner bdp-gen-spinner--sm" aria-hidden="true" />{'  Resolving…'}</>
+                : '✦ Submit Answer'}
+            </button>
+          </div>
+        </div>
       )}
-    </div>
+    </>
   );
 };
 
@@ -1302,12 +1850,21 @@ const ViewBody: React.FC<ViewBodyProps> = ({
   onAnswerClarification,
   isClarificationSubmitting,
   clarificationResult,
+  onDismissClarificationResult,
   pagePath,
   project,
   areaPath,
   onFeatureUpdated,
 }) => (
   <>
+    {/* Clarification result banner — shown independently of active clarifications */}
+    {clarificationResult && onDismissClarificationResult && (
+      <ClarificationResultBanner
+        result={clarificationResult}
+        onDismiss={onDismissClarificationResult}
+      />
+    )}
+
     {/* Meta row */}
     <div className="bdp-meta-row">
       {(node as any).priority && (
@@ -1398,19 +1955,64 @@ const ViewBody: React.FC<ViewBodyProps> = ({
       </div>
     )}
 
-    {/* Clarification Needed */}
-    {(node as any).clarificationNeeded && onAnswerClarification && (
-      <ClarificationSection
-        question={(node as any).clarificationNeeded}
-        onSubmitAnswer={onAnswerClarification}
-        isSubmitting={isClarificationSubmitting ?? false}
-        result={clarificationResult}
-      />
+    {/* Clarification Wizard (structured) */}
+    {((node as any).businessClarifications?.length > 0 || (node as any).uiUxClarifications?.length > 0) && (
+      <div className="bdp-section bdp-clarification-section">
+        <h3 className="bdp-section-title">
+          <span className="bdp-clarification-icon">❓</span>
+          {' '}Clarification Needed
+        </h3>
+        {onAnswerClarification ? (
+          <ClarificationWizard
+            businessClarifications={(node as any).businessClarifications ?? []}
+            uiUxClarifications={(node as any).uiUxClarifications ?? []}
+            onSubmit={onAnswerClarification}
+            isSubmitting={isClarificationSubmitting ?? false}
+          />
+        ) : (
+          <div className="bdp-wizard-readonly">
+            {[(
+              { label: 'Business', questions: (node as any).businessClarifications ?? [] } as { label: string; questions: ClarificationQuestion[] }
+            ), (
+              { label: 'UI/UX', questions: (node as any).uiUxClarifications ?? [] } as { label: string; questions: ClarificationQuestion[] }
+            )].map(({ label, questions }) =>
+              questions.length > 0 ? (
+                <div key={label} className="bdp-wizard-review-group">
+                  <div className="bdp-wizard-review-group-label">{label}</div>
+                  {questions.map((q: ClarificationQuestion, i: number) => (
+                    <div key={i} className="bdp-wizard-review-row">
+                      <div className="bdp-wizard-review-question">{q.title}</div>
+                      <div className="bdp-wizard-review-answer bdp-wizard-answers-list">
+                        {q.answers.map((a: string, j: number) => (
+                          <span key={j} className="bdp-wizard-answer-chip">{a}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null
+            )}
+          </div>
+        )}
+      </div>
     )}
-    {(node as any).clarificationNeeded && !onAnswerClarification && (
-      <div className="bdp-section">
-        <h3 className="bdp-section-title">Clarification Needed</h3>
-        <div className="bdp-clarification">{(node as any).clarificationNeeded}</div>
+
+    {/* Legacy clarificationNeeded fallback */}
+    {!(node as any).businessClarifications?.length && !(node as any).uiUxClarifications?.length && (node as any).clarificationNeeded && (
+      <div className="bdp-section bdp-clarification-section">
+        <h3 className="bdp-section-title">
+          <span className="bdp-clarification-icon">❓</span>
+          {' '}Clarification Needed
+        </h3>
+        {onAnswerClarification ? (
+          <LegacyClarificationSection
+            question={(node as any).clarificationNeeded}
+            onSubmitAnswer={onAnswerClarification}
+            isSubmitting={isClarificationSubmitting ?? false}
+          />
+        ) : (
+          <div className="bdp-clarification">{(node as any).clarificationNeeded}</div>
+        )}
       </div>
     )}
 
@@ -1987,6 +2589,8 @@ const GenerateFeatureModal: React.FC<GenerateFeatureModalProps> = ({
   const [step, setStep] = useState<'input' | 'generating' | 'review'>('input');
   const [reviewMode, setReviewMode] = useState<'view' | 'edit'>('view');
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [genBusinessClarifications, setGenBusinessClarifications] = useState<ClarificationQuestion[]>([]);
+  const [genUiUxClarifications, setGenUiUxClarifications] = useState<ClarificationQuestion[]>([]);
 
   const promptForm = useForm<GenerateFeatureFormValues>({
     resolver: zodResolver(generateFeatureSchema),
@@ -2037,6 +2641,9 @@ const GenerateFeatureModal: React.FC<GenerateFeatureModalProps> = ({
       }
       const data = (await res.json()) as GeneratedFeatureWithPBIs;
 
+      setGenBusinessClarifications(data.feature.businessClarifications ?? []);
+      setGenUiUxClarifications(data.feature.uiUxClarifications ?? []);
+
       reviewForm.reset({
         featureTitle: data.feature.title,
         featureDescription: data.feature.description,
@@ -2072,6 +2679,8 @@ const GenerateFeatureModal: React.FC<GenerateFeatureModalProps> = ({
       confidence: values.featureConfidence,
       tags: parseTags(values.featureTags),
       clarificationNeeded: values.featureClarification || undefined,
+      businessClarifications: genBusinessClarifications.length > 0 ? genBusinessClarifications : undefined,
+      uiUxClarifications: genUiUxClarifications.length > 0 ? genUiUxClarifications : undefined,
     };
 
     const pbis: GeneratedPBIData[] = values.pbis.map(p => ({
@@ -2189,7 +2798,34 @@ const GenerateFeatureModal: React.FC<GenerateFeatureModalProps> = ({
                     ))}
                   </div>
                 </div>
-                {reviewed.featureClarification && (
+                {(genBusinessClarifications.length > 0 || genUiUxClarifications.length > 0) && (
+                  <div className="bdp-gen-preview-section">
+                    <span className="bdp-edit-label">Clarification Needed</span>
+                    <div className="bdp-wizard-readonly">
+                      {[
+                        { label: 'Business', questions: genBusinessClarifications },
+                        { label: 'UI/UX', questions: genUiUxClarifications },
+                      ].map(({ label, questions }) =>
+                        questions.length > 0 ? (
+                          <div key={label} className="bdp-wizard-review-group">
+                            <div className="bdp-wizard-review-group-label">{label}</div>
+                            {questions.map((q, i) => (
+                              <div key={i} className="bdp-wizard-review-row">
+                                <div className="bdp-wizard-review-question">{q.title}</div>
+                                <div className="bdp-wizard-review-answer bdp-wizard-answers-list">
+                                  {q.answers.map((a, j) => (
+                                    <span key={j} className="bdp-wizard-answer-chip">{a}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null
+                      )}
+                    </div>
+                  </div>
+                )}
+                {genBusinessClarifications.length === 0 && genUiUxClarifications.length === 0 && reviewed.featureClarification && (
                   <div className="bdp-gen-preview-section">
                     <span className="bdp-edit-label">Clarification Needed</span>
                     <div className="bdp-clarification">{reviewed.featureClarification}</div>
@@ -2796,6 +3432,87 @@ const GeneratePBIModal: React.FC<GeneratePBIModalProps> = ({
               </button>
             </>
           )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ── Create Feature ADO Confirm Modal ───────────────────── */
+
+interface CreateFeatureAdoConfirmModalProps {
+  feature: BacklogFeature;
+  document: BacklogDocumentPayload;
+  isCreating: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const CreateFeatureAdoConfirmModal: React.FC<CreateFeatureAdoConfirmModalProps> = ({
+  feature,
+  document,
+  isCreating,
+  onConfirm,
+  onCancel,
+}) => {
+  const isReady = (s: string) => s === 'Approved' || s === 'Merged';
+  const parentEpic = document.epics.find(e => e.id === feature.parentId);
+
+  const eligiblePBIs = document.pbis.filter(
+    p => p.parentId === feature.id && isReady(p.status ?? '') && !p.adoWorkItemId
+  );
+  const skippedPBIs = document.pbis.filter(
+    p => p.parentId === feature.id && (!isReady(p.status ?? '') || !!p.adoWorkItemId)
+  );
+
+  return (
+    <div className="bdp-modal-overlay" onClick={onCancel}>
+      <div className="bdp-modal" onClick={e => e.stopPropagation()}>
+        <div className="bdp-modal-header">
+          <h3 className="bdp-modal-title">Create Feature in Azure DevOps</h3>
+          <button className="bdp-modal-close" onClick={onCancel} disabled={isCreating}>✕</button>
+        </div>
+
+        <div className="bdp-modal-body">
+          <p className="bdp-modal-epic-name">&ldquo;{feature.title}&rdquo;</p>
+
+          <div className="bdp-modal-info">
+            This will create <strong>1 Feature</strong>
+            {eligiblePBIs.length > 0 && (
+              <> and <strong>{eligiblePBIs.length} PBI{eligiblePBIs.length > 1 ? 's' : ''}</strong></>
+            )} in Azure DevOps.
+            {parentEpic?.adoWorkItemId && (
+              <> The Feature will be linked to its parent Epic (ADO&nbsp;#{parentEpic.adoWorkItemId}).</>
+            )}
+            {skippedPBIs.length > 0 && (
+              <> {skippedPBIs.length} PBI{skippedPBIs.length > 1 ? 's' : ''} will be skipped
+              (not Approved/Merged or already in ADO).</>
+            )}
+          </div>
+
+          <div className="bdp-modal-summary">
+            <div className="bdp-modal-summary-row">
+              <span className="bdp-type-chip type-feature" style={{ fontSize: '10px' }}>Feature</span>
+              <span>1 Feature will be created</span>
+            </div>
+            {eligiblePBIs.length > 0 && (
+              <div className="bdp-modal-summary-row">
+                <span className="bdp-type-chip type-pbi" style={{ fontSize: '10px' }}>PBI</span>
+                <span>{eligiblePBIs.length} PBI{eligiblePBIs.length > 1 ? 's' : ''} will be created</span>
+              </div>
+            )}
+          </div>
+
+          <p className="bdp-modal-confirm-text">
+            Are you sure you want to proceed? This will create live work items in Azure DevOps.
+          </p>
+        </div>
+
+        <div className="bdp-modal-footer">
+          <button className="btn-cancel" onClick={onCancel} disabled={isCreating}>Cancel</button>
+          <button className="btn-create-ado-confirm" onClick={onConfirm} disabled={isCreating}>
+            {isCreating ? 'Creating…' : '⊕ Create in ADO'}
+          </button>
         </div>
       </div>
     </div>

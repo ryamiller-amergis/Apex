@@ -270,12 +270,16 @@ router.get('/pull-request-time-stats', async (req: Request, res: Response) => {
       if (aggregatedStats.has(stat.developer)) {
         const existing = aggregatedStats.get(stat.developer)!;
         existing.totalItemsInPullRequest += stat.totalItemsInPullRequest;
+        existing.totalActivePullRequests += stat.totalActivePullRequests ?? 0;
+        existing.totalCompletedPullRequests += stat.totalCompletedPullRequests ?? 0;
         existing.totalTimeInPullRequest += stat.totalTimeInPullRequest;
         existing.workItemDetails.push(...stat.workItemDetails);
       } else {
         aggregatedStats.set(stat.developer, {
           developer: stat.developer,
           totalItemsInPullRequest: stat.totalItemsInPullRequest,
+          totalActivePullRequests: stat.totalActivePullRequests ?? 0,
+          totalCompletedPullRequests: stat.totalCompletedPullRequests ?? 0,
           averageTimeInPullRequest: 0, // Will recalculate
           totalTimeInPullRequest: stat.totalTimeInPullRequest,
           workItemDetails: [...stat.workItemDetails]
@@ -298,6 +302,23 @@ router.get('/pull-request-time-stats', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error fetching pull request time stats:', error);
     res.status(500).json({ error: 'Failed to fetch pull request time statistics' });
+  }
+});
+
+// GET /api/pull-request-feedback-stats - Get PR review feedback (comments + votes) per developer
+router.get('/pull-request-feedback-stats', async (req: Request, res: Response) => {
+  try {
+    const { from, to, developer, areaPath: areaPathParam } = req.query as { from?: string; to?: string; developer?: string; areaPath?: string };
+    console.log('=== API: /pull-request-feedback-stats called ===', { from, to, developer, areaPath: areaPathParam });
+
+    const adoService = new AzureDevOpsService('MaxView', areaPathParam || '');
+    const stats = await adoService.getPullRequestFeedbackStats(from, to, developer);
+
+    console.log(`=== API: Returning ${stats.length} reviewer feedback stats ===`);
+    res.json(stats);
+  } catch (error: any) {
+    console.error('Error fetching pull request feedback stats:', error);
+    res.status(500).json({ error: 'Failed to fetch pull request feedback statistics' });
   }
 });
 
@@ -1445,6 +1466,81 @@ router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) 
   }
 });
 
+// POST /api/backlog/create-feature-ado-item - Create a single Feature in ADO (and its approved child PBIs without an ADO link)
+router.post('/backlog/create-feature-ado-item', async (req: Request, res: Response) => {
+  try {
+    const { featureId, document, project, areaPath } = req.body as {
+      featureId?: string;
+      document?: any;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!featureId || typeof featureId !== 'string') {
+      return res.status(400).json({ error: 'featureId is required' });
+    }
+    if (!document || typeof document !== 'object') {
+      return res.status(400).json({ error: 'document is required' });
+    }
+
+    const feature = (document.features ?? []).find((f: any) => f.id === featureId);
+    if (!feature) return res.status(404).json({ error: `Feature ${featureId} not found in document` });
+    if (feature.adoWorkItemId) return res.status(422).json({ error: 'Feature already has an ADO work item' });
+
+    const isReady = (s: string) => s === 'Approved' || s === 'Merged';
+    if (!isReady(feature.status)) {
+      return res.status(422).json({ error: 'Feature must be Approved or Merged before creating in ADO' });
+    }
+
+    // Resolve parent Epic's ADO ID so the Feature can be linked
+    const parentEpic = (document.epics ?? []).find((e: any) => e.id === feature.parentId);
+    const parentEpicAdoId = parentEpic?.adoWorkItemId as number | undefined;
+
+    // Only push child PBIs that are Approved/Merged and not yet in ADO
+    const eligiblePBIs = ((document.pbis ?? []) as any[]).filter(
+      (p: any) => p.parentId === featureId && isReady(p.status) && !p.adoWorkItemId
+    );
+
+    // Resolve Figma URLs (design-ready mocks only)
+    const featureFigmaUrl = feature.uiMock?.designReady && feature.uiMock?.figmaUrl
+      ? feature.uiMock.figmaUrl as string
+      : undefined;
+    const eligiblePBIsWithFigma = eligiblePBIs.map((p: any) => {
+      const view = ((feature.uiMock?.views ?? []) as any[]).find((v: any) => v.pbiId === p.id);
+      return {
+        ...p,
+        figmaUrl: view?.designReady && view?.figmaUrl ? view.figmaUrl as string : undefined,
+      };
+    });
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const result = await adoService.createSingleFeatureInADO(
+      { ...feature, figmaUrl: featureFigmaUrl },
+      eligiblePBIsWithFigma,
+      parentEpicAdoId
+    );
+
+    // Tag the feature if it has an approved AI-generated UI mock
+    if (feature.uiMock?.status === 'approved') {
+      try {
+        await adoService.addTagToWorkItem(result.featureAdoId, 'ai-generated-ui');
+      } catch (tagErr) {
+        console.warn(`Could not add ai-generated-ui tag to ADO item ${result.featureAdoId}:`, tagErr);
+      }
+    }
+
+    res.json({
+      success: true,
+      featureAdoId: result.featureAdoId,
+      featureAdoUrl: result.featureAdoUrl,
+      pbiMap: result.pbiMap,
+    });
+  } catch (error: any) {
+    console.error('Error creating ADO Feature:', error);
+    res.status(500).json({ error: 'Failed to create ADO Feature', details: error.message });
+  }
+});
+
 // POST /api/backlog/generate-feature - Generate a Feature + PBIs via Bedrock AI
 router.post('/backlog/generate-feature', async (req: Request, res: Response) => {
   try {
@@ -1553,6 +1649,8 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       document,
       project,
       areaPath,
+      clarificationResponses,
+      // Legacy fallback fields
       clarificationQuestion,
       userAnswer,
     } = req.body as {
@@ -1562,6 +1660,7 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       document?: any;
       project?: string;
       areaPath?: string;
+      clarificationResponses?: { businessClarifications?: any[]; uiUxClarifications?: any[] };
       clarificationQuestion?: string;
       userAnswer?: string;
     };
@@ -1569,8 +1668,18 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
     if (!nodeId || !workItemType || !pagePath || !document) {
       return res.status(400).json({ error: 'nodeId, workItemType, pagePath, and document are required' });
     }
-    if (!clarificationQuestion || !userAnswer?.trim()) {
-      return res.status(400).json({ error: 'clarificationQuestion and userAnswer are required' });
+
+    // Accept either new structured responses or legacy single-question answer
+    const hasStructuredResponses =
+      clarificationResponses &&
+      ((clarificationResponses.businessClarifications?.length ?? 0) > 0 ||
+        (clarificationResponses.uiUxClarifications?.length ?? 0) > 0);
+    const hasLegacyAnswer = clarificationQuestion && userAnswer?.trim();
+
+    if (!hasStructuredResponses && !hasLegacyAnswer) {
+      return res.status(400).json({
+        error: 'clarificationResponses (with at least one answer) or clarificationQuestion + userAnswer are required',
+      });
     }
 
     // ── Locate the node and build context for Bedrock ──────────────
@@ -1611,8 +1720,9 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       workItemType,
       title: node.title,
       description: node.description,
-      clarificationQuestion,
-      userAnswer: userAnswer.trim(),
+      clarificationResponses: hasStructuredResponses ? clarificationResponses : undefined,
+      clarificationQuestion: hasLegacyAnswer ? clarificationQuestion : undefined,
+      userAnswer: hasLegacyAnswer ? (userAnswer as string).trim() : undefined,
       parentType,
       parentTitle,
       existingChildren,
@@ -1625,7 +1735,12 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
     const nextPBIId = (existingPBIs: any[]): string =>
       generateBacklogId('PBI', existingPBIs.map((p: any) => p.id));
 
-    const clearClarification = (n: any) => ({ ...n, clarificationNeeded: undefined });
+    const clearClarification = (n: any) => ({
+      ...n,
+      clarificationNeeded: undefined,
+      businessClarifications: undefined,
+      uiUxClarifications: undefined,
+    });
 
     // ── Apply result ───────────────────────────────────────────────
     let updatedDoc = { ...document };
@@ -1637,7 +1752,10 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       const updatedNode = {
         ...node,
         ...(f.description !== undefined && { description: f.description }),
-        ...(f.clarificationNeeded !== undefined && { clarificationNeeded: f.clarificationNeeded || undefined }),
+        // Always clear all clarification forms when Bedrock accepts the answer
+        clarificationNeeded: f.clarificationNeeded || undefined,
+        businessClarifications: undefined,
+        uiUxClarifications: undefined,
         ...(f.priority !== undefined && { priority: f.priority }),
         ...(f.confidence !== undefined && { confidence: f.confidence }),
         ...(f.tags !== undefined && { tags: f.tags }),
@@ -1653,6 +1771,21 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
       } else {
         updatedDoc = { ...document, pbis: document.pbis.map((p: any) => p.id === nodeId ? updatedNode : p) };
       }
+
+      // Build human-readable list of which fields actually changed
+      const changedFields: string[] = [];
+      if (f.description !== undefined) changedFields.push('Description');
+      if (f.priority !== undefined) changedFields.push('Priority');
+      if (f.confidence !== undefined) changedFields.push('Confidence');
+      if (f.tags !== undefined) changedFields.push('Tags');
+      if (f.acceptanceCriteria !== undefined && workItemType === 'PBI') changedFields.push('Acceptance Criteria');
+
+      responsePayload = {
+        ...responsePayload,
+        updatedItemType: workItemType,
+        updatedItemTitle: node.title,
+        changedFields,
+      };
     }
 
     // ── create-feature (Epic only) ───────────────────────────────────
@@ -1709,7 +1842,11 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
         ...responsePayload,
         featureTitle: newFeature.title,
         featureId: newFeatId,
+        featurePriority: newFeature.priority,
         pbisCreated: bundledPBIs.length,
+        bundledPbiTitles: bundledPBIs.map((p: any) => p.title),
+        clearedItemType: workItemType,
+        clearedItemTitle: node.title,
       };
     }
 
@@ -1769,7 +1906,10 @@ router.post('/backlog/resolve-clarification', async (req: Request, res: Response
         ...responsePayload,
         pbiTitle: newPBI.title,
         pbiId: newPBIId,
+        pbiPriority: newPBI.priority,
         parentFeatureTitle: parentFeat?.title,
+        clearedItemType: workItemType,
+        clearedItemTitle: node.title,
       };
     }
 

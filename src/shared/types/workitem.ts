@@ -74,6 +74,8 @@ export interface DueDateHitRateStats {
 export interface PullRequestTimeStats {
   developer: string;
   totalItemsInPullRequest: number;
+  totalActivePullRequests: number;
+  totalCompletedPullRequests: number;
   averageTimeInPullRequest: number;
   totalTimeInPullRequest: number;
   workItemDetails: Array<{
@@ -82,6 +84,9 @@ export interface PullRequestTimeStats {
     timeInPullRequestDays: number;
     enteredPullRequestDate: string;
     exitedPullRequestDate: string;
+    prUrl?: string;
+    repositoryName?: string;
+    isActive?: boolean;
   }>;
 }
 

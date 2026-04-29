@@ -134,13 +134,19 @@ export interface GenerateFeatureInput {
   userRequest: string;
 }
 
+import type { ClarificationQuestion, ClarificationAnswer, ClarificationResponses } from '../../shared/types/backlog';
+export type { ClarificationQuestion, ClarificationAnswer, ClarificationResponses };
+
 export interface GeneratedFeatureData {
   title: string;
   description: string;
   priority: string;
   confidence: string;
   tags: string[];
+  /** @deprecated Use businessClarifications / uiUxClarifications */
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
 }
 
 export interface GeneratedFeatureWithPBIs {
@@ -278,6 +284,14 @@ export async function generateFeatureFromBedrock(
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'Feature')) as GeneratedFeatureWithPBIs;
 
+  const normClarificationQuestions = (arr: any): ClarificationQuestion[] | undefined => {
+    if (!Array.isArray(arr) || arr.length === 0) return undefined;
+    const valid = arr.filter(
+      (q: any) => q && typeof q.title === 'string' && Array.isArray(q.answers) && q.answers.length > 0
+    ) as ClarificationQuestion[];
+    return valid.length > 0 ? valid : undefined;
+  };
+
   const feature: GeneratedFeatureData = {
     title: parsed.feature?.title ?? '',
     description: parsed.feature?.description ?? '',
@@ -285,6 +299,8 @@ export async function generateFeatureFromBedrock(
     confidence: parsed.feature?.confidence ?? 'Medium',
     tags: Array.isArray(parsed.feature?.tags) ? parsed.feature.tags : [],
     clarificationNeeded: parsed.feature?.clarificationNeeded || undefined,
+    businessClarifications: normClarificationQuestions(parsed.feature?.businessClarifications),
+    uiUxClarifications: normClarificationQuestions(parsed.feature?.uiUxClarifications),
   };
 
   const pbis: GeneratedPBIData[] = Array.isArray(parsed.pbis)
@@ -342,7 +358,9 @@ ${skillContent.trim() ? `Follow the SDLC Formatting Standards above exactly. In 
 3. **priority** — "Critical", "High", "Medium", or "Low". Match sibling features.
 4. **confidence** — "High", "Medium", or "Low".
 5. **tags** — 2–5 tags derived from epic tags and feature subject matter.
-6. **clarificationNeeded** — one sentence identifying the most important open question, or omit if none.
+6. **businessClarifications** — an array of business-focused clarification questions (optional). Each object has "title" (the question) and "answers" (array of labeled options like "a) Some option", always include "e) Other: (freeform)"). Include 2–4 questions only when there are meaningful open business decisions. Omit if confidence is High and requirements are clear.
+7. **uiUxClarifications** — an array of UI/UX-focused clarification questions (optional). Same shape as businessClarifications. Include 2–3 questions only when platform, visual treatment, or interaction choices are genuinely open. Omit if not applicable.
+8. **clarificationNeeded** — omit this field; use the structured arrays above instead.
 
 ### PBIs (generate 2–4 PBIs that together fully deliver the feature)
 For each PBI:
@@ -363,7 +381,18 @@ Respond ONLY with valid JSON inside a fenced code block — no other text:
     "priority": "High",
     "confidence": "Medium",
     "tags": ["tag1", "tag2"],
-    "clarificationNeeded": "..."
+    "businessClarifications": [
+      {
+        "title": "What is the primary business goal for this Feature?",
+        "answers": ["a) Option one", "b) Option two", "c) Option three", "d) Other: (freeform)"]
+      }
+    ],
+    "uiUxClarifications": [
+      {
+        "title": "Which platform(s) are in-scope for UI changes?",
+        "answers": ["a) Mobile app only", "b) Desktop web only", "c) Both", "d) Other: (freeform)"]
+      }
+    ]
   },
   "pbis": [
     {
@@ -388,8 +417,12 @@ export interface ResolveClarificationInput {
   workItemType: 'Epic' | 'Feature' | 'PBI';
   title: string;
   description?: string;
-  clarificationQuestion: string;
-  userAnswer: string;
+  /** Structured wizard responses (preferred) */
+  clarificationResponses?: ClarificationResponses;
+  /** @deprecated Use clarificationResponses instead */
+  clarificationQuestion?: string;
+  /** @deprecated Use clarificationResponses instead */
+  userAnswer?: string;
   parentType?: string;
   parentTitle?: string;
   /** For Epic: existing Features. For Feature: existing PBIs. For PBI: sibling PBIs. */
@@ -399,6 +432,8 @@ export interface ResolveClarificationInput {
 export interface ClarificationUpdatedFields {
   description?: string;
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
   acceptanceCriteria?: string[];
   priority?: string;
   confidence?: string;
@@ -662,6 +697,32 @@ Or to add a PBI to an existing Feature:
 \`\`\``;
   }
 
+  /* ── Format the user's clarification responses ── */
+  let clarificationSection: string;
+  if (input.clarificationResponses) {
+    const { businessClarifications, uiUxClarifications } = input.clarificationResponses;
+    const lines: string[] = [];
+
+    const formatAnswers = (answers: ClarificationAnswer[], sectionLabel: string) => {
+      if (answers.length === 0) return;
+      lines.push(`### ${sectionLabel}`);
+      for (const a of answers) {
+        const text = a.freeformText ? `${a.selectedAnswer} — ${a.freeformText}` : a.selectedAnswer;
+        lines.push(`- **${a.questionTitle}**\n  Selected: ${text}`);
+      }
+    };
+
+    if (businessClarifications && businessClarifications.length > 0) {
+      formatAnswers(businessClarifications, 'Business Clarifications');
+    }
+    if (uiUxClarifications && uiUxClarifications.length > 0) {
+      formatAnswers(uiUxClarifications, 'UI/UX Clarifications');
+    }
+    clarificationSection = `## Clarification Wizard Responses\n\n${lines.join('\n\n')}`;
+  } else {
+    clarificationSection = `## Clarification Question That Was Flagged\n\n"${input.clarificationQuestion ?? ''}"\n\n## User's Answer\n\n"${input.userAnswer ?? ''}"`;
+  }
+
   return `You are a senior product owner resolving a clarification on a backlog work item.
 
 ${skillSection}## Work Item Being Reviewed
@@ -669,13 +730,7 @@ ${skillSection}## Work Item Being Reviewed
 **Type:** ${input.workItemType}
 ${parentSection}**Title:** "${input.title}"
 ${input.description ? `**Current Description:**\n${input.description}\n` : ''}${childrenSection}
-## Clarification Question That Was Flagged
-
-"${input.clarificationQuestion}"
-
-## User's Answer
-
-"${input.userAnswer}"
+${clarificationSection}
 
 ## Available Actions
 ${actionOptions}
@@ -707,7 +762,8 @@ ${outputExamples}
 
 Rules:
 - Only include fields in updatedFields that actually change.
-- clarificationNeeded must always appear in updatedFields (use "" to clear it, or a revised question if still partially unclear).
+- Always include \`"clarificationNeeded": ""\` in updatedFields to clear the legacy field.
+- Do NOT include businessClarifications or uiUxClarifications in updatedFields; the server clears them automatically.
 - acceptanceCriteria only applies to PBI-type items.
 - Match SDLC formatting standards if provided above.`;
 }

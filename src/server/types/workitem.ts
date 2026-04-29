@@ -145,6 +145,24 @@ export interface InProgressTimeStats {
   }>;
 }
 
+export interface PullRequestFeedbackStats {
+  developer: string;
+  totalPRsReviewed: number;
+  totalCommentsGiven: number;
+  totalApprovalsGiven: number;
+  totalRejectionsGiven: number;
+  prDetails: Array<{
+    prId: number;
+    title: string;
+    prUrl: string;
+    creator: string;
+    repositoryName: string;
+    commentsGiven: number;
+    vote: number;
+    createdDate: string;
+  }>;
+}
+
 export interface QACycleTimeStats {
   qaAssignee: string;
   totalItems: number;

@@ -1,5 +1,24 @@
 export type BacklogStatus = 'Draft' | 'Approved' | 'Rejected' | string;
 
+/* ── Structured clarification types ────────────────────────── */
+
+export interface ClarificationQuestion {
+  title: string;
+  answers: string[];
+}
+
+/** A single answered question: the selected answer label and optional freeform text for "Other" answers. */
+export interface ClarificationAnswer {
+  questionTitle: string;
+  selectedAnswer: string;
+  freeformText?: string;
+}
+
+export interface ClarificationResponses {
+  businessClarifications?: ClarificationAnswer[];
+  uiUxClarifications?: ClarificationAnswer[];
+}
+
 /* ── UI Mock types ─────────────────────────────────────────── */
 
 export type UiMockDecision = 'new-page' | 'update-page' | 'no-ui';
@@ -74,7 +93,10 @@ export interface BacklogEpic {
   tags?: string[];
   confidence?: string;
   sourceEvidence?: string;
+  /** @deprecated Use businessClarifications / uiUxClarifications */
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
 }
@@ -95,7 +117,10 @@ export interface BacklogFeature {
   tags?: string[];
   confidence?: string;
   sourceEvidence?: string;
+  /** @deprecated Use businessClarifications / uiUxClarifications */
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
   featureFlag?: FeatureFlag;
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
@@ -113,7 +138,10 @@ export interface BacklogPBI {
   tags?: string[];
   confidence?: string;
   sourceEvidence?: string;
+  /** @deprecated Use businessClarifications / uiUxClarifications */
   clarificationNeeded?: string;
+  businessClarifications?: ClarificationQuestion[];
+  uiUxClarifications?: ClarificationQuestion[];
   acceptanceCriteria?: string[];
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;

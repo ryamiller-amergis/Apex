@@ -720,8 +720,10 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
   // PBIs that belong to this feature
   const childPBIs = (document.pbis ?? []).filter(p => p.parentId === feature.id);
 
-  // Active tab: 'overview' or a pbiId string
-  const [activeTab, setActiveTab] = useState<string>('overview');
+  // Active tab: first PBI id (or null when there are no PBIs)
+  const [activeTab, setActiveTab] = useState<string | null>(
+    () => childPBIs[0]?.id ?? null
+  );
   // Progress label shown while "Generate All" is running
   const [generateAllProgress, setGenerateAllProgress] = useState<string | null>(null);
   // Additional context the BA/UX types before clicking "Generate All"
@@ -738,51 +740,22 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
     onFeatureUpdated(updated);
   };
 
-  /* ── Generate All: overview then all PBI views in parallel ──
-     When mocks already exist, this acts as a batch regeneration — versions
-     increment and prior history is preserved per-mock so users don't lose
-     earlier iterations. */
+  /* ── Generate All: all PBI views in parallel (no feature overview step) ── */
   const generateAllMutation = useMutation({
     mutationFn: async () => {
+      if (childPBIs.length === 0) return;
       const ctx = generateAllContext.trim() || undefined;
 
-      // ── Step 1: feature overview ──
-      setGenerateAllProgress(`Generating feature overview…`);
-      const overviewResult = await apiGenerateUiMock(feature.id, document, project, areaPath, ctx);
+      setGenerateAllProgress(`Generating ${childPBIs.length} PBI mock${childPBIs.length > 1 ? 's' : ''}…`);
 
-      const existingMock = feature.uiMock;
-      const overviewVersion = (existingMock?.mockVersion ?? 0) + 1;
-      const overviewEntry = buildHistoryEntry(overviewResult, overviewVersion);
-      const newUiMock: UiMock = {
-        ...(existingMock ?? {}),
-        decision: overviewResult.decision,
-        rationale: overviewResult.rationale,
-        targetPageRoute: overviewResult.targetPageRoute,
-        targetPageTitle: overviewResult.targetPageTitle,
-        targetPageSubTabs: overviewResult.targetPageSubTabs,
-        mockHtml: overviewResult.mockHtml,
-        mockVersion: overviewVersion,
-        status: 'draft',
-        history: [...(existingMock?.history ?? []), overviewEntry],
-        views: existingMock?.views ?? [],
-      } as UiMock;
-
-      // Save the overview so the PBI endpoints can read featureContext from the stored doc
-      await saveFeature({ ...feature, uiMock: newUiMock });
-
-      if (childPBIs.length === 0) return;
-
-      // ── Step 2: PBI views in parallel ──
-      setGenerateAllProgress(`Generating ${childPBIs.length} PBI view${childPBIs.length > 1 ? 's' : ''}…`);
+      const existingViews: UiMockView[] = feature.uiMock?.views ?? [];
       const pbiResults = await Promise.allSettled(
         childPBIs.map(pbi =>
-          apiGeneratePbiView(feature.id, pbi.id, document, project, areaPath, ctx, overviewResult.mockHtml)
+          apiGeneratePbiView(feature.id, pbi.id, document, project, areaPath, ctx)
         )
       );
 
-      // Merge each successful PBI result into the views array, incrementing the
-      // existing view's version (or starting at 1 if this is its first generation).
-      const updatedViews: UiMockView[] = [...(newUiMock.views ?? [])];
+      const updatedViews: UiMockView[] = [...existingViews];
       pbiResults.forEach((r, i) => {
         if (r.status !== 'fulfilled') return;
         const result = r.value;
@@ -808,10 +781,13 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
         else updatedViews.push(view);
       });
 
-      const finalMock: UiMock = { ...newUiMock, views: updatedViews };
+      const existingMock = feature.uiMock;
+      const finalMock: UiMock = existingMock
+        ? { ...existingMock, views: updatedViews }
+        : { decision: 'new-page', rationale: '', mockVersion: 0, status: 'draft', history: [], views: updatedViews } as UiMock;
+
       await saveFeature({ ...feature, uiMock: finalMock });
 
-      // Report any PBI failures
       const failures = pbiResults
         .map((r, i) => r.status === 'rejected' ? childPBIs[i].title : null)
         .filter(Boolean);
@@ -822,17 +798,6 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
   });
 
   const isGeneratingAll = generateAllMutation.isPending;
-
-  /* ── Handlers for the overview (feature-level) mock ── */
-  const handleOverviewChange = async (updated: UiMock | UiMockView) => {
-    const updatedFeature: BacklogFeature = { ...feature, uiMock: updated as UiMock };
-    try { await saveFeature(updatedFeature); } catch { /* error surfaced inside panel */ }
-  };
-
-  const handleOverviewDiscard = async () => {
-    const updatedFeature: BacklogFeature = { ...feature, uiMock: undefined };
-    try { await saveFeature(updatedFeature); } catch { /* error surfaced inside panel */ }
-  };
 
   /* ── Handlers for PBI views ── */
   const handlePbiViewChange = async (pbiId: string, updated: UiMock | UiMockView) => {
@@ -860,7 +825,7 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
   };
 
   /* ── Derive active content ── */
-  const activePbi = activeTab !== 'overview' ? childPBIs.find(p => p.id === activeTab) : undefined;
+  const activePbi = activeTab ? childPBIs.find(p => p.id === activeTab) : undefined;
   const activePbiView = activePbi
     ? (feature.uiMock?.views ?? []).find(v => v.pbiId === activePbi.id) ?? null
     : null;
@@ -878,12 +843,12 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
         )}
       </div>
 
-      {/* Generate All panel — only on Overview tab when PBIs exist */}
-      {childPBIs.length > 0 && activeTab === 'overview' && !isGeneratingAll && (
+      {/* Generate All panel — shown when there are multiple PBIs */}
+      {childPBIs.length > 1 && !isGeneratingAll && (
         <div className="ui-mock-generate-all-panel">
           <textarea
             className="ui-mock-generate-all-panel__context"
-            placeholder={`Optional context applied to all ${childPBIs.length + 1} mocks — e.g. "focus on mobile-first layout", "target persona: staffing coordinator", "use a card grid instead of tables"…`}
+            placeholder={`Optional context applied to all ${childPBIs.length} mocks — e.g. "focus on mobile-first layout", "target persona: staffing coordinator", "use a card grid instead of tables"…`}
             value={generateAllContext}
             onChange={e => setGenerateAllContext(e.target.value)}
             rows={2}
@@ -893,30 +858,20 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
             className="ui-mock-section__btn-generate-all"
             onClick={() => generateAllMutation.mutate()}
             disabled={isGeneratingAll}
-            title={feature.uiMock?.mockHtml
-              ? `Regenerate the overview and all ${childPBIs.length} PBI mock${childPBIs.length > 1 ? 's' : ''} — each will get a new version on top of its existing history`
-              : `Generate the feature overview and all ${childPBIs.length} PBI mock${childPBIs.length > 1 ? 's' : ''} at once`}
+            title={(feature.uiMock?.views ?? []).length > 0
+              ? `Regenerate all ${childPBIs.length} PBI mocks — each will get a new version on top of its existing history`
+              : `Generate mocks for all ${childPBIs.length} PBIs at once`}
           >
-            {feature.uiMock?.mockHtml
-              ? `↻ Regenerate All (${childPBIs.length + 1})`
-              : `⚡ Generate All (${childPBIs.length + 1})`}
+            {(feature.uiMock?.views ?? []).length > 0
+              ? `↻ Regenerate All (${childPBIs.length})`
+              : `⚡ Generate All (${childPBIs.length})`}
           </button>
         </div>
       )}
 
-      {/* Tab bar — only shown when there are PBIs */}
-      {childPBIs.length > 0 && (
+      {/* Tab bar — only shown when there are multiple PBIs */}
+      {childPBIs.length > 1 && (
         <div className="ui-mock-tabs" role="tablist">
-          <button
-            role="tab"
-            aria-selected={activeTab === 'overview'}
-            className={`ui-mock-tab${activeTab === 'overview' ? ' ui-mock-tab--active' : ''}`}
-            onClick={() => setActiveTab('overview')}
-          >
-            Feature Overview
-            {feature.uiMock?.designReady && <span className="ui-mock-tab__dot ui-mock-tab__dot--ready" title="Design ready" />}
-            {feature.uiMock?.status === 'approved' && !feature.uiMock.designReady && <span className="ui-mock-tab__dot ui-mock-tab__dot--approved" title="Approved" />}
-          </button>
           {childPBIs.map(pbi => {
             const view = (feature.uiMock?.views ?? []).find(v => v.pbiId === pbi.id);
             return (
@@ -937,23 +892,8 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
         </div>
       )}
 
-      {/* Active panel */}
-      {activeTab === 'overview' ? (
-        <MockViewPanel
-          key="overview"
-          kind="feature"
-          mock={feature.uiMock ?? null}
-          feature={feature}
-          document={document}
-          pagePath={pagePath}
-          project={project}
-          areaPath={areaPath}
-          onMockChange={handleOverviewChange}
-          onDiscard={handleOverviewDiscard}
-          externalBusy={isGeneratingAll}
-          suppressEmptyState={childPBIs.length > 0}
-        />
-      ) : activePbi ? (
+      {/* Active PBI panel */}
+      {activePbi ? (
         <MockViewPanel
           key={activePbi.id}
           kind="pbi"
@@ -968,7 +908,11 @@ export const UiMockSection: React.FC<UiMockSectionProps> = ({
           onDiscard={() => handlePbiViewDiscard(activePbi.id)}
           externalBusy={isGeneratingAll}
         />
-      ) : null}
+      ) : (
+        <div className="ui-mock-section__empty">
+          <p className="ui-mock-section__empty-text">No PBIs found for this feature. Add PBIs to generate UI mocks.</p>
+        </div>
+      )}
     </div>
   );
 };

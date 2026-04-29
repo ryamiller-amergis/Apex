@@ -1,4 +1,4 @@
-import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats, DesignDocKickoffStats } from '../types/workitem';
+import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats, DesignDocKickoffStats, PullRequestFeedbackStats } from '../types/workitem';
 import './DevStats.css';
 import { useState, useMemo, useEffect } from 'react';
 
@@ -22,6 +22,8 @@ const IN_PROGRESS_DATA_KEY = 'devStatsInProgressData';
 const IN_PROGRESS_LOADING_STATE_KEY = 'devStatsInProgressLoadingState';
 const KICKOFF_DATA_KEY = 'devStatsKickoffData';
 const KICKOFF_LOADING_STATE_KEY = 'devStatsKickoffLoadingState';
+const PR_FEEDBACK_DATA_KEY = 'devStatsPRFeedbackData';
+const PR_FEEDBACK_LOADING_STATE_KEY = 'devStatsPRFeedbackLoadingState';
 const SESSION_INITIALIZED_KEY = 'devStatsSessionInitialized';
 
 // Check for page refresh once - this runs before component render
@@ -43,6 +45,8 @@ const checkAndClearOnRefresh = () => {
     sessionStorage.removeItem(IN_PROGRESS_LOADING_STATE_KEY);
     sessionStorage.removeItem(KICKOFF_DATA_KEY);
     sessionStorage.removeItem(KICKOFF_LOADING_STATE_KEY);
+    sessionStorage.removeItem(PR_FEEDBACK_DATA_KEY);
+    sessionStorage.removeItem(PR_FEEDBACK_LOADING_STATE_KEY);
     sessionStorage.setItem(SESSION_INITIALIZED_KEY, 'true');
     return true;
   }
@@ -222,6 +226,34 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     return savedLoading ? 'Loading design doc kickoff stats in background...' : '';
   });
 
+  // Pull Request Feedback stats state
+  const [prFeedbackStats, setPrFeedbackStats] = useState<PullRequestFeedbackStats[]>(() => {
+    if (isPageRefresh) return [];
+    const savedData = sessionStorage.getItem(PR_FEEDBACK_DATA_KEY);
+    return savedData ? JSON.parse(savedData).stats : [];
+  });
+  const [prFeedbackLoading, setPrFeedbackLoading] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(PR_FEEDBACK_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [prFeedbackHasLoaded, setPrFeedbackHasLoaded] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedData = sessionStorage.getItem(PR_FEEDBACK_DATA_KEY);
+    return savedData ? JSON.parse(savedData).hasLoaded : false;
+  });
+  const [prFeedbackError, setPrFeedbackError] = useState<string | null>(null);
+  const [showPrFeedbackNotification, setShowPrFeedbackNotification] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(PR_FEEDBACK_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [prFeedbackNotificationMessage, setPrFeedbackNotificationMessage] = useState(() => {
+    if (isPageRefresh) return '';
+    const savedLoading = sessionStorage.getItem(PR_FEEDBACK_LOADING_STATE_KEY);
+    return savedLoading ? 'Loading pull request feedback stats in background...' : '';
+  });
+
   // Info tooltip state
   const [showChangesInfo, setShowChangesInfo] = useState(false);
   const [showHitRateInfo, setShowHitRateInfo] = useState(false);
@@ -229,7 +261,8 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   const [showQaBugInfo, setShowQaBugInfo] = useState(false);
   const [showInProgressInfo, setShowInProgressInfo] = useState(false);
   const [showKickoffInfo, setShowKickoffInfo] = useState(false);
-  
+  const [showPrFeedbackInfo, setShowPrFeedbackInfo] = useState(false);
+
   // Collapse state for sections — all default to collapsed for better visibility
   const [isChangesCollapsed, setIsChangesCollapsed] = useState(true);
   const [isHitRateCollapsed, setIsHitRateCollapsed] = useState(true);
@@ -237,6 +270,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   const [isQaBugCollapsed, setIsQaBugCollapsed] = useState(true);
   const [isInProgressCollapsed, setIsInProgressCollapsed] = useState(true);
   const [isKickoffCollapsed, setIsKickoffCollapsed] = useState(true);
+  const [isPrFeedbackCollapsed, setIsPrFeedbackCollapsed] = useState(true);
   const [collapsedReasons, setCollapsedReasons] = useState<Set<string>>(new Set());
   const [collapsedQaBug, setCollapsedQaBug] = useState<Set<string>>(new Set());
   
@@ -553,6 +587,11 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   useEffect(() => {
     sessionStorage.setItem(KICKOFF_DATA_KEY, JSON.stringify({ stats: kickoffStats, hasLoaded: kickoffHasLoaded }));
   }, [kickoffStats, kickoffHasLoaded]);
+
+  // Persist PR feedback data to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem(PR_FEEDBACK_DATA_KEY, JSON.stringify({ stats: prFeedbackStats, hasLoaded: prFeedbackHasLoaded }));
+  }, [prFeedbackStats, prFeedbackHasLoaded]);
 
   const fetchDueDateStats = async () => {
     setLoading(true);
@@ -987,6 +1026,52 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     }
   };
 
+  const fetchPullRequestFeedbackStats = async () => {
+    setPrFeedbackLoading(true);
+    setPrFeedbackError(null);
+    setShowPrFeedbackNotification(true);
+    setPrFeedbackNotificationMessage('Loading pull request feedback statistics in background...');
+    sessionStorage.setItem(PR_FEEDBACK_LOADING_STATE_KEY, JSON.stringify({ loading: true, timestamp: Date.now() }));
+
+    try {
+      let fromDate = '';
+      let toDate = new Date().toISOString().split('T')[0];
+      if (timeFrame === 'custom') {
+        fromDate = customFromDate;
+        toDate = customToDate;
+      } else {
+        const daysBack = parseInt(timeFrame);
+        const from = new Date();
+        from.setDate(from.getDate() - daysBack);
+        fromDate = from.toISOString().split('T')[0];
+      }
+
+      const params = new URLSearchParams();
+      if (fromDate) params.append('from', fromDate);
+      if (toDate) params.append('to', toDate);
+      if (selectedDeveloper !== 'all') params.append('developer', selectedDeveloper);
+      const selectedTeamDef = teams.find(t => t.id === selectedTeam);
+      if (selectedTeamDef?.areaPath) params.append('areaPath', selectedTeamDef.areaPath);
+
+      const response = await fetch(`/api/pull-request-feedback-stats?${params.toString()}`, { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to fetch pull request feedback statistics');
+
+      const data: PullRequestFeedbackStats[] = await response.json();
+      sessionStorage.setItem(PR_FEEDBACK_DATA_KEY, JSON.stringify({ stats: data, hasLoaded: true }));
+      setPrFeedbackStats(data);
+      setPrFeedbackHasLoaded(true);
+      setPrFeedbackNotificationMessage('Pull request feedback statistics loaded successfully!');
+      setTimeout(() => setShowPrFeedbackNotification(false), 3000);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setPrFeedbackError(errorMsg);
+      setPrFeedbackNotificationMessage(`Error: ${errorMsg}`);
+    } finally {
+      setPrFeedbackLoading(false);
+      sessionStorage.setItem(PR_FEEDBACK_LOADING_STATE_KEY, JSON.stringify({ loading: false, timestamp: Date.now() }));
+    }
+  };
+
   // Active member allow-list: allTeamMembers for "all", teamMembers for a specific team.
   // null means the list is still loading — don't filter yet.
   const activeMemberSet = useMemo((): Set<string> | null => {
@@ -1044,6 +1129,39 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     if (selectedDeveloper !== 'all') stats = stats.filter(s => s.developer === selectedDeveloper);
     return stats;
   }, [kickoffStats, selectedDeveloper, activeMemberSet]);
+
+  const filteredPrFeedbackStats = useMemo(() => {
+    let stats = activeMemberSet
+      ? prFeedbackStats.filter(s => activeMemberSet.has(s.developer))
+      : prFeedbackStats;
+    if (selectedDeveloper !== 'all') stats = stats.filter(s => s.developer === selectedDeveloper);
+    return stats;
+  }, [prFeedbackStats, selectedDeveloper, activeMemberSet]);
+
+  // Build a minimal WorkItem stub from stats data when the item isn't in the
+  // currently loaded workItems array (e.g. different date range / area path).
+  // The DetailsPanel uses workItem.id for its own API calls, so this is enough
+  // to open the panel and load full details on demand.
+  const resolveWorkItem = (id: number, title: string, workItemType?: string): WorkItem => {
+    return workItems.find(wi => wi.id === id) ?? {
+      id,
+      title,
+      state: '',
+      workItemType: workItemType ?? '',
+      changedDate: '',
+      createdDate: '',
+      areaPath: '',
+      iterationPath: '',
+    };
+  };
+
+  const getVoteLabel = (vote: number): { label: string; className: string } => {
+    switch (vote) {
+      case 10:  return { label: 'Approved', className: 'vote-approved' };
+      case -10: return { label: 'Rejected', className: 'vote-rejected' };
+      default:  return { label: '', className: 'vote-none' };
+    }
+  };
 
   const getWorkItemTypeIcon = (type: string): string => {
     switch (type) {
@@ -1436,20 +1554,16 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                       <summary>View Work Items ({stats.workItemDetails.length})</summary>
                       <ul className="work-item-list">
                         {stats.workItemDetails.map((item, idx) => {
-                          const fullWorkItem = workItems.find(wi => wi.id === item.id);
-                          const typeIcon = getWorkItemTypeIcon(item.workItemType || fullWorkItem?.workItemType || '');
+                          const resolvedItem = resolveWorkItem(item.id, item.title, item.workItemType);
+                          const typeIcon = getWorkItemTypeIcon(resolvedItem.workItemType);
                           const uniqueReasons = Array.from(new Set(item.dueDateChangeReasons ?? []));
                           return (
                             <li 
                               key={idx} 
-                              className={`work-item ${item.status}${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
-                              onClick={() => {
-                                if (onSelectItem && fullWorkItem) {
-                                  onSelectItem(fullWorkItem);
-                                }
-                              }}
-                              role={onSelectItem && fullWorkItem ? 'button' : undefined}
-                              tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
+                              className={`work-item ${item.status}${onSelectItem ? ' clickable' : ''}`}
+                              onClick={() => { if (onSelectItem) onSelectItem(resolvedItem); }}
+                              role={onSelectItem ? 'button' : undefined}
+                              tabIndex={onSelectItem ? 0 : undefined}
                             >
                               <span className="work-item-id">
                                 <span className="work-item-type-icon" title={item.workItemType}>{typeIcon}</span>
@@ -1514,13 +1628,17 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
             </button>
             <p>
               <strong>What this section shows:</strong><br />
-              Time spent by developers in the "In Pull Request" state for their work items.
+              Pull requests opened by each developer within the selected time frame — both completed and currently active PRs.
             </p>
             <p>
               <strong>How to interpret:</strong><br />
-              • <strong>Total Items in PR:</strong> Number of work items that went through the "In Pull Request" state<br />
-              • <strong>Average Time in PR:</strong> Average days spent in pull request state<br />
-              • <strong>Total Time in PR:</strong> Sum of all days spent across all items
+              • <strong>Total PRs:</strong> All PRs opened by the developer in the time frame (active + completed)<br />
+              • <strong>Active:</strong> PRs still open; time is measured from creation to now<br />
+              • <strong>Average Time in PR:</strong> Average days from PR creation to merge (or today for active PRs)<br />
+              • <strong>Total Time in PR:</strong> Sum of all days across all PRs
+            </p>
+            <p>
+              <strong>Note:</strong> The time frame filters on when each PR was <em>created</em> (not closed), so all PRs a developer opened in the window are included regardless of whether they've merged yet.
             </p>
           </div>
         )}
@@ -1581,12 +1699,28 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
         {!isPrTimeCollapsed && prTimeHasLoaded && !prTimeLoading && filteredPrTimeStats.length > 0 && (
           <div className="developer-stats-list">
             {filteredPrTimeStats.map((stats, index) => {
-              
+              const hasOverduePr = stats.workItemDetails.some(item => item.timeInPullRequestDays > 2 && item.isActive);
+              const overdueCountPr = stats.workItemDetails.filter(item => item.timeInPullRequestDays > 2 && item.isActive).length;
               return (
-                <div key={index} className="developer-stat-card">
+                <div key={index} className={`developer-stat-card${hasOverduePr ? ' has-overdue' : ''}`}>
                   <div className="developer-header">
                     <span className="developer-name">{stats.developer}</span>
-                    <span className="total-changes">{stats.totalItemsInPullRequest} items</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {hasOverduePr && (
+                        <span className="overdue-card-indicator" title={`${overdueCountPr} PR${overdueCountPr !== 1 ? 's' : ''} open longer than 2 days`}>
+                          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+                          </svg>
+                          {overdueCountPr} overdue
+                        </span>
+                      )}
+                      <span className="total-changes">
+                        {stats.totalItemsInPullRequest} PRs
+                        {(stats.totalActivePullRequests ?? 0) > 0 && (
+                          <> · <span style={{ color: 'var(--accent-color)' }}>{stats.totalActivePullRequests} active</span></>
+                        )}
+                      </span>
+                    </div>
                   </div>
                   
                   <div className="pr-time-summary">
@@ -1599,35 +1733,62 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                         <span className="stat-label">Total Time:</span>
                         <span className="stat-value">{stats.totalTimeInPullRequest.toFixed(1)} days</span>
                       </div>
+                      {(stats.totalCompletedPullRequests ?? 0) > 0 && (
+                        <div className="pr-time-stat">
+                          <span className="stat-label">Completed:</span>
+                          <span className="stat-value">{stats.totalCompletedPullRequests}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   
                   {stats.workItemDetails.length > 0 && (
                     <details className="work-item-details">
-                      <summary>View Work Items ({stats.workItemDetails.length})</summary>
+                      <summary>View Pull Requests ({stats.workItemDetails.length})</summary>
                       <ul className="work-item-list">
                         {stats.workItemDetails.map((item, idx) => {
-                          const fullWorkItem = workItems.find(wi => wi.id === item.id);
+                          const isPrOverdue = item.timeInPullRequestDays > 2 && !!item.isActive;
                           return (
-                            <li 
-                              key={idx} 
-                              className={`work-item${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
-                              onClick={() => {
-                                if (onSelectItem && fullWorkItem) {
-                                  onSelectItem(fullWorkItem);
-                                }
-                              }}
-                              role={onSelectItem && fullWorkItem ? 'button' : undefined}
-                              tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
-                            >
-                              <span className="work-item-id">#{item.id}</span>
+                            <li key={idx} className={`work-item${isPrOverdue ? ' overdue' : ''}`}>
+                              <span className="work-item-id">
+                                {item.isActive && (
+                                  <span
+                                    className="pr-active-badge"
+                                    title="Active PR"
+                                    style={{ marginRight: 4, color: 'var(--accent-color)', fontWeight: 600, fontSize: '0.75em' }}
+                                  >
+                                    OPEN
+                                  </span>
+                                )}
+                                {item.prUrl ? (
+                                  <a
+                                    href={item.prUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="pr-link"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    PR #{item.id}
+                                  </a>
+                                ) : (
+                                  `PR #${item.id}`
+                                )}
+                              </span>
                               <span className="work-item-title">{item.title}</span>
                               <span className="work-item-dates">
-                                PR: {item.enteredPullRequestDate} → {item.exitedPullRequestDate}
+                                {item.enteredPullRequestDate} → {item.exitedPullRequestDate}
                               </span>
                               <span className="work-item-pr-time">
                                 {item.timeInPullRequestDays.toFixed(1)} days
                               </span>
+                              {isPrOverdue && (
+                                <span className="overdue-warning-badge" title="In pull request for more than 2 days">
+                                  <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+                                  </svg>
+                                  &gt;2 days
+                                </span>
+                              )}
                             </li>
                           );
                         })}
@@ -1757,7 +1918,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                       <summary>View PBIs with Bugs ({stats.pbiDetails.length})</summary>
                       <div className="qa-bug-pbi-list">
                         {stats.pbiDetails.map((pbi, idx) => {
-                          const fullWorkItem = workItems.find(wi => wi.id === pbi.id);
+                          const resolvedPbi = resolveWorkItem(pbi.id, pbi.title, 'Product Backlog Item');
                           const pbiKey = `qabug-pbi-${stats.developer}-${pbi.id}`;
                           const isPbiExpanded = !collapsedQaBug.has(pbiKey);
                           
@@ -1766,14 +1927,10 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                               <div className="qa-bug-pbi-header">
                                 <div className="qa-bug-pbi-info">
                                   <span 
-                                    className={`work-item-id${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
-                                    onClick={() => {
-                                      if (onSelectItem && fullWorkItem) {
-                                        onSelectItem(fullWorkItem);
-                                      }
-                                    }}
-                                    role={onSelectItem && fullWorkItem ? 'button' : undefined}
-                                    tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
+                                    className={`work-item-id${onSelectItem ? ' clickable' : ''}`}
+                                    onClick={() => { if (onSelectItem) onSelectItem(resolvedPbi); }}
+                                    role={onSelectItem ? 'button' : undefined}
+                                    tabIndex={onSelectItem ? 0 : undefined}
                                   >
                                     #{pbi.id}
                                   </span>
@@ -1947,15 +2104,15 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                     <summary>View Kickoffs ({stats.kickoffDetails.length})</summary>
                     <ul className="work-item-list">
                       {stats.kickoffDetails.map((detail, idx) => {
-                        const fullWorkItem = workItems.find(wi => wi.id === detail.workItemId);
+                        const resolvedKickoff = resolveWorkItem(detail.workItemId, detail.title, detail.workItemType);
                         const typeIcon = getWorkItemTypeIcon(detail.workItemType);
                         return (
                           <li
                             key={idx}
-                            className={`work-item${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
-                            onClick={() => { if (onSelectItem && fullWorkItem) onSelectItem(fullWorkItem); }}
-                            role={onSelectItem && fullWorkItem ? 'button' : undefined}
-                            tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
+                            className={`work-item${onSelectItem ? ' clickable' : ''}`}
+                            onClick={() => { if (onSelectItem) onSelectItem(resolvedKickoff); }}
+                            role={onSelectItem ? 'button' : undefined}
+                            tabIndex={onSelectItem ? 0 : undefined}
                           >
                             <span className="work-item-id">
                               <span className="work-item-type-icon" title={detail.workItemType}>{typeIcon}</span>
@@ -2050,11 +2207,24 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
 
         {!isInProgressCollapsed && inProgressHasLoaded && !inProgressLoading && filteredInProgressStats.length > 0 && (
           <div className="developer-stats-list">
-            {filteredInProgressStats.map((stats, index) => (
-              <div key={index} className="developer-stat-card">
+            {filteredInProgressStats.map((stats, index) => {
+            const hasOverdueInProgress = stats.workItemDetails.some(item => item.daysInProgress > 5 && item.isCurrentlyInProgress);
+            const overdueCountInProgress = stats.workItemDetails.filter(item => item.daysInProgress > 5 && item.isCurrentlyInProgress).length;
+            return (
+              <div key={index} className={`developer-stat-card${hasOverdueInProgress ? ' has-overdue' : ''}`}>
                 <div className="developer-header">
                   <span className="developer-name">{stats.developer}</span>
-                  <span className="total-changes">{stats.totalItemsInProgress} items</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {hasOverdueInProgress && (
+                      <span className="overdue-card-indicator" title={`${overdueCountInProgress} item${overdueCountInProgress !== 1 ? 's' : ''} in progress longer than 5 days`}>
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+                        </svg>
+                        {overdueCountInProgress} overdue
+                      </span>
+                    )}
+                    <span className="total-changes">{stats.totalItemsInProgress} items</span>
+                  </div>
                 </div>
 
                 <div className="pr-time-summary">
@@ -2075,14 +2245,15 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                     <summary>View Work Items ({stats.workItemDetails.length})</summary>
                     <ul className="work-item-list">
                       {stats.workItemDetails.map((item, idx) => {
-                        const fullWorkItem = workItems.find(wi => wi.id === item.id);
+                        const resolvedInProgress = resolveWorkItem(item.id, item.title, item.workItemType);
+                        const isOverdue = item.daysInProgress > 5 && item.isCurrentlyInProgress;
                         return (
                           <li
                             key={idx}
-                            className={`work-item${onSelectItem && fullWorkItem ? ' clickable' : ''}`}
-                            onClick={() => { if (onSelectItem && fullWorkItem) onSelectItem(fullWorkItem); }}
-                            role={onSelectItem && fullWorkItem ? 'button' : undefined}
-                            tabIndex={onSelectItem && fullWorkItem ? 0 : undefined}
+                            className={`work-item${onSelectItem ? ' clickable' : ''}${isOverdue ? ' overdue' : ''}`}
+                            onClick={() => { if (onSelectItem) onSelectItem(resolvedInProgress); }}
+                            role={onSelectItem ? 'button' : undefined}
+                            tabIndex={onSelectItem ? 0 : undefined}
                           >
                             <span className="work-item-id">#{item.id}</span>
                             <span className="work-item-title">{item.title}</span>
@@ -2092,6 +2263,14 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                             <span className="work-item-pr-time">
                               {item.isCurrentlyInProgress ? '⏳ ' : ''}{item.daysInProgress.toFixed(1)} days
                             </span>
+                            {isOverdue && (
+                              <span className="overdue-warning-badge" title="In progress for more than 5 days">
+                                <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                                  <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+                                </svg>
+                                &gt;5 days
+                              </span>
+                            )}
                           </li>
                         );
                       })}
@@ -2099,9 +2278,162 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                   </details>
                 )}
               </div>
-            ))}
+            );
+          })}
           </div>
         )}
+      </div>
+
+      {/* Pull Request Feedback Section */}
+      <div className="stats-section">
+        <h3>
+          <button
+            className="collapse-button"
+            onClick={() => setIsPrFeedbackCollapsed(!isPrFeedbackCollapsed)}
+            aria-label={isPrFeedbackCollapsed ? 'Expand section' : 'Collapse section'}
+          >
+            {isPrFeedbackCollapsed ? '▶' : '▼'}
+          </button>
+          Pull Request Feedback
+          <div
+            className="info-icon"
+            onClick={() => setShowPrFeedbackInfo(!showPrFeedbackInfo)}
+            role="button"
+            aria-label="Show information about this section"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+              <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+            </svg>
+          </div>
+        </h3>
+
+        {showPrFeedbackInfo && (
+          <div className="info-tooltip">
+            <button className="info-close" onClick={() => setShowPrFeedbackInfo(false)} aria-label="Close information">×</button>
+            <p>
+              <strong>What this section shows:</strong><br />
+              How much feedback each developer has given on other people's pull requests within the selected time frame.
+            </p>
+            <p>
+              <strong>How to interpret:</strong><br />
+              • <strong>PRs Reviewed:</strong> Number of unique PRs where the developer left comments or voted<br />
+              • <strong>Comments Given:</strong> Total non-system comments left across all reviewed PRs<br />
+              • <strong>Approvals / Rejections:</strong> Vote counts on PRs they reviewed
+            </p>
+            <p>
+              <strong>Note:</strong> Only PRs created within the selected time frame are included. Comments on your own PRs are excluded.
+            </p>
+          </div>
+        )}
+
+        {!isPrFeedbackCollapsed && (
+          <div className="filter-actions">
+            <button
+              onClick={fetchPullRequestFeedbackStats}
+              disabled={prFeedbackLoading || (timeFrame === 'custom' && (!customFromDate || !customToDate))}
+              className="load-stats-button"
+            >
+              {prFeedbackLoading ? 'Loading...' : prFeedbackHasLoaded ? 'Refresh PR Feedback' : 'Load PR Feedback'}
+            </button>
+          </div>
+        )}
+
+        {!isPrFeedbackCollapsed && (showPrFeedbackNotification || prFeedbackLoading) && (
+          <div className={`background-notification ${prFeedbackLoading ? 'loading' : prFeedbackError ? 'error' : 'success'}`}>
+            {prFeedbackLoading && <div className="notification-spinner"></div>}
+            <span className="notification-text">
+              {prFeedbackLoading ? 'Loading pull request feedback statistics in background...' : prFeedbackNotificationMessage}
+            </span>
+            {!prFeedbackLoading && (
+              <button className="notification-close" onClick={() => setShowPrFeedbackNotification(false)} aria-label="Close notification">×</button>
+            )}
+          </div>
+        )}
+
+        {!isPrFeedbackCollapsed && !prFeedbackHasLoaded && !prFeedbackLoading && (
+          <p className="placeholder-text">Click "Load PR Feedback" to view how much feedback each developer gives on pull requests.</p>
+        )}
+
+        {!isPrFeedbackCollapsed && prFeedbackHasLoaded && !prFeedbackLoading && filteredPrFeedbackStats.length === 0 && (
+          <p className="placeholder-text">No pull request feedback found for the selected filters.</p>
+        )}
+
+        {!isPrFeedbackCollapsed && prFeedbackHasLoaded && !prFeedbackLoading && filteredPrFeedbackStats.length > 0 && (() => {
+          const maxComments = Math.max(...filteredPrFeedbackStats.map(s => s.totalCommentsGiven), 1);
+          return (
+            <div className="developer-stats-list">
+              {filteredPrFeedbackStats.map((stats, index) => (
+                <div key={index} className="developer-stat-card">
+                  <div className="developer-header">
+                    <span className="developer-name">{stats.developer}</span>
+                    <span className="total-changes">{stats.totalPRsReviewed} PRs reviewed</span>
+                  </div>
+
+                  {/* Comment bar */}
+                  <div className="changes-bar-container" style={{ marginBottom: 12 }}>
+                    <div
+                      className="changes-bar"
+                      style={{ width: `${(stats.totalCommentsGiven / maxComments) * 100}%` }}
+                      title={`${stats.totalCommentsGiven} comments`}
+                    >
+                      {(stats.totalCommentsGiven / maxComments) * 100 > 20 && (
+                        <span className="changes-bar-label">{stats.totalCommentsGiven}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pr-feedback-summary">
+                    <div className="pr-feedback-stat">
+                      <span className="stat-label">Comments Given:</span>
+                      <span className="stat-value">{stats.totalCommentsGiven}</span>
+                    </div>
+                    <div className="pr-feedback-stat">
+                      <span className="stat-label pr-feedback-approvals">Approvals:</span>
+                      <span className="stat-value">{stats.totalApprovalsGiven}</span>
+                    </div>
+                    <div className="pr-feedback-stat">
+                      <span className="stat-label pr-feedback-rejections">Rejections:</span>
+                      <span className="stat-value">{stats.totalRejectionsGiven}</span>
+                    </div>
+                  </div>
+
+                  {stats.prDetails.length > 0 && (
+                    <details className="work-item-details">
+                      <summary>View Reviewed PRs ({stats.prDetails.length})</summary>
+                      <ul className="work-item-list">
+                        {stats.prDetails.map((pr, idx) => {
+                          const { label: voteLabel, className: voteClass } = getVoteLabel(pr.vote);
+                          return (
+                            <li key={idx} className="work-item pr-feedback-row">
+                              <span className="work-item-id">
+                                <a href={pr.prUrl} target="_blank" rel="noreferrer" className="pr-link" onClick={e => e.stopPropagation()}>
+                                  PR #{pr.prId}
+                                </a>
+                              </span>
+                              <span className="work-item-title">{pr.title}</span>
+                              <span className="work-item-dates">by {pr.creator} · {pr.repositoryName}</span>
+                              <div className="pr-feedback-row-right">
+                                {pr.commentsGiven > 0 && (
+                                  <span className="pr-feedback-comment-count" title={`${pr.commentsGiven} comment${pr.commentsGiven !== 1 ? 's' : ''}`}>
+                                    💬 {pr.commentsGiven}
+                                  </span>
+                                )}
+                                {pr.vote !== 0 && (
+                                  <span className={`pr-vote-badge ${voteClass}`}>{voteLabel}</span>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

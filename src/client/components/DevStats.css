@@ -1086,3 +1086,177 @@
   background: #e65100;
   color: #ffcc80;
 }
+
+/* Pull Request Feedback Styles */
+.pr-feedback-summary {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.pr-feedback-stat {
+  flex: 1;
+  min-width: 100px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+.pr-feedback-stat .stat-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.pr-feedback-stat .pr-feedback-approvals {
+  color: #4caf50;
+}
+
+.pr-feedback-stat .pr-feedback-rejections {
+  color: #f44336;
+}
+
+.pr-feedback-row {
+  grid-template-columns: auto 1fr auto auto !important;
+}
+
+.pr-feedback-row-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pr-feedback-comment-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pr-vote-badge {
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pr-vote-badge.vote-approved {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.pr-vote-badge.vote-approved-suggestions {
+  background: #f1f8e9;
+  color: #558b2f;
+}
+
+.pr-vote-badge.vote-waiting {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.pr-vote-badge.vote-rejected {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.pr-vote-badge.vote-none {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+
+[data-theme="dark"] .pr-vote-badge.vote-approved {
+  background: #1b5e20;
+  color: #a5d6a7;
+}
+
+[data-theme="dark"] .pr-vote-badge.vote-approved-suggestions {
+  background: #1b5e20;
+  color: #c5e1a5;
+}
+
+[data-theme="dark"] .pr-vote-badge.vote-waiting {
+  background: #4e2600;
+  color: #ffb74d;
+}
+
+[data-theme="dark"] .pr-vote-badge.vote-rejected {
+  background: #b71c1c;
+  color: #ef9a9a;
+}
+
+/* Overdue warning — work items exceeding the 5-day threshold */
+.work-item.overdue {
+  border-left-color: #f57c00;
+}
+
+/* Developer card highlight when at least one overdue item exists */
+.developer-stat-card.has-overdue {
+  border-color: #f57c00;
+  box-shadow: 0 0 0 1px rgba(245, 124, 0, 0.35), 0 2px 8px rgba(245, 124, 0, 0.15);
+}
+
+.developer-stat-card.has-overdue .developer-header {
+  border-bottom-color: rgba(245, 124, 0, 0.3);
+}
+
+.overdue-card-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: #fff3e0;
+  color: #e65100;
+  border: 1px solid #ffb74d;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.overdue-card-indicator svg {
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .developer-stat-card.has-overdue {
+  border-color: #f57c00;
+  box-shadow: 0 0 0 1px rgba(245, 124, 0, 0.5), 0 2px 12px rgba(245, 124, 0, 0.2);
+}
+
+[data-theme="dark"] .overdue-card-indicator {
+  background: #4e2600;
+  color: #ffb74d;
+  border-color: #f57c00;
+}
+
+.overdue-warning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  background: #fff3e0;
+  color: #e65100;
+  border: 1px solid #ffb74d;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.overdue-warning-badge svg {
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .overdue-warning-badge {
+  background: #4e2600;
+  color: #ffb74d;
+  border-color: #f57c00;
+}
