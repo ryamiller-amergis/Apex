@@ -11,8 +11,32 @@ import type {
   SseEvent,
 } from '../../shared/types/chat';
 
-const WORKSPACE_BASE = path.join(os.tmpdir(), 'ai-pilot-workspaces');
-const THREADS_DIR = path.join(process.cwd(), 'data', 'chat-threads');
+function isAzureWwwroot(): boolean {
+  const home = process.env.HOME;
+  return Boolean(home && process.cwd().startsWith(path.join(home, 'site', 'wwwroot')));
+}
+
+function resolveDataRoot(): string {
+  if (process.env.AI_PILOT_DATA_DIR) {
+    return path.resolve(process.env.AI_PILOT_DATA_DIR);
+  }
+
+  // Azure App Service deploys app code to /home/site/wwwroot, which can be
+  // read-only. /home/data is the writable file-storage location.
+  if (isAzureWwwroot() && process.env.HOME) {
+    return path.join(process.env.HOME, 'data', 'ai-pilot');
+  }
+
+  return path.join(process.cwd(), 'data');
+}
+
+const DATA_ROOT = resolveDataRoot();
+const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
+  ? path.resolve(process.env.AI_PILOT_WORKSPACE_DIR)
+  : isAzureWwwroot()
+    ? path.join(DATA_ROOT, 'workspaces')
+    : path.join(os.tmpdir(), 'ai-pilot-workspaces');
+const THREADS_DIR = path.join(DATA_ROOT, 'chat-threads');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── In-memory state ───────────────────────────────────────────────────────────
