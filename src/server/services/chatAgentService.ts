@@ -349,10 +349,9 @@ export function subscribeToThread(
 }
 
 const DEFAULT_MODEL = 'composer-2';
-const SUPPORTED_MODELS = new Set(['composer-2', 'auto']);
 
 function resolveModelId(model?: string): string {
-  return model && SUPPORTED_MODELS.has(model) ? model : DEFAULT_MODEL;
+  return model?.trim() || DEFAULT_MODEL;
 }
 
 function describeError(err: unknown): string {
