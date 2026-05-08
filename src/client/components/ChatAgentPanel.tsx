@@ -11,7 +11,8 @@ import {
   useSkillList,
 } from '../hooks/useChatThreads';
 import { AGENT_MODELS, DEFAULT_MODEL_ID, modelBadge } from '../config/models';
-import type { ChatThread, ChatMessage } from '../../shared/types/chat';
+import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
+import type { ChatAttachment, ChatThread, ChatMessage } from '../../shared/types/chat';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
@@ -247,6 +248,15 @@ function UserBubble({ msg }: { msg: ChatMessage }) {
     <div className={`${styles.message} ${styles.roleUser}`}>
       <div className={styles.userBubble}>
         <span className={styles.userBubbleText}>{msg.text}</span>
+        {msg.attachments && msg.attachments.length > 0 && (
+          <div className={styles.messageAttachments}>
+            {msg.attachments.map((attachment) => (
+              <span key={attachment.id} className={styles.messageAttachment}>
+                {attachment.name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <div className={styles.messageMeta}>{new Date(msg.ts).toLocaleTimeString()}</div>
     </div>
@@ -259,7 +269,10 @@ interface ChatAgentPanelProps {
   thread: ChatThread | null;
   isOpen: boolean;
   onClose: () => void;
-  onNewChat: () => void;
+  onNewChat: () => void | Promise<void>;
+  canStartNewChat?: boolean;
+  isStartingNewChat?: boolean;
+  newChatError?: string;
 }
 
 export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
@@ -267,6 +280,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   isOpen,
   onClose,
   onNewChat,
+  canStartNewChat = true,
+  isStartingNewChat = false,
+  newChatError,
 }) => {
   const [input, setInput] = useState('');
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
@@ -291,10 +307,19 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const skillPickerRef = useRef<HTMLDivElement | null>(null);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
+
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
 
   const { messages, streamingText, status, isConnected } = useChatStream(
     thread?.id ?? null,
@@ -416,12 +441,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   // ── Actions ──────────────────────────────────────────────────────────────────
 
-  const doSend = useCallback(async (text: string) => {
-    if (!text.trim() || isRunning || !thread) return;
+  const doSend = useCallback(async (text: string, messageAttachments: ChatAttachment[] = []) => {
+    const trimmedText = text.trim();
+    if ((!trimmedText && messageAttachments.length === 0) || isRunning || !thread) return;
     setInput('');
     setSkillPickerOpen(false);
-    await sendMessage.mutateAsync({ text, model: selectedModel });
-  }, [isRunning, thread, sendMessage, selectedModel]);
+    await sendMessage.mutateAsync({
+      text: trimmedText || 'Please use the attached files as additional context.',
+      model: selectedModel,
+      attachments: messageAttachments,
+    });
+    if (messageAttachments.length > 0) clearAttachments();
+  }, [isRunning, thread, sendMessage, selectedModel, clearAttachments]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
     const msg = `Run skill: ${skill.name} (\`${skill.path}\`)`;
@@ -435,6 +466,15 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     const isSlash = /^\//.test(val);
     setSkillPickerOpen(isSlash);
     if (isSlash) setSkillPickerIdx(0);
+  };
+
+  const handleAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(e.currentTarget.files);
+    e.currentTarget.value = '';
+  };
+
+  const openFilePicker = () => {
+    fileInputRef.current?.click();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -462,7 +502,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      doSend(input);
+      doSend(input, attachments);
     }
   };
 
@@ -531,7 +571,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           </div>
         </div>
         <div className={styles.headerActions}>
-          <button className={styles.iconBtn} onClick={onNewChat} title="New chat">+ New</button>
+          <button
+            className={styles.iconBtn}
+            onClick={onNewChat}
+            title="New chat"
+            disabled={!canStartNewChat || isStartingNewChat || isRunning}
+          >
+            {isStartingNewChat ? 'Starting…' : '+ New'}
+          </button>
           <button className={`${styles.iconBtn} ${styles.iconBtnDanger}`} onClick={handleClose} title="Close panel">✕</button>
         </div>
       </div>
@@ -547,10 +594,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
       {!thread ? (
         <div className={styles.emptyPane}>
-          <span className={styles.emptyIcon}>🤖</span>
+          <span className={styles.emptyIcon}>AI</span>
           <h3 className={styles.emptyTitle}>No active chat</h3>
-          <p className={styles.emptyHint}>Pick a skill from your ADO repo, optionally paste a prior transcript, and start a conversation with the agent.</p>
-          <button className={styles.btnPrimary} onClick={onNewChat}>Start Chat</button>
+          <p className={styles.emptyHint}>Start a free-form session in this project's default repo. Type <kbd className={styles.kbdHint}>/</kbd> in chat to invoke a skill.</p>
+          {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
+          <button
+            className={styles.btnPrimary}
+            onClick={onNewChat}
+            disabled={!canStartNewChat || isStartingNewChat}
+          >
+            {isStartingNewChat ? 'Starting…' : 'Start free chat'}
+          </button>
         </div>
       ) : (
         <>
@@ -680,6 +734,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           )}
 
           <div className={styles.inputArea}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className={styles.fileInput}
+              onChange={handleAttachmentChange}
+              disabled={isRunning || status === 'closed'}
+            />
             {/* Skill picker popover — anchored above the input grid */}
             {skillPickerOpen && (
               <div className={styles.skillPicker} ref={skillPickerRef}>
@@ -721,6 +783,19 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 ))}
               </select>
 
+              <button
+                className={styles.attachBtn}
+                onClick={openFilePicker}
+                type="button"
+                aria-label="Attach files"
+                title="Attach files for context"
+                disabled={isRunning || status === 'closed'}
+              >
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
+                </svg>
+              </button>
+
               {/* Message textarea */}
               <textarea
                 ref={textareaRef}
@@ -733,11 +808,35 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 rows={1}
               />
 
+              {attachments.length > 0 && (
+                <div className={styles.attachmentList}>
+                  {attachments.map((attachment) => (
+                    <span key={attachment.id} className={styles.attachmentChip}>
+                      <span className={styles.attachmentName}>{attachment.name}</span>
+                      <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
+                      <button
+                        type="button"
+                        className={styles.attachmentRemove}
+                        onClick={() => removeAttachment(attachment.id)}
+                        aria-label={`Remove ${attachment.name}`}
+                        disabled={isRunning || status === 'closed'}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {attachmentError && (
+                <div className={styles.attachmentError}>{attachmentError}</div>
+              )}
+
               {/* Send / stop button */}
               {isRunning ? (
                 <button className={styles.cancelBtn} onClick={() => cancelRun.mutate()} title="Stop">■ Stop</button>
               ) : (
-                <button className={styles.sendBtn} onClick={() => doSend(input)} disabled={!input.trim() || status === 'closed'}>Send ↑</button>
+                <button className={styles.sendBtn} onClick={() => doSend(input, attachments)} disabled={(!input.trim() && attachments.length === 0) || status === 'closed'}>Send ↑</button>
               )}
 
               {/* Hint row spans textarea column */}

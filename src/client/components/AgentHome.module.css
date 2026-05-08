@@ -198,6 +198,68 @@
   color: var(--text-muted);
 }
 
+.fileInput {
+  display: none;
+}
+
+.attachmentList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.attachmentName {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.attachmentSize {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.attachmentRemove:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.attachmentError {
+  font-size: 0.75rem;
+  color: var(--error-color);
+}
+
 .inputActions {
   display: flex;
   align-items: center;
@@ -205,15 +267,61 @@
   gap: 8px;
 }
 
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.attachBtn:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.attachBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.attachBtn svg {
+  width: 16px;
+  height: 16px;
+}
+
 .modelSelect {
-  padding: 4px 8px;
+  height: 34px;
+  padding: 0 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
   cursor: pointer;
   outline: none;
+  transition: all 0.2s ease;
+}
+
+.modelSelect:hover:not(:disabled),
+.modelSelect:focus {
+  background: var(--bg-primary);
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.modelSelect:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .sendBtn {
@@ -263,6 +371,119 @@
   overflow: hidden;
 }
 
+.chatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.chatTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.chatSubtitle {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.chatHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.contextMeter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+}
+
+.contextMeterRing {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background:
+    conic-gradient(var(--accent-color) var(--context-percent), var(--bg-tertiary) 0),
+    var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--text-primary);
+  font-size: 0.65rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.contextMeterRing::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--bg-primary);
+}
+
+.contextMeterRing span {
+  position: relative;
+}
+
+.contextMeterText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.contextMeterText span {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.contextMeterText strong {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.newSessionBtn {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.newSessionBtn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+  transform: translateY(-1px);
+}
+
+.newSessionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -298,6 +519,25 @@
   word-break: break-word;
 }
 
+.messageAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.messageAttachment {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 0.72rem;
+}
+
 .agentRow {
   display: flex;
   align-items: flex-start;
@@ -330,6 +570,112 @@
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Markdown-rendered agent bubbles — override white-space so block elements lay out correctly */
+.agentBubbleMd {
+  white-space: normal;
+}
+
+.agentBubbleMd p {
+  margin: 0 0 0.75em;
+}
+.agentBubbleMd p:last-child {
+  margin-bottom: 0;
+}
+
+.agentBubbleMd h1,
+.agentBubbleMd h2,
+.agentBubbleMd h3,
+.agentBubbleMd h4 {
+  margin: 1em 0 0.4em;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.agentBubbleMd h1 { font-size: 1.15rem; }
+.agentBubbleMd h2 { font-size: 1.05rem; }
+.agentBubbleMd h3 { font-size: 0.95rem; }
+.agentBubbleMd h4 { font-size: 0.9rem; }
+
+.agentBubbleMd ul,
+.agentBubbleMd ol {
+  margin: 0.5em 0 0.75em 1.4em;
+  padding: 0;
+}
+.agentBubbleMd li {
+  margin-bottom: 0.25em;
+}
+
+.agentBubbleMd strong {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.agentBubbleMd em {
+  font-style: italic;
+}
+
+.agentBubbleMd code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.82em;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
+
+.agentBubbleMd pre {
+  margin: 0.75em 0;
+  padding: 12px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.agentBubbleMd pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.83em;
+}
+
+.agentBubbleMd blockquote {
+  margin: 0.5em 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent-color);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.agentBubbleMd hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 1em 0;
+}
+
+.agentBubbleMd table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin: 0.75em 0;
+}
+.agentBubbleMd th,
+.agentBubbleMd td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+.agentBubbleMd th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+.agentBubbleMd tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
+}
+
+.agentBubbleMd a {
+  color: var(--accent-color);
+  text-decoration: underline;
 }
 
 .toolMsg {

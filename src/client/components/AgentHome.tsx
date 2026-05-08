@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useSkillRepos, useStartChat, useSkillList } from '../hooks/useChatThreads';
 import { useChatStream } from '../hooks/useChatStream';
+import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
 import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage } from '../../shared/types/chat';
 import styles from './AgentHome.module.css';
@@ -8,6 +11,15 @@ import styles from './AgentHome.module.css';
 interface AgentHomeProps {
   selectedProject: string;
 }
+
+const DEFAULT_CONTEXT_TOKEN_LIMIT = 200_000;
+const MODEL_CONTEXT_TOKEN_LIMITS: Record<string, number> = {
+  'composer-2': 200_000,
+  'claude-opus-4-6': 200_000,
+  'claude-sonnet-4-6': 200_000,
+  'gpt-5.5': 200_000,
+  'gemini-3.1-pro': 1_000_000,
+};
 
 const ToolIcon: React.FC = () => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -30,14 +42,27 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.role === 'user') {
     return (
       <div className={styles.userRow}>
-        <div className={styles.userBubble}>{msg.text}</div>
+        <div className={styles.userBubble}>
+          <span>{msg.text}</span>
+          {msg.attachments && msg.attachments.length > 0 && (
+            <div className={styles.messageAttachments}>
+              {msg.attachments.map((attachment) => (
+                <span key={attachment.id} className={styles.messageAttachment}>
+                  {attachment.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
   return (
     <div className={styles.agentRow}>
       <div className={styles.agentAvatar}>AI</div>
-      <div className={styles.agentBubble}>{msg.text}</div>
+      <div className={`${styles.agentBubble} ${styles.agentBubbleMd}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+      </div>
     </div>
   );
 }
@@ -51,8 +76,17 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [skillPickerIdx, setSkillPickerIdx] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const skillPickerRef = useRef<HTMLDivElement>(null);
+
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
 
@@ -73,6 +107,24 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const isRunning = status === 'running';
 
   const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+
+  const contextTokenLimit = MODEL_CONTEXT_TOKEN_LIMITS[model] ?? DEFAULT_CONTEXT_TOKEN_LIMIT;
+  const estimatedTokens = useMemo(() => {
+    const messageChars = visibleMessages.reduce((sum, message) => {
+      const attachmentChars = message.attachments?.reduce(
+        (attachmentSum, attachment) => attachmentSum + attachment.size,
+        0,
+      ) ?? 0;
+      return sum + message.text.length + attachmentChars;
+    }, 0);
+    const draftChars = input.length + attachments.reduce((sum, attachment) => sum + attachment.content.length, 0);
+    const streamChars = streamingText.length;
+    return Math.ceil((messageChars + draftChars + streamChars) / 4);
+  }, [visibleMessages, input, attachments, streamingText]);
+  const contextPercent = Math.min(100, Math.round((estimatedTokens / contextTokenLimit) * 100));
+  const contextLabel = estimatedTokens >= 1000
+    ? `${Math.round(estimatedTokens / 1000)}k`
+    : `${estimatedTokens}`;
 
   // Slash command: extract query after "/"
   const slashQuery = useMemo(() => {
@@ -123,9 +175,18 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     if (isSlash) setSkillPickerIdx(0);
   }, []);
 
+  const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(e.currentTarget.files);
+    e.currentTarget.value = '';
+  }, [addFiles]);
+
+  const openFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending) return;
+    if ((!text && attachments.length === 0) || isRunning || isSending) return;
     if (!threadId && !defaultRepo) return;
 
     setInput('');
@@ -148,16 +209,25 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         setThreadId(activeThreadId);
       }
 
-      await fetch(`/api/chat/threads/${activeThreadId}/messages`, {
+      const response = await fetch(`/api/chat/threads/${activeThreadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text, model }),
+        body: JSON.stringify({
+          text: text || 'Please use the attached files as additional context.',
+          model,
+          attachments,
+        }),
       });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.error ?? `HTTP ${response.status}`);
+      }
+      clearAttachments();
     } finally {
       setIsSending(false);
     }
-  }, [input, isRunning, isSending, threadId, defaultRepo, startChat, selectedProject, defaultBranch, model]);
+  }, [input, attachments, isRunning, isSending, threadId, defaultRepo, startChat, selectedProject, defaultBranch, model, clearAttachments]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -196,8 +266,17 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     });
   }, [threadId]);
 
+  const handleNewSession = useCallback(() => {
+    if (isRunning || isSending) return;
+    setThreadId(null);
+    setInput('');
+    setSkillPickerOpen(false);
+    setSkillPickerIdx(0);
+    clearAttachments();
+  }, [isRunning, isSending, clearAttachments]);
+
   const isCompose = !threadId;
-  const canSend = input.trim().length > 0 && !isRunning && !isSending && (!!threadId || !!defaultRepo);
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && (!!threadId || !!defaultRepo);
 
   const inputArea = (
     <div className={styles.inputWrapper}>
@@ -227,6 +306,14 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
       )}
 
       <div className={styles.inputBox}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className={styles.fileInput}
+          onChange={handleAttachmentChange}
+          disabled={isRunning || isSending}
+        />
         <textarea
           ref={textareaRef}
           className={styles.textarea}
@@ -244,7 +331,41 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
           disabled={isRunning || isSending}
           autoFocus={isCompose}
         />
+        {attachments.length > 0 && (
+          <div className={styles.attachmentList}>
+            {attachments.map((attachment) => (
+              <span key={attachment.id} className={styles.attachmentChip}>
+                <span className={styles.attachmentName}>{attachment.name}</span>
+                <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
+                <button
+                  type="button"
+                  className={styles.attachmentRemove}
+                  onClick={() => removeAttachment(attachment.id)}
+                  aria-label={`Remove ${attachment.name}`}
+                  disabled={isRunning || isSending}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {attachmentError && (
+          <div className={styles.attachmentError}>{attachmentError}</div>
+        )}
         <div className={styles.inputActions}>
+          <button
+            className={styles.attachBtn}
+            onClick={openFilePicker}
+            type="button"
+            aria-label="Attach files"
+            title="Attach files for context"
+            disabled={isRunning || isSending}
+          >
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
+            </svg>
+          </button>
           <select
             className={styles.modelSelect}
             value={model}
@@ -339,6 +460,35 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         </div>
       ) : (
         <div className={styles.chat}>
+          <div className={styles.chatHeader}>
+            <div>
+              <div className={styles.chatTitle}>Agent session</div>
+              <div className={styles.chatSubtitle}>{selectedProject} · {defaultRepo?.name ?? 'workspace'}</div>
+            </div>
+            <div className={styles.chatHeaderActions}>
+              <div
+                className={styles.contextMeter}
+                style={{ '--context-percent': `${contextPercent}%` } as React.CSSProperties}
+                title={`Estimated context usage: ${estimatedTokens.toLocaleString()} of ${contextTokenLimit.toLocaleString()} tokens`}
+              >
+                <div className={styles.contextMeterRing}>
+                  <span>{contextPercent}%</span>
+                </div>
+                <div className={styles.contextMeterText}>
+                  <span>Context</span>
+                  <strong>{contextLabel} tokens</strong>
+                </div>
+              </div>
+              <button
+                className={styles.newSessionBtn}
+                onClick={handleNewSession}
+                disabled={isRunning || isSending}
+                type="button"
+              >
+                + New chat
+              </button>
+            </div>
+          </div>
           <div className={styles.messages}>
             {visibleMessages.map((msg) => (
               <MessageBubble key={msg.id} msg={msg} />
@@ -356,8 +506,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             {streamingText && (
               <div className={styles.agentRow}>
                 <div className={styles.agentAvatar}>AI</div>
-                <div className={styles.agentBubble}>
-                  {streamingText}
+                <div className={`${styles.agentBubble} ${styles.agentBubbleMd}`}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
                   <span className={styles.cursor} />
                 </div>
               </div>

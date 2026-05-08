@@ -11,14 +11,65 @@ import {
   writeOutputPrd,
 } from '../services/chatAgentService';
 import { saveWikiPage } from '../services/wikiCatalog';
-import type { StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
+import type { ChatAttachment, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
 import type { SaveWikiPageRequest } from '../../shared/types/skills';
 
 const router = Router();
+const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
+const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 
 function getUserId(req: Request): string {
   const user = (req as any).user;
   return user?.oid ?? user?.id ?? user?.upn ?? 'anonymous';
+}
+
+function readAttachments(raw: unknown): ChatAttachment[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    const err = new Error('attachments must be an array');
+    (err as any).status = 400;
+    throw err;
+  }
+  if (raw.length > MAX_CHAT_ATTACHMENTS) {
+    const err = new Error(`up to ${MAX_CHAT_ATTACHMENTS} attachments are allowed`);
+    (err as any).status = 413;
+    throw err;
+  }
+
+  let totalBytes = 0;
+  return raw.map((attachment, index) => {
+    const a = attachment as Partial<ChatAttachment>;
+    if (!a.id || !a.name || typeof a.content !== 'string') {
+      const err = new Error(`attachment ${index + 1} is invalid`);
+      (err as any).status = 400;
+      throw err;
+    }
+    const size = Number(a.size);
+    if (!Number.isFinite(size) || size < 0) {
+      const err = new Error(`attachment ${a.name} has an invalid size`);
+      (err as any).status = 400;
+      throw err;
+    }
+    if (size > MAX_CHAT_ATTACHMENT_BYTES) {
+      const err = new Error(`attachment ${a.name} is too large`);
+      (err as any).status = 413;
+      throw err;
+    }
+    totalBytes += size;
+    if (totalBytes > MAX_CHAT_ATTACHMENT_TOTAL_BYTES) {
+      const err = new Error('attachments are too large');
+      (err as any).status = 413;
+      throw err;
+    }
+    return {
+      id: a.id,
+      name: a.name,
+      type: a.type ?? 'text/plain',
+      size,
+      content: a.content,
+    };
+  });
 }
 
 /**
@@ -101,7 +152,15 @@ router.get('/threads/:id/stream', (req: Request, res: Response) => {
  */
 router.post('/threads/:id/messages', async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
-  if (!body.text?.trim()) return res.status(400).json({ error: 'text is required' });
+  let attachments: ChatAttachment[];
+  try {
+    attachments = readAttachments(body.attachments);
+  } catch (err: any) {
+    return res.status(err.status ?? 400).json({ error: err.message });
+  }
+  if (!body.text?.trim() && attachments.length === 0) {
+    return res.status(400).json({ error: 'text or attachments are required' });
+  }
 
   const thread = getThread(req.params.id);
   if (!thread) return res.status(404).json({ error: 'Thread not found' });
@@ -109,7 +168,7 @@ router.post('/threads/:id/messages', async (req: Request, res: Response) => {
 
   // Fire-and-forget: response streams via SSE, this returns 202 immediately
   res.status(202).json({ ok: true });
-  sendMessage(req.params.id, body.text, body.model).catch((err) => {
+  sendMessage(req.params.id, body.text ?? '', body.model, attachments).catch((err) => {
     console.error(`[chat] sendMessage error for thread ${req.params.id}:`, err.message);
   });
 });

@@ -5,6 +5,8 @@ import path from 'path';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import type {
+  ChatAttachment,
+  ChatAttachmentMeta,
   ChatThread,
   ChatMessage,
   ChatThreadKickoff,
@@ -138,6 +140,55 @@ function injectKickoffFiles(workspaceDir: string, kickoff: ChatThreadKickoff, th
     ),
     'utf-8',
   );
+}
+
+function sanitizeAttachmentName(name: string, index: number): string {
+  const fallback = `attachment-${index + 1}.txt`;
+  const baseName = path.basename(name || fallback);
+  const sanitized = baseName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+  return sanitized || fallback;
+}
+
+function writeMessageAttachments(
+  workspaceDir: string,
+  turnId: string,
+  attachments: ChatAttachment[],
+): ChatAttachmentMeta[] {
+  if (attachments.length === 0) return [];
+
+  const attachmentsDir = path.join(workspaceDir, '.ai-pilot', 'attachments', turnId);
+  fs.mkdirSync(attachmentsDir, { recursive: true });
+
+  return attachments.map((attachment, index) => {
+    const fileName = `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentName(attachment.name, index)}`;
+    const absolutePath = path.join(attachmentsDir, fileName);
+    fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
+
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      type: attachment.type,
+      size: attachment.size,
+      path: path.posix.join('.ai-pilot', 'attachments', turnId, fileName),
+    };
+  });
+}
+
+function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMeta[]): string {
+  if (attachments.length === 0) return text;
+
+  const messageText = text.trim() || 'Please use the uploaded files as additional context.';
+  const attachmentLines = attachments.map((attachment) => (
+    `- ${attachment.name} (${attachment.type || 'text/plain'}, ${attachment.size} bytes): \`${attachment.path}\``
+  ));
+
+  return [
+    messageText,
+    '',
+    '# Uploaded context files for this turn',
+    'The user attached these files. They have been written into the local sandbox workspace; read them before responding when they are relevant.',
+    ...attachmentLines,
+  ].join('\n');
 }
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
@@ -375,7 +426,12 @@ function logAgentError(threadId: string, err: unknown): void {
   console.error(`[chat] Agent failed for thread ${threadId}:`, err);
 }
 
-export async function sendMessage(threadId: string, text: string, modelOverride?: string): Promise<void> {
+export async function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments: ChatAttachment[] = [],
+): Promise<void> {
   const state = threads.get(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
   if (state.thread.status === 'running') throw new Error('Agent is already running');
@@ -396,12 +452,17 @@ export async function sendMessage(threadId: string, text: string, modelOverride?
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
 
+  const turnId = uuidv4();
+  const attachmentMeta = writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+
   // Record the user message
   const userMsg: ChatMessage = {
-    id: uuidv4(),
+    id: turnId,
     role: 'user',
-    text,
+    text: text.trim() || 'Uploaded files for context.',
     ts: new Date().toISOString(),
+    attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
   };
   state.thread.messages.push(userMsg);
   state.thread.lastActivityAt = userMsg.ts;
@@ -416,8 +477,8 @@ export async function sendMessage(threadId: string, text: string, modelOverride?
   // Build initial prompt on first turn
   const isFirstTurn = !state.thread.cursorAgentId;
   const prompt = isFirstTurn
-    ? `${buildInitialPrompt(state.thread.kickoff)}\n\n---\n\n${text}`
-    : text;
+    ? `${buildInitialPrompt(state.thread.kickoff)}\n\n---\n\n${promptText}`
+    : promptText;
 
   try {
     // Create or resume the agent

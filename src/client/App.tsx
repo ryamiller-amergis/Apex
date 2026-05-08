@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useCallback, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -11,11 +11,11 @@ import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
 import { PlanningTabs } from './components/PlanningTabs';
 import { ChatAgentPanel } from './components/ChatAgentPanel';
-import { StartChatModal } from './components/StartChatModal';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
 import { useAppShell } from './hooks/useAppShell';
-import { useChatThread } from './hooks/useChatThreads';
+import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { DEFAULT_MODEL_ID } from './config/models';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -38,7 +38,6 @@ function App() {
   const location = useLocation();
 
   const [chatOpen, setChatOpen] = useState(false);
-  const [showStartChat, setShowStartChat] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
@@ -87,6 +86,32 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
   } = useAppShell();
+
+  const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
+  const startChat = useStartChat();
+  const defaultAgentRepo = skillRepos.find(
+    (repo) => repo.name.toLowerCase() === selectedProject.toLowerCase(),
+  ) ?? skillRepos[0];
+
+  const handleStartPanelChat = useCallback(async () => {
+    setChatOpen(true);
+    if (!defaultAgentRepo || startChat.isPending) return;
+
+    setActiveThreadId(null);
+    try {
+      const result = await startChat.mutateAsync({
+        kickoff: {
+          project: selectedProject,
+          repo: defaultAgentRepo.name,
+          branch: defaultAgentRepo.defaultBranch ?? 'main',
+          model: DEFAULT_MODEL_ID,
+        },
+      });
+      setActiveThreadId(result.threadId);
+    } catch {
+      // Error is shown in the slide-out panel.
+    }
+  }, [defaultAgentRepo, selectedProject, startChat]);
 
   if (isAuthenticated === null) return <div>Loading...</div>;
   if (!isAuthenticated) return <Login />;
@@ -286,19 +311,11 @@ function App() {
           thread={activeThread}
           isOpen={chatOpen}
           onClose={() => setChatOpen(false)}
-          onNewChat={() => setShowStartChat(true)}
+          onNewChat={handleStartPanelChat}
+          canStartNewChat={!!defaultAgentRepo && !isLoadingSkillRepos && !startChat.isPending}
+          isStartingNewChat={startChat.isPending}
+          newChatError={startChat.error?.message}
         />
-
-        {showStartChat && (
-          <StartChatModal
-            onClose={() => setShowStartChat(false)}
-            onStarted={(threadId) => {
-              setActiveThreadId(threadId);
-              setShowStartChat(false);
-              setChatOpen(true);
-            }}
-          />
-        )}
       </DndProvider>
     </ErrorBoundary>
   );

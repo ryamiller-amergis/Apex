@@ -7,6 +7,24 @@ export interface ChatMessage {
   ts: string;
   /** For tool messages: the tool name that was called */
   toolName?: string;
+  /** User-uploaded context files attached to this message */
+  attachments?: ChatAttachmentMeta[];
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  content: string;
+}
+
+export interface ChatAttachmentMeta {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  path?: string;
 }
 
 export interface ChatThreadKickoff {
@@ -110,4 +128,6 @@ export interface SendMessageRequest {
   /** Optional model override for this turn. If different from the thread's current model,
    *  the agent will be disposed and resumed with the new model. */
   model?: string;
+  /** Text file contents uploaded by the user as additional turn context. */
+  attachments?: ChatAttachment[];
 }

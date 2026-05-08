@@ -194,7 +194,18 @@
 }
 
 .emptyIcon {
-  font-size: 36px;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--accent-color);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  box-shadow: var(--shadow-sm);
 }
 
 .emptyTitle {
@@ -212,6 +223,18 @@
   line-height: 1.5;
 }
 
+.emptyError {
+  margin: 0;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, var(--border-color));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+  color: var(--error-color);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .btnPrimary {
   padding: 9px 20px;
   background: var(--accent-color);
@@ -226,6 +249,11 @@
 
 .btnPrimary:hover {
   background: var(--accent-hover);
+}
+
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Messages list ── */
@@ -292,6 +320,25 @@
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.messageAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.messageAttachment {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 11px;
 }
 
 .roleUser .messageMeta {
@@ -974,11 +1021,15 @@
   flex-shrink: 0;
 }
 
+.fileInput {
+  display: none;
+}
+
 /* ── Input grid (model | textarea | button, hint under textarea) ── */
 .inputGrid {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  grid-template-rows: auto auto;
+  grid-template-columns: auto auto 1fr auto;
+  grid-template-rows: auto auto auto auto;
   column-gap: 8px;
   row-gap: 4px;
   padding: 10px 12px 10px;
@@ -992,20 +1043,24 @@
   grid-row: 1;
   align-self: end;
   height: 42px;
-  padding: 0 8px;
+  padding: 0 12px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg-primary);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.2s ease;
+  transition: all 0.2s ease;
   white-space: nowrap;
 }
 
+.modelSelect:hover:not(:disabled),
 .modelSelect:focus {
   outline: none;
   border-color: var(--accent-color);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
 }
 
 .modelSelect:disabled {
@@ -1013,9 +1068,42 @@
   cursor: not-allowed;
 }
 
-/* textarea: column 2, row 1 */
-.textarea {
+.attachBtn {
   grid-column: 2;
+  grid-row: 1;
+  align-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.attachBtn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.attachBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.attachBtn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* textarea: column 3, row 1 */
+.textarea {
+  grid-column: 3;
   grid-row: 1;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
@@ -1046,7 +1134,7 @@
 
 /* send/cancel button: column 3, row 1, pinned to bottom */
 .sendBtn {
-  grid-column: 3;
+  grid-column: 4;
   grid-row: 1;
   align-self: end;
   height: 42px;
@@ -1074,7 +1162,7 @@
 }
 
 .cancelBtn {
-  grid-column: 3;
+  grid-column: 4;
   grid-row: 1;
   align-self: end;
   height: 42px;
@@ -1093,10 +1181,74 @@
   background: rgba(239, 68, 68, 0.08);
 }
 
+.attachmentList {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.attachmentName {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.attachmentSize {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.attachmentRemove:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.attachmentError {
+  grid-column: 3;
+  grid-row: 3;
+  color: var(--error-color);
+  font-size: 11px;
+  padding-left: 2px;
+}
+
 /* hint row: spans only the textarea column */
 .inputHint {
-  grid-column: 2;
-  grid-row: 2;
+  grid-column: 3;
+  grid-row: 4;
   font-size: 10px;
   color: var(--text-muted);
   padding-left: 2px;
