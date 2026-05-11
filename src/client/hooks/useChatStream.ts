@@ -7,6 +7,8 @@ interface ChatStreamState {
   streamingText: string;
   status: ChatThreadStatus;
   isConnected: boolean;
+  prdReady: boolean;
+  backlogReady: boolean;
 }
 
 interface UseChatStreamOptions {
@@ -23,6 +25,8 @@ export function useChatStream(
   const [streamingText, setStreamingText] = useState('');
   const [status, setStatus] = useState<ChatThreadStatus>(options.initialStatus ?? 'idle');
   const [isConnected, setIsConnected] = useState(false);
+  const [prdReady, setPrdReady] = useState(false);
+  const [backlogReady, setBacklogReady] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   // Buffer tokens into the in-progress message
@@ -33,12 +37,17 @@ export function useChatStream(
     setStreamingText('');
     setStatus(options.initialStatus ?? 'idle');
     setIsConnected(false);
+    setPrdReady(false);
+    setBacklogReady(false);
     streamBufferRef.current = '';
   }, [options.initialMessages, options.initialStatus]);
 
   useEffect(() => {
+    // Always reset derived state (streaming buffer, prdReady, backlogReady) when
+    // the thread changes — including switching from one thread to another.
+    reset();
+
     if (!threadId) {
-      reset();
       return;
     }
 
@@ -109,6 +118,8 @@ export function useChatStream(
         case 'done': {
           streamBufferRef.current = '';
           setStreamingText('');
+          if (event.prdReady) setPrdReady(true);
+          if (event.backlogReady) setBacklogReady(true);
           break;
         }
       }
@@ -121,5 +132,5 @@ export function useChatStream(
     };
   }, [threadId, reset]);
 
-  return { messages, streamingText, status, isConnected };
+  return { messages, streamingText, status, isConnected, prdReady, backlogReady };
 }

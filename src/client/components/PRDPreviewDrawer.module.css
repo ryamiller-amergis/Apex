@@ -537,3 +537,165 @@
   border-radius: 8px;
   border: 1px solid rgba(239, 68, 68, 0.15);
 }
+
+/* ── Backlog / Waves tab ──────────────────────────────────────────────────── */
+
+.backlogPane {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.backlogEmpty {
+  padding: 32px 24px;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.backlogFeatureTitle {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.waveBlock {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.waveHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.waveBadge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-color);
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.waveName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.waveCount {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.waveItems {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.backlogItem {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color-light);
+  transition: background 0.15s ease;
+}
+
+.backlogItem:last-child {
+  border-bottom: none;
+}
+
+.backlogItem:hover {
+  background: var(--bg-secondary);
+}
+
+.backlogItemHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.backlogItemId {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: 'Fira Code', 'Consolas', monospace;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.backlogItemType {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-color);
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 3px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.backlogItemModule {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-color-light);
+}
+
+.backlogItemTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.backlogItemDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.backlogItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.backlogDeps {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.backlogTestScope {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(34, 197, 94, 0.06);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+  border-radius: 4px;
+  padding: 2px 8px;
+}

@@ -9,6 +9,8 @@ interface WorkItemSpec {
   title: string;
   description?: string;
   parentTitle?: string;
+  /** Local backlog item IDs (e.g. "WI-001") that must complete before this item */
+  predecessors?: string[];
   tags?: string[];
 }
 
@@ -48,22 +50,34 @@ router.post('/from-prd', async (req: Request, res: Response) => {
     const adoService = new AzureDevOpsService(body.project, body.areaPath);
     const created: { title: string; id: number; url: string }[] = [];
 
-    // Title → ADO work item ID map (for parent linking)
+    // Title → ADO ID and local backlog ID → ADO ID (for parent/predecessor linking)
     const titleToId = new Map<string, number>();
+    const localIdToAdoId = new Map<string, number>();
 
     for (const spec of body.items) {
       const parentId = spec.parentTitle ? titleToId.get(spec.parentTitle) : undefined;
+
+      const predecessorIds = spec.predecessors
+        ?.map((localId) => localIdToAdoId.get(localId))
+        .filter((id): id is number => id !== undefined);
 
       const wi = await adoService.createWorkItemForPrd({
         type: spec.type,
         title: spec.title,
         description: spec.description,
         parentId,
+        predecessorIds,
         prdUrl,
         tags: spec.tags,
       });
 
       titleToId.set(spec.title, wi.id);
+      // Map local IDs (e.g. "WI-001") if the spec carries one via tags or a convention
+      if (spec.tags) {
+        for (const tag of spec.tags) {
+          if (/^WI-\d+$/i.test(tag)) localIdToAdoId.set(tag.toUpperCase(), wi.id);
+        }
+      }
       created.push({ title: spec.title, id: wi.id, url: wi.url });
     }
 

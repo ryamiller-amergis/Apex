@@ -103,6 +103,8 @@ export interface SseErrorEvent {
 export interface SseDoneEvent {
   type: 'done';
   runId?: string;
+  prdReady?: boolean;
+  backlogReady?: boolean;
 }
 
 export type SseEvent =

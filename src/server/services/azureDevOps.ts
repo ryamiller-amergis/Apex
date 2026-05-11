@@ -4850,6 +4850,7 @@ export class AzureDevOpsService {
     title: string;
     description?: string;
     parentId?: number;
+    predecessorIds?: number[];
     prdUrl?: string;
     tags?: string[];
   }): Promise<{ id: number; url: string }> {
@@ -4882,6 +4883,21 @@ export class AzureDevOpsService {
             url: `${orgUrl}/_apis/wit/workItems/${spec.parentId}`,
           },
         });
+      }
+
+      if (spec.predecessorIds && spec.predecessorIds.length > 0) {
+        const orgUrl = this.organization.replace(/\/$/, '');
+        for (const predId of spec.predecessorIds) {
+          patch.push({
+            op: 'add',
+            path: '/relations/-',
+            value: {
+              rel: 'System.LinkTypes.Dependency-Reverse',
+              url: `${orgUrl}/_apis/wit/workItems/${predId}`,
+              attributes: { comment: 'Predecessor' },
+            },
+          });
+        }
       }
 
       if (spec.prdUrl) {

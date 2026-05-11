@@ -312,6 +312,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
+  const prdAutoOpenedRef = useRef(false);
 
   const {
     attachments,
@@ -321,7 +322,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     clearAttachments,
   } = useChatAttachments();
 
-  const { messages, streamingText, status, isConnected } = useChatStream(
+  const { messages, streamingText, status, isConnected, prdReady } = useChatStream(
     thread?.id ?? null,
     { initialMessages: thread?.messages, initialStatus: thread?.status },
   );
@@ -358,9 +359,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   }, [slashQuery, threadSkills]);
 
   const isRunning = status === 'running';
-  const hasPrd = messages.some(
-    (m) => m.role === 'agent' && m.text.toLowerCase().includes('.ai-pilot/output/prd.md'),
-  );
+  const hasPrd =
+    prdReady ||
+    messages.some(
+      (m) =>
+        m.role === 'agent' &&
+        m.text.toLowerCase().includes('.ai-pilot/output/') &&
+        m.text.toLowerCase().includes('.prd.md'),
+    );
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -378,6 +384,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       setWikiPageName(`${repoSlug}-requirements`);
       // Sync the model dropdown to whatever the thread was started with
       setSelectedModel(thread.kickoff.model ?? DEFAULT_MODEL_ID);
+      // Reset auto-open guard for the new thread
+      prdAutoOpenedRef.current = false;
     }
   }, [thread?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -387,6 +395,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       setWikiId(wikis[0].id);
     }
   }, [wikis, wikiId]);
+
+  // Auto-open PRD preview the first time the server signals prdReady
+  useEffect(() => {
+    if (prdReady && !prdAutoOpenedRef.current) {
+      prdAutoOpenedRef.current = true;
+      setShowPrdPreview(true);
+    }
+  }, [prdReady]);
 
   useEffect(() => {
     const el = textareaRef.current;

@@ -58,6 +58,23 @@ interface ThreadState {
 
 const threads = new Map<string, ThreadState>();
 
+// ── Output file helpers ───────────────────────────────────────────────────────
+
+/**
+ * Returns the path of the first file in `dir` whose name matches `pattern`,
+ * or null if not found / dir doesn't exist.
+ */
+function findOutputFile(dir: string, pattern: RegExp): string | null {
+  if (!fs.existsSync(dir)) return null;
+  try {
+    const names = fs.readdirSync(dir);
+    const match = names.find((n) => pattern.test(n));
+    return match ? path.join(dir, match) : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Persistence helpers ───────────────────────────────────────────────────────
 
 function ensureDirs() {
@@ -225,91 +242,54 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 
   const branch = kickoff.branch ?? 'main';
   const parts: string[] = [
-    `# Sandbox notice`,
+    `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
-    `It is NOT a clone of the project repo. Project files such as \`CONTEXT.md\`, \`AGENTS.md\`, ADRs, glossaries, sibling skills, etc. will NOT be on the local filesystem. Do not search the filesystem for them and do not report them as "missing" — they live in the ADO repo and must be fetched via MCP.`,
+    `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
     ``,
-    `# Step 1 — Load the skill`,
-    `Call the \`get_skill\` tool on the \`ado-skills\` MCP server with:`,
+    `# MCP tools (ado-skills server)`,
+    `- \`get_skill\`        — load a SKILL.md from the repo`,
+    `- \`list_repo_dir\`    — browse repo directory structure`,
+    `- \`get_skill_file\`   — read any file from the repo`,
+    `- \`search_repo_code\` — search code in the repo`,
+    ``,
+    `# Your task`,
+    `Call \`get_skill\` with the following parameters to load the skill:`,
     `  project: "${kickoff.project}"`,
-    `  repo: "${kickoff.repo}"`,
-    `  path: "${kickoff.skillPath}"`,
-    `  branch: "${branch}"`,
+    `  repo:    "${kickoff.repo}"`,
+    `  path:    "${kickoff.skillPath}"`,
+    `  branch:  "${branch}"`,
     ``,
-    `# Step 2 — Fetch every repo file the skill references`,
-    `If the skill instructs you to read files like \`CONTEXT.md\`, \`AGENTS.md\`, ADRs, glossaries, examples, a docs sidebar, or a handbook index, follow this sub-procedure:`,
+    `Then follow the skill's instructions exactly and completely. The skill defines everything:`,
+    `which repo files to load, how to interact with the user, what to produce, and when to produce it.`,
+    `Do not add steps, skip steps, or modify the skill's behavior in any way.`,
     ``,
-    `  2a. DISCOVER before fetching. Use the \`list_repo_dir\` tool to browse the repo and confirm a path exists before calling \`get_skill_file\`. Start at the repo root (\`/\`) to see top-level structure, then drill into sub-folders as needed:`,
-    `        list_repo_dir  project="${kickoff.project}"  repo="${kickoff.repo}"  branch="${branch}"  path="/"`,
-    `      Then check sub-folders like \`/docs\`, \`/.cursor\`, etc. as the root listing suggests.`,
+    `When the skill instructs you to write output files, write them to \`.ai-pilot/output/\``,
+    `using the exact filenames the skill specifies.`,
     ``,
-    `  2b. FETCH files that actually exist using \`get_skill_file\`. Only attempt paths that appeared in the \`list_repo_dir\` results.`,
-    ``,
-    `  2c. GIVE UP PROMPTLY if a referenced file does not appear in the directory listing after at most 2-3 browsing attempts. Do NOT keep guessing new paths in a loop. Instead, note what was not found and continue the skill with the context you have. Tell the user briefly which files were unavailable.`,
-    ``,
-    `  2d. NEVER search the local filesystem (the sandbox cwd) for these files — they do not exist there.`,
-    ``,
-    `  2e. BEFORE the first interview question, gather implementation context from code. Use \`search_repo_code\` with 2-4 targeted queries derived from the user's kickoff topic (domain terms, feature names, service names, key entities).`,
-    `      Example:`,
-    `        search_repo_code  project="${kickoff.project}"  repo="${kickoff.repo}"  branch="${branch}"  query="timecard approval callout pto"  limit=8`,
-    ``,
-    `  2f. For each relevant hit from \`search_repo_code\`, read the file via \`get_skill_file\` and summarize concrete findings (existing modules, route handlers, services, and constraints) before you start the interview. Do not ask architecture questions that are already answered by discovered code.`,
-    ``,
-    `# Step 3 — Run the full interview before producing any artifact`,
-    `Execute the skill's procedure in order. If the skill defines an interview, "grill", clarification, rubric, or Q&A phase, follow these rules WITHOUT EXCEPTION:`,
-    ``,
-    `  a. Ask the questions one at a time (or in small numbered batches per the skill's format). After posting questions, STOP and wait for the user's reply. Do not generate any document or summary.`,
-    `  b. After each user reply, continue with the NEXT unanswered interview questions. A single user reply does NOT complete the interview. Keep asking until every question in the skill's defined interview list has been covered.`,
-    `  c. When ALL questions have been asked and answered, end your message with EXACTLY this sentence on its own line:`,
-    `       > Interview complete — reply **"create prd"** when you are ready for me to generate the document.`,
-    `  d. ONLY write the output file after the user explicitly says "create prd", "yes", "proceed", "generate", "go ahead", or a clearly equivalent signal. If the user asks a follow-up question or requests a change instead, answer it and keep waiting.`,
-    ``,
-    `⛔ HARD RULE: Do NOT write \`.ai-pilot/output/PRD.md\` (or any other output file) at any point during the interview. Writing it early will be treated as a critical failure.`,
-    ``,
-    `# Question format — MANDATORY for EVERY interview question, no exceptions`,
-    `The chat UI renders lettered options as interactive buttons that the user clicks to answer. This ONLY works if you follow the exact format below. Failing to use this format means the user cannot answer interactively.`,
-    ``,
-    `⛔ EVERY question you ask during the interview — including yes/no questions, binary choices, and open-ended clarifications — MUST be formatted as a lettered list. There are no exceptions. If a question seems binary (yes/no), turn it into a 3-4 option list anyway.`,
-    ``,
-    `Required format (copy this structure exactly):`,
-    ``,
-    `  **Question N:** [question text — one clear sentence]`,
-    ``,
-    `  a. [first option]`,
-    `  b. [second option]`,
-    `  c. [third option — can be "Some of both / hybrid"]`,
-    `  d. Other — I'll describe in the text box below`,
-    ``,
-    `  > *Recommendation: [letter] — [one sentence reason why]*`,
-    ``,
-    `Rules (all mandatory):`,
-    `- ALWAYS use exactly the \`a. text\` format — one option per line, letter + period + space + text.`,
-    `- ALWAYS include at least 3 options. For a yes/no question, add a third option like "c. It depends — I'll clarify below".`,
-    `- ALWAYS end with a "d. Other / free-form" option so the user can type a custom answer.`,
-    `- Put the recommendation AFTER the options, not before, not inline.`,
-    `- NEVER write choices in prose sentences like "Choose A or B", "**[A]**", "Option 1 vs Option 2", or embed the options in a paragraph. Each option must be its own line starting with \`a.\`, \`b.\`, \`c.\`, or \`d.\`.`,
-    `- NEVER ask an open-ended question without lettered options. Even "please describe X" must be wrapped: offer 2-3 likely answers as options plus "d. Other — I'll describe below".`,
+    `# UI rendering note`,
+    `When the skill asks the user questions with multiple-choice options, format each option`,
+    `as \`a. text\`, \`b. text\`, etc. on its own line — the chat UI renders these as clickable`,
+    `buttons. This is a rendering hint only; it does not change when, whether, or how many`,
+    `questions the skill asks.`,
   ];
 
   if (kickoff.transcript) {
     parts.push(
       ``,
-      `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\` in this workspace. Read it for input context before starting the skill flow — but treat it as background, not as a substitute for the skill's interview phase. The transcript does NOT count as having answered the interview questions.`,
+      `# Kickoff transcript`,
+      `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`.`,
+      `Read it as input context before executing the skill. Follow the skill's own instructions`,
+      `for how to use prior context.`,
     );
   }
 
   if (kickoff.freeformContext) {
     parts.push(
       ``,
+      `# Additional context`,
       `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
     );
   }
-
-  parts.push(
-    ``,
-    `# Step 4 — Final artifact (only after explicit user approval)`,
-    `After the user says "create prd" (or equivalent), write the output to \`.ai-pilot/output/PRD.md\` (or whatever filename the skill specifies under \`.ai-pilot/output/\`) and tell the user it is ready for review.`,
-  );
 
   return parts.join('\n');
 }
@@ -538,9 +518,17 @@ export async function sendMessage(
     const result = await run.wait();
 
     if (result.status === 'error') {
-      state.thread.status = 'error';
-      state.thread.lastError = `Run ${state.thread.activeRunId} failed`;
-      broadcast(state, { type: 'error', error: state.thread.lastError });
+      const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
+      state.thread.lastError = reason;
+      broadcast(state, { type: 'error', error: reason });
+      // Dispose the agent so the next send creates a fresh one instead of
+      // reusing a run that already ended in an error state.
+      if (state.agent) {
+        await state.agent[Symbol.asyncDispose]().catch(() => {});
+        state.agent = null;
+      }
+      state.thread.status = 'idle';
+      broadcast(state, { type: 'status', status: 'idle' });
     } else {
       // Commit the accumulated agent message
       if (agentTextBuffer) {
@@ -558,7 +546,25 @@ export async function sendMessage(
       broadcast(state, { type: 'status', status: 'idle' });
     }
 
-    broadcast(state, { type: 'done', runId: state.thread.activeRunId });
+    const outputDir = path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
+    const prdFile = findOutputFile(outputDir, /\.prd\.md$/i) ?? (fs.existsSync(path.join(outputDir, 'PRD.md')) ? path.join(outputDir, 'PRD.md') : null);
+    const backlogFile = findOutputFile(outputDir, /\.backlog\.json$/i);
+    const prdReady = prdFile !== null;
+    const backlogReady = backlogFile !== null;
+
+    // Persist output to the durable threads dir so previews survive restarts/workspace cleanup
+    if (prdFile) {
+      try {
+        fs.copyFileSync(prdFile, path.join(THREADS_DIR, `${threadId}.prd.md`));
+      } catch { /* non-fatal */ }
+    }
+    if (backlogFile) {
+      try {
+        fs.copyFileSync(backlogFile, path.join(THREADS_DIR, `${threadId}.backlog.json`));
+      } catch { /* non-fatal */ }
+    }
+
+    broadcast(state, { type: 'done', runId: state.thread.activeRunId, prdReady, backlogReady });
     state.thread.activeRunId = undefined;
   } catch (err: any) {
     logAgentError(threadId, err);
@@ -628,39 +634,69 @@ export async function closeThread(threadId: string): Promise<void> {
   }
 }
 
+function resolveOutputDir(threadId: string): string | null {
+  const state = threads.get(threadId);
+  if (state) return path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
+  const thread = loadThread(threadId);
+  return thread ? path.join(thread.workspaceDir, '.ai-pilot', 'output') : null;
+}
+
 /**
- * Read the output PRD (if the agent wrote it) from the workspace.
- * Returns null if not yet written.
+ * Read the output PRD. Checks the durable threads dir first (survives restarts),
+ * then falls back to the ephemeral workspace.
  */
 export function readOutputPrd(threadId: string): string | null {
-  const state = threads.get(threadId);
-  if (!state) {
-    const thread = loadThread(threadId);
-    if (!thread) return null;
-    const prdPath = path.join(thread.workspaceDir, '.ai-pilot', 'output', 'PRD.md');
-    return fs.existsSync(prdPath) ? fs.readFileSync(prdPath, 'utf-8') : null;
+  // 1. Durable copy next to the thread JSON
+  const durablePrd = path.join(THREADS_DIR, `${threadId}.prd.md`);
+  if (fs.existsSync(durablePrd)) return fs.readFileSync(durablePrd, 'utf-8');
+
+  // 2. Ephemeral workspace (still exists in the current session)
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const named = findOutputFile(outputDir, /\.prd\.md$/i);
+  if (named) return fs.readFileSync(named, 'utf-8');
+  const legacy = path.join(outputDir, 'PRD.md');
+  return fs.existsSync(legacy) ? fs.readFileSync(legacy, 'utf-8') : null;
+}
+
+/**
+ * Read the output backlog JSON. Checks the durable threads dir first,
+ * then falls back to the ephemeral workspace.
+ */
+export function readOutputBacklog(threadId: string): unknown | null {
+  // 1. Durable copy next to the thread JSON
+  const durableBacklog = path.join(THREADS_DIR, `${threadId}.backlog.json`);
+  if (fs.existsSync(durableBacklog)) {
+    try {
+      return JSON.parse(fs.readFileSync(durableBacklog, 'utf-8'));
+    } catch { /* fall through */ }
   }
-  const prdPath = path.join(state.thread.workspaceDir, '.ai-pilot', 'output', 'PRD.md');
-  return fs.existsSync(prdPath) ? fs.readFileSync(prdPath, 'utf-8') : null;
+
+  // 2. Ephemeral workspace
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const file = findOutputFile(outputDir, /\.backlog\.json$/i);
+  if (!file) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Overwrite the output PRD on disk with edited content.
- * Creates the output directory if it doesn't exist yet.
+ * Writes to both the durable threads dir and the workspace (if it exists).
  */
 export function writeOutputPrd(threadId: string, content: string): void {
-  const state = threads.get(threadId);
-  const workspaceDir = state
-    ? state.thread.workspaceDir
-    : (() => {
-        const thread = loadThread(threadId);
-        if (!thread) throw new Error(`Thread ${threadId} not found`);
-        return thread.workspaceDir;
-      })();
+  // Always update the durable copy
+  ensureDirs();
+  fs.writeFileSync(path.join(THREADS_DIR, `${threadId}.prd.md`), content, 'utf-8');
 
-  const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+  // Also keep the workspace copy in sync if it still exists
+  const outputDir = resolveOutputDir(threadId);
+  if (outputDir && fs.existsSync(outputDir)) {
+    const named = findOutputFile(outputDir, /\.prd\.md$/i);
+    fs.writeFileSync(named ?? path.join(outputDir, 'PRD.md'), content, 'utf-8');
   }
-  fs.writeFileSync(path.join(outputDir, 'PRD.md'), content, 'utf-8');
 }

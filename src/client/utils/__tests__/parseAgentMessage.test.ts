@@ -157,4 +157,99 @@ describe('parseAgentMessage', () => {
     expect(parts).toHaveLength(1);
     expect(parts[0].type).toBe('markdown');
   });
+
+  // ── Real agent message patterns ──────────────────────────────────────────────
+
+  it('parses a typical agent interview message with intro + question + options', () => {
+    const text = [
+      'I have loaded the skill. Let me start the interview.',
+      '',
+      '**Question 1:** Which area of the codebase does this touch?',
+      'a. Admin Portal backend',
+      'b. MaxHub pipeline',
+      'c. Both',
+    ].join('\n');
+
+    const parts = parseAgentMessage(text);
+    const choices = parts.filter((p) => p.type === 'choices');
+    const markdown = parts.filter((p) => p.type === 'markdown');
+
+    expect(choices).toHaveLength(1);
+    expect(markdown).toHaveLength(1);
+    expect((choices[0] as ChoiceBlock).options).toHaveLength(3);
+    expect((choices[0] as ChoiceBlock).question).toContain('Question 1');
+  });
+
+  it('produces separate choice blocks for each numbered question', () => {
+    const text = [
+      '**Question 1:** First question?',
+      'a. Yes',
+      'b. No',
+      '',
+      '**Question 2:** Second question?',
+      'a. Option A',
+      'b. Option B',
+    ].join('\n');
+
+    const parts = parseAgentMessage(text);
+    const choices = parts.filter((p) => p.type === 'choices');
+    expect(choices).toHaveLength(2);
+  });
+
+  it('handles "Interview complete" marker as plain markdown', () => {
+    const text = '> Interview complete — reply **"create prd"** when you are ready for me to generate the document.';
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('markdown');
+  });
+
+  it('handles bold-marked question text without crashing', () => {
+    const text = '**What is the primary goal?**\na. Improve performance\nb. Add new feature';
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    const block = parts[0] as ChoiceBlock;
+    expect(block.question).toBe('**What is the primary goal?**');
+  });
+
+  it('handles options with em-dash descriptions (real agent format)', () => {
+    const text = [
+      'Which modules?',
+      'a. Admin Portal — template grid row action',
+      'b. Backend — resend endpoint only',
+      'c. Both — full stack',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options[0].text).toBe('Admin Portal — template grid row action');
+  });
+
+  it('survives very long option text without truncating', () => {
+    const longText = 'A very detailed option that describes implementation constraints in detail';
+    const text = `Choose:\na. ${longText}\nb. Shorter option`;
+    const parts = parseAgentMessage(text);
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options[0].text).toBe(longText);
+  });
+
+  it('returns all parts when message contains code block followed by choices', () => {
+    const text = [
+      'Here is the current code:',
+      '',
+      '```typescript',
+      'const x = 1;',
+      '```',
+      '',
+      'Which approach do you prefer?',
+      'a. Refactor',
+      'b. Keep as-is',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    const choices = parts.filter((p) => p.type === 'choices');
+    expect(choices).toHaveLength(1);
+    // The code block renders as markdown
+    const markdown = parts.filter((p) => p.type === 'markdown');
+    expect(markdown.length).toBeGreaterThanOrEqual(1);
+  });
 });

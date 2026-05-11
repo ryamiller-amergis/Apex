@@ -110,9 +110,139 @@ function buildToc(markdown: string): TocEntry[] {
   return entries;
 }
 
+// ── Backlog types ─────────────────────────────────────────────────────────────
+
+interface BacklogItem {
+  id?: string;
+  title: string;
+  type?: string;
+  module?: string;
+  description?: string;
+  dependencies?: string[];
+  predecessors?: string[];
+  testScope?: string | string[];
+  wave?: number;
+}
+
+interface BacklogWave {
+  wave: number;
+  name?: string;
+  items: BacklogItem[];
+}
+
+interface BacklogData {
+  feature?: string;
+  waves?: BacklogWave[];
+  items?: BacklogItem[];
+}
+
+async function fetchBacklog(threadId: string): Promise<BacklogData> {
+  const res = await fetch(`/api/chat/threads/${encodeURIComponent(threadId)}/backlog`, {
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<BacklogData>;
+}
+
+/** Normalise flat items list or wave-grouped data into waves for display */
+function normaliseBacklog(data: BacklogData): BacklogWave[] {
+  if (data.waves && data.waves.length > 0) return data.waves;
+  if (data.items && data.items.length > 0) {
+    const waveMap = new Map<number, BacklogItem[]>();
+    for (const item of data.items) {
+      const w = item.wave ?? 1;
+      if (!waveMap.has(w)) waveMap.set(w, []);
+      waveMap.get(w)!.push(item);
+    }
+    return Array.from(waveMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([waveNum, items]) => ({ wave: waveNum, items }));
+  }
+  return [];
+}
+
+// ── Backlog view sub-component ────────────────────────────────────────────────
+
+const BacklogView: React.FC<{ threadId: string }> = ({ threadId }) => {
+  const { data, isLoading, error } = useQuery<BacklogData, Error>({
+    queryKey: ['backlog-thread', threadId],
+    queryFn: () => fetchBacklog(threadId),
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  if (isLoading) {
+    return (
+      <div className={styles.loading}>
+        <div className={styles.spinner} />
+        Loading backlog…
+      </div>
+    );
+  }
+
+  if (error) {
+    return <div className={styles.error}>Failed to load backlog: {error.message}</div>;
+  }
+
+  if (!data) return null;
+
+  const waves = normaliseBacklog(data);
+
+  if (waves.length === 0) {
+    return <div className={styles.backlogEmpty}>No backlog items found in the generated output.</div>;
+  }
+
+  return (
+    <div className={styles.backlogPane}>
+      {data.feature && <div className={styles.backlogFeatureTitle}>{data.feature}</div>}
+      {waves.map((wave) => (
+        <div key={wave.wave} className={styles.waveBlock}>
+          <div className={styles.waveHeader}>
+            <span className={styles.waveBadge}>Wave {wave.wave}</span>
+            {wave.name && <span className={styles.waveName}>{wave.name}</span>}
+            <span className={styles.waveCount}>{wave.items.length} item{wave.items.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className={styles.waveItems}>
+            {wave.items.map((item, idx) => {
+              const deps = item.dependencies ?? item.predecessors ?? [];
+              const scope = Array.isArray(item.testScope) ? item.testScope.join(', ') : item.testScope;
+              return (
+                <div key={item.id ?? idx} className={styles.backlogItem}>
+                  <div className={styles.backlogItemHeader}>
+                    {item.id && <span className={styles.backlogItemId}>{item.id}</span>}
+                    <span className={styles.backlogItemType}>{item.type ?? 'Story'}</span>
+                    {item.module && <span className={styles.backlogItemModule}>{item.module}</span>}
+                  </div>
+                  <div className={styles.backlogItemTitle}>{item.title}</div>
+                  {item.description && (
+                    <div className={styles.backlogItemDesc}>{item.description}</div>
+                  )}
+                  <div className={styles.backlogItemMeta}>
+                    {deps.length > 0 && (
+                      <span className={styles.backlogDeps}>
+                        ← depends on: {deps.join(', ')}
+                      </span>
+                    )}
+                    {scope && (
+                      <span className={styles.backlogTestScope}>tests: {scope}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
-type Tab = 'preview' | 'edit';
+type Tab = 'preview' | 'edit' | 'backlog';
 
 export const PRDPreviewDrawer: React.FC<PRDPreviewDrawerProps> = (props) => {
   const isThread = 'threadId' in props;
@@ -232,6 +362,12 @@ export const PRDPreviewDrawer: React.FC<PRDPreviewDrawerProps> = (props) => {
             >
               Edit{hasUnsavedEdits ? ' ●' : ''}
             </button>
+            <button
+              className={`${styles.tab} ${activeTab === 'backlog' ? styles.tabActive : ''}`}
+              onClick={() => setActiveTab('backlog')}
+            >
+              Backlog / Waves
+            </button>
 
             {activeTab === 'edit' && (
               <div className={styles.editActions}>
@@ -278,13 +414,18 @@ export const PRDPreviewDrawer: React.FC<PRDPreviewDrawerProps> = (props) => {
 
           {/* Body */}
           <div className={activeTab === 'edit' ? styles.editorPane : styles.body}>
-            {isLoading && (
+            {/* Backlog tab — full-width, skip PRD loading states */}
+            {activeTab === 'backlog' && isThread && (
+              <BacklogView threadId={(props as ThreadSource).threadId} />
+            )}
+
+            {activeTab !== 'backlog' && isLoading && (
               <div className={styles.loading}>
                 <div className={styles.spinner} />
                 Loading PRD…
               </div>
             )}
-            {error && (
+            {activeTab !== 'backlog' && error && (
               <div className={styles.error}>
                 Failed to load PRD: {error.message}
               </div>

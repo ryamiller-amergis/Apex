@@ -218,4 +218,61 @@ describe('useChatStream', () => {
     });
     expect(result.current.messages).toHaveLength(0);
   });
+
+  it('sets prdReady=true when done event carries prdReady flag', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    expect(result.current.prdReady).toBe(false);
+    act(() => {
+      lastES!.emit('message', { type: 'done', prdReady: true });
+    });
+    expect(result.current.prdReady).toBe(true);
+  });
+
+  it('sets backlogReady=true when done event carries backlogReady flag', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    expect(result.current.backlogReady).toBe(false);
+    act(() => {
+      lastES!.emit('message', { type: 'done', backlogReady: true });
+    });
+    expect(result.current.backlogReady).toBe(true);
+  });
+
+  it('does not set prdReady when done event has no flag', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'done' });
+    });
+    expect(result.current.prdReady).toBe(false);
+    expect(result.current.backlogReady).toBe(false);
+  });
+
+  it('resets prdReady and backlogReady when threadId changes', () => {
+    const { result, rerender } = renderHook(({ id }) => useChatStream(id), {
+      initialProps: { id: 'thread-a' as string | null },
+    });
+
+    act(() => {
+      lastES!.emit('message', { type: 'done', prdReady: true, backlogReady: true });
+    });
+    expect(result.current.prdReady).toBe(true);
+    expect(result.current.backlogReady).toBe(true);
+
+    rerender({ id: 'thread-b' });
+    expect(result.current.prdReady).toBe(false);
+    expect(result.current.backlogReady).toBe(false);
+  });
+
+  it('resets prdReady when threadId is set to null', () => {
+    const { result, rerender } = renderHook(({ id }) => useChatStream(id), {
+      initialProps: { id: 'thread-a' as string | null },
+    });
+
+    act(() => {
+      lastES!.emit('message', { type: 'done', prdReady: true });
+    });
+    expect(result.current.prdReady).toBe(true);
+
+    rerender({ id: null });
+    expect(result.current.prdReady).toBe(false);
+  });
 });

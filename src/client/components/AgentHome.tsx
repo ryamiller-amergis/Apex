@@ -1,9 +1,18 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useSkillRepos, useStartChat, useSkillList } from '../hooks/useChatThreads';
+import {
+  useSkillRepos,
+  useStartChat,
+  useSkillList,
+  useSaveToWiki,
+  useWikiList,
+} from '../hooks/useChatThreads';
 import { useChatStream } from '../hooks/useChatStream';
 import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
+import { parseAgentMessage } from '../utils/parseAgentMessage';
+import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage } from '../../shared/types/chat';
 import styles from './AgentHome.module.css';
@@ -21,13 +30,255 @@ const MODEL_CONTEXT_TOKEN_LIMITS: Record<string, number> = {
   'gemini-3.1-pro': 1_000_000,
 };
 
+const WIKI_PARENT = '/scrum-app-requirement';
+
+// ── ToolIcon ───────────────────────────────────────────────────────────────────
+
 const ToolIcon: React.FC = () => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M13 2l-1 3H4L3 2" /><rect x="2" y="5" width="12" height="8" rx="1" /><path d="M6 9h4" />
   </svg>
 );
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+// ── Interactive choice block ───────────────────────────────────────────────────
+
+interface ChoiceBlockProps {
+  block: ChoiceBlock;
+  questionNumber: number;
+  selection: string | null;
+  freeform: string;
+  locked: boolean;
+  onSelect: (letter: string) => void;
+  onFreeform: (text: string) => void;
+  onSubmit: () => void;
+}
+
+// Matches agent-formatted question headers like "**Question 6:**" or "**Question 6.**"
+// Returns [displayNumber, strippedQuestionText] when matched, null otherwise.
+function parseQuestionHeader(text: string): [number, string] | null {
+  const m = text.match(/^\*\*Question\s+(\d+)\*\*[:.]\s*/i);
+  if (!m) return null;
+  return [parseInt(m[1], 10), text.slice(m[0].length).trim()];
+}
+
+const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
+  block,
+  questionNumber,
+  selection,
+  freeform,
+  locked,
+  onSelect,
+  onFreeform,
+  onSubmit,
+}) => {
+  // True when the agent already included an "other" option (e.g. "d. Other — I'll describe…")
+  const hasBuiltInOther = block.options.some((o) => /^other/i.test(o.text));
+  // True when the currently selected option is the agent's built-in "other" entry
+  const selectedBuiltInOther = hasBuiltInOther && block.options.some((o) => o.letter === selection && /^other/i.test(o.text));
+  const showFreeform = selection === 'other' || selectedBuiltInOther;
+
+  // Use the number the agent embedded in the question text when available so
+  // "Q6" matches "Question 6" regardless of which message the block appears in.
+  const parsed = block.question ? parseQuestionHeader(block.question) : null;
+  const displayNumber = parsed ? parsed[0] : questionNumber;
+  const questionText = parsed ? parsed[1] : block.question;
+
+  return (
+    <div className={`${styles.choiceBlock} ${locked ? styles.choiceBlockLocked : ''}`}>
+      {questionText && (
+        <div className={styles.choiceQuestion}>
+          <span className={styles.choiceQNum}>Q{displayNumber}</span>
+          <div className={styles.markdownBody} style={{ flex: 1, padding: '0' }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{questionText}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+      <div className={styles.choiceOptions}>
+        {block.options.map((opt) => {
+          const isSelected = selection === opt.letter;
+          return (
+            <button
+              key={opt.letter}
+              className={`${styles.choiceOption} ${isSelected ? styles.choiceOptionSelected : ''}`}
+              onClick={() => !locked && onSelect(opt.letter)}
+              disabled={locked}
+              type="button"
+            >
+              <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
+              <span className={styles.choiceOptionText}>{opt.text}</span>
+            </button>
+          );
+        })}
+        {!hasBuiltInOther && (
+          <button
+            className={`${styles.choiceOption} ${selection === 'other' ? styles.choiceOptionSelected : ''}`}
+            onClick={() => !locked && onSelect('other')}
+            disabled={locked}
+            type="button"
+          >
+            <span className={styles.choiceOptionLetter}>✎</span>
+            <span className={styles.choiceOptionText}>Other / free-form</span>
+          </button>
+        )}
+      </div>
+      {showFreeform && !locked && (
+        <textarea
+          className={styles.choiceFreeform}
+          placeholder="Type your answer here… (Enter to submit · Shift+Enter for new line)"
+          value={freeform}
+          onChange={(e) => onFreeform(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+          rows={2}
+        />
+      )}
+      {locked && freeform && (
+        <div className={styles.choiceFreeformLocked}>{freeform}</div>
+      )}
+    </div>
+  );
+};
+
+// ── Agent message with interactive questions ──────────────────────────────────
+
+interface AgentMessageProps {
+  msg: ChatMessage;
+  onSend: (text: string) => void;
+  isRunning: boolean;
+  questionOffset: number;
+}
+
+interface QuestionState {
+  selected: string | null;
+  freeform: string;
+}
+
+const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, questionOffset }) => {
+  const parts = parseAgentMessage(msg.text);
+  const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
+
+  const [selections, setSelections] = useState<Record<string, QuestionState>>(() => {
+    const init: Record<string, QuestionState> = {};
+    for (const b of choiceBlocks) {
+      init[b.id] = { selected: null, freeform: '' };
+    }
+    return init;
+  });
+  const [sent, setSent] = useState(false);
+
+  const allAnswered = choiceBlocks.every((b) => {
+    const s = selections[b.id];
+    if (!s) return false;
+    if (s.selected === 'other') return s.freeform.trim().length > 0;
+    return s.selected !== null;
+  });
+
+  const handleSelect = useCallback((blockId: string, letter: string) => {
+    setSelections((prev) => ({
+      ...prev,
+      [blockId]: { ...prev[blockId], selected: letter },
+    }));
+  }, []);
+
+  const handleFreeform = useCallback((blockId: string, text: string) => {
+    setSelections((prev) => ({
+      ...prev,
+      [blockId]: { ...prev[blockId], freeform: text },
+    }));
+  }, []);
+
+  const handleSend = () => {
+    if (!allAnswered || sent) return;
+    const lines: string[] = [];
+    let qNum = 1;
+    for (const block of choiceBlocks) {
+      const s = selections[block.id];
+      if (!s) continue;
+      if (s.selected === 'other') {
+        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
+      } else if (s.selected) {
+        const opt = block.options.find((o) => o.letter === s.selected);
+        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
+        if (s.freeform.trim()) lines.push(`  Additional notes: ${s.freeform.trim()}`);
+      }
+      qNum++;
+    }
+    onSend(lines.join('\n'));
+    setSent(true);
+  };
+
+  let questionCounter = questionOffset;
+
+  return (
+    <div className={styles.agentMsgRow}>
+      <div className={styles.agentMsgHeader}>
+        <span className={styles.agentAvatar}>AI</span>
+        <span className={styles.agentLabel}>Agent</span>
+        <span className={styles.agentMsgMeta}>{new Date(msg.ts).toLocaleTimeString()}</span>
+      </div>
+      <div className={styles.agentBubblePanel}>
+        {parts.map((part) => {
+          if (part.type === 'markdown') {
+            return (
+              <div key={part.id} className={styles.markdownBody}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.content}</ReactMarkdown>
+              </div>
+            );
+          }
+          questionCounter++;
+          const qNum = questionCounter;
+          const s = selections[part.id] ?? { selected: null, freeform: '' };
+          return (
+            <ChoiceBlockUI
+              key={part.id}
+              block={part}
+              questionNumber={qNum}
+              selection={s.selected}
+              freeform={s.freeform}
+              locked={sent}
+              onSelect={(letter) => handleSelect(part.id, letter)}
+              onFreeform={(text) => handleFreeform(part.id, text)}
+              onSubmit={handleSend}
+            />
+          );
+        })}
+
+        {choiceBlocks.length > 0 && !sent && (
+          <button
+            className={styles.choiceSendBtn}
+            onClick={handleSend}
+            disabled={!allAnswered || isRunning}
+            type="button"
+          >
+            {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
+          </button>
+        )}
+
+        {sent && choiceBlocks.length > 0 && (
+          <div className={styles.choiceSentLabel}>✓ Answers sent</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── Message bubble dispatcher ─────────────────────────────────────────────────
+
+function MessageBubble({
+  msg,
+  onSend,
+  isRunning,
+  questionOffset,
+}: {
+  msg: ChatMessage;
+  onSend: (text: string) => void;
+  isRunning: boolean;
+  questionOffset: number;
+}) {
   if (msg.role === 'tool') {
     return (
       <div className={styles.toolMsg}>
@@ -57,15 +308,10 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
       </div>
     );
   }
-  return (
-    <div className={styles.agentRow}>
-      <div className={styles.agentAvatar}>AI</div>
-      <div className={`${styles.agentBubble} ${styles.agentBubbleMd}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-      </div>
-    </div>
-  );
+  return <AgentMessage msg={msg} onSend={onSend} isRunning={isRunning} questionOffset={questionOffset} />;
 }
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [input, setInput] = useState('');
@@ -75,11 +321,30 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerIdx, setSkillPickerIdx] = useState(0);
   const [selectedSkillPath, setSelectedSkillPath] = useState<string | null>(null);
+  const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
+
+  // PRD / wiki state
+  const [showSaveWiki, setShowSaveWiki] = useState(false);
+  const [showPrdPreview, setShowPrdPreview] = useState(false);
+  const [wikiProject, setWikiProject] = useState(selectedProject);
+  const [wikiId, setWikiId] = useState('');
+  const [wikiPageName, setWikiPageName] = useState(() => {
+    const slug = selectedProject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return `${slug}-requirements`;
+  });
+  const [wikiComment, setWikiComment] = useState('');
+  const [savedWikiMeta, setSavedWikiMeta] = useState<{
+    url: string;
+    project: string;
+    wikiName: string;
+    path: string;
+  } | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const skillPickerRef = useRef<HTMLDivElement>(null);
+  const prdAutoOpenedRef = useRef(false);
 
   const {
     attachments,
@@ -96,7 +361,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   ) ?? repos[0];
   const defaultBranch = defaultRepo?.defaultBranch ?? 'main';
 
-  // Pre-load skills for the default repo so the / picker is ready immediately
   const { data: skills = [] } = useSkillList(
     selectedProject || null,
     defaultRepo?.name ?? null,
@@ -104,10 +368,25 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   );
 
   const startChat = useStartChat();
-  const { messages, streamingText, status } = useChatStream(threadId, {});
+  const { messages, streamingText, status, prdReady } = useChatStream(threadId, {});
   const isRunning = status === 'running';
 
+  const saveToWiki = useSaveToWiki(threadId ?? '');
+  const { data: wikis = [] } = useWikiList(wikiProject || null);
+
   const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+
+  const hasPrd = useMemo(
+    () =>
+      prdReady ||
+      visibleMessages.some(
+        (m) =>
+          m.role === 'agent' &&
+          m.text.toLowerCase().includes('.ai-pilot/output/') &&
+          m.text.toLowerCase().includes('.prd.md'),
+      ),
+    [prdReady, visibleMessages],
+  );
 
   const contextTokenLimit = MODEL_CONTEXT_TOKEN_LIMITS[model] ?? DEFAULT_CONTEXT_TOKEN_LIMIT;
   const estimatedTokens = useMemo(() => {
@@ -127,7 +406,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     ? `${Math.round(estimatedTokens / 1000)}k`
     : `${estimatedTokens}`;
 
-  // Slash command: extract query after "/"
   const slashQuery = useMemo(() => {
     const m = input.match(/^\/(.*)$/s);
     return m ? m[1].toLowerCase() : null;
@@ -142,6 +420,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         s.path.toLowerCase().includes(slashQuery),
     );
   }, [slashQuery, skills]);
+
+  const wikiFullPath = `${WIKI_PARENT}/${wikiPageName.trim().replace(/^\/+/, '')}`;
 
   // Scroll messages to bottom
   useEffect(() => {
@@ -163,22 +443,42 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     active?.scrollIntoView({ block: 'nearest' });
   }, [skillPickerIdx, skillPickerOpen]);
 
+  // Auto-select the first wiki once the list loads
+  useEffect(() => {
+    if (wikis.length > 0 && !wikiId) {
+      setWikiId(wikis[0].id);
+    }
+  }, [wikis, wikiId]);
+
+  // Auto-open PRD preview the first time the server signals prdReady
+  useEffect(() => {
+    if (prdReady && !prdAutoOpenedRef.current) {
+      prdAutoOpenedRef.current = true;
+      setShowPrdPreview(true);
+    }
+  }, [prdReady]);
+
+  // ── Callbacks ────────────────────────────────────────────────────────────────
+
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
-    setInput(`Run skill: ${skill.name} (\`${skill.path}\`)`);
+    setInput(`/${skill.name}`);
     setSelectedSkillPath(skill.path);
+    setSelectedSkillName(skill.name);
     setSkillPickerOpen(false);
   }, []);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
-    if (!selectedSkillPath || !val.includes(selectedSkillPath)) {
+    const skillStillActive = !!(selectedSkillPath && selectedSkillName && val.startsWith(`/${selectedSkillName}`));
+    if (selectedSkillPath && !skillStillActive) {
       setSelectedSkillPath(null);
+      setSelectedSkillName(null);
     }
     const isSlash = /^\//.test(val);
-    setSkillPickerOpen(isSlash);
-    if (isSlash) setSkillPickerIdx(0);
-  }, [selectedSkillPath]);
+    setSkillPickerOpen(isSlash && !skillStillActive);
+    if (isSlash && !skillStillActive) setSkillPickerIdx(0);
+  }, [selectedSkillPath, selectedSkillName]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -188,6 +488,27 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  // Used by AgentMessage choice block submissions (thread already exists)
+  const doSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isRunning || isSending || !threadId) return;
+    setIsSending(true);
+    try {
+      const resp = await fetch(`/api/chat/threads/${threadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: trimmed, model }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${resp.status}`);
+      }
+    } finally {
+      setIsSending(false);
+    }
+  }, [threadId, isRunning, isSending, model]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -200,15 +521,22 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
 
     try {
       let activeThreadId = threadId;
+      const wasNewThread = !activeThreadId;
 
       if (!activeThreadId) {
+        // Starting a new thread: bake the skill path into the kickoff so the
+        // server-side system prompt loads it automatically via get_skill.
+        const skillSlug = selectedSkillName ? `/${selectedSkillName}` : null;
+        const freeformContext = selectedSkillPath && skillSlug
+          ? (text === skillSlug ? undefined : text.startsWith(`${skillSlug} `) ? text.slice(skillSlug.length + 1).trim() || undefined : text)
+          : undefined;
         const result = await startChat.mutateAsync({
           kickoff: {
             project: selectedProject,
             repo: defaultRepo!.name,
             branch: defaultBranch,
             skillPath: selectedSkillPath ?? undefined,
-            freeformContext: selectedSkillPath ? text : undefined,
+            freeformContext,
             model,
           },
         });
@@ -216,9 +544,26 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         setThreadId(activeThreadId);
       }
 
-      if (selectedSkillPath && text.includes(selectedSkillPath)) {
+      // For new threads the skill is baked into the kickoff system prompt — no message needed.
+      if (wasNewThread && selectedSkillPath && selectedSkillName && text === `/${selectedSkillName}`) {
+        setSelectedSkillPath(null);
+        setSelectedSkillName(null);
         clearAttachments();
         return;
+      }
+
+      // For existing threads, translate a skill selection into the explicit "Run skill"
+      // format that the agent's free-chat system prompt is documented to handle.
+      // This ensures mid-conversation skill switches (e.g. /to-prd after a /grill-with-docs
+      // interview) reliably trigger get_skill via MCP instead of being treated as plain text.
+      let messageText = text || 'Please use the attached files as additional context.';
+      if (!wasNewThread && selectedSkillPath && selectedSkillName) {
+        const isSkillSlug = text === `/${selectedSkillName}` || text === selectedSkillName;
+        messageText = isSkillSlug
+          ? `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)`
+          : `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)\n\n${text}`;
+        setSelectedSkillPath(null);
+        setSelectedSkillName(null);
       }
 
       const response = await fetch(`/api/chat/threads/${activeThreadId}/messages`, {
@@ -226,20 +571,20 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          text: text || 'Please use the attached files as additional context.',
+          text: messageText,
           model,
           attachments,
         }),
       });
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody.error ?? `HTTP ${response.status}`);
+        throw new Error((errorBody as { error?: string }).error ?? `HTTP ${response.status}`);
       }
       clearAttachments();
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, defaultRepo, startChat, selectedProject, defaultBranch, selectedSkillPath, model, clearAttachments]);
+  }, [input, attachments, isRunning, isSending, threadId, defaultRepo, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, model, clearAttachments]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -285,11 +630,37 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     setSkillPickerOpen(false);
     setSkillPickerIdx(0);
     setSelectedSkillPath(null);
+    setSelectedSkillName(null);
     clearAttachments();
-  }, [isRunning, isSending, clearAttachments]);
+    setSavedWikiMeta(null);
+    setShowPrdPreview(false);
+    setShowSaveWiki(false);
+    setWikiId('');
+    setWikiComment('');
+    prdAutoOpenedRef.current = false;
+    const slug = selectedProject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    setWikiPageName(`${slug}-requirements`);
+  }, [isRunning, isSending, clearAttachments, selectedProject]);
+
+  const handleSaveToWiki = useCallback(async () => {
+    if (!wikiProject || !wikiId || !wikiPageName.trim()) return;
+    try {
+      const result = await saveToWiki.mutateAsync({
+        project: wikiProject,
+        wikiId,
+        path: wikiFullPath,
+        comment: wikiComment || undefined,
+      });
+      const wikiName = wikis.find((w) => w.id === wikiId)?.name ?? wikiId;
+      setSavedWikiMeta({ url: result.url, project: wikiProject, wikiName, path: wikiFullPath });
+      setShowSaveWiki(false);
+    } catch { /* shown via saveToWiki.error */ }
+  }, [wikiProject, wikiId, wikiPageName, wikiComment, wikiFullPath, saveToWiki, wikis]);
 
   const isCompose = !threadId;
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && (!!threadId || !!defaultRepo);
+
+  // ── Shared input area ────────────────────────────────────────────────────────
 
   const inputArea = (
     <div className={styles.inputWrapper}>
@@ -502,10 +873,20 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
               </button>
             </div>
           </div>
+
           <div className={styles.messages}>
-            {visibleMessages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} />
-            ))}
+            {(() => {
+              let qOffset = 0;
+              return visibleMessages.map((msg) => {
+                const offset = qOffset;
+                if (msg.role === 'agent') {
+                  qOffset += parseAgentMessage(msg.text).filter((p) => p.type === 'choices').length;
+                }
+                return (
+                  <MessageBubble key={msg.id} msg={msg} onSend={doSend} isRunning={isRunning} questionOffset={offset} />
+                );
+              });
+            })()}
 
             {isRunning && !streamingText && (
               <div className={styles.agentRow}>
@@ -529,10 +910,134 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* PRD ready banner */}
+          {hasPrd && !savedWikiMeta && (
+            <div className={styles.prdBanner}>
+              <span className={styles.prdBannerText}>PRD is ready for review</span>
+              <div className={styles.prdActions}>
+                <button className={styles.btnSecondary} onClick={() => setShowPrdPreview(true)} type="button">
+                  Preview
+                </button>
+                <button className={styles.btnSuccess} onClick={() => setShowSaveWiki(true)} type="button">
+                  Save to Wiki
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Wiki saved success card */}
+          {savedWikiMeta && (
+            <div className={styles.wikiSuccessCard}>
+              <div className={styles.wikiSuccessHeader}>
+                <span className={styles.wikiSuccessIcon}>✓</span>
+                <span className={styles.wikiSuccessTitle}>PRD saved to wiki</span>
+              </div>
+              <div className={styles.wikiSuccessMeta}>
+                <span className={styles.wikiSuccessCrumb}>{savedWikiMeta.project}</span>
+                <span className={styles.wikiSuccessSep}>›</span>
+                <span className={styles.wikiSuccessCrumb}>{savedWikiMeta.wikiName}</span>
+                <span className={styles.wikiSuccessSep}>›</span>
+                <span className={styles.wikiSuccessCrumb}>{savedWikiMeta.path}</span>
+              </div>
+              <div className={styles.wikiSuccessActions}>
+                <button className={styles.btnSecondary} onClick={() => setShowPrdPreview(true)} type="button">
+                  Preview
+                </button>
+                <a
+                  className={styles.wikiSuccessOpenBtn}
+                  href={savedWikiMeta.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open in ADO ↗
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Save to wiki form */}
+          {showSaveWiki && (
+            <div className={styles.saveWikiForm}>
+              <p className={styles.saveWikiTitle}>Save PRD to ADO Wiki</p>
+              <div className={styles.saveWikiFields}>
+                <div className={styles.saveWikiField}>
+                  <label className={styles.saveWikiLabel} htmlFor="ah-sw-project">Project</label>
+                  <input
+                    id="ah-sw-project"
+                    className={styles.saveWikiInput}
+                    value={wikiProject}
+                    onChange={(e) => { setWikiProject(e.target.value); setWikiId(''); }}
+                  />
+                </div>
+                <div className={styles.saveWikiField}>
+                  <label className={styles.saveWikiLabel} htmlFor="ah-sw-wiki">Wiki</label>
+                  <select
+                    id="ah-sw-wiki"
+                    className={styles.saveWikiSelect}
+                    value={wikiId}
+                    onChange={(e) => setWikiId(e.target.value)}
+                  >
+                    {wikis.length === 0 && <option value="">— loading wikis… —</option>}
+                    {wikis.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </select>
+                </div>
+                <div className={styles.saveWikiField} style={{ gridColumn: '1 / -1' }}>
+                  <label className={styles.saveWikiLabel} htmlFor="ah-sw-pagename">Page name</label>
+                  <div className={styles.wikiPathRow}>
+                    <span className={styles.wikiPathPrefix}>{WIKI_PARENT}/</span>
+                    <input
+                      id="ah-sw-pagename"
+                      className={styles.wikiPathInput}
+                      value={wikiPageName}
+                      onChange={(e) => setWikiPageName(e.target.value)}
+                      placeholder="e.g. sprint-planning-requirements"
+                    />
+                  </div>
+                  <div className={styles.wikiPathPreview}>
+                    Full path: <code>{wikiFullPath}</code>
+                  </div>
+                </div>
+                <div className={styles.saveWikiField} style={{ gridColumn: '1 / -1' }}>
+                  <label className={styles.saveWikiLabel} htmlFor="ah-sw-comment">Commit comment (optional)</label>
+                  <input
+                    id="ah-sw-comment"
+                    className={styles.saveWikiInput}
+                    value={wikiComment}
+                    onChange={(e) => setWikiComment(e.target.value)}
+                    placeholder="AI-Pilot: PRD generated via agent chat"
+                  />
+                </div>
+              </div>
+              {saveToWiki.error && (
+                <span className={styles.saveWikiError}>{saveToWiki.error.message}</span>
+              )}
+              <div className={styles.saveWikiActions}>
+                <button className={styles.btnSecondary} onClick={() => setShowSaveWiki(false)} type="button">
+                  Cancel
+                </button>
+                <button
+                  className={styles.btnSuccess}
+                  onClick={handleSaveToWiki}
+                  disabled={!wikiProject || !wikiId || !wikiPageName.trim() || saveToWiki.isPending}
+                  type="button"
+                >
+                  {saveToWiki.isPending ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className={styles.chatInputBar}>
             {inputArea}
           </div>
         </div>
+      )}
+
+      {showPrdPreview && threadId && (
+        <PRDPreviewDrawer
+          threadId={threadId}
+          onClose={() => setShowPrdPreview(false)}
+        />
       )}
     </div>
   );

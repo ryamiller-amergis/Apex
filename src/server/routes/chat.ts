@@ -9,6 +9,7 @@ import {
   closeThread,
   readOutputPrd,
   writeOutputPrd,
+  readOutputBacklog,
 } from '../services/chatAgentService';
 import { saveWikiPage } from '../services/wikiCatalog';
 import type { ChatAttachment, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
@@ -194,6 +195,16 @@ router.get('/threads/:id/prd', (req: Request, res: Response) => {
   const content = readOutputPrd(req.params.id);
   if (content === null) return res.status(404).json({ error: 'PRD not yet generated' });
   res.type('text/markdown').send(content);
+});
+
+/**
+ * GET /api/chat/threads/:id/backlog
+ * Read the output *.backlog.json written by the agent (if available).
+ */
+router.get('/threads/:id/backlog', (req: Request, res: Response) => {
+  const content = readOutputBacklog(req.params.id);
+  if (content === null) return res.status(404).json({ error: 'Backlog not yet generated' });
+  res.json(content);
 });
 
 /**
