@@ -740,6 +740,14 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         const freeformContext = selectedSkillPath && skillSlug
           ? (text === skillSlug ? undefined : text.startsWith(`${skillSlug} `) ? text.slice(skillSlug.length + 1).trim() || undefined : text)
           : undefined;
+        // Only the exact "/skill" with no follow-up message relies on server "Begin." kickoff.
+        const skillSlugOnlyKickoff =
+          Boolean(
+            selectedSkillPath &&
+              selectedSkillName &&
+              text === `/${selectedSkillName}` &&
+              attachments.length === 0,
+          );
         const result = await startChat.mutateAsync({
           kickoff: {
             project: selectedProject,
@@ -749,13 +757,22 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             freeformContext,
             model,
           },
+          skipAutoKickoff: !skillSlugOnlyKickoff,
         });
         activeThreadId = result.threadId;
         setThreadId(activeThreadId);
       }
 
-      // For new threads the skill is baked into the kickoff system prompt — no message needed.
-      if (wasNewThread && selectedSkillPath && selectedSkillName && text === `/${selectedSkillName}`) {
+      // For new threads the skill is baked into the kickoff system prompt, so a bare
+      // /skill send needs no extra user message. Attachments still need a real first
+      // message so they are persisted and shown before the agent response.
+      if (
+        wasNewThread &&
+        selectedSkillPath &&
+        selectedSkillName &&
+        text === `/${selectedSkillName}` &&
+        attachments.length === 0
+      ) {
         setSelectedSkillPath(null);
         setSelectedSkillName(null);
         clearAttachments();
@@ -767,6 +784,15 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
       // This ensures mid-conversation skill switches (e.g. /to-prd after a /grill-with-docs
       // interview) reliably trigger get_skill via MCP instead of being treated as plain text.
       let messageText = text || 'Please use the attached files as additional context.';
+      if (
+        wasNewThread &&
+        selectedSkillPath &&
+        selectedSkillName &&
+        text === `/${selectedSkillName}` &&
+        attachments.length > 0
+      ) {
+        messageText = 'Please use the attached files as additional context.';
+      }
       if (!wasNewThread && selectedSkillPath && selectedSkillName) {
         const isSkillSlug = text === `/${selectedSkillName}` || text === selectedSkillName;
         messageText = isSkillSlug

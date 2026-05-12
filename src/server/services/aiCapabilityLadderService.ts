@@ -304,7 +304,7 @@ function scoreBar2(
     category: 'practice',
     status: orchFraction !== null ? statusFromValue(orchFraction, B2_ORCHESTRATOR_PCT) : 'unknown',
     evidenceQuality: 'definitive',
-    threshold: `>=${pct(B2_ORCHESTRATOR_PCT)} of ADO work items that newly went In Progress in the selected window have the ai-code tag`,
+    threshold: `>=${pct(B2_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the last 4 weeks have the ai-code tag`,
     targetValue: B2_ORCHESTRATOR_PCT,
     currentValue: orchFraction,
     currentDisplay: orchFraction !== null
@@ -314,7 +314,7 @@ function scoreBar2(
     gapDisplay: orchFraction !== null && !orchMet
       ? `${Math.ceil(aiCodeAdoption.totalAssignedWorkItems * B2_ORCHESTRATOR_PCT) - aiCodeAdoption.aiCodeWorkItems} more work item(s) need ai-code`
       : null,
-    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate (first In Progress entry) falls within the selected window, attributed to current assignee.',
+    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the last 4 weeks; developer attributed to assignee at first In Progress revision.',
     developersNeedingLift: aiCodeWorkItemGaps(aiCodeAdoption, B2_ORCHESTRATOR_PCT),
   };
 
@@ -491,7 +491,7 @@ function scoreBar3(
     category: 'practice',
     status: orchFraction !== null ? statusFromValue(orchFraction, B3_ORCHESTRATOR_PCT) : 'unknown',
     evidenceQuality: 'definitive',
-    threshold: `>=${pct(B3_ORCHESTRATOR_PCT)} of ADO work items that newly went In Progress in the selected window have the ai-code tag`,
+    threshold: `>=${pct(B3_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the last 4 weeks have the ai-code tag`,
     targetValue: B3_ORCHESTRATOR_PCT,
     currentValue: orchFraction,
     currentDisplay: orchFraction !== null
@@ -501,7 +501,7 @@ function scoreBar3(
     gapDisplay: orchFraction !== null && orchFraction < B3_ORCHESTRATOR_PCT
       ? `${Math.ceil(aiCodeAdoption.totalAssignedWorkItems * B3_ORCHESTRATOR_PCT) - aiCodeAdoption.aiCodeWorkItems} more work item(s) need ai-code`
       : null,
-    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate (first In Progress entry) falls within the selected window, attributed to current assignee.',
+    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the last 4 weeks; developer attributed to assignee at first In Progress revision.',
     developersNeedingLift: aiCodeWorkItemGaps(aiCodeAdoption, B3_ORCHESTRATOR_PCT),
   };
 

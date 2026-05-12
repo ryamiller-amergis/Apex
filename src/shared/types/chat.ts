@@ -119,6 +119,12 @@ export type SseEvent =
 
 export interface StartChatRequest {
   kickoff: ChatThreadKickoff;
+  /**
+   * When true, the server does not auto-send the hidden "Begin." message.
+   * Use when the client will POST the user's first message immediately so the
+   * transcript shows the request before the agent reply.
+   */
+  skipAutoKickoff?: boolean;
 }
 
 export interface StartChatResponse {

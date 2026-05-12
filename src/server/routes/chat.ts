@@ -94,7 +94,9 @@ router.post('/threads', async (req: Request, res: Response) => {
   if (!body.kickoff?.repo) return res.status(400).json({ error: 'kickoff.repo is required' });
 
   try {
-    const thread = await createThread(getUserId(req), body.kickoff);
+    const thread = await createThread(getUserId(req), body.kickoff, {
+      skipAutoKickoff: Boolean(body.skipAutoKickoff),
+    });
     res.status(201).json({ threadId: thread.id });
   } catch (err: any) {
     console.error('[chat] createThread error:', err.message);

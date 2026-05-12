@@ -4097,15 +4097,22 @@ export class AzureDevOpsService {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
 
-      // Population: PBI/TBI/Bug that newly entered an In Progress state during the window.
-      // ActivatedDate captures the first time a work item was moved to Active/In Progress/Committed,
-      // which correctly limits the denominator to items where development actually started.
+      // Fixed 4-week lookback from the 'to' date.
+      // Population: PBI/TBI/Bug whose ActivatedDate (first entry to an in-progress state)
+      // falls within the last 4 weeks. Items still in New/Approved with no ActivatedDate
+      // are excluded — only items where development actually started are counted.
+      const toDate = new Date(to);
+      const fourWeeksAgo = new Date(toDate);
+      fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+      const windowStart = fourWeeksAgo.toISOString().split('T')[0];
+      const windowEnd = toDate.toISOString().split('T')[0];
+
       let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND ([System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
       if (this.areaPath) {
         wiql += ` AND [System.AreaPath] UNDER '${this.areaPath}'`;
       }
       wiql += ` AND [System.State] IN ('In Progress', 'Active', 'Committed', 'Done', 'Closed', 'Resolved')`;
-      wiql += ` AND [Microsoft.VSTS.Common.ActivatedDate] >= '${from}' AND [Microsoft.VSTS.Common.ActivatedDate] <= '${to}' ORDER BY [Microsoft.VSTS.Common.ActivatedDate] DESC`;
+      wiql += ` AND [Microsoft.VSTS.Common.ActivatedDate] >= '${windowStart}' AND [Microsoft.VSTS.Common.ActivatedDate] <= '${windowEnd}' ORDER BY [Microsoft.VSTS.Common.ActivatedDate] DESC`;
 
       const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
       const ids = (queryResult.workItems ?? []).map(wi => wi.id!).filter(Boolean);
@@ -4137,17 +4144,44 @@ export class AzureDevOpsService {
           'System.Tags',
           'System.WorkItemType',
           'System.AssignedTo',
+          'System.State',
         ]);
 
         for (const wi of workItems) {
           if (!wi?.id || !wi.fields) continue;
 
           const itemHasAiCode = hasAiCodeTag(wi.fields['System.Tags']);
-          const developer = identityDisplayName(wi.fields['System.AssignedTo']);
 
+          // Walk revision history to find the developer assigned at the first in-progress transition.
+          // This correctly attributes the item to whoever was doing the work, not just the current assignee.
+          let developer: string | undefined;
+          try {
+            const revisions = await witApi.getRevisions(wi.id);
+            for (const revision of revisions) {
+              const state = revision.fields?.['System.State'];
+              const assignedToField = revision.fields?.['System.AssignedTo'];
+              if (
+                (state === 'In Progress' || state === 'Active' || state === 'Committed') &&
+                assignedToField
+              ) {
+                developer = identityDisplayName(assignedToField);
+                break;
+              }
+            }
+          } catch {
+            // fall through to current-assignee fallback
+          }
+
+          // Fallback: use current assignee if revision history didn't yield an in-progress developer
+          if (!developer) {
+            developer = identityDisplayName(wi.fields['System.AssignedTo']);
+          }
+
+          // Total counts include every item in the population (with or without ai-code tag)
           totalWorkItems += 1;
           if (itemHasAiCode) aiCodeWorkItems += 1;
 
+          // Per-developer counts are scoped to team members only
           if (developer) {
             const normalized = developer.toLowerCase().trim();
             if (!hasTeamFilter || memberSet.has(normalized)) {

@@ -309,9 +309,36 @@ function resetIdleTimer(state: ThreadState) {
   state.idleTimer = setTimeout(() => closeThread(state.thread.id), IDLE_TIMEOUT_MS);
 }
 
+/**
+ * Return live ThreadState from memory, or hydrate from disk (e.g. after server restart).
+ * `getThread` used to return `loadThread()` without registering in `threads`, so POST
+ * /messages passed the route check then `sendMessage` threw "Thread not found".
+ */
+function ensureThreadState(threadId: string): ThreadState | null {
+  const existing = threads.get(threadId);
+  if (existing) return existing;
+
+  const thread = loadThread(threadId);
+  if (!thread) return null;
+
+  const state: ThreadState = {
+    thread,
+    subscribers: new Set(),
+    agent: null,
+    idleTimer: null,
+  };
+  threads.set(threadId, state);
+  resetIdleTimer(state);
+  return state;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function createThread(userId: string, kickoff: ChatThreadKickoff): Promise<ChatThread> {
+export async function createThread(
+  userId: string,
+  kickoff: ChatThreadKickoff,
+  options?: { skipAutoKickoff?: boolean },
+): Promise<ChatThread> {
   ensureDirs();
 
   const threadId = uuidv4();
@@ -347,19 +374,22 @@ export async function createThread(userId: string, kickoff: ChatThreadKickoff): 
   persistThread(thread);
   resetIdleTimer(state);
 
-  // Auto-kickoff: start the skill immediately so the user doesn't have to type a first message.
-  // Fire-and-forget — the HTTP response returns with the threadId while the agent spins up.
-  setImmediate(() => {
-    sendMessage(threadId, 'Begin.').catch((err: Error) => {
-      console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
+  // Auto-kickoff: start the skill when the client will not send a first message right away
+  // (e.g. skill slug only, or modal/panel open). If skipAutoKickoff is set, the client POSTs
+  // the real first message next so the transcript shows the user request before the agent.
+  if (!options?.skipAutoKickoff) {
+    setImmediate(() => {
+      sendMessage(threadId, 'Begin.').catch((err: Error) => {
+        console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
+      });
     });
-  });
+  }
 
   return thread;
 }
 
 export function getThread(threadId: string): ChatThread | null {
-  return threads.get(threadId)?.thread ?? loadThread(threadId);
+  return ensureThreadState(threadId)?.thread ?? null;
 }
 
 export function listThreads(userId: string): ChatThread[] {
@@ -373,7 +403,7 @@ export function subscribeToThread(
   threadId: string,
   callback: (event: SseEvent) => void,
 ): () => void {
-  const state = threads.get(threadId);
+  const state = ensureThreadState(threadId);
   if (!state) return () => {};
   state.subscribers.add(callback);
   return () => state.subscribers.delete(callback);
@@ -412,7 +442,7 @@ export async function sendMessage(
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
 ): Promise<void> {
-  const state = threads.get(threadId);
+  const state = ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
@@ -590,7 +620,7 @@ export async function sendMessage(
 }
 
 export async function cancelRun(threadId: string): Promise<void> {
-  const state = threads.get(threadId);
+  const state = ensureThreadState(threadId);
   if (!state || !state.agent) return;
 
   const activeRunId = state.thread.activeRunId;
@@ -611,7 +641,7 @@ export async function cancelRun(threadId: string): Promise<void> {
 }
 
 export async function closeThread(threadId: string): Promise<void> {
-  const state = threads.get(threadId);
+  const state = ensureThreadState(threadId);
   if (!state) return;
 
   if (state.idleTimer) clearTimeout(state.idleTimer);

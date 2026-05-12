@@ -5,7 +5,10 @@ import {
   useSkillList,
   useSkillRepos,
   useStartChat,
+  useSaveToWiki,
+  useWikiList,
 } from '../../hooks/useChatThreads';
+import { useChatAttachments } from '../../hooks/useChatAttachments';
 
 jest.mock('../../hooks/useChatThreads', () => ({
   useSkillRepos: jest.fn(),
@@ -32,13 +35,16 @@ jest.mock('../../hooks/useChatStream', () => ({
 
 jest.mock('../../hooks/useChatAttachments', () => ({
   formatAttachmentSize: jest.fn((size: number) => `${size} bytes`),
-  useChatAttachments: jest.fn(() => ({
-    attachments: [],
-    attachmentError: null,
-    addFiles: jest.fn(),
-    removeAttachment: jest.fn(),
-    clearAttachments: jest.fn(),
-  })),
+  useChatAttachments: jest.fn(),
+}));
+
+jest.mock('../PRDPreviewDrawer', () => ({
+  PRDPreviewDrawer: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="prd-preview-drawer">
+      PRD Preview Drawer
+      <button type="button" onClick={onClose}>Close preview</button>
+    </div>
+  ),
 }));
 
 // Default stream state — no active session
@@ -53,6 +59,10 @@ const idleStream = {
 
 describe('AgentHome', () => {
   const mutateAsync = jest.fn();
+  const saveToWikiMutateAsync = jest.fn();
+  const clearAttachments = jest.fn();
+  const addFiles = jest.fn();
+  const removeAttachment = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -84,7 +94,27 @@ describe('AgentHome', () => {
       ],
     });
     (useStartChat as jest.Mock).mockReturnValue({ mutateAsync, isPending: false });
+    (useSaveToWiki as jest.Mock).mockReturnValue({
+      mutateAsync: saveToWikiMutateAsync,
+      isPending: false,
+      error: null,
+    });
+    (useWikiList as jest.Mock).mockReturnValue({
+      data: [{ id: 'wiki-1', name: 'Engineering Wiki', type: 'projectWiki' }],
+    });
+    (useChatAttachments as jest.Mock).mockReturnValue({
+      attachments: [],
+      attachmentError: null,
+      addFiles,
+      removeAttachment,
+      clearAttachments,
+    });
     mutateAsync.mockResolvedValue({ threadId: 'thread-123' });
+    saveToWikiMutateAsync.mockResolvedValue({
+      path: '/AI-Pilot/Generated Requirements/maxview-requirements',
+      url: 'https://example.test/wiki',
+      version: 'abc123',
+    });
   });
 
   // ── Compose (no active thread) ──────────────────────────────────────────────
@@ -148,16 +178,19 @@ describe('AgentHome', () => {
       fireEvent.click(screen.getByLabelText('Send'));
 
       await waitFor(() => {
-        expect(mutateAsync).toHaveBeenCalledWith({
-          kickoff: expect.objectContaining({
-            project: 'MaxView',
-            repo: 'MaxView',
-            branch: 'main',
-            skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
-            freeformContext: undefined,
-            model: expect.any(String),
+        expect(mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kickoff: expect.objectContaining({
+              project: 'MaxView',
+              repo: 'MaxView',
+              branch: 'main',
+              skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+              freeformContext: undefined,
+              model: expect.any(String),
+            }),
+            skipAutoKickoff: false,
           }),
-        });
+        );
       });
       // Pure slug kickoff — no extra fetch to /messages
       expect(global.fetch).not.toHaveBeenCalled();
@@ -184,12 +217,15 @@ describe('AgentHome', () => {
       fireEvent.click(screen.getByLabelText('Send'));
 
       await waitFor(() => {
-        expect(mutateAsync).toHaveBeenCalledWith({
-          kickoff: expect.objectContaining({
-            skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
-            freeformContext: 'add email resend feature',
+        expect(mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kickoff: expect.objectContaining({
+              skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+              freeformContext: 'add email resend feature',
+            }),
+            skipAutoKickoff: true,
           }),
-        });
+        );
       });
     });
 
@@ -207,13 +243,107 @@ describe('AgentHome', () => {
       fireEvent.click(screen.getByLabelText('Send'));
 
       await waitFor(() => {
-        expect(mutateAsync).toHaveBeenCalledWith({
-          kickoff: expect.objectContaining({
-            skillPath: undefined,
-            freeformContext: undefined,
+        expect(mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kickoff: expect.objectContaining({
+              skillPath: undefined,
+              freeformContext: undefined,
+            }),
+            skipAutoKickoff: true,
           }),
-        });
+        );
       });
+    });
+
+    it('posts the plain text request as the first message after creating a home-page thread', async () => {
+      render(<AgentHome selectedProject="MaxView" />);
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: 'Tell me about the architecture' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+
+      await waitFor(() => {
+        const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
+          String(c[0]).includes('/api/chat/threads/thread-123/messages'),
+        );
+        expect(messageCall).toBeDefined();
+        const body = JSON.parse(messageCall![1].body);
+        expect(body).toEqual(expect.objectContaining({
+          text: 'Tell me about the architecture',
+          model: expect.any(String),
+          attachments: [],
+        }));
+      });
+    });
+
+    it('posts the user request after a skill kickoff when text follows the skill slug', async () => {
+      render(<AgentHome selectedProject="MaxView" />);
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: '/' },
+      });
+      fireEvent.mouseDown(await screen.findByText('grill-with-docs'));
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: '/grill-with-docs add email resend feature' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+
+      await waitFor(() => {
+        const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
+          String(c[0]).includes('/api/chat/threads/thread-123/messages'),
+        );
+        expect(messageCall).toBeDefined();
+        const body = JSON.parse(messageCall![1].body);
+        expect(body.text).toBe('/grill-with-docs add email resend feature');
+      });
+    });
+
+    it('sends attachments as the first message when a new skill thread starts with only a skill slug', async () => {
+      const attachment = {
+        id: 'att-1',
+        name: 'notes.md',
+        type: 'text/markdown',
+        size: 42,
+        content: 'important context',
+      };
+      (useChatAttachments as jest.Mock).mockReturnValue({
+        attachments: [attachment],
+        attachmentError: null,
+        addFiles,
+        removeAttachment,
+        clearAttachments,
+      });
+
+      render(<AgentHome selectedProject="MaxView" />);
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: '/' },
+      });
+      fireEvent.mouseDown(await screen.findByText('grill-with-docs'));
+      fireEvent.click(screen.getByLabelText('Send'));
+
+      await waitFor(() => {
+        expect(mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ skipAutoKickoff: true }),
+        );
+        const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
+          String(c[0]).includes('/api/chat/threads/thread-123/messages'),
+        );
+        expect(messageCall).toBeDefined();
+        const body = JSON.parse(messageCall![1].body);
+        expect(body.text).toBe('Please use the attached files as additional context.');
+        expect(body.attachments).toEqual([attachment]);
+      });
+    });
+
+    it('selects a skill with keyboard navigation and Enter', async () => {
+      render(<AgentHome selectedProject="MaxView" />);
+      const input = screen.getByPlaceholderText(/Ask me anything/i);
+      fireEvent.change(input, { target: { value: '/' } });
+      await screen.findByText('grill-with-docs');
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(input).toHaveValue('/to-prd');
     });
 
     it('does not submit when textarea is empty', () => {
@@ -314,18 +444,61 @@ describe('AgentHome', () => {
   // ── PRD ready banner ────────────────────────────────────────────────────────
 
   describe('PRD ready banner', () => {
-    it('shows PRD banner when prdReady is true', () => {
+    it('shows PRD banner in chat view when prdReady is true', async () => {
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
+      });
+      const { rerender } = render(<AgentHome selectedProject="MaxView" />);
+
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: 'write a PRD' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+      await screen.findByPlaceholderText(/Continue the conversation/i);
+
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
+        prdReady: true,
+      });
+      rerender(<AgentHome selectedProject="MaxView" />);
+
+      expect(screen.getByText('PRD is ready for review')).toBeInTheDocument();
+      expect(screen.getByTestId('prd-preview-drawer')).toBeInTheDocument();
+    });
+
+    it('saves the PRD to the selected wiki path', async () => {
       mockUseChatStream.mockReturnValue({
         ...idleStream,
         messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
         prdReady: true,
       });
       render(<AgentHome selectedProject="MaxView" />);
-      // Banner only shows in chat view (threadId must be set); the compose view hides it.
-      // We can verify the banner appears after a thread starts by checking the PRD state.
-      // The banner is conditional on both prdReady AND being in chat view (threadId set).
-      // Without pre-seeding threadId we just verify the component renders without errors.
-      expect(screen.getByPlaceholderText(/Ask me anything/i)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: 'write a PRD' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+      await screen.findByPlaceholderText(/Continue the conversation/i);
+
+      fireEvent.click(await screen.findByText('Save to Wiki'));
+      fireEvent.change(screen.getByLabelText('Page name'), {
+        target: { value: 'custom-page' },
+      });
+      fireEvent.change(screen.getByLabelText(/Commit comment/i), {
+        target: { value: 'publish generated PRD' },
+      });
+      fireEvent.click(screen.getByText('Save'));
+
+      await waitFor(() => {
+        expect(saveToWikiMutateAsync).toHaveBeenCalledWith({
+          project: 'MaxView',
+          wikiId: 'wiki-1',
+          path: '/scrum-app-requirement/custom-page',
+          comment: 'publish generated PRD',
+        });
+      });
     });
   });
 
@@ -353,6 +526,32 @@ describe('AgentHome', () => {
       // during the async send; we verify the button exists and the component is stable
       const sendBtn = screen.getByLabelText('Send');
       expect(sendBtn).toBeInTheDocument();
+    });
+
+    it('sends a cancel request when Stop is clicked during a running chat', async () => {
+      const { rerender } = render(<AgentHome selectedProject="MaxView" />);
+
+      fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
+        target: { value: 'start session' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+      await screen.findByPlaceholderText(/Continue the conversation/i);
+      (global.fetch as jest.Mock).mockClear();
+
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        status: 'running',
+      });
+      rerender(<AgentHome selectedProject="MaxView" />);
+
+      fireEvent.click(screen.getByLabelText('Stop'));
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/chat/threads/thread-123/cancel', {
+          method: 'POST',
+          credentials: 'include',
+        });
+      });
     });
 
     it('filters out the auto-kickoff "Begin." user message from visible messages', () => {
