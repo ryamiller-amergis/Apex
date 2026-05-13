@@ -1,0 +1,21 @@
+---
+description: Known issues that must be resolved before deploying AI-Pilot to the cloud
+alwaysApply: true
+---
+
+# Pre-Deployment (Cloud) Requirements
+
+These items are known to work locally but will break or lose data in a cloud environment (Azure App Service, Container Apps, etc.) due to ephemeral filesystems or multi-instance scaling.
+
+## 1. AI Capability Baseline — Persistent Storage ✅ Handled
+
+**File:** `src/server/services/aiCapabilityBaselineService.ts`
+
+**Resolution:** The service now uses the shared `resolveDataRoot()` utility from `src/server/utils/dataDir.ts` — the same logic used by `chatAgentService.ts` for chat thread storage.
+
+**How it resolves per environment:**
+- Local dev → `<cwd>/data/ai-capability-baseline.json`
+- Azure App Service → `/home/data/ai-pilot/ai-capability-baseline.json` (persists across restarts, shared across instances)
+- Explicit override → `AI_PILOT_DATA_DIR/ai-capability-baseline.json`
+
+**No additional infra config is required for Azure App Service.** The `/home/data` path is automatically writable and persistent on Azure App Service without any manual File Share setup.

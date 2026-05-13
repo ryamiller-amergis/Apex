@@ -12,29 +12,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
-
-function isAzureWwwroot(): boolean {
-  const home = process.env.HOME;
-  const cwd = process.cwd();
-  return (
-    cwd.startsWith('/home/site/wwwroot') ||
-    Boolean(home && cwd.startsWith(path.join(home, 'site', 'wwwroot')))
-  );
-}
-
-function resolveDataRoot(): string {
-  if (process.env.AI_PILOT_DATA_DIR) {
-    return path.resolve(process.env.AI_PILOT_DATA_DIR);
-  }
-
-  // Azure App Service deploys app code to /home/site/wwwroot, which can be
-  // read-only. /home/data is the writable file-storage location.
-  if (isAzureWwwroot()) {
-    return path.join('/home', 'data', 'ai-pilot');
-  }
-
-  return path.join(process.cwd(), 'data');
-}
+import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 
 const DATA_ROOT = resolveDataRoot();
 const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR

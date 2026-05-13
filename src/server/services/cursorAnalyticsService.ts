@@ -243,16 +243,29 @@ function countWeeksWithCondition(
   return weekSet.size;
 }
 
-/** Returns the number of consecutive weeks (ending from the most recent week) that all satisfy the predicate. */
+/**
+ * Returns the number of consecutive complete weeks (ending most recently) where
+ * average DAU / teamSize >= pct. Skips the most recent week if it is partial
+ * (fewer than 5 days of data), since a mid-week snapshot would unfairly break a streak.
+ */
 function countConsecutiveWeeksFromEnd(
-  weekDauMap: Map<string, number>,
+  weekDauData: Map<string, { sum: number; count: number }>,
   teamSize: number,
   pct: number,
 ): number {
-  const sortedWeeks = Array.from(weekDauMap.keys()).sort().reverse();
+  const sortedWeeks = Array.from(weekDauData.keys()).sort().reverse();
   let count = 0;
+  let checkedFirst = false;
   for (const week of sortedWeeks) {
-    const avgDau = weekDauMap.get(week)!;
+    const { sum, count: dayCount } = weekDauData.get(week)!;
+    // Skip the most recent week if it looks partial (< 5 days), so a mid-week
+    // snapshot doesn't unfairly reset the streak to 0.
+    if (!checkedFirst && dayCount < 5) {
+      checkedFirst = true;
+      continue;
+    }
+    checkedFirst = true;
+    const avgDau = dayCount > 0 ? sum / dayCount : 0;
     if (avgDau / teamSize >= pct) count++;
     else break;
   }
@@ -333,7 +346,7 @@ export async function buildCursorTeamSummary(
     const dev = devMap.get(row.email)!;
     const isActive = row.isActive !== undefined
       ? row.isActive
-      : (row.totalAccepts > 0 || row.totalApplies > 0 || row.cmdkUsages > 0);
+      : (row.totalAccepts > 0 || row.totalApplies > 0 || row.cmdkUsages > 0 || row.usageBasedReqs > 0 || row.bugbotUsages > 0);
     if (isActive) dev.activeDays.add(row.day);
     dev.acceptedLinesAdded += row.acceptedLinesAdded ?? 0;
     dev.totalApplies += row.totalApplies ?? 0;
@@ -367,28 +380,46 @@ export async function buildCursorTeamSummary(
     });
   }
 
-  // Team-level DAU thresholds
-  const daysAbove50pct = dauSeries.filter(r => teamSize > 0 && r.dau / teamSize >= 0.5).length;
-  const daysAbove80pct = dauSeries.filter(r => teamSize > 0 && r.dau / teamSize >= 0.8).length;
+  // Build per-day active-user count directly from devMap (avoids relying on the
+  // /analytics/team/dau aggregate which covers ALL seats in the org, not just this team).
+  const dayActiveCount = new Map<string, number>();
+  for (const dev of devMap.values()) {
+    for (const day of dev.activeDays) {
+      dayActiveCount.set(day, (dayActiveCount.get(day) ?? 0) + 1);
+    }
+  }
 
-  // Build weekly average DAU map
-  const weekDauSum = new Map<string, { sum: number; count: number }>();
-  for (const r of dauSeries) {
-    const dt = new Date(r.date);
+  // Team-level DAU thresholds (based on per-user data)
+  const daysAbove50pct = teamSize > 0
+    ? [...dayActiveCount.values()].filter(n => n / teamSize >= 0.5).length
+    : 0;
+  const daysAbove80pct = teamSize > 0
+    ? [...dayActiveCount.values()].filter(n => n / teamSize >= 0.8).length
+    : 0;
+
+  // Build weekly DAU map from per-user data
+  const weekDauData = new Map<string, { sum: number; count: number }>();
+  for (const [day, count] of dayActiveCount.entries()) {
+    const dt = new Date(day);
     const dow = dt.getDay();
     const diff = dow === 0 ? -6 : 1 - dow;
     const mon = new Date(dt);
     mon.setDate(dt.getDate() + diff);
     const key = mon.toISOString().split('T')[0]!;
-    const prev = weekDauSum.get(key) ?? { sum: 0, count: 0 };
-    weekDauSum.set(key, { sum: prev.sum + r.dau, count: prev.count + 1 });
+    const prev = weekDauData.get(key) ?? { sum: 0, count: 0 };
+    weekDauData.set(key, { sum: prev.sum + count, count: prev.count + 1 });
   }
-  const weekAvgDauMap = new Map<string, number>();
-  for (const [week, { sum, count }] of weekDauSum.entries()) {
-    weekAvgDauMap.set(week, count > 0 ? sum / count : 0);
-  }
-  const weeksAbove50pct = countConsecutiveWeeksFromEnd(weekAvgDauMap, teamSize, 0.5);
-  const weeksAbove80pct = countConsecutiveWeeksFromEnd(weekAvgDauMap, teamSize, 0.8);
+  const weeksAbove50pct = countConsecutiveWeeksFromEnd(weekDauData, teamSize, 0.5);
+  const weeksAbove80pct = countConsecutiveWeeksFromEnd(weekDauData, teamSize, 0.8);
+
+  // Recent 14-day average DAU% from per-user data
+  const cutoff14d = new Date();
+  cutoff14d.setDate(cutoff14d.getDate() - 14);
+  const cutoff14dStr = cutoff14d.toISOString().split('T')[0]!;
+  const recent14Entries = [...dayActiveCount.entries()].filter(([day]) => day >= cutoff14dStr);
+  const recentDauPct = teamSize > 0 && recent14Entries.length > 0
+    ? recent14Entries.reduce((s, [, n]) => s + n, 0) / recent14Entries.length / teamSize
+    : 0;
 
   // Tab acceptance rate
   const totalTabSuggestions = tabsData.reduce((s, r) => s + r.total_suggestions, 0);
@@ -427,6 +458,8 @@ export async function buildCursorTeamSummary(
     daysAbove80pct,
     weeksAbove50pct,
     weeksAbove80pct,
+    recentDauPct,
+    totalDauDays: dayActiveCount.size,
     tabAcceptRate,
     agentEditAcceptRate,
     skillsInUse: Array.from(skillSet),

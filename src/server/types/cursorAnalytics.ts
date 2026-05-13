@@ -171,10 +171,14 @@ export interface CursorTeamSummary {
   daysAbove50pct: number;
   /** Number of unique days where team DAU / teamSize >= 0.8 */
   daysAbove80pct: number;
-  /** Consecutive weeks with >=50% DAU */
+  /** Consecutive complete weeks with >=50% DAU (partial current week excluded) */
   weeksAbove50pct: number;
-  /** Consecutive weeks with >=80% DAU */
+  /** Consecutive complete weeks with >=80% DAU (partial current week excluded) */
   weeksAbove80pct: number;
+  /** Average DAU as a fraction of teamSize over the last 14 calendar days */
+  recentDauPct: number;
+  /** Number of days in the window where DAU data was returned */
+  totalDauDays: number;
   tabAcceptRate: number;
   agentEditAcceptRate: number;
   /** All skills used by the team */

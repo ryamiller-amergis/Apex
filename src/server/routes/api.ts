@@ -3413,7 +3413,7 @@ router.get('/ai-capability-ladder', async (req: Request, res: Response) => {
       qaBugResult,
       deploymentsResult,
     ] = await Promise.allSettled([
-      adoService.getTeamMembers('MaxView - Dev').catch(() => []),
+      adoService.getTeamMembersWithEmails('MaxView - Dev').catch(() => []),
       adoService.getDesignDocKickoffStats(fromStr, toStr),
       adoService.getPullRequestTimeStats(fromStr, toStr),
       adoService.getInProgressTimeStats(fromStr, toStr),
@@ -3423,7 +3423,8 @@ router.get('/ai-capability-ladder', async (req: Request, res: Response) => {
       ),
     ]);
 
-    const adoMembers: string[] = adoMembersResult.status === 'fulfilled' ? adoMembersResult.value : [];
+    const adoMembersWithEmails: Array<{ name: string; email: string }> = adoMembersResult.status === 'fulfilled' ? adoMembersResult.value : [];
+    const adoMembers: string[] = adoMembersWithEmails.map(m => m.name);
     const kickoffStats = kickoffResult.status === 'fulfilled' ? kickoffResult.value : [];
     const prTimeStats = prTimeResult.status === 'fulfilled' ? prTimeResult.value : [];
     const inProgressStats = inProgressResult.status === 'fulfilled' ? inProgressResult.value : [];
@@ -3478,6 +3479,7 @@ router.get('/ai-capability-ladder', async (req: Request, res: Response) => {
         teamSize: 0, activeSeats: 0, developers: [],
         dauSeries: [], daysAbove50pct: 0, daysAbove80pct: 0,
         weeksAbove50pct: 0, weeksAbove80pct: 0,
+        recentDauPct: 0, totalDauDays: 0,
         tabAcceptRate: 0, agentEditAcceptRate: 0,
         skillsInUse: [], totalSkillUsages: 0,
         mcpToolsInUse: [], planModeUsages: 0, commandsUsed: [],
@@ -3491,6 +3493,7 @@ router.get('/ai-capability-ladder', async (req: Request, res: Response) => {
       cursorDataAvailable,
       cursorApiError,
       adoMembers,
+      adoMembersWithEmails,
       kickoffCount,
       totalEligibleFeatures,
       aiCodeWorkItemAdoption,
@@ -3529,6 +3532,85 @@ router.put('/ai-capability-baseline', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to save baseline' });
+  }
+});
+
+// POST /api/ai-capability-baseline/auto-capture
+// Derives pre-AI baseline metrics from ADO data before aiStartDate and saves them.
+// Body: { aiStartDate: "YYYY-MM-DD", lookbackDays?: number, areaPath?: string }
+router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Response) => {
+  try {
+    const { aiStartDate, lookbackDays = 90, areaPath = '' } = req.body as {
+      aiStartDate: string;
+      lookbackDays?: number;
+      areaPath?: string;
+    };
+
+    if (!aiStartDate || !/^\d{4}-\d{2}-\d{2}$/.test(aiStartDate)) {
+      return res.status(400).json({ error: 'aiStartDate is required (YYYY-MM-DD)' });
+    }
+
+    const toDate = new Date(aiStartDate);
+    toDate.setDate(toDate.getDate() - 1); // day before AI start
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - lookbackDays);
+
+    const fromStr = fromDate.toISOString().split('T')[0]!;
+    const toStr = toDate.toISOString().split('T')[0]!;
+
+    console.log(`=== auto-capture baseline: ${fromStr} → ${toStr} (${lookbackDays}d before ${aiStartDate}) ===`);
+
+    const adoService = new AzureDevOpsService('MaxView', areaPath);
+
+    const [prTimeResult, inProgressResult, qaBugResult] = await Promise.allSettled([
+      adoService.getPullRequestTimeStats(fromStr, toStr),
+      adoService.getInProgressTimeStats(fromStr, toStr),
+      adoService.getQABugStats(fromStr, toStr),
+    ]);
+
+    const prTimeStats = prTimeResult.status === 'fulfilled' ? prTimeResult.value : [];
+    const inProgressStats = inProgressResult.status === 'fulfilled' ? inProgressResult.value : [];
+    const qaBugStats = qaBugResult.status === 'fulfilled' ? qaBugResult.value : [];
+
+    const avgPrCycleTimeDays = prTimeStats.length > 0
+      ? Math.round((prTimeStats.reduce((s: number, d: any) => s + d.averageTimeInPullRequest, 0) / prTimeStats.length) * 10) / 10
+      : null;
+
+    const avgLeadTimeDays = inProgressStats.length > 0
+      ? Math.round((inProgressStats.reduce((s: number, d: any) => s + d.averageDaysInProgress, 0) / inProgressStats.length) * 10) / 10
+      : null;
+
+    const totalPbis = qaBugStats.reduce((s: number, d: any) => s + d.totalPBIs, 0);
+    const totalBugs = qaBugStats.reduce((s: number, d: any) => s + d.totalBugs, 0);
+    const defectRatePerPbi = totalPbis > 0 ? Math.round((totalBugs / totalPbis) * 100) / 100 : null;
+
+    const { getBaseline, saveBaseline } = await import('../services/aiCapabilityBaselineService');
+    const existing = getBaseline();
+
+    const updated = {
+      ...existing,
+      capturedAt: new Date().toISOString().split('T')[0]!,
+      prCycleTimeDays: avgPrCycleTimeDays,
+      leadTimeDays: avgLeadTimeDays,
+      defectRatePerPbi,
+    };
+
+    saveBaseline(updated);
+
+    res.json({
+      success: true,
+      baseline: updated,
+      capturedFrom: fromStr,
+      capturedTo: toStr,
+      prCycleTimeDays: avgPrCycleTimeDays,
+      leadTimeDays: avgLeadTimeDays,
+      defectRatePerPbi,
+      prSampleSize: prTimeStats.reduce((s: number, d: any) => s + d.totalItemsInPullRequest, 0),
+      leadTimeSampleSize: inProgressStats.reduce((s: number, d: any) => s + d.totalItemsInProgress, 0),
+    });
+  } catch (error: any) {
+    console.error('auto-capture baseline error:', error);
+    res.status(500).json({ error: error.message ?? 'Failed to auto-capture baseline' });
   }
 });
 

@@ -1,6 +1,281 @@
 import React, { useState, useCallback } from 'react';
 import type { AiCapabilityLadderResult, LadderBar, LadderCriterion, CriterionStatus } from '../types/aiCapabilityLadder';
 
+// ── Baseline capture panel ─────────────────────────────────────────────────────
+
+interface CaptureResult {
+  prCycleTimeDays: number | null;
+  leadTimeDays: number | null;
+  defectRatePerPbi: number | null;
+  capturedFrom: string;
+  capturedTo: string;
+  prSampleSize: number;
+  leadTimeSampleSize: number;
+}
+
+interface SkillEntry {
+  skillName: string;
+  developer: string;
+  sharedRegistry: boolean;
+}
+
+const BaselineCapturePanel: React.FC<{ onCaptured: () => void }> = ({ onCaptured }) => {
+  const [open, setOpen] = useState(false);
+  const [aiStartDate, setAiStartDate] = useState('2026-04-13');
+  const [lookbackDays, setLookbackDays] = useState(90);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<CaptureResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Skills management
+  const [skills, setSkills] = useState<SkillEntry[]>([]);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsSaved, setSkillsSaved] = useState(false);
+  const [newSkillName, setNewSkillName] = useState('');
+  const [newSkillDev, setNewSkillDev] = useState('');
+  const [newSkillShared, setNewSkillShared] = useState(true);
+
+  const loadSkills = useCallback(async () => {
+    setSkillsLoading(true);
+    try {
+      const res = await fetch('/api/ai-capability-baseline', { credentials: 'include' });
+      const data = await res.json();
+      setSkills(data.skillContributions ?? []);
+      setSkillsLoaded(true);
+    } catch {
+      // ignore
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, []);
+
+  const saveSkills = useCallback(async (updated: SkillEntry[]) => {
+    setSkillsLoading(true);
+    setSkillsSaved(false);
+    try {
+      const current = await fetch('/api/ai-capability-baseline', { credentials: 'include' }).then(r => r.json());
+      await fetch('/api/ai-capability-baseline', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...current, skillContributions: updated }),
+      });
+      setSkills(updated);
+      setSkillsSaved(true);
+      onCaptured();
+    } catch {
+      // ignore
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, [onCaptured]);
+
+  const addSkill = useCallback(() => {
+    if (!newSkillName.trim()) return;
+    const entry: SkillEntry = { skillName: newSkillName.trim(), developer: newSkillDev.trim(), sharedRegistry: newSkillShared };
+    const updated = [...skills, entry];
+    setSkills(updated);
+    saveSkills(updated);
+    setNewSkillName('');
+    setNewSkillDev('');
+    setNewSkillShared(true);
+  }, [newSkillName, newSkillDev, newSkillShared, skills, saveSkills]);
+
+  const removeSkill = useCallback((idx: number) => {
+    const updated = skills.filter((_, i) => i !== idx);
+    saveSkills(updated);
+  }, [skills, saveSkills]);
+
+  const toggleShared = useCallback((idx: number) => {
+    const updated = skills.map((s, i) => i === idx ? { ...s, sharedRegistry: !s.sharedRegistry } : s);
+    saveSkills(updated);
+  }, [skills, saveSkills]);
+
+  const handleToggle = useCallback(() => {
+    setOpen(o => {
+      if (!o && !skillsLoaded) loadSkills();
+      return !o;
+    });
+  }, [skillsLoaded, loadSkills]);
+
+  const capture = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch('/api/ai-capability-baseline/auto-capture', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aiStartDate, lookbackDays }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setResult(data);
+      onCaptured();
+    } catch (e: any) {
+      setError(e.message ?? 'Capture failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [aiStartDate, lookbackDays, onCaptured]);
+
+  return (
+    <div className="ladder-baseline-panel">
+      <button className="ladder-baseline-toggle" onClick={handleToggle}>
+        {open ? '▲' : '▼'} Pre-AI Baseline &amp; Skills Configuration
+      </button>
+
+      {open && (
+        <div className="ladder-baseline-form">
+
+          {/* ── Metrics capture ── */}
+          <div className="ladder-baseline-section-title">Capture Pre-AI Metrics from ADO</div>
+          <p className="ladder-baseline-desc">
+            Queries ADO PR cycle time and lead time for the period <em>before</em> your AI adoption date.
+            The window will be <strong>{lookbackDays} days before {aiStartDate}</strong>.
+          </p>
+          <div className="ladder-baseline-fields">
+            <label className="ladder-baseline-field">
+              <span>AI adoption start date</span>
+              <input
+                type="date"
+                value={aiStartDate}
+                onChange={e => setAiStartDate(e.target.value)}
+                className="ladder-baseline-input"
+              />
+            </label>
+            <label className="ladder-baseline-field">
+              <span>Lookback window (days)</span>
+              <input
+                type="number"
+                min={14}
+                max={365}
+                value={lookbackDays}
+                onChange={e => setLookbackDays(Number(e.target.value))}
+                className="ladder-baseline-input ladder-baseline-input-narrow"
+              />
+            </label>
+            <button className="load-stats-button" onClick={capture} disabled={loading}>
+              {loading ? 'Capturing…' : 'Capture & Save Baseline'}
+            </button>
+          </div>
+
+          {error && <div className="ladder-baseline-error">⚠ {error}</div>}
+
+          {result && (
+            <div className="ladder-baseline-result">
+              <div className="ladder-baseline-result-title">
+                ✓ Baseline captured from {result.capturedFrom} → {result.capturedTo}
+              </div>
+              <div className="ladder-baseline-result-grid">
+                <div className="ladder-baseline-metric">
+                  <span className="ladder-baseline-metric-label">PR Cycle Time</span>
+                  <span className="ladder-baseline-metric-value">
+                    {result.prCycleTimeDays != null ? `${result.prCycleTimeDays}d` : 'No data'}
+                  </span>
+                  <span className="ladder-baseline-metric-sample">({result.prSampleSize} PRs)</span>
+                </div>
+                <div className="ladder-baseline-metric">
+                  <span className="ladder-baseline-metric-label">Lead Time</span>
+                  <span className="ladder-baseline-metric-value">
+                    {result.leadTimeDays != null ? `${result.leadTimeDays}d` : 'No data'}
+                  </span>
+                  <span className="ladder-baseline-metric-sample">({result.leadTimeSampleSize} items)</span>
+                </div>
+                <div className="ladder-baseline-metric">
+                  <span className="ladder-baseline-metric-label">Defect Rate</span>
+                  <span className="ladder-baseline-metric-value">
+                    {result.defectRatePerPbi != null ? `${result.defectRatePerPbi} bugs/PBI` : 'No data'}
+                  </span>
+                </div>
+              </div>
+              <p className="ladder-baseline-saved-note">Saved. Reload the scorecard to see updated comparisons.</p>
+            </div>
+          )}
+
+          {/* ── Skills configuration ── */}
+          <div className="ladder-baseline-divider" />
+          <div className="ladder-baseline-section-title">Team Skills in Use</div>
+          <p className="ladder-baseline-desc">
+            Register Cursor skills your team actively uses. These count toward the contribution criteria
+            when the Cursor analytics API does not surface them automatically.
+            Mark a skill as <strong>Shared</strong> to credit it toward the Bar 3 shared-registry criterion.
+          </p>
+
+          {skillsLoading && <div className="ladder-baseline-desc">Saving…</div>}
+          {skillsSaved && !skillsLoading && <div className="ladder-baseline-saved-note">✓ Skills saved.</div>}
+
+          {skills.length > 0 && (
+            <table className="ladder-dev-table" style={{ marginBottom: 10 }}>
+              <thead>
+                <tr><th>Skill</th><th>Developer</th><th>Shared Registry</th><th></th></tr>
+              </thead>
+              <tbody>
+                {skills.map((s, i) => (
+                  <tr key={i}>
+                    <td>{s.skillName}</td>
+                    <td>{s.developer || '—'}</td>
+                    <td>
+                      <button
+                        className={`ladder-skill-toggle ${s.sharedRegistry ? 'ladder-skill-shared' : 'ladder-skill-local'}`}
+                        onClick={() => toggleShared(i)}
+                      >
+                        {s.sharedRegistry ? 'Shared' : 'Local'}
+                      </button>
+                    </td>
+                    <td>
+                      <button className="ladder-skill-remove" onClick={() => removeSkill(i)}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="ladder-baseline-fields">
+            <label className="ladder-baseline-field">
+              <span>Skill name</span>
+              <input
+                type="text"
+                placeholder="/design-doc-kickoff"
+                value={newSkillName}
+                onChange={e => setNewSkillName(e.target.value)}
+                className="ladder-baseline-input"
+                onKeyDown={e => e.key === 'Enter' && addSkill()}
+              />
+            </label>
+            <label className="ladder-baseline-field">
+              <span>Developer (optional)</span>
+              <input
+                type="text"
+                placeholder="All team"
+                value={newSkillDev}
+                onChange={e => setNewSkillDev(e.target.value)}
+                className="ladder-baseline-input"
+                onKeyDown={e => e.key === 'Enter' && addSkill()}
+              />
+            </label>
+            <label className="ladder-baseline-field">
+              <span>Shared registry</span>
+              <input
+                type="checkbox"
+                checked={newSkillShared}
+                onChange={e => setNewSkillShared(e.target.checked)}
+                className="ladder-skill-checkbox"
+              />
+            </label>
+            <button className="load-stats-button" onClick={addSkill} disabled={!newSkillName.trim() || skillsLoading}>
+              Add Skill
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface AiCapabilityLadderSectionProps {
   fromDate: string;
   toDate: string;
@@ -197,6 +472,10 @@ export const AiCapabilityLadderSection: React.FC<AiCapabilityLadderSectionProps>
     }
   }, [fromDate, toDate, areaPath]);
 
+  const handleBaselineCaptured = useCallback(() => {
+    if (loaded) load();
+  }, [loaded, load]);
+
   return (
     <div className="stats-section ladder-section">
       <h3>
@@ -213,6 +492,8 @@ export const AiCapabilityLadderSection: React.FC<AiCapabilityLadderSectionProps>
 
       {!collapsed && (
         <>
+          <BaselineCapturePanel onCaptured={handleBaselineCaptured} />
+
           <div className="filter-actions">
             <button
               onClick={load}

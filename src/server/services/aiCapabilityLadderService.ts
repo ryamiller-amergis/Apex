@@ -68,10 +68,16 @@ function devsNeedingLift(
   field: keyof Pick<CursorDeveloperSummary, 'dauFraction' | 'totalAccepts' | 'cmdkUsages'>,
   target: number,
   action: string,
+  adoMembersWithEmails?: Array<{ name: string; email: string }>,
 ): DeveloperGap[] {
   const result: DeveloperGap[] = [];
   for (const dev of developers) {
-    if (adoMembers.length > 0 && !adoMembers.some(m => namesMatch(m, dev.name, dev.email))) continue;
+    if (adoMembers.length > 0) {
+      const isTeamMember = adoMembersWithEmails
+        ? adoMembersWithEmails.some(m => emailsMatch(m.email, dev.email) || namesMatch(m.name, dev.name, dev.email))
+        : adoMembers.some(m => namesMatch(m, dev.name, dev.email));
+      if (!isTeamMember) continue;
+    }
     const val = dev[field] as number;
     if (val < target) {
       result.push({
@@ -86,30 +92,80 @@ function devsNeedingLift(
   return result;
 }
 
+/** Email-based matching: preferred when ADO email is available */
+function emailsMatch(adoEmail: string, cursorEmail: string): boolean {
+  if (!adoEmail || !cursorEmail) return false;
+  return adoEmail.toLowerCase().trim() === cursorEmail.toLowerCase().trim();
+}
+
 /** Loose identity matching: ADO display name vs Cursor name or email prefix */
 function namesMatch(adoName: string, cursorName: string, cursorEmail: string): boolean {
   const norm = (s: string) => s.toLowerCase().trim();
-  if (norm(adoName) === norm(cursorName)) return true;
+  const adoNorm = norm(adoName);
+  const cursorNorm = norm(cursorName);
+
+  if (adoNorm === cursorNorm) return true;
+
   // "First Last" vs email "first.last@..."
-  const emailPrefix = cursorEmail.split('@')[0]?.replace(/[._-]/g, ' ') ?? '';
-  return norm(adoName) === norm(emailPrefix);
+  const emailPrefix = norm(cursorEmail.split('@')[0]?.replace(/[._-]/g, ' ') ?? '');
+  if (adoNorm === emailPrefix) return true;
+
+  // Tokenized subset matching — handles middle names and ordering differences
+  const adoTokens = adoNorm.split(/\s+/).filter(Boolean);
+  const cursorTokens = cursorNorm.split(/\s+/).filter(Boolean);
+  const emailTokens = emailPrefix.split(/\s+/).filter(Boolean);
+
+  if (adoTokens.length >= 2 && cursorTokens.length >= 2) {
+    const cursorFirst = cursorTokens[0]!;
+    const cursorLast = cursorTokens[cursorTokens.length - 1]!;
+    const adoFirst = adoTokens[0]!;
+    const adoLast = adoTokens[adoTokens.length - 1]!;
+
+    if (adoFirst === cursorFirst && adoLast === cursorLast) return true;
+    if (adoTokens.includes(cursorFirst) && adoTokens.includes(cursorLast)) return true;
+    if (cursorTokens.includes(adoFirst) && cursorTokens.includes(adoLast)) return true;
+  }
+
+  if (adoTokens.length >= 2 && emailTokens.length >= 2) {
+    const adoFirst = adoTokens[0]!;
+    const adoLast = adoTokens[adoTokens.length - 1]!;
+    if (emailTokens.includes(adoFirst) && emailTokens.includes(adoLast)) return true;
+  }
+
+  return false;
+}
+
+/** Find a Cursor developer matching an ADO member, preferring email match */
+function findCursorDev(
+  developers: CursorDeveloperSummary[],
+  adoName: string,
+  adoEmail?: string,
+): CursorDeveloperSummary | undefined {
+  if (adoEmail) {
+    const byEmail = developers.find(d => emailsMatch(adoEmail, d.email));
+    if (byEmail) return byEmail;
+  }
+  return developers.find(d => namesMatch(adoName, d.name, d.email));
 }
 
 function devsWithoutCursorActivity(
   developers: CursorDeveloperSummary[],
   adoMembers: string[],
+  adoMembersWithEmails?: Array<{ name: string; email: string }>,
 ): DeveloperGap[] {
-  // ADO members who have no matching Cursor entry with activeDays > 0
-  return adoMembers
-    .filter(adoName => {
-      const found = developers.find(d => namesMatch(adoName, d.name, d.email));
+  // Use email-enriched list when available for accurate matching
+  const memberList = adoMembersWithEmails ?? adoMembers.map(name => ({ name, email: '' }));
+
+  return memberList
+    .filter(member => {
+      const found = findCursorDev(developers, member.name, member.email);
       return !found || found.activeDays === 0;
     })
-    .map(adoName => {
-      const found = developers.find(d => namesMatch(adoName, d.name, d.email));
+    .map(member => {
+      const found = findCursorDev(developers, member.name, member.email);
       return {
-        name: adoName,
-        email: found?.email ?? '',
+        name: member.name,
+        email: found?.email ?? member.email,
         currentValue: 0,
         currentDisplay: '0 active days',
         action: 'Ensure Cursor seat is assigned and guide first AI-assisted workflow',
@@ -140,6 +196,7 @@ function scoreBar1(
   kickoffCount: number,
   baseline: AiCapabilityBaseline,
   cursorDataAvailable: boolean,
+  adoMembersWithEmails?: Array<{ name: string; email: string }>,
 ): LadderBar {
   const adoSize = adoMembers.length || cursor.teamSize;
 
@@ -153,8 +210,9 @@ function scoreBar1(
     : (() => {
         const seatCoverage = adoSize > 0 ? cursor.activeSeats / adoSize : null;
         // Developers who are on the ADO roster but whose name/email doesn't appear in Cursor
-        const missingFromCursor = adoMembers.filter(
-          name => !cursor.developers.some(d => namesMatch(name, d.name, d.email))
+        const memberList = adoMembersWithEmails ?? adoMembers.map(name => ({ name, email: '' }));
+        const missingFromCursor = memberList.filter(
+          m => !findCursorDev(cursor.developers, m.name, m.email)
         );
         return {
           id: 'b1-seats',
@@ -172,12 +230,12 @@ function scoreBar1(
             : 'unknown',
           targetDisplay: `${adoSize}/${adoSize} (100%)`,
           gapDisplay: seatCoverage !== null && seatCoverage < 1
-            ? `${missingFromCursor.length} member(s) not matched in Cursor: ${missingFromCursor.slice(0, 3).join(', ')}${missingFromCursor.length > 3 ? '…' : ''}`
+            ? `${missingFromCursor.length} member(s) not matched in Cursor: ${missingFromCursor.slice(0, 3).map(m => m.name).join(', ')}${missingFromCursor.length > 3 ? '…' : ''}`
             : null,
           evidenceSource: 'Cursor Admin API /teams/members matched against ADO team roster',
-          developersNeedingLift: missingFromCursor.map(name => ({
-            name,
-            email: '',
+          developersNeedingLift: missingFromCursor.map(m => ({
+            name: m.name,
+            email: m.email,
             currentValue: 0,
             currentDisplay: 'Not matched in Cursor',
             action: 'Assign Cursor seat, or add email-to-name override if display name differs',
@@ -187,6 +245,8 @@ function scoreBar1(
 
   // 1b. >=50% DAU sustained 2+ weeks
   const dauMet = cursor.weeksAbove50pct >= B1_DAU_WEEKS;
+  // Also treat as met if recent 14-day avg is above threshold even if full-week count isn't yet
+  const dauMetViaRecent = cursor.recentDauPct >= B1_DAU_FRACTION && cursor.daysAbove50pct >= 10;
   const dauCrit: LadderCriterion = !cursorDataAvailable
     ? unknownCursorCriterion(
         'b1-dau', '>=50% Cursor DAU sustained 2+ weeks', 'adoption',
@@ -197,18 +257,19 @@ function scoreBar1(
         id: 'b1-dau',
         label: '>=50% Cursor DAU sustained 2+ weeks',
         category: 'adoption',
-        status: dauMet ? 'met' : (cursor.weeksAbove50pct >= 1 ? 'at-risk' : 'not-met'),
+        status: (dauMet || dauMetViaRecent) ? 'met' : (cursor.weeksAbove50pct >= 1 || cursor.daysAbove50pct >= 5 ? 'at-risk' : 'not-met'),
         evidenceQuality: 'definitive',
         threshold: '>=50% of team active in Cursor each day, for at least 2 consecutive weeks',
         targetValue: B1_DAU_WEEKS,
         currentValue: cursor.weeksAbove50pct,
-        currentDisplay: `${cursor.weeksAbove50pct} week(s) at >=50% DAU`,
+        currentDisplay: `${cursor.weeksAbove50pct} complete week(s) at >=50% DAU · ${cursor.daysAbove50pct} day(s) total · recent avg ${pct(cursor.recentDauPct)}`,
         targetDisplay: `${B1_DAU_WEEKS}+ consecutive weeks`,
-        gapDisplay: !dauMet ? `Need ${B1_DAU_WEEKS - cursor.weeksAbove50pct} more week(s)` : null,
+        gapDisplay: !(dauMet || dauMetViaRecent) ? `${cursor.weeksAbove50pct} of ${B1_DAU_WEEKS} weeks met (recent 14-day avg: ${pct(cursor.recentDauPct)})` : null,
         evidenceSource: 'Cursor Analytics API /analytics/team/dau',
         developersNeedingLift: devsNeedingLift(
           cursor.developers, adoMembers, 'dauFraction', B1_DAU_FRACTION,
           `Increase daily Cursor usage — target at least ${pct(B1_DAU_FRACTION)} of working days`,
+          adoMembersWithEmails,
         ),
       };
 
@@ -236,6 +297,15 @@ function scoreBar1(
     baseline.leadTimeDays !== null ||
     baseline.defectRatePerPbi !== null
   );
+  const baselineValueParts: string[] = [];
+  if (baseline.prCycleTimeDays !== null) baselineValueParts.push(`PR cycle: ${days(baseline.prCycleTimeDays)}`);
+  if (baseline.leadTimeDays !== null) baselineValueParts.push(`Lead time: ${days(baseline.leadTimeDays)}`);
+  if (baseline.defectRatePerPbi !== null) baselineValueParts.push(`Defect rate: ${baseline.defectRatePerPbi.toFixed(2)} bugs/PBI`);
+  const missingBaseline: string[] = [];
+  if (baseline.prCycleTimeDays === null) missingBaseline.push('PR cycle time');
+  if (baseline.leadTimeDays === null) missingBaseline.push('lead time');
+  if (baseline.defectRatePerPbi === null) missingBaseline.push('defect rate');
+
   const baselineCrit: LadderCriterion = {
     id: 'b1-baseline',
     label: 'Pre-AI baseline captured',
@@ -245,10 +315,16 @@ function scoreBar1(
     threshold: 'PR cycle time, lead time, and defect rate baseline values are recorded',
     targetValue: 1,
     currentValue: hasBaseline ? 1 : 0,
-    currentDisplay: hasBaseline ? `Baseline from ${baseline.capturedAt}` : 'Not set',
+    currentDisplay: hasBaseline
+      ? `Captured ${baseline.capturedAt} · ${baselineValueParts.join(' · ')}`
+      : 'Not captured — use "Capture Pre-AI Baseline from ADO" above',
     targetDisplay: 'Baseline recorded',
-    gapDisplay: !hasBaseline ? 'Edit data/ai-capability-baseline.json with pre-AI measurements' : null,
-    evidenceSource: 'data/ai-capability-baseline.json (configured)',
+    gapDisplay: !hasBaseline
+      ? 'Click "Capture Pre-AI Baseline from ADO" at the top of this section to auto-populate from ADO history'
+      : missingBaseline.length > 0
+        ? `Partially captured — still missing: ${missingBaseline.join(', ')}`
+        : null,
+    evidenceSource: 'data/ai-capability-baseline.json — auto-populated via ADO PR/lead-time history',
     developersNeedingLift: [],
   };
 
@@ -267,6 +343,7 @@ function scoreBar2(
   avgDefectRate: number | null,
   baseline: AiCapabilityBaseline,
   cursorDataAvailable: boolean,
+  adoMembersWithEmails?: Array<{ name: string; email: string }>,
 ): LadderBar {
   // 2a. >=80% DAU sustained 4+ weeks
   const dau4wMet = cursor.weeksAbove80pct >= B2_DAU_WEEKS;
@@ -285,13 +362,14 @@ function scoreBar2(
         threshold: '>=80% of team active in Cursor each day, for at least 4 consecutive weeks',
         targetValue: B2_DAU_WEEKS,
         currentValue: cursor.weeksAbove80pct,
-        currentDisplay: `${cursor.weeksAbove80pct} week(s) at >=80% DAU`,
+        currentDisplay: `${cursor.weeksAbove80pct} complete week(s) at >=80% DAU · ${cursor.daysAbove80pct} day(s) total · recent avg ${pct(cursor.recentDauPct)}`,
         targetDisplay: `${B2_DAU_WEEKS}+ consecutive weeks`,
-        gapDisplay: !dau4wMet ? `Need ${B2_DAU_WEEKS - cursor.weeksAbove80pct} more week(s)` : null,
+        gapDisplay: !dau4wMet ? `${cursor.weeksAbove80pct} of ${B2_DAU_WEEKS} weeks met (recent 14-day avg: ${pct(cursor.recentDauPct)})` : null,
         evidenceSource: 'Cursor Analytics API /analytics/team/dau',
         developersNeedingLift: devsNeedingLift(
           cursor.developers, adoMembers, 'dauFraction', B2_DAU_FRACTION,
           `Increase daily Cursor usage — target at least ${pct(B2_DAU_FRACTION)} of working days`,
+          adoMembersWithEmails,
         ),
       };
 
@@ -304,7 +382,7 @@ function scoreBar2(
     category: 'practice',
     status: orchFraction !== null ? statusFromValue(orchFraction, B2_ORCHESTRATOR_PCT) : 'unknown',
     evidenceQuality: 'definitive',
-    threshold: `>=${pct(B2_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the last 4 weeks have the ai-code tag`,
+    threshold: `>=${pct(B2_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the selected date window have the ai-code tag`,
     targetValue: B2_ORCHESTRATOR_PCT,
     currentValue: orchFraction,
     currentDisplay: orchFraction !== null
@@ -314,8 +392,21 @@ function scoreBar2(
     gapDisplay: orchFraction !== null && !orchMet
       ? `${Math.ceil(aiCodeAdoption.totalAssignedWorkItems * B2_ORCHESTRATOR_PCT) - aiCodeAdoption.aiCodeWorkItems} more work item(s) need ai-code`
       : null,
-    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the last 4 weeks; developer attributed to assignee at first In Progress revision.',
-    developersNeedingLift: aiCodeWorkItemGaps(aiCodeAdoption, B2_ORCHESTRATOR_PCT),
+    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the selected date window; developer attributed to assignee at first In Progress revision.',
+    developersNeedingLift: orchFraction !== null && !orchMet
+      ? aiCodeAdoption.developerAdoption
+          .filter(d => d.adoptionRate < B2_ORCHESTRATOR_PCT)
+          .map(d => {
+            const cursorDev = cursor.developers.find(cd => cd.name === d.developer);
+            return {
+              name: d.developer,
+              email: cursorDev?.email ?? '',
+              currentValue: d.adoptionRate,
+              currentDisplay: `${d.aiCodeWorkItems}/${d.totalAssignedWorkItems} (${pct(d.adoptionRate)}) ai-code tagged`,
+              action: 'Tag work items with ai-code when AI-assisted workflows are used',
+            };
+          })
+      : [],
   };
 
   // 2c. AI standard for review/test/doc gen — use skills + agent edits + MCP as signal
@@ -415,8 +506,14 @@ function scoreBar2(
   };
 
   // 2g. >=1 team-specific skill in active use
-  const skillsMet = cursor.skillsInUse.length >= B2_SKILLS_IN_USE;
-  const skillsCrit: LadderCriterion = !cursorDataAvailable
+  // Merge Cursor API skills with any skills configured in baseline.skillContributions
+  const configuredSkillNames = baseline.skillContributions.map(s => s.skillName).filter(Boolean);
+  const combinedSkills = Array.from(new Set([...cursor.skillsInUse, ...configuredSkillNames]));
+  const skillsFromApi = cursor.skillsInUse.length > 0;
+  const skillsFromConfig = configuredSkillNames.length > 0;
+  const skillsMet = combinedSkills.length >= B2_SKILLS_IN_USE;
+  const skillsEvidenceQuality = skillsFromApi ? 'definitive' : skillsFromConfig ? 'configured' : 'definitive';
+  const skillsCrit: LadderCriterion = !cursorDataAvailable && !skillsFromConfig
     ? unknownCursorCriterion(
         'b2-skills', `>=${B2_SKILLS_IN_USE} team-specific skill in active use`, 'contribution',
         `At least ${B2_SKILLS_IN_USE} Cursor skill has been used by the team`,
@@ -426,17 +523,19 @@ function scoreBar2(
         id: 'b2-skills',
         label: `>=${B2_SKILLS_IN_USE} team-specific skill in active use`,
         category: 'contribution',
-        status: skillsMet ? 'met' : (cursor.totalSkillUsages > 0 ? 'at-risk' : 'not-met'),
-        evidenceQuality: 'definitive',
+        status: skillsMet ? 'met' : (combinedSkills.length > 0 || cursor.totalSkillUsages > 0 ? 'at-risk' : 'not-met'),
+        evidenceQuality: skillsEvidenceQuality,
         threshold: `At least ${B2_SKILLS_IN_USE} Cursor skill has been used by the team`,
         targetValue: B2_SKILLS_IN_USE,
-        currentValue: cursor.skillsInUse.length,
-        currentDisplay: cursor.skillsInUse.length > 0
-          ? `${cursor.skillsInUse.length} skill(s): ${cursor.skillsInUse.slice(0, 3).join(', ')}${cursor.skillsInUse.length > 3 ? '…' : ''}`
-          : 'No skills used',
+        currentValue: combinedSkills.length,
+        currentDisplay: combinedSkills.length > 0
+          ? `${combinedSkills.length} skill(s): ${combinedSkills.slice(0, 5).join(', ')}${combinedSkills.length > 5 ? '…' : ''}`
+          : 'No skills recorded — add skills to baseline config',
         targetDisplay: `${B2_SKILLS_IN_USE}+ active skill(s)`,
-        gapDisplay: !skillsMet ? `${B2_SKILLS_IN_USE - cursor.skillsInUse.length} more skill(s) needed` : null,
-        evidenceSource: 'Cursor Analytics API /analytics/team/skills',
+        gapDisplay: !skillsMet ? `${B2_SKILLS_IN_USE - combinedSkills.length} more skill(s) needed — add to baseline skillContributions if not appearing via API` : null,
+        evidenceSource: skillsFromApi
+          ? 'Cursor Analytics API /analytics/team/skills'
+          : 'data/ai-capability-baseline.json skillContributions (Cursor analytics API returned no data)',
         developersNeedingLift: [],
       };
 
@@ -456,6 +555,7 @@ function scoreBar3(
   deployFrequencyPerMonth: number | null,
   baseline: AiCapabilityBaseline,
   cursorDataAvailable: boolean,
+  adoMembersWithEmails?: Array<{ name: string; email: string }>,
 ): LadderBar {
   // 3a. >=80% DAU steady state
   const dau3Crit: LadderCriterion = !cursorDataAvailable
@@ -473,13 +573,14 @@ function scoreBar3(
         threshold: '>=80% DAU maintained over the full selected window (steady state, not just 4 weeks)',
         targetValue: 8,
         currentValue: cursor.weeksAbove80pct,
-        currentDisplay: `${cursor.weeksAbove80pct} consecutive week(s) at >=80% DAU`,
+        currentDisplay: `${cursor.weeksAbove80pct} complete week(s) at >=80% DAU · ${cursor.daysAbove80pct} day(s) total · recent avg ${pct(cursor.recentDauPct)}`,
         targetDisplay: '8+ consecutive weeks (steady state)',
-        gapDisplay: cursor.weeksAbove80pct < 8 ? `${8 - cursor.weeksAbove80pct} more week(s) needed` : null,
+        gapDisplay: cursor.weeksAbove80pct < 8 ? `${cursor.weeksAbove80pct} of 8 weeks met (recent 14-day avg: ${pct(cursor.recentDauPct)})` : null,
         evidenceSource: 'Cursor Analytics API /analytics/team/dau',
         developersNeedingLift: devsNeedingLift(
           cursor.developers, adoMembers, 'dauFraction', B3_DAU_FRACTION,
           `Sustain daily Cursor usage — all developers should be using AI as default workflow`,
+          adoMembersWithEmails,
         ),
       };
 
@@ -491,7 +592,7 @@ function scoreBar3(
     category: 'practice',
     status: orchFraction !== null ? statusFromValue(orchFraction, B3_ORCHESTRATOR_PCT) : 'unknown',
     evidenceQuality: 'definitive',
-    threshold: `>=${pct(B3_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the last 4 weeks have the ai-code tag`,
+    threshold: `>=${pct(B3_ORCHESTRATOR_PCT)} of ADO work items that went In Progress in the selected date window have the ai-code tag`,
     targetValue: B3_ORCHESTRATOR_PCT,
     currentValue: orchFraction,
     currentDisplay: orchFraction !== null
@@ -501,8 +602,8 @@ function scoreBar3(
     gapDisplay: orchFraction !== null && orchFraction < B3_ORCHESTRATOR_PCT
       ? `${Math.ceil(aiCodeAdoption.totalAssignedWorkItems * B3_ORCHESTRATOR_PCT) - aiCodeAdoption.aiCodeWorkItems} more work item(s) need ai-code`
       : null,
-    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the last 4 weeks; developer attributed to assignee at first In Progress revision.',
-    developersNeedingLift: aiCodeWorkItemGaps(aiCodeAdoption, B3_ORCHESTRATOR_PCT),
+    evidenceSource: 'ADO PBI/TBI/Bug whose ActivatedDate falls in the selected date window; developer attributed to assignee at first In Progress revision.',
+    developersNeedingLift: [],
   };
 
   // 3c. PR cycle time -30%
@@ -594,20 +695,30 @@ function scoreBar3(
   };
 
   // 3g. >=2 skills contributed to shared registry
-  const sharedSkillsContributed = baseline.skillContributions.filter(s => s.sharedRegistry).length;
+  const allContribSkills = baseline.skillContributions;
+  const sharedSkills = allContribSkills.filter(s => s.sharedRegistry);
+  const sharedSkillsContributed = sharedSkills.length;
   const skillsContribMet = sharedSkillsContributed >= B3_SKILLS_CONTRIBUTED;
+  const allSkillNames = allContribSkills.map(s => s.skillName).filter(Boolean);
+  const sharedSkillNames = sharedSkills.map(s => s.skillName).filter(Boolean);
   const skillsContrib3Crit: LadderCriterion = {
     id: 'b3-skills',
     label: `>=${B3_SKILLS_CONTRIBUTED} skills contributed to shared registry`,
     category: 'contribution',
-    status: skillsContribMet ? 'met' : (sharedSkillsContributed >= 1 ? 'at-risk' : 'not-met'),
+    status: skillsContribMet ? 'met' : (sharedSkillsContributed >= 1 ? 'at-risk' : allSkillNames.length > 0 ? 'at-risk' : 'not-met'),
     evidenceQuality: 'configured',
     threshold: `At least ${B3_SKILLS_CONTRIBUTED} skills have been added to the shared skills registry`,
     targetValue: B3_SKILLS_CONTRIBUTED,
     currentValue: sharedSkillsContributed,
-    currentDisplay: `${sharedSkillsContributed} shared skill(s) contributed`,
-    targetDisplay: `${B3_SKILLS_CONTRIBUTED}+`,
-    gapDisplay: !skillsContribMet ? `${B3_SKILLS_CONTRIBUTED - sharedSkillsContributed} more shared skill contribution(s) needed` : null,
+    currentDisplay: allSkillNames.length > 0
+      ? `${sharedSkillsContributed} shared · ${allSkillNames.length} total: ${allSkillNames.slice(0, 5).join(', ')}${allSkillNames.length > 5 ? '…' : ''}`
+      : 'No skills configured — add to baseline skillContributions',
+    targetDisplay: `${B3_SKILLS_CONTRIBUTED}+ shared`,
+    gapDisplay: !skillsContribMet
+      ? sharedSkillNames.length > 0
+        ? `${sharedSkillsContributed} of ${B3_SKILLS_CONTRIBUTED} shared: ${sharedSkillNames.join(', ')} — mark remaining skills as sharedRegistry: true`
+        : `${allSkillNames.length > 0 ? `${allSkillNames.length} skill(s) configured but none marked sharedRegistry` : 'No skills configured'} — update baseline skillContributions`
+      : null,
     evidenceSource: 'data/ai-capability-baseline.json skillContributions (configured)',
     developersNeedingLift: [],
   };
@@ -645,6 +756,8 @@ export interface LadderInputs {
   /** Error message from Cursor API if unavailable */
   cursorApiError: string | null;
   adoMembers: string[];
+  /** ADO members with emails for direct email-based matching against Cursor */
+  adoMembersWithEmails?: Array<{ name: string; email: string }>;
   kickoffCount: number;
   totalEligibleFeatures: number;
   aiCodeWorkItemAdoption: AiCodeWorkItemAdoptionSummary;
@@ -684,20 +797,22 @@ function unknownCursorCriterion(
 export function buildLadderResult(inputs: LadderInputs): AiCapabilityLadderResult {
   const {
     cursorSummary, cursorDataAvailable, cursorApiError,
-    adoMembers, kickoffCount, totalEligibleFeatures, aiCodeWorkItemAdoption,
+    adoMembers, adoMembersWithEmails, kickoffCount, totalEligibleFeatures, aiCodeWorkItemAdoption,
     avgPrCycleTimeDays, avgLeadTimeDays, avgDefectRatePerPbi,
     deployFrequencyPerMonth, baseline, fromDate, toDate,
   } = inputs;
 
-  const bar1 = scoreBar1(cursorSummary, adoMembers, kickoffCount, baseline, cursorDataAvailable);
+  const bar1 = scoreBar1(cursorSummary, adoMembers, kickoffCount, baseline, cursorDataAvailable, adoMembersWithEmails);
   const bar2 = scoreBar2(
     cursorSummary, adoMembers, kickoffCount, totalEligibleFeatures, aiCodeWorkItemAdoption,
     avgPrCycleTimeDays, avgLeadTimeDays, avgDefectRatePerPbi, baseline, cursorDataAvailable,
+    adoMembersWithEmails,
   );
   const bar3 = scoreBar3(
     cursorSummary, adoMembers, kickoffCount, totalEligibleFeatures, aiCodeWorkItemAdoption,
     avgPrCycleTimeDays, avgLeadTimeDays, avgDefectRatePerPbi,
     deployFrequencyPerMonth, baseline, cursorDataAvailable,
+    adoMembersWithEmails,
   );
 
   const allCriteria = [...bar1.criteria, ...bar2.criteria, ...bar3.criteria];
@@ -717,7 +832,7 @@ export function buildLadderResult(inputs: LadderInputs): AiCapabilityLadderResul
     cursorSeats: cursorDataAvailable ? cursorSummary.activeSeats : 0,
     bars: [bar1, bar2, bar3],
     developersWithoutCursorActivity: cursorDataAvailable
-      ? devsWithoutCursorActivity(cursorSummary.developers, adoMembers)
+      ? devsWithoutCursorActivity(cursorSummary.developers, adoMembers, adoMembersWithEmails)
       : [],
     topGaps,
     cursorApiError,

@@ -1,16 +1,20 @@
 /**
  * Reads and writes the AI Capability Baseline config.
- * Stored as a simple JSON file in data/ai-capability-baseline.json.
+ * Stored as a simple JSON file in <dataRoot>/ai-capability-baseline.json.
+ *
+ * Uses the shared resolveDataRoot() utility so it automatically resolves to
+ * the correct writable location in all environments:
+ *   - Local dev       → <cwd>/data/ai-capability-baseline.json
+ *   - Azure App Svc   → /home/data/ai-pilot/ai-capability-baseline.json
+ *   - Explicit override → AI_PILOT_DATA_DIR/ai-capability-baseline.json
  */
 import fs from 'fs';
 import path from 'path';
 import type { AiCapabilityBaseline } from '../types/aiCapabilityLadder';
+import { resolveDataRoot } from '../utils/dataDir';
 
 function resolveBaselineFile(): string {
-  if (process.env.AI_PILOT_DATA_DIR) {
-    return path.join(process.env.AI_PILOT_DATA_DIR, 'ai-capability-baseline.json');
-  }
-  return path.join(process.cwd(), 'data', 'ai-capability-baseline.json');
+  return path.join(resolveDataRoot(), 'ai-capability-baseline.json');
 }
 
 const EMPTY_BASELINE: AiCapabilityBaseline = {

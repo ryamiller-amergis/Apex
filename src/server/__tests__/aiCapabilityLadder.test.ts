@@ -59,6 +59,7 @@ function makeCursorSummary(overrides: Partial<CursorTeamSummary> = {}): CursorTe
     dauSeries: [],
     daysAbove50pct: 12, daysAbove80pct: 3,
     weeksAbove50pct: 2, weeksAbove80pct: 0,
+    recentDauPct: 0.6, totalDauDays: 14,
     tabAcceptRate: 0.45, agentEditAcceptRate: 0.3,
     skillsInUse: ['review-helper'], totalSkillUsages: 55,
     mcpToolsInUse: ['get_issue'], planModeUsages: 20,
@@ -118,7 +119,7 @@ describe('buildLadderResult - Bar 1', () => {
   });
 
   it('marks DAU criterion not-met when weeksAbove50pct < 2', () => {
-    const result = buildLadderResult({ ...BASE_INPUTS, cursorSummary: makeCursorSummary({ weeksAbove50pct: 0 }), adoMembers, baseline: makeBaseline() });
+    const result = buildLadderResult({ ...BASE_INPUTS, cursorSummary: makeCursorSummary({ weeksAbove50pct: 0, daysAbove50pct: 0, recentDauPct: 0 }), adoMembers, baseline: makeBaseline() });
     expect(result.bars.find(b => b.bar === 'bar1')!.criteria.find(c => c.id === 'b1-dau')!.status).toBe('not-met');
   });
 

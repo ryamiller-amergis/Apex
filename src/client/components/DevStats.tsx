@@ -1378,6 +1378,84 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
       }));
   }, [filteredPrTimeStats]);
 
+  /** Dynamic plain-language synopsis of the PR cycle time trend for the info panel. */
+  const prCycleTimeSynopsis = useMemo(() => {
+    const data = prCycleTimeChartData;
+    if (data.length < 2) return null;
+
+    const n = data.length;
+
+    const avgField = (
+      slice: typeof data,
+      field: 'avgCycleTimeDays' | 'completedAvgCycleTimeDays' | 'completedPrCount',
+    ): number | null => {
+      const vals = slice.map(d => d[field]).filter((v): v is number => v !== null);
+      if (vals.length === 0) return null;
+      return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+    };
+
+    const recentSlice = data.slice(Math.max(0, n - 4));
+    const priorSlice = data.slice(Math.max(0, n - 8), Math.max(0, n - 4));
+
+    const recentOpened = avgField(recentSlice, 'avgCycleTimeDays');
+    const priorOpened = avgField(priorSlice, 'avgCycleTimeDays');
+    const recentCompleted = avgField(recentSlice, 'completedAvgCycleTimeDays');
+    const priorCompleted = avgField(priorSlice, 'completedAvgCycleTimeDays');
+    const recentThroughput = avgField(recentSlice, 'completedPrCount');
+    const priorThroughput = avgField(priorSlice, 'completedPrCount');
+
+    if (recentOpened === null && recentCompleted === null) return null;
+
+    const dir = (recent: number | null, prior: number | null): 'up' | 'down' | 'flat' | 'unknown' => {
+      if (recent === null || prior === null || prior === 0) return 'unknown';
+      const pct = (recent - prior) / prior;
+      if (pct > 0.05) return 'up';
+      if (pct < -0.05) return 'down';
+      return 'flat';
+    };
+
+    const openedDir = dir(recentOpened, priorOpened);
+    const completedDir = dir(recentCompleted, priorCompleted);
+    const throughputDir = dir(recentThroughput, priorThroughput);
+
+    let headline = '';
+    let detail = '';
+
+    if (openedDir === 'down' && completedDir === 'up') {
+      headline = 'New PRs are moving faster, but older slow PRs are still landing.';
+      detail = `Opened PR cycle time has improved recently (${recentOpened?.toFixed(1)} days avg vs ${priorOpened?.toFixed(1)} days prior), indicating current work is moving faster. Completed PR cycle time remains elevated (${recentCompleted?.toFixed(1)} days), likely because slow PRs from earlier weeks are now merging. Expect completed avg to fall as that backlog clears.`;
+    } else if (openedDir === 'down' && completedDir === 'down') {
+      headline = 'PR cycle time is improving across the board — a positive signal.';
+      detail = `Both lines are trending down. Opened PRs avg ${recentOpened?.toFixed(1)} days (was ${priorOpened?.toFixed(1)}); Completed PRs avg ${recentCompleted?.toFixed(1)} days (was ${priorCompleted?.toFixed(1)}). PRs are being reviewed and merged faster than the prior period.`;
+    } else if (openedDir === 'up' && completedDir === 'up') {
+      headline = 'PR cycle time is increasing — PRs are taking longer to get through review.';
+      detail = `Opened PRs avg ${recentOpened?.toFixed(1)} days (was ${priorOpened?.toFixed(1)}); Completed PRs avg ${recentCompleted?.toFixed(1)} days (was ${priorCompleted?.toFixed(1)}). This may reflect larger PR sizes, reviewer bottlenecks, or process slowdowns worth investigating.`;
+    } else if (openedDir === 'up' && completedDir === 'down') {
+      headline = 'Old backlog is clearing, but newer PRs are taking longer to move.';
+      detail = `Completed PR cycle time is improving (${recentCompleted?.toFixed(1)} days, down from ${priorCompleted?.toFixed(1)}), but opened PR cycle time is rising (${recentOpened?.toFixed(1)} days, up from ${priorOpened?.toFixed(1)}). Monitor whether recently opened PRs close quickly or continue to accumulate.`;
+    } else if (openedDir === 'flat' && completedDir === 'flat') {
+      headline = 'PR cycle time is holding steady — no significant change recently.';
+      detail = `Opened PRs avg ${recentOpened?.toFixed(1)} days; Completed PRs avg ${recentCompleted?.toFixed(1)} days. Both lines are stable compared to the prior 4 weeks.`;
+    } else {
+      const parts: string[] = [];
+      if (recentOpened !== null) parts.push(`Opened PRs avg ${recentOpened.toFixed(1)} days`);
+      if (recentCompleted !== null) parts.push(`Completed PRs avg ${recentCompleted.toFixed(1)} days`);
+      if (parts.length === 0) return null;
+      headline = 'PR cycle time snapshot for the selected period.';
+      detail = parts.join('; ') + '.';
+    }
+
+    if (throughputDir === 'up' && recentThroughput !== null) {
+      detail += ` Throughput is up — averaging ${recentThroughput.toFixed(1)} PRs merged per week recently.`;
+    } else if (throughputDir === 'down' && recentThroughput !== null) {
+      detail += ` Throughput has slowed — averaging ${recentThroughput.toFixed(1)} PRs merged per week recently.`;
+    } else if (recentThroughput !== null) {
+      detail += ` Throughput is steady at ~${recentThroughput.toFixed(1)} PRs merged per week.`;
+    }
+
+    return { headline, detail };
+  }, [prCycleTimeChartData]);
+
   /** Weekly work item counts split by whether the current item has the ai-code tag. */
   const aiCodeTagChartData = useMemo(() => {
     const selectedTeamDef = teams.find(t => t.id === selectedTeam);
@@ -1788,12 +1866,32 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
               <br />
               Weekly average time PRs spent open (from creation to merge) for the developers and time frame selected. As the team uses AI more, you should see this trend decrease.
             </p>
+            {prCycleTimeSynopsis && (
+              <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 14px', margin: '8px 0' }}>
+                <p style={{ margin: '0 0 6px 0' }}>
+                  <strong>Current snapshot:</strong> {prCycleTimeSynopsis.headline}
+                </p>
+                <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.875em' }}>
+                  {prCycleTimeSynopsis.detail}
+                </p>
+              </div>
+            )}
             <p>
               <strong>How to interpret:</strong>
               <br />
-              Each point is a calendar week (Monday–Sunday). <strong>All PRs avg (days)</strong> is grouped by the week the PR opened and includes active PRs measured to today.{' '}
-              <strong>Completed PRs avg (days)</strong> and <strong>Completed PRs merged</strong> are grouped by the week the PR closed, so the dashed line shows actual weekly throughput.
+              Each point represents a calendar week (Monday–Sunday). The chart tracks three signals:
             </p>
+            <ul>
+              <li>
+                <strong>Opened PRs avg (days):</strong> Grouped by the week each PR was <em>created</em>. Includes both active (still open) and completed PRs — active PRs are measured from creation to today, so this line can rise when PRs sit unmerged. Use it to spot trends in how long newly-opened work is taking.
+              </li>
+              <li>
+                <strong>Completed PRs avg (days):</strong> Grouped by the week each PR was <em>merged or closed</em>. Only includes finished work, so this is the most accurate measure of actual cycle time. Use it to evaluate true delivery speed over time.
+              </li>
+              <li>
+                <strong>Completed PRs merged (count):</strong> The number of PRs that closed in each week, shown on the right axis. Use this alongside the averages to understand whether a spike in cycle time reflects a few slow PRs or a broad slowdown.
+              </li>
+            </ul>
             <p>
               <strong>Note:</strong> This chart uses the same underlying PR Time data as the Pull Request Time section. Use the load button here to fetch it directly.
             </p>
@@ -1888,7 +1986,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                   yAxisId="days"
                   type="monotone"
                   dataKey="avgCycleTimeDays"
-                  name="All PRs avg (days)"
+                  name="Opened PRs avg (days)"
                   stroke="var(--accent-color)"
                   strokeWidth={2}
                   dot={{ r: 3 }}
