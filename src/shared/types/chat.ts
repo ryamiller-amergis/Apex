@@ -17,6 +17,8 @@ export interface ChatAttachment {
   type: string;
   size: number;
   content: string;
+  /** 'base64' for binary files (images); absent/undefined for plain text */
+  encoding?: 'base64';
 }
 
 export interface ChatAttachmentMeta {

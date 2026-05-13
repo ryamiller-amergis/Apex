@@ -179,7 +179,11 @@ function writeMessageAttachments(
   return attachments.map((attachment, index) => {
     const fileName = `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentName(attachment.name, index)}`;
     const absolutePath = path.join(attachmentsDir, fileName);
-    fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
+    if (attachment.encoding === 'base64') {
+      fs.writeFileSync(absolutePath, Buffer.from(attachment.content, 'base64'));
+    } else {
+      fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
+    }
 
     return {
       id: attachment.id,
@@ -195,9 +199,11 @@ function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMet
   if (attachments.length === 0) return text;
 
   const messageText = text.trim() || 'Please use the uploaded files as additional context.';
-  const attachmentLines = attachments.map((attachment) => (
-    `- ${attachment.name} (${attachment.type || 'text/plain'}, ${attachment.size} bytes): \`${attachment.path}\``
-  ));
+  const attachmentLines = attachments.map((attachment) => {
+    const isImage = attachment.type.startsWith('image/');
+    const hint = isImage ? ' [IMAGE -- use the Read tool to view this file]' : '';
+    return `- ${attachment.name} (${attachment.type || 'text/plain'}, ${attachment.size} bytes): \`${attachment.path}\`${hint}`;
+  });
 
   return [
     messageText,

@@ -55,13 +55,32 @@ export function useChatAttachments() {
         continue;
       }
 
-      const content = await file.text();
+      const isImage = file.type.startsWith('image/');
+      let content: string;
+      let encoding: 'base64' | undefined;
+
+      if (isImage) {
+        content = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result as string;
+            resolve(dataUrl.split(',')[1]);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        encoding = 'base64';
+      } else {
+        content = await file.text();
+      }
+
       nextAttachments.push({
         id: makeAttachmentId(),
         name: file.name,
         type: file.type || 'text/plain',
         size: file.size,
         content,
+        encoding,
       });
       nextTotalBytes += file.size;
     }

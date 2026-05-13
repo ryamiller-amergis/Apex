@@ -19,3 +19,39 @@ ado_project = "YourProject"
 #   Team        = "Platform"
 #   CostCenter  = "Engineering"
 # }
+
+# Azure AD Auth
+azure_tenant_id     = "your-tenant-id"
+azure_client_id     = "your-client-id"
+azure_client_secret = "your-client-secret"
+azure_redirect_url  = "https://your-app.azurewebsites.net/auth/callback"
+session_secret      = "your-session-secret"
+
+# Azure Cost Management
+azure_cost_tenant_id     = "your-tenant-id"
+azure_cost_client_id     = "your-cost-client-id"
+azure_cost_client_secret = "your-cost-client-secret"
+
+# AWS Bedrock
+aws_access_key_id     = "your-aws-key-id"
+aws_secret_access_key = "your-aws-secret"
+aws_region            = "us-east-2"
+bedrock_model_id      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Cursor
+cursor_api_key      = "crsr_..."
+cursor_team_api_key = "crsr_..."
+
+# Application
+ado_area_path        = "YourProject"
+ado_allowed_projects = "YourProject,AnotherProject"
+vite_teams           = "YourProject|YourProject"
+poll_interval        = "30"
+port                 = "8080"
+
+# PostgreSQL Database Configuration
+postgresql_server_name    = "psql-hub-dev"
+postgresql_admin_username = "pgadmin"
+postgresql_admin_password = "ChangeMe123!"  # Must include upper, lower, number, min 8 chars
+postgresql_database_name  = "aipilot"
+postgresql_sku_name       = "B_Standard_B1ms"

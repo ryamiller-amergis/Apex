@@ -9,6 +9,7 @@ import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHit
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
 import { DeploymentTrackingService } from '../services/deploymentTracking';
 import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionService';
+import pool from '../db';
 
 const router = express.Router();
 
@@ -160,6 +161,17 @@ router.get('/health', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Health check error:', error);
     res.status(503).json({ healthy: false, error: 'Service unavailable' });
+  }
+});
+
+// GET /api/health/db - Database connectivity check
+router.get('/health/db', async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query<{ now: string }>('SELECT NOW() AS now');
+    res.json({ healthy: true, timestamp: result.rows[0].now });
+  } catch (error: any) {
+    console.error('[db] Health check failed:', error);
+    res.status(503).json({ healthy: false, error: 'Database unavailable' });
   }
 });
 

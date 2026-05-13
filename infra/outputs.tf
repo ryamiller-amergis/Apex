@@ -29,3 +29,19 @@ output "application_insights_connection_string" {
   value       = azurerm_application_insights.main.connection_string
   sensitive   = true
 }
+
+output "postgresql_server_fqdn" {
+  description = "Fully qualified domain name of the PostgreSQL Flexible Server"
+  value       = azurerm_postgresql_flexible_server.main.fqdn
+}
+
+output "postgresql_database_name" {
+  description = "Name of the PostgreSQL database"
+  value       = azurerm_postgresql_flexible_server_database.main.name
+}
+
+output "postgresql_connection_string" {
+  description = "Full PostgreSQL connection URI for the application"
+  value       = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
+  sensitive   = true
+}
