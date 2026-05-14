@@ -4,6 +4,7 @@ import {
   listThreadsByUser,
   loadFullThread,
   deleteThread,
+  toggleFlag,
 } from '../services/chatThreadRepository';
 import type { ChatThread, ChatMessage } from '../../shared/types/chat';
 
@@ -13,6 +14,7 @@ jest.mock('../db/drizzle', () => ({
   db: {
     select: jest.fn(),
     insert: jest.fn(),
+    update: jest.fn(),
     delete: jest.fn(),
     transaction: jest.fn(),
     query: {
@@ -49,6 +51,12 @@ function buildDeleteChain() {
   return { where };
 }
 
+function buildUpdateChain() {
+  const where = jest.fn().mockResolvedValue(undefined);
+  const set = jest.fn().mockReturnValue({ where });
+  return { set, where };
+}
+
 function buildTxInsertChain() {
   const onConflictDoNothing = jest.fn().mockResolvedValue(undefined);
   const values = jest.fn().mockReturnValue({ onConflictDoNothing });
@@ -77,6 +85,7 @@ const sampleThread: ChatThread = {
   kickoff: sampleKickoff,
   messages: [sampleMessage],
   workspaceDir: '/tmp/workspace',
+  flagged: false,
   createdAt: '2026-01-01T00:00:00.000Z',
   lastActivityAt: '2026-01-01T01:00:00.000Z',
 };
@@ -283,6 +292,8 @@ describe('listThreadsByUser', () => {
       title: 'Grill With Docs',
       status: 'idle',
       kickoff: { project: 'TestProject', repo: 'TestRepo', skillPath: 'some/path' },
+      flagged: true,
+      flaggedAt: '2026-01-01T12:00:00.000Z',
       createdAt: '2026-01-01T00:00:00.000Z',
       lastActivityAt: '2026-01-02T00:00:00.000Z',
     },
@@ -292,6 +303,8 @@ describe('listThreadsByUser', () => {
       title: null,
       status: 'error',
       kickoff: { project: 'TestProject', repo: 'TestRepo' },
+      flagged: false,
+      flaggedAt: null,
       createdAt: '2026-01-02T00:00:00.000Z',
       lastActivityAt: '2026-01-03T00:00:00.000Z',
     },
@@ -364,6 +377,8 @@ describe('loadFullThread', () => {
     workspaceDir: '/tmp/workspace',
     lastError: null,
     savedWikiUrl: null,
+    flagged: false,
+    flaggedAt: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     lastActivityAt: '2026-01-01T01:00:00.000Z',
     messages: [
@@ -512,5 +527,144 @@ describe('deleteThread', () => {
     (db.delete as jest.Mock).mockReturnValue(chain);
 
     await expect(deleteThread('thread-1')).resolves.toBeUndefined();
+  });
+});
+
+// ── toggleFlag ─────────────────────────────────────────────────────────────────
+
+describe('toggleFlag', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('calls db.update with flagged=true and a non-null flaggedAt', async () => {
+    const chain = buildUpdateChain();
+    (db.update as jest.Mock).mockReturnValue(chain);
+
+    const result = await toggleFlag('thread-1', true);
+
+    expect(db.update).toHaveBeenCalledTimes(1);
+    const setArg = chain.set.mock.calls[0][0];
+    expect(setArg.flagged).toBe(true);
+    expect(setArg.flaggedAt).toBeTruthy();
+    expect(result.flagged).toBe(true);
+    expect(result.flaggedAt).not.toBeNull();
+  });
+
+  it('calls db.update with flagged=false and null flaggedAt', async () => {
+    const chain = buildUpdateChain();
+    (db.update as jest.Mock).mockReturnValue(chain);
+
+    const result = await toggleFlag('thread-1', false);
+
+    const setArg = chain.set.mock.calls[0][0];
+    expect(setArg.flagged).toBe(false);
+    expect(setArg.flaggedAt).toBeNull();
+    expect(result.flagged).toBe(false);
+    expect(result.flaggedAt).toBeNull();
+  });
+
+  it('returns an ISO-8601 timestamp when flagging', async () => {
+    const chain = buildUpdateChain();
+    (db.update as jest.Mock).mockReturnValue(chain);
+
+    const result = await toggleFlag('thread-1', true);
+
+    expect(() => new Date(result.flaggedAt!).toISOString()).not.toThrow();
+  });
+
+  it('calls where with the correct thread id', async () => {
+    const chain = buildUpdateChain();
+    (db.update as jest.Mock).mockReturnValue(chain);
+
+    await toggleFlag('thread-42', true);
+
+    expect(chain.where).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── listThreadsByUser — flagged fields ─────────────────────────────────────────
+
+describe('listThreadsByUser — flagged fields', () => {
+  const flaggedRow = {
+    id: 'thread-f1',
+    userId: 'user-1',
+    title: 'Flagged Thread',
+    status: 'idle',
+    kickoff: { project: 'P', repo: 'R' },
+    flagged: true,
+    flaggedAt: '2026-02-01T09:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-02-01T09:00:00.000Z',
+  };
+
+  const unflaggedRow = {
+    ...flaggedRow,
+    id: 'thread-f2',
+    title: 'Not Flagged',
+    flagged: false,
+    flaggedAt: null,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('includes flagged=true and flaggedAt in the summary', async () => {
+    const chain = buildSelectChain([flaggedRow]);
+    (db.select as jest.Mock).mockReturnValue(chain);
+
+    const result = await listThreadsByUser('user-1');
+
+    expect(result[0].flagged).toBe(true);
+    expect(result[0].flaggedAt).toBe('2026-02-01T09:00:00.000Z');
+  });
+
+  it('includes flagged=false and undefined flaggedAt for unflagged threads', async () => {
+    const chain = buildSelectChain([unflaggedRow]);
+    (db.select as jest.Mock).mockReturnValue(chain);
+
+    const result = await listThreadsByUser('user-1');
+
+    expect(result[0].flagged).toBe(false);
+    expect(result[0].flaggedAt).toBeUndefined();
+  });
+});
+
+// ── loadFullThread — flagged fields ────────────────────────────────────────────
+
+describe('loadFullThread — flagged fields', () => {
+  const flaggedDbResult = {
+    id: 'thread-f1',
+    userId: 'user-1',
+    status: 'idle',
+    kickoff: sampleKickoff,
+    cursorAgentId: null,
+    workspaceDir: '/tmp/workspace',
+    lastError: null,
+    savedWikiUrl: null,
+    flagged: true,
+    flaggedAt: '2026-03-01T10:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-03-01T10:00:00.000Z',
+    messages: [],
+  };
+
+  it('maps flagged=true and flaggedAt through', async () => {
+    (db.query.chatThreads.findFirst as jest.Mock).mockResolvedValue(flaggedDbResult);
+
+    const result = await loadFullThread('thread-f1');
+
+    expect(result!.flagged).toBe(true);
+    expect(result!.flaggedAt).toBe('2026-03-01T10:00:00.000Z');
+  });
+
+  it('maps null flaggedAt to undefined', async () => {
+    (db.query.chatThreads.findFirst as jest.Mock).mockResolvedValue({
+      ...flaggedDbResult,
+      flagged: false,
+      flaggedAt: null,
+    });
+
+    const result = await loadFullThread('thread-f1');
+
+    expect(result!.flagged).toBe(false);
+    expect(result!.flaggedAt).toBeUndefined();
   });
 });

@@ -93,6 +93,8 @@ export async function listThreadsByUser(
       title: chatThreads.title,
       status: chatThreads.status,
       kickoff: chatThreads.kickoff,
+      flagged: chatThreads.flagged,
+      flaggedAt: chatThreads.flaggedAt,
       createdAt: chatThreads.createdAt,
       lastActivityAt: chatThreads.lastActivityAt,
     })
@@ -112,6 +114,8 @@ export async function listThreadsByUser(
       repo: row.kickoff?.repo ?? '',
       skillPath: row.kickoff?.skillPath,
     },
+    flagged: row.flagged,
+    flaggedAt: row.flaggedAt ?? undefined,
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   }));
@@ -159,6 +163,8 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     workspaceDir: result.workspaceDir ?? '',
     lastError: result.lastError ?? undefined,
     savedWikiUrl: result.savedWikiUrl ?? undefined,
+    flagged: result.flagged,
+    flaggedAt: result.flaggedAt ?? undefined,
     messages,
     createdAt: result.createdAt,
     lastActivityAt: result.lastActivityAt,
@@ -169,6 +175,20 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
 
 export async function deleteThread(threadId: string): Promise<void> {
   await db.delete(chatThreads).where(eq(chatThreads.id, threadId));
+}
+
+// ── toggleFlag ────────────────────────────────────────────────────────
+
+export async function toggleFlag(
+  threadId: string,
+  flagged: boolean,
+): Promise<{ flagged: boolean; flaggedAt: string | null }> {
+  const flaggedAt = flagged ? new Date().toISOString() : null;
+  await db
+    .update(chatThreads)
+    .set({ flagged, flaggedAt })
+    .where(eq(chatThreads.id, threadId));
+  return { flagged, flaggedAt };
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

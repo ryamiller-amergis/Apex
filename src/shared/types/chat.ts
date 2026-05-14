@@ -62,6 +62,10 @@ export interface ChatThread {
   lastError?: string;
   /** Wiki page URL if the PRD has been saved */
   savedWikiUrl?: string;
+  /** True when the user has flagged this thread for follow-up */
+  flagged: boolean;
+  /** ISO timestamp of when the thread was flagged (undefined when not flagged) */
+  flaggedAt?: string;
   createdAt: string;
   lastActivityAt: string;
 }
@@ -125,6 +129,8 @@ export interface ChatThreadSummary {
   title: string;
   status: ChatThreadStatus;
   kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath'>;
+  flagged: boolean;
+  flaggedAt?: string;
   createdAt: string;
   lastActivityAt: string;
 }

@@ -22,6 +22,12 @@
   color: var(--text-primary);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .close-btn {
   background: none;
   border: none;
@@ -36,6 +42,46 @@
 .close-btn:hover {
   color: var(--text-primary);
   background: var(--bg-tertiary);
+}
+
+.filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 3px 7px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.filter-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.filter-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.filter-btn--active {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+}
+
+.filter-btn--active:hover {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 15%, transparent);
+}
+
+.filter-badge {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .list {
@@ -92,12 +138,59 @@
   cursor: not-allowed;
 }
 
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.row-flag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.row-flag svg {
+  width: 13px;
+  height: 13px;
+}
+
+.row-flag--active {
+  color: var(--accent-color);
+  opacity: 1;
+}
+
+.row:hover .row-flag {
+  opacity: 1;
+}
+
+.row-flag:not(.row-flag--active):hover {
+  color: var(--accent-color);
+}
+
+.row-flag--active:hover {
+  color: var(--text-muted);
+}
+
+.row-flag-indicator {
+  color: var(--accent-color);
+  margin-right: 4px;
+  font-size: 12px;
+}
+
 .row-delete {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: 28px;
   background: none;
   border: none;
   cursor: pointer;

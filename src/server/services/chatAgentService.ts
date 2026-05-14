@@ -388,6 +388,7 @@ export async function createThread(
     messages: [],
     status: 'idle',
     workspaceDir,
+    flagged: false,
     createdAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString(),
   };

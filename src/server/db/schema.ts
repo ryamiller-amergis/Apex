@@ -1,4 +1,4 @@
-import { integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 
@@ -14,6 +14,8 @@ export const chatThreads = pgTable('chat_threads', {
   lastError: text('last_error'),
   savedWikiUrl: text('saved_wiki_url'),
   title: text('title'),
+  flagged: boolean('flagged').notNull().default(false),
+  flaggedAt: timestamp('flagged_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });

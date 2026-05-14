@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.11.0",
+    "date": "2026-05-14",
+    "title": "Chat Agent, Thread History & Follow-Up Flags",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added AI chat agent with skill-based workflows — type '/' in the compose box to browse available skills (e.g. grill-with-docs, to-prd) or send freeform questions for open-ended agent conversations"
+      },
+      {
+        "type": "feature",
+        "description": "Chat thread history sidebar — browse, resume, and delete past conversations from a scrollable sidebar with status indicators and relative timestamps"
+      },
+      {
+        "type": "feature",
+        "description": "Flag conversations for follow-up — click the flag icon on any chat thread to mark it for later; flagged threads show a persistent indicator so you never lose track of important conversations"
+      },
+      {
+        "type": "feature",
+        "description": "Flagged-only filter — toggle the flag filter in the history sidebar header to instantly narrow the list to only your flagged conversations, with a badge showing the total count"
+      },
+      {
+        "type": "feature",
+        "description": "Chat threads are now persisted in PostgreSQL — conversations survive server restarts and are available across sessions, replacing the previous in-memory-only storage"
+      },
+      {
+        "type": "improvement",
+        "description": "Proper per-user thread isolation — each user only sees their own chat history, with ownership checks enforced on every thread operation"
+      },
+      {
+        "type": "improvement",
+        "description": "File attachments in chat — attach up to 5 files per message to provide additional context to the agent during a conversation"
+      }
+    ]
+  },
+  {
     "version": "1.10.0",
     "date": "2026-04-23",
     "title": "Selective PBI Creation in Azure DevOps",

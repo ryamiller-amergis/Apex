@@ -108,6 +108,34 @@ export function useDeleteThread() {
   });
 }
 
+export function useFlagThread() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { flagged: boolean; flaggedAt: string | null },
+    Error,
+    { threadId: string; flagged: boolean }
+  >({
+    mutationFn: ({ threadId, flagged }) =>
+      apiFetch(`/api/chat/threads/${threadId}/flag`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagged }),
+      }),
+    onSuccess: (data, { threadId }) => {
+      queryClient.setQueryData<ChatThreadSummary[]>(
+        ['chat-thread-list', 50],
+        (prev) =>
+          prev?.map((t) =>
+            t.id === threadId
+              ? { ...t, flagged: data.flagged, flaggedAt: data.flaggedAt ?? undefined }
+              : t,
+          ),
+      );
+      queryClient.invalidateQueries({ queryKey: ['chat-thread', threadId] });
+    },
+  });
+}
+
 export function useSaveToWiki(threadId: string) {
   return useMutation<
     { path: string; url: string; version: string },

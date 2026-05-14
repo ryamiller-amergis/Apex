@@ -6,6 +6,7 @@ import {
   useChatThread,
   useStartChat,
   useDeleteThread,
+  useFlagThread,
 } from '../useChatThreads';
 import type { ChatThreadSummary } from '../../../shared/types/chat';
 
@@ -48,6 +49,7 @@ const threadSummary: ChatThreadSummary = {
   title: 'Grill With Docs',
   status: 'idle',
   kickoff: { project: 'TestProject', repo: 'TestRepo' },
+  flagged: false,
   createdAt: '2026-01-01T00:00:00.000Z',
   lastActivityAt: '2026-01-02T00:00:00.000Z',
 };
@@ -291,5 +293,135 @@ describe('useDeleteThread', () => {
         await result.current.mutateAsync('thread-1');
       }),
     ).resolves.not.toThrow();
+  });
+});
+
+// ── useFlagThread ────────────────────────────────────────────────────────────
+
+describe('useFlagThread', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('sends PATCH to /api/chat/threads/:id/flag with { flagged: true }', async () => {
+    mockFetchOk({ flagged: true, flaggedAt: '2026-05-14T12:00:00.000Z' });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ threadId: 'thread-1', flagged: true });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/flag',
+      expect.objectContaining({
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const [, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ flagged: true });
+  });
+
+  it('sends PATCH with { flagged: false } to unflag', async () => {
+    mockFetchOk({ flagged: false, flaggedAt: null });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ threadId: 'thread-1', flagged: false });
+    });
+
+    const [, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ flagged: false });
+  });
+
+  it('updates the flagged state in the chat-thread-list cache', async () => {
+    mockFetchOk({ flagged: true, flaggedAt: '2026-05-14T12:00:00.000Z' });
+    const { queryClient, wrapper } = createWrapper();
+
+    queryClient.setQueryData<ChatThreadSummary[]>(
+      ['chat-thread-list', 50],
+      [threadSummary, threadSummary2],
+    );
+
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ threadId: 'thread-1', flagged: true });
+    });
+
+    const cached = queryClient.getQueryData<ChatThreadSummary[]>(['chat-thread-list', 50]);
+    expect(cached!.find((t) => t.id === 'thread-1')!.flagged).toBe(true);
+    expect(cached!.find((t) => t.id === 'thread-1')!.flaggedAt).toBe('2026-05-14T12:00:00.000Z');
+  });
+
+  it('does not modify other threads in the list cache', async () => {
+    mockFetchOk({ flagged: true, flaggedAt: '2026-05-14T12:00:00.000Z' });
+    const { queryClient, wrapper } = createWrapper();
+
+    queryClient.setQueryData<ChatThreadSummary[]>(
+      ['chat-thread-list', 50],
+      [threadSummary, threadSummary2],
+    );
+
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ threadId: 'thread-1', flagged: true });
+    });
+
+    const cached = queryClient.getQueryData<ChatThreadSummary[]>(['chat-thread-list', 50]);
+    expect(cached!.find((t) => t.id === 'thread-2')!.flagged).toBe(false);
+  });
+
+  it('sets flaggedAt to undefined when the API returns null', async () => {
+    mockFetchOk({ flagged: false, flaggedAt: null });
+    const { queryClient, wrapper } = createWrapper();
+
+    const flaggedSummary: ChatThreadSummary = {
+      ...threadSummary,
+      flagged: true,
+      flaggedAt: '2026-05-14T12:00:00.000Z',
+    };
+    queryClient.setQueryData<ChatThreadSummary[]>(
+      ['chat-thread-list', 50],
+      [flaggedSummary],
+    );
+
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ threadId: 'thread-1', flagged: false });
+    });
+
+    const cached = queryClient.getQueryData<ChatThreadSummary[]>(['chat-thread-list', 50]);
+    expect(cached![0].flagged).toBe(false);
+    expect(cached![0].flaggedAt).toBeUndefined();
+  });
+
+  it('handles an empty list cache gracefully', async () => {
+    mockFetchOk({ flagged: true, flaggedAt: '2026-05-14T12:00:00.000Z' });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    await expect(
+      act(async () => {
+        await result.current.mutateAsync({ threadId: 'thread-1', flagged: true });
+      }),
+    ).resolves.not.toThrow();
+  });
+
+  it('surfaces an error when the API returns a non-ok response', async () => {
+    mockFetchError(400, { error: 'flagged (boolean) is required' });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useFlagThread(), { wrapper });
+
+    act(() => {
+      result.current.mutate({ threadId: 'thread-1', flagged: true });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error?.message).toBe('flagged (boolean) is required');
   });
 });

@@ -13,6 +13,7 @@ import {
   readOutputBacklog,
 } from '../services/chatAgentService';
 import { saveWikiPage } from '../services/wikiCatalog';
+import { toggleFlag } from '../services/chatThreadRepository';
 import { getUserId } from '../utils/requestUser';
 import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
 import type { SaveWikiPageRequest } from '../../shared/types/skills';
@@ -272,6 +273,25 @@ router.post('/threads/:id/save-to-wiki', requireThreadOwner, async (req: Request
   } catch (err: any) {
     console.error('[chat] save-to-wiki error:', err.message);
     res.status(500).json({ error: err.message ?? 'Failed to save to wiki' });
+  }
+});
+
+/**
+ * PATCH /api/chat/threads/:id/flag
+ * Toggle the flagged state for a thread.
+ * Body: { flagged: boolean }
+ */
+router.patch('/threads/:id/flag', requireThreadOwner, async (req: Request, res: Response) => {
+  const { flagged } = req.body as { flagged?: boolean };
+  if (typeof flagged !== 'boolean') {
+    return res.status(400).json({ error: 'flagged (boolean) is required' });
+  }
+  try {
+    const result = await toggleFlag(req.params.id, flagged);
+    res.json(result);
+  } catch (err: any) {
+    console.error('[chat] toggleFlag error:', err.message);
+    res.status(500).json({ error: err.message ?? 'Failed to toggle flag' });
   }
 });
 
