@@ -317,6 +317,12 @@ function ensureThreadState(threadId: string): ThreadState | null {
   const thread = loadThread(threadId);
   if (!thread) return null;
 
+  // A thread persisted as 'running' means the server was killed mid-run.
+  // Reset it to 'idle' so the client input isn't permanently locked out.
+  if (thread.status === 'running') {
+    thread.status = 'idle';
+  }
+
   const state: ThreadState = {
     thread,
     subscribers: new Set(),
@@ -338,6 +344,11 @@ async function ensureThreadStateAsync(threadId: string): Promise<ThreadState | n
 
   const thread = await pgLoadFullThread(threadId);
   if (!thread) return null;
+
+  // Same as ensureThreadState: reset stale 'running' status from before a server restart.
+  if (thread.status === 'running') {
+    thread.status = 'idle';
+  }
 
   const state: ThreadState = {
     thread,

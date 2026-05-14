@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import {
   createThread,
   getThread,
@@ -13,7 +13,8 @@ import {
   readOutputBacklog,
 } from '../services/chatAgentService';
 import { saveWikiPage } from '../services/wikiCatalog';
-import type { ChatAttachment, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
+import { getUserId } from '../utils/requestUser';
+import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
 import type { SaveWikiPageRequest } from '../../shared/types/skills';
 
 const router = Router();
@@ -21,9 +22,23 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 
-function getUserId(req: Request): string {
-  const user = (req as any).user;
-  return user?.oid ?? user?.id ?? user?.upn ?? 'anonymous';
+/**
+ * Middleware that loads a thread by :id and verifies the requesting user owns it.
+ * Returns 404 for both "not found" and "wrong owner" to avoid leaking thread existence.
+ * Attaches the loaded thread to req for downstream handlers to reuse.
+ */
+async function requireThreadOwner(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const thread = await getThreadAsync(req.params.id);
+  if (!thread) {
+    res.status(404).json({ error: 'Thread not found' });
+    return;
+  }
+  if (thread.userId !== getUserId(req)) {
+    res.status(404).json({ error: 'Thread not found' });
+    return;
+  }
+  (req as any).thread = thread;
+  next();
 }
 
 function readAttachments(raw: unknown): ChatAttachment[] {
@@ -117,19 +132,16 @@ router.post('/threads', async (req: Request, res: Response) => {
  * GET /api/chat/threads/:id
  * Get thread metadata and message history (falls back to Postgres for historical threads).
  */
-router.get('/threads/:id', async (req: Request, res: Response) => {
-  const thread = await getThreadAsync(req.params.id);
-  if (!thread) return res.status(404).json({ error: 'Thread not found' });
-  res.json(thread);
+router.get('/threads/:id', requireThreadOwner, (req: Request, res: Response) => {
+  res.json((req as any).thread as ChatThread);
 });
 
 /**
  * GET /api/chat/threads/:id/stream
  * Server-Sent Events stream for real-time agent output.
  */
-router.get('/threads/:id/stream', async (req: Request, res: Response) => {
-  const thread = await getThreadAsync(req.params.id);
-  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+router.get('/threads/:id/stream', requireThreadOwner, (req: Request, res: Response) => {
+  const thread = (req as any).thread as ChatThread;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -169,7 +181,7 @@ router.get('/threads/:id/stream', async (req: Request, res: Response) => {
  * Send a user message. The agent response streams via SSE.
  * Body: SendMessageRequest
  */
-router.post('/threads/:id/messages', async (req: Request, res: Response) => {
+router.post('/threads/:id/messages', requireThreadOwner, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
   try {
@@ -181,8 +193,7 @@ router.post('/threads/:id/messages', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'text or attachments are required' });
   }
 
-  const thread = await getThreadAsync(req.params.id);
-  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+  const thread = (req as any).thread as ChatThread;
   if (thread.status === 'running') return res.status(409).json({ error: 'Agent is already running' });
 
   // Fire-and-forget: response streams via SSE, this returns 202 immediately
@@ -196,7 +207,7 @@ router.post('/threads/:id/messages', async (req: Request, res: Response) => {
  * POST /api/chat/threads/:id/cancel
  * Cancel the active run.
  */
-router.post('/threads/:id/cancel', async (req: Request, res: Response) => {
+router.post('/threads/:id/cancel', requireThreadOwner, async (req: Request, res: Response) => {
   try {
     await cancelRun(req.params.id);
     res.json({ ok: true });
@@ -209,7 +220,7 @@ router.post('/threads/:id/cancel', async (req: Request, res: Response) => {
  * GET /api/chat/threads/:id/prd
  * Read the output PRD.md written by the agent (if available).
  */
-router.get('/threads/:id/prd', (req: Request, res: Response) => {
+router.get('/threads/:id/prd', requireThreadOwner, (req: Request, res: Response) => {
   const content = readOutputPrd(req.params.id);
   if (content === null) return res.status(404).json({ error: 'PRD not yet generated' });
   res.type('text/markdown').send(content);
@@ -219,7 +230,7 @@ router.get('/threads/:id/prd', (req: Request, res: Response) => {
  * GET /api/chat/threads/:id/backlog
  * Read the output *.backlog.json written by the agent (if available).
  */
-router.get('/threads/:id/backlog', (req: Request, res: Response) => {
+router.get('/threads/:id/backlog', requireThreadOwner, (req: Request, res: Response) => {
   const content = readOutputBacklog(req.params.id);
   if (content === null) return res.status(404).json({ error: 'Backlog not yet generated' });
   res.json(content);
@@ -230,7 +241,7 @@ router.get('/threads/:id/backlog', (req: Request, res: Response) => {
  * Overwrite the PRD with user-edited content.
  * Body: plain text (text/markdown or text/plain)
  */
-router.put('/threads/:id/prd', (req: Request, res: Response) => {
+router.put('/threads/:id/prd', requireThreadOwner, (req: Request, res: Response) => {
   const content = typeof req.body === 'string' ? req.body : req.body?.content;
   if (typeof content !== 'string') return res.status(400).json({ error: 'body must be the markdown text' });
   try {
@@ -246,7 +257,7 @@ router.put('/threads/:id/prd', (req: Request, res: Response) => {
  * Save the agent's output PRD to an ADO wiki page.
  * Body: { project, wikiId, path, comment? }
  */
-router.post('/threads/:id/save-to-wiki', async (req: Request, res: Response) => {
+router.post('/threads/:id/save-to-wiki', requireThreadOwner, async (req: Request, res: Response) => {
   const prdContent = readOutputPrd(req.params.id);
   if (!prdContent) return res.status(404).json({ error: 'PRD not yet generated' });
 
@@ -268,7 +279,7 @@ router.post('/threads/:id/save-to-wiki', async (req: Request, res: Response) => 
  * DELETE /api/chat/threads/:id
  * Close the thread, dispose the agent, and remove the workspace.
  */
-router.delete('/threads/:id', async (req: Request, res: Response) => {
+router.delete('/threads/:id', requireThreadOwner, async (req: Request, res: Response) => {
   try {
     await closeThread(req.params.id);
     res.json({ ok: true });

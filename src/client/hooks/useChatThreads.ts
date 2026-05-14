@@ -51,6 +51,7 @@ export function useStartChat() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chat-threads'] });
+      queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
     },
   });
 }

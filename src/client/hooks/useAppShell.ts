@@ -178,6 +178,7 @@ export function useAppShell() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    sessionStorage.removeItem('agentHomeThreadId');
     try { await fetch('/auth/logout', { credentials: 'include' }); } catch { /* ignore */ }
     window.location.href = '/';
   }, []);

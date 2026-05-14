@@ -34,6 +34,42 @@ export interface CostData {
   }>;
 }
 
+const MAX_RETRIES = 4;
+const BASE_DELAY_MS = 2000;
+
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  label: string
+): Promise<T> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const is429 =
+        error?.statusCode === 429 ||
+        error?.code === 'TooManyRequests' ||
+        (error?.message && /too many requests/i.test(error.message));
+
+      if (!is429 || attempt === MAX_RETRIES) throw error;
+
+      const retryAfterHeader = error?.response?.headers?.get?.('retry-after');
+      const delayMs = retryAfterHeader
+        ? parseInt(retryAfterHeader, 10) * 1000
+        : BASE_DELAY_MS * Math.pow(2, attempt);
+
+      console.warn(
+        `[${label}] 429 throttled – retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error('Unreachable');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export class AzureCostService {
   private credential: DefaultAzureCredential | ClientSecretCredential;
 
@@ -85,22 +121,24 @@ export class AzureCostService {
    */
   async getResourceGroups(subscriptionId: string): Promise<AzureResourceGroup[]> {
     try {
-      const resourceClient = new ResourceManagementClient(this.credential, subscriptionId);
-      const resourceGroups: AzureResourceGroup[] = [];
+      return await retryWithBackoff(async () => {
+        const resourceClient = new ResourceManagementClient(this.credential, subscriptionId);
+        const resourceGroups: AzureResourceGroup[] = [];
 
-      for await (const rg of resourceClient.resourceGroups.list()) {
-        if (rg.name && rg.location) {
-          resourceGroups.push({
-            id: rg.id || rg.name,
-            name: rg.name,
-            location: rg.location,
-            subscriptionId: subscriptionId
-          });
+        for await (const rg of resourceClient.resourceGroups.list()) {
+          if (rg.name && rg.location) {
+            resourceGroups.push({
+              id: rg.id || rg.name,
+              name: rg.name,
+              location: rg.location,
+              subscriptionId: subscriptionId
+            });
+          }
         }
-      }
 
-      console.log(`Found ${resourceGroups.length} resource groups in subscription ${subscriptionId}`);
-      return resourceGroups;
+        console.log(`Found ${resourceGroups.length} resource groups in subscription ${subscriptionId}`);
+        return resourceGroups;
+      }, `getResourceGroups(${subscriptionId})`);
     } catch (error) {
       console.error(`Error fetching resource groups for subscription ${subscriptionId}:`, error);
       throw new Error(`Failed to fetch resource groups: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -206,7 +244,10 @@ export class AzureCostService {
       console.log('Resource groups requested:', resourceGroups);
       console.log('Query filter:', JSON.stringify(usageQuery.dataset.filter, null, 2));
       
-      const result = await costClient.query.usage(scope, usageQuery);
+      const result = await retryWithBackoff(
+        () => costClient.query.usage(scope, usageQuery),
+        `getCostData(${subscriptionId})`
+      );
       
       console.log('API Response columns:', result.columns?.map((c: any) => c.name));
       console.log('API Response row count:', result.rows?.length || 0);
@@ -404,8 +445,10 @@ export class AzureCostService {
       const subscriptions = await this.getSubscriptions();
       const dashboardData = [];
 
-      // Get cost data for each subscription
-      for (const subscription of subscriptions) {
+      // Get cost data for each subscription (sequential with throttle to avoid 429s)
+      for (let i = 0; i < subscriptions.length; i++) {
+        const subscription = subscriptions[i];
+        if (i > 0) await delay(1000);
         try {
           // Get all resource groups for this subscription
           const resourceGroups = await this.getResourceGroups(subscription.subscriptionId);

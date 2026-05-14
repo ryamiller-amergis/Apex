@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -427,8 +428,13 @@ function MessageBubble({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
-  const [threadId, setThreadId] = useState<string | null>(null);
+  // Prefer the URL param (direct links) then sessionStorage (survives SPA
+  // navigation where App.tsx resets the URL to /home without query params).
+  const [threadId, setThreadId] = useState<string | null>(
+    () => searchParams.get('thread') ?? sessionStorage.getItem('agentHomeThreadId') ?? null,
+  );
   const [showHistory, setShowHistory] = useState(false);
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
@@ -463,6 +469,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const skillPickerRef = useRef<HTMLDivElement>(null);
   const prdAutoOpenedRef = useRef(false);
+  const initialThreadIdRef = useRef(threadId); // captures URL param value at first render
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechInputBaseRef = useRef('');
 
@@ -652,6 +659,35 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
       speechRecognitionRef.current = null;
     };
   }, []);
+
+  // Keep the URL and sessionStorage in sync with the active thread.
+  // URL gives shareable/bookmarkable links; sessionStorage survives the
+  // navigate('/home') call in App.tsx which strips query params.
+  useEffect(() => {
+    setSearchParams(threadId ? { thread: threadId } : {}, { replace: true });
+    if (threadId) {
+      sessionStorage.setItem('agentHomeThreadId', threadId);
+    } else {
+      sessionStorage.removeItem('agentHomeThreadId');
+    }
+  }, [threadId, setSearchParams]);
+
+  // On first mount, if a ?thread=<id> param was present, reload that thread's
+  // message history so the UI is immediately usable without re-fetching.
+  useEffect(() => {
+    const id = initialThreadIdRef.current;
+    if (!id) return;
+    fetch(`/api/chat/threads/${id}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((thread: ChatThread | null) => {
+        if (!thread) {
+          setThreadId(null);
+          return;
+        }
+        setSeedMessages(thread.messages ?? []);
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- intentional mount-only
 
   // ── Callbacks ────────────────────────────────────────────────────────────────
 

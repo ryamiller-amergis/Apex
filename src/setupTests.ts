@@ -1,4 +1,10 @@
 import '@testing-library/jest-dom';
+import { TextEncoder, TextDecoder } from 'util';
+
+// React Router (and its dependencies) require TextEncoder/TextDecoder in the
+// jsdom test environment, which does not provide them by default.
+Object.defineProperty(global, 'TextEncoder', { value: TextEncoder });
+Object.defineProperty(global, 'TextDecoder', { value: TextDecoder });
 
 // Mock window.matchMedia for tests
 Object.defineProperty(window, 'matchMedia', {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -58,6 +58,14 @@ function App() {
                 : 'calendar';
 
   const planningTab = (location.pathname.split('/')[2] as PlanningTab) || 'dev-stats';
+
+  // Close the slide-out panel when landing on the home view — the full-page
+  // AgentHome already provides the complete chat experience there.
+  useEffect(() => {
+    if (currentView === 'home') {
+      setChatOpen(false);
+    }
+  }, [currentView]);
 
   const {
     isAuthenticated,

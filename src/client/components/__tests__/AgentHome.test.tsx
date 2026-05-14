@@ -1,6 +1,15 @@
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AgentHome } from '../AgentHome';
+
+// Wrap renders in a router since AgentHome uses useSearchParams
+const renderAgentHome = (props: { selectedProject: string }) =>
+  render(
+    <MemoryRouter>
+      <AgentHome {...props} />
+    </MemoryRouter>,
+  );
 import {
   useSkillList,
   useSkillRepos,
@@ -66,6 +75,7 @@ describe('AgentHome', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    sessionStorage.clear(); // prevent thread ID from leaking across tests
     HTMLElement.prototype.scrollIntoView = jest.fn();
     // Default fetch mock returns a successful response — individual tests can override
     global.fetch = jest.fn().mockResolvedValue({
@@ -121,13 +131,13 @@ describe('AgentHome', () => {
 
   describe('compose state (no active thread)', () => {
     it('renders the compose prompt and skill hint', () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       expect(screen.getByPlaceholderText(/Ask me anything/i)).toBeInTheDocument();
       expect(screen.getByText(/Enter to send/i)).toBeInTheDocument();
     });
 
     it('shows skill picker when "/" is typed', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -136,7 +146,7 @@ describe('AgentHome', () => {
     });
 
     it('filters skill picker by query after "/"', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/grill' },
       });
@@ -145,7 +155,7 @@ describe('AgentHome', () => {
     });
 
     it('hides skill picker when input is cleared', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -158,7 +168,7 @@ describe('AgentHome', () => {
     });
 
     it('populates textarea with /skillName after picker selection', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -169,7 +179,7 @@ describe('AgentHome', () => {
     });
 
     it('creates a new thread with skillPath in kickoff when skill slug is sent', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -203,7 +213,7 @@ describe('AgentHome', () => {
         json: () => Promise.resolve({ ok: true }),
       });
 
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -236,7 +246,7 @@ describe('AgentHome', () => {
         json: () => Promise.resolve({ ok: true }),
       });
 
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'Tell me about the architecture' },
       });
@@ -256,7 +266,7 @@ describe('AgentHome', () => {
     });
 
     it('posts the plain text request as the first message after creating a home-page thread', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'Tell me about the architecture' },
       });
@@ -277,7 +287,7 @@ describe('AgentHome', () => {
     });
 
     it('posts the user request after a skill kickoff when text follows the skill slug', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -313,7 +323,7 @@ describe('AgentHome', () => {
         clearAttachments,
       });
 
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: '/' },
       });
@@ -335,7 +345,7 @@ describe('AgentHome', () => {
     });
 
     it('selects a skill with keyboard navigation and Enter', async () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       const input = screen.getByPlaceholderText(/Ask me anything/i);
       fireEvent.change(input, { target: { value: '/' } });
       await screen.findByText('grill-with-docs');
@@ -347,7 +357,7 @@ describe('AgentHome', () => {
     });
 
     it('does not submit when textarea is empty', () => {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       fireEvent.click(screen.getByLabelText('Send'));
       expect(mutateAsync).not.toHaveBeenCalled();
     });
@@ -359,7 +369,7 @@ describe('AgentHome', () => {
     // Helper: render, start a free-chat thread, wait for chat view, then clear the
     // fetch mock so each test only sees calls from its own actions.
     async function startThread() {
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
 
       // Compose-mode send to create a thread (calls mutateAsync + fetch /messages)
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
@@ -449,7 +459,7 @@ describe('AgentHome', () => {
         ...idleStream,
         messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
       });
-      const { rerender } = render(<AgentHome selectedProject="MaxView" />);
+      const { rerender } = renderAgentHome({ selectedProject: "MaxView" });
 
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'write a PRD' },
@@ -462,7 +472,7 @@ describe('AgentHome', () => {
         messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
         prdReady: true,
       });
-      rerender(<AgentHome selectedProject="MaxView" />);
+      rerender(<MemoryRouter><AgentHome selectedProject="MaxView" /></MemoryRouter>);
 
       expect(screen.getByText('PRD is ready for review')).toBeInTheDocument();
       expect(screen.getByTestId('prd-preview-drawer')).toBeInTheDocument();
@@ -474,7 +484,7 @@ describe('AgentHome', () => {
         messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
         prdReady: true,
       });
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
 
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'write a PRD' },
@@ -507,7 +517,7 @@ describe('AgentHome', () => {
   describe('streaming state', () => {
     it('disables the Send button while the agent is running', async () => {
       // Start a thread then simulate the agent being in the running state
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
 
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'go' },
@@ -529,7 +539,7 @@ describe('AgentHome', () => {
     });
 
     it('sends a cancel request when Stop is clicked during a running chat', async () => {
-      const { rerender } = render(<AgentHome selectedProject="MaxView" />);
+      const { rerender } = renderAgentHome({ selectedProject: "MaxView" });
 
       fireEvent.change(screen.getByPlaceholderText(/Ask me anything/i), {
         target: { value: 'start session' },
@@ -542,7 +552,7 @@ describe('AgentHome', () => {
         ...idleStream,
         status: 'running',
       });
-      rerender(<AgentHome selectedProject="MaxView" />);
+      rerender(<MemoryRouter><AgentHome selectedProject="MaxView" /></MemoryRouter>);
 
       fireEvent.click(screen.getByLabelText('Stop'));
 
@@ -563,7 +573,7 @@ describe('AgentHome', () => {
         ],
       });
 
-      render(<AgentHome selectedProject="MaxView" />);
+      renderAgentHome({ selectedProject: "MaxView" });
       // "Begin." is the auto-kickoff message and must not appear in the UI
       expect(screen.queryByText('Begin.')).toBeNull();
     });
