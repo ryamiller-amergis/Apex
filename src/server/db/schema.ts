@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 
@@ -57,4 +57,69 @@ export const attachmentsRelations = relations(chatMessageAttachments, ({ one }) 
     fields: [chatMessageAttachments.messageId],
     references: [chatMessages.id],
   }),
+}));
+
+// ── RBAC Tables ───────────────────────────────────────────────────────────────
+
+export const appUsers = pgTable('app_users', {
+  oid: text('oid').primaryKey(),
+  displayName: text('display_name'),
+  email: text('email'),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+});
+
+export const appRoles = pgTable('app_roles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').unique().notNull(),
+  description: text('description'),
+  isDefault: boolean('is_default').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const appPermissions = pgTable('app_permissions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  key: text('key').unique().notNull(),
+  description: text('description'),
+  category: text('category'),
+});
+
+export const appRolePermissions = pgTable('app_role_permissions', {
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'cascade' }),
+  permissionId: uuid('permission_id').notNull().references(() => appPermissions.id, { onDelete: 'cascade' }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.roleId, t.permissionId] }),
+}));
+
+export const appUserRoles = pgTable('app_user_roles', {
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'cascade' }),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.roleId] }),
+}));
+
+// ── RBAC Relations ────────────────────────────────────────────────────────────
+
+export const appUsersRelations = relations(appUsers, ({ many }) => ({
+  userRoles: many(appUserRoles),
+}));
+
+export const appRolesRelations = relations(appRoles, ({ many }) => ({
+  userRoles: many(appUserRoles),
+  rolePermissions: many(appRolePermissions),
+}));
+
+export const appPermissionsRelations = relations(appPermissions, ({ many }) => ({
+  rolePermissions: many(appRolePermissions),
+}));
+
+export const appRolePermissionsRelations = relations(appRolePermissions, ({ one }) => ({
+  role: one(appRoles, { fields: [appRolePermissions.roleId], references: [appRoles.id] }),
+  permission: one(appPermissions, { fields: [appRolePermissions.permissionId], references: [appPermissions.id] }),
+}));
+
+export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
+  user: one(appUsers, { fields: [appUserRoles.userId], references: [appUsers.oid] }),
+  role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
 }));

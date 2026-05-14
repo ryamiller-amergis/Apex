@@ -17,6 +17,8 @@ import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import { mountAdoMcp } from './mcp/ado/express';
 import { ensureAuthenticated } from './middleware/auth';
+import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
+import adminRouter from './routes/admin';
 import {
   extractAgentToken,
   verifyAgentToken,
@@ -103,6 +105,7 @@ app.use('/api/skills', ensureAuthenticated, skillsRoutes);
 app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/workitems', ensureAuthenticated, workitemsFromPrdRoutes);
+app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 
 // Serve static files in production
@@ -128,6 +131,41 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
+async function bootstrapAdmin(): Promise<void> {
+  const bootstrapOid = process.env.BOOTSTRAP_ADMIN_OID;
+  if (!bootstrapOid) {
+    console.log('[bootstrap] BOOTSTRAP_ADMIN_OID not set — skipping admin bootstrap');
+    return;
+  }
+
+  try {
+    const users = await listUsers();
+    const hasAdmin = users.some((u) => u.roles.includes('admin'));
+    if (hasAdmin) {
+      console.log('[bootstrap] Admin role already assigned — skipping bootstrap');
+      return;
+    }
+
+    // Ensure user row exists, then assign admin role
+    await upsertAppUser(bootstrapOid, 'Bootstrap Admin', '');
+
+    // Get the admin role id
+    const { db } = await import('./db/drizzle');
+    const { appRoles } = await import('./db/schema');
+    const { eq } = await import('drizzle-orm');
+    const [adminRole] = await db.select().from(appRoles).where(eq(appRoles.name, 'admin'));
+    if (!adminRole) {
+      console.error('[bootstrap] admin role not found in DB — run migrations first');
+      return;
+    }
+
+    await assignRole(bootstrapOid, adminRole.id, 'system-bootstrap');
+    console.log(`[bootstrap] Assigned admin role to OID ${bootstrapOid}`);
+  } catch (err) {
+    console.error('[bootstrap] Bootstrap failed:', err);
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -141,4 +179,6 @@ app.listen(PORT, () => {
   const uatAutoRelease = getUatAutoReleaseService();
   uatAutoRelease.start();
   console.log('UAT auto-release service started');
+
+  bootstrapAdmin();
 });

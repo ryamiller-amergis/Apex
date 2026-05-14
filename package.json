@@ -1,6 +1,6 @@
 {
   "name": "scrum-calendar",
-  "version": "1.0.0",
+  "version": "1.12.0",
   "description": "Scrum Calendar web application for visualizing Azure DevOps PBIs",
   "main": "dist/server/index.js",
   "scripts": {

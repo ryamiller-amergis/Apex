@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.12.0",
+    "date": "2026-05-14",
+    "title": "Role-Based Access Control (RBAC)",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added full role-based access control system — admins can create and manage roles, assign permissions per role, and control which features each user can access"
+      },
+      {
+        "type": "feature",
+        "description": "Admin Roles page — create, edit, and delete roles; manage which permissions each role grants; assign or remove members directly from the role management UI"
+      },
+      {
+        "type": "feature",
+        "description": "Admin Users page — view all users who have logged in, assign or revoke roles per user, and search/filter users by name or email"
+      },
+      {
+        "type": "feature",
+        "description": "New users are automatically registered on first login and receive the default 'member' role with standard access permissions"
+      },
+      {
+        "type": "improvement",
+        "description": "Admin routes are protected by permission checks — users without 'admin:roles' are redirected away from /admin/* and cannot access admin API endpoints"
+      },
+      {
+        "type": "improvement",
+        "description": "Permission-aware navigation — the Admin menu item in the header is only visible to users with the admin:roles permission"
+      }
+    ]
+  },
+  {
     "version": "1.11.0",
     "date": "2026-05-14",
     "title": "Chat Agent, Thread History & Follow-Up Flags",

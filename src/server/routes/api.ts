@@ -3615,4 +3615,28 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
   }
 });
 
+// ── GET /api/me/permissions ────────────────────────────────────────────────────
+// Returns the current user's permission keys and role names.
+// ensureAuthenticated is applied upstream in index.ts for all /api routes.
+
+import { attachPermissions } from '../middleware/rbac';
+import { getUserPermissions, getUserRoleNames } from '../services/rbacService';
+
+router.get('/me/permissions', attachPermissions, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const [permSet, roles] = await Promise.all([
+      getUserPermissions(userId),
+      getUserRoleNames(userId),
+    ]);
+    res.json({ permissions: [...permSet], roles });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

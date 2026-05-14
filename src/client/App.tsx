@@ -30,6 +30,8 @@ const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
 const BacklogView = lazy(() => import('./components/BacklogView'));
+const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
+const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
 
@@ -41,7 +43,7 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog';
+  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -55,7 +57,9 @@ function App() {
               ? 'cloudcost'
               : location.pathname.startsWith('/backlog')
                 ? 'backlog'
-                : 'calendar';
+                : location.pathname.startsWith('/admin')
+                  ? 'admin'
+                  : 'calendar';
 
   const planningTab = (location.pathname.split('/')[2] as PlanningTab) || 'dev-stats';
 
@@ -69,6 +73,8 @@ function App() {
 
   const {
     isAuthenticated,
+    can,
+    permissionsLoaded,
     workItems,
     error,
     isLoading,
@@ -94,6 +100,14 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
   } = useAppShell();
+
+  // Guard admin routes: redirect to home if user lacks admin:roles permission.
+  // Wait for permissionsLoaded to avoid redirecting before the fetch completes.
+  useEffect(() => {
+    if (currentView === 'admin' && permissionsLoaded && !can('admin:roles')) {
+      navigate('/home');
+    }
+  }, [currentView, permissionsLoaded, can, navigate]);
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
@@ -159,15 +173,17 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog'}
+            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin'}
             planningTab={planningTab}
             theme={theme}
             hasUnreadChangelog={hasUnreadChangelog}
+            can={can}
             onNavigateHome={() => navigate('/home')}
             onNavigateCalendar={() => navigate('/calendar')}
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onToggleTheme={toggleTheme}
             onLogout={handleLogout}
@@ -242,6 +258,18 @@ function App() {
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="backlog-view">
                   <BacklogView project={selectedProject} areaPath={selectedAreaPath} />
+                </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'admin' && can('admin:roles') ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <div className="admin-container">
+                  {location.pathname === '/admin/users' ? (
+                    <AdminUsers />
+                  ) : (
+                    <AdminRoles />
+                  )}
                 </div>
               </Suspense>
             </ErrorBoundary>

@@ -2,15 +2,17 @@ import React from 'react';
 import { UserMenu } from './UserMenu';
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
   planningTab: string;
   theme: 'light' | 'dark';
   hasUnreadChangelog: boolean;
+  can: (key: string) => boolean;
   onNavigateHome: () => void;
   onNavigateCalendar: () => void;
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
+  onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onToggleTheme: () => void;
   onLogout: () => void;
@@ -21,11 +23,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentView,
   theme,
   hasUnreadChangelog,
+  can,
   onNavigateHome,
   onNavigateCalendar,
   onNavigatePlanning,
   onNavigateCloudCost,
   onNavigateBacklog,
+  onNavigateAdmin,
   onOpenChangelog,
   onToggleTheme,
   onLogout,
@@ -63,6 +67,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       >
         Backlog
       </button>
+      {can('admin:roles') && (
+        <button
+          className={`view-btn ${currentView === 'admin' ? 'active' : ''}`}
+          onClick={onNavigateAdmin}
+        >
+          Admin
+        </button>
+      )}
     </div>
     <div className="header-controls">
       {onOpenAgentChat && (

@@ -1,6 +1,7 @@
 import express from 'express';
 import passport from 'passport';
 import { OIDCStrategy } from 'passport-azure-ad';
+import { upsertAppUser } from '../services/rbacService';
 
 const router = express.Router();
 
@@ -81,6 +82,12 @@ router.get(
           return res.redirect('/auth/login-failed');
         }
         console.log('User logged in successfully');
+        // Fire-and-forget: populate user cache table (do not block login on this)
+        upsertAppUser(
+          user.profile?.oid ?? '',
+          user.profile?.displayName ?? '',
+          user.profile?.upn ?? user.profile?.email ?? ''
+        ).catch((err) => console.error('upsertAppUser failed:', err));
         // Redirect to the Vite dev server (or root in production)
         const redirectUrl = process.env.NODE_ENV === 'production' 
           ? '/' 

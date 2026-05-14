@@ -5,8 +5,9 @@ import { useWorkItems } from './useWorkItems';
 import { azureCostService } from '../services/azureCostService';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
+import type { MyPermissionsResponse } from '../../shared/types/rbac';
 
-const CURRENT_VERSION = '1.11.0';
+const CURRENT_VERSION = '1.12.0';
 
 interface DueDateChange {
   workItemId: number;
@@ -46,6 +47,9 @@ export function useAppShell() {
   const queryClient = useQueryClient();
   const [currentDate] = useState(new Date());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [roles, setRoles] = useState<string[]>([]);
+  const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('theme') as 'light' | 'dark') || 'dark');
   const [showChangelog, setShowChangelog] = useState(false);
@@ -70,6 +74,21 @@ export function useAppShell() {
       .then(d => setIsAuthenticated(d.authenticated))
       .catch(() => setIsAuthenticated(false));
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    setPermissionsLoaded(false);
+    fetch('/api/me/permissions', { credentials: 'include' })
+      .then(r => r.ok ? (r.json() as Promise<MyPermissionsResponse>) : null)
+      .then(d => {
+        if (d) {
+          setPermissions(d.permissions);
+          setRoles(d.roles);
+        }
+      })
+      .catch(() => { /* ignore */ })
+      .finally(() => setPermissionsLoaded(true));
+  }, [isAuthenticated]);
 
   const { workItems, loading, error, updateDueDate, refetch } = useWorkItems(
     startDate, endDate, selectedProject, selectedAreaPath, isAuthenticated === true
@@ -172,6 +191,8 @@ export function useAppShell() {
     setPendingDueDateChange(null);
   }, [pendingDueDateChange, updateDueDate]);
 
+  const can = useCallback((key: string) => permissions.includes(key), [permissions]);
+
   const handleMarkChangelogAsRead = useCallback(() => {
     localStorage.setItem('lastReadChangelogVersion', CURRENT_VERSION);
     setHasUnreadChangelog(false);
@@ -191,6 +212,11 @@ export function useAppShell() {
 
   return {
     isAuthenticated,
+    permissions,
+    roles,
+    permissionsLoaded,
+    can,
+    isAdmin: roles.includes('admin'),
     workItems,
     loading,
     error,
