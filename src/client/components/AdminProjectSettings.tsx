@@ -4,7 +4,7 @@ import {
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
 } from '../hooks/useProjectSkillConfig';
-import { useSkillRepos, useSkillBranches } from '../hooks/useChatThreads';
+import { useSkillProjects, useSkillRepos, useSkillBranches } from '../hooks/useChatThreads';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import styles from './AdminProjectSettings.module.css';
 
@@ -226,7 +226,6 @@ interface EditState {
 }
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
-  selectedProject = '',
   availableProjects = [],
 }) => {
   const { data: configs = [], isLoading, isError } = useAllProjectSkillConfigs();
@@ -236,6 +235,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [edit, setEdit] = useState<EditState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
+
+  const { data: skillProjects = [], isLoading: isLoadingProjects } = useSkillProjects();
 
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
   const { data: branches = [], isLoading: isLoadingBranches } = useSkillBranches(
@@ -253,7 +254,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   }, [edit?.skillRepo, repos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAddNew = () => {
-    setEdit({ project: selectedProject, skillRepo: '', skillBranch: '', isNew: true });
+    setEdit({ project: '', skillRepo: '', skillBranch: '', isNew: true });
     setFormError(null);
   };
 
@@ -308,7 +309,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   if (isLoading) return <div className={styles.loading}>Loading project settings…</div>;
   if (isError) return <div className={styles.error}>Failed to load project settings.</div>;
 
-  const projectOptions = availableProjects.length > 0 ? availableProjects : (edit ? [edit.project] : []);
+  // Prefer the full live ADO project list; fall back to the env-configured list, then the current edit value
+  const projectOptions = skillProjects.length > 0
+    ? skillProjects.map((p) => p.name)
+    : availableProjects.length > 0
+      ? availableProjects
+      : (edit ? [edit.project] : []);
 
   return (
     <div className={styles.page}>
@@ -337,9 +343,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     className={styles.select}
                     value={edit.project}
                     onChange={(e) => handleProjectChange(e.target.value)}
-                    disabled={upsert.isPending}
+                    disabled={upsert.isPending || isLoadingProjects}
                   >
-                    {projectOptions.length === 0 && <option value="">— select a project —</option>}
+                    <option value="">{isLoadingProjects ? 'Loading projects…' : '— select a project —'}</option>
                     {projectOptions.map((p) => (
                       <option key={p} value={p}>{p}</option>
                     ))}
