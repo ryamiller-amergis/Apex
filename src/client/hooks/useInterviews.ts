@@ -1,14 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  CreateDesignDocResponse,
   CreateInterviewResponse,
   CreatePrdResponse,
+  DesignDoc,
+  DesignDocStatus,
+  DesignDocSummary,
   Interview,
   InterviewStatus,
   InterviewSummary,
   Prd,
   PrdStatus,
   PrdSummary,
+  ReviewDesignDocRequest,
   ReviewPrdRequest,
+  ReviewPrdResponse,
 } from '../../shared/types/interview';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -64,6 +70,43 @@ export function usePrd(id: string | null) {
     staleTime: 30_000,
     refetchInterval: (query) =>
       query.state.data?.content === '' ? 5_000 : false,
+  });
+}
+
+// ── Design Doc queries ────────────────────────────────────────────────────────
+
+export function useDesignDocList(filters?: { status?: DesignDocStatus; project?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.project) params.set('project', filters.project);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return useQuery<DesignDocSummary[]>({
+    queryKey: ['design-docs', filters],
+    queryFn: () => apiFetch(`/api/interviews/design-docs${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+export function useDesignDocsByPrd(prdId: string | null | undefined) {
+  return useQuery<DesignDocSummary[]>({
+    queryKey: ['design-docs', { prdId }],
+    queryFn: () => apiFetch(`/api/interviews/design-docs?prdId=${prdId}`),
+    enabled: !!prdId,
+    staleTime: 30_000,
+  });
+}
+
+export function useDesignDoc(id: string | null) {
+  return useQuery<DesignDoc>({
+    queryKey: ['design-doc', id],
+    queryFn: () => apiFetch(`/api/interviews/design-docs/${id}`),
+    enabled: !!id,
+    staleTime: 30_000,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      return (d.designContent === '' || d.techSpecContent === '' || d.assumptionsContent === '') ? 5_000 : false;
+    },
   });
 }
 
@@ -190,7 +233,7 @@ export function useWithdrawPrd() {
 
 export function useReviewPrd() {
   const qc = useQueryClient();
-  return useMutation<void, Error, { prdId: string } & ReviewPrdRequest>({
+  return useMutation<ReviewPrdResponse, Error, { prdId: string } & ReviewPrdRequest>({
     mutationFn: ({ prdId, ...body }) =>
       apiFetch(`/api/interviews/prds/${prdId}/review`, {
         method: 'POST',
@@ -200,6 +243,7 @@ export function useReviewPrd() {
     onSuccess: (_data, { prdId }) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
     },
   });
 }
@@ -212,6 +256,99 @@ export function useSyncPrd() {
     onSuccess: (_data, prdId) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+// ── Design Doc mutations ──────────────────────────────────────────────────────
+
+export function useCreateDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<CreateDesignDocResponse, Error, { prdId: string }>({
+    mutationFn: ({ prdId }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/design-docs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useUpdateDesignDocContent() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { designDocId: string; designContent?: string; techSpecContent?: string; assumptionsContent?: string }>({
+    mutationFn: ({ designDocId, ...body }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { designDocId }) => qc.invalidateQueries({ queryKey: ['design-doc', designDocId] }),
+  });
+}
+
+export function useSubmitDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/submit`, { method: 'POST' }),
+    onSuccess: (_data, designDocId) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useWithdrawDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/withdraw`, { method: 'POST' }),
+    onSuccess: (_data, designDocId) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useReviewDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { designDocId: string } & ReviewDesignDocRequest>({
+    mutationFn: ({ designDocId, ...body }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { designDocId }) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useDeleteDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useSyncDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; designContent: string | null; techSpecContent: string | null; assumptionsContent: string | null }, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/sync`, { method: 'POST' }),
+    onSuccess: (_data, designDocId) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
     },
   });
 }

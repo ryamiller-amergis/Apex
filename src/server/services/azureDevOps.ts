@@ -9,6 +9,7 @@ export class AzureDevOpsService {
   private organization: string;
   private project: string;
   private areaPath: string;
+  private readonly WORK_ITEM_BATCH_SIZE = 200;
 
   constructor(project?: string, areaPath?: string) {
     const orgUrl = process.env.ADO_ORG;
@@ -33,6 +34,30 @@ export class AzureDevOpsService {
       socketTimeout: 120000, // 120 seconds
     };
     this.connection = new azdev.WebApi(orgUrl, authHandler, options);
+  }
+
+  private async getWorkItemsInBatches(
+    witApi: any,
+    ids: number[],
+    fields?: string[],
+    expand?: WorkItemExpand,
+  ): Promise<any[]> {
+    const workItems: any[] = [];
+
+    for (let i = 0; i < ids.length; i += this.WORK_ITEM_BATCH_SIZE) {
+      const batch = ids.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
+      const batchItems = await witApi.getWorkItems(
+        batch,
+        fields,
+        undefined,
+        expand,
+        undefined,
+        this.project,
+      );
+      workItems.push(...batchItems);
+    }
+
+    return workItems;
   }
 
   /** Returns all ADO projects in the organization that the PAT has access to. */
@@ -108,7 +133,7 @@ export class AzureDevOpsService {
       const ids = allIds.slice(0, boundedMax);
       const expand = params.includeRelations ? WorkItemExpand.Relations : undefined;
       const fields = params.fields && params.fields.length > 0 ? params.fields : undefined;
-      const workItems = await witApi.getWorkItems(ids, fields, undefined, expand, undefined, this.project);
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, fields, expand);
 
       return {
         totalMatched: allIds.length,
@@ -121,7 +146,7 @@ export class AzureDevOpsService {
             rev: wi.rev,
             url: wi.url,
             fields: (wi.fields ?? {}) as Record<string, any>,
-            relations: wi.relations?.map((rel) => ({
+            relations: wi.relations?.map((rel: any) => ({
               rel: rel.rel,
               url: rel.url,
               attributes: rel.attributes as Record<string, any> | undefined,
@@ -1679,7 +1704,7 @@ export class AzureDevOpsService {
           return [];
         }
 
-        const workItems = await witApi.getWorkItems(ids, ['System.Tags']);
+        const workItems = await this.getWorkItemsInBatches(witApi, ids, ['System.Tags']);
 
         console.log(`[getReleaseVersions] getWorkItems returned:`, workItems ? `${workItems.length} items` : 'null');
 
@@ -1758,7 +1783,7 @@ export class AzureDevOpsService {
         'System.Description',
       ];
 
-      const workItems = await witApi.getWorkItems(ids, fields, undefined, WorkItemExpand.All);
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, fields, WorkItemExpand.All);
 
       return workItems.map((wi) => {
         const extractDate = (dateValue: any): string | undefined => {
@@ -2027,7 +2052,7 @@ export class AzureDevOpsService {
         'System.Tags',
       ];
 
-      const workItems = await witApi.getWorkItems(ids, fields);
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, fields);
 
       const releaseEpics = [];
 
@@ -2073,7 +2098,7 @@ export class AzureDevOpsService {
             .map((rel: any) => rel.target.id) || [];
 
           if (childIds.length > 0) {
-            const childWorkItems = await witApi.getWorkItems(childIds, ['System.State', 'System.WorkItemType', 'System.Id']);
+            const childWorkItems = await this.getWorkItemsInBatches(witApi, childIds, ['System.State', 'System.WorkItemType', 'System.Id']);
             const actualChildren = childWorkItems.filter((child) => child.id !== wi.id);
             totalItems = actualChildren.length;
             

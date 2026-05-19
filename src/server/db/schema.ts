@@ -44,6 +44,7 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   messages: many(chatMessages),
   interviews: many(interviews),
   prds: many(prds),
+  designDocs: many(designDocs),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -145,9 +146,28 @@ export const prds = pgTable('prds', {
   interviewId: uuid('interview_id'),
   chatThreadId: uuid('chat_thread_id'),
   authorId: text('author_id').notNull(),
+  project: text('project').notNull(),
   title: text('title').notNull().default('Untitled PRD'),
   content: text('content').notNull().default(''),
   backlogJson: jsonb('backlog_json'),
+  status: text('status').notNull().default('draft'),
+  reviewerId: text('reviewer_id'),
+  reviewComment: text('review_comment'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const designDocs = pgTable('design_docs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  chatThreadId: uuid('chat_thread_id'),
+  authorId: text('author_id').notNull(),
+  title: text('title').notNull().default('Untitled Design Doc'),
+  designContent: text('design_content').notNull().default(''),
+  techSpecContent: text('tech_spec_content').notNull().default(''),
+  assumptionsContent: text('assumptions_content').notNull().default(''),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
@@ -166,13 +186,25 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
 }));
 
-export const prdsRelations = relations(prds, ({ one }) => ({
+export const prdsRelations = relations(prds, ({ one, many }) => ({
   interview: one(interviews, {
     fields: [prds.interviewId],
     references: [interviews.id],
   }),
   chatThread: one(chatThreads, {
     fields: [prds.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  designDocs: many(designDocs),
+}));
+
+export const designDocsRelations = relations(designDocs, ({ one }) => ({
+  prd: one(prds, {
+    fields: [designDocs.prdId],
+    references: [prds.id],
+  }),
+  chatThread: one(chatThreads, {
+    fields: [designDocs.chatThreadId],
     references: [chatThreads.id],
   }),
 }));
@@ -185,6 +217,19 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   skillRepo: text('skill_repo').notNull(),
   skillBranch: text('skill_branch').notNull(),
   updatedBy: text('updated_by'),
+  interviewSkillPath: text('interview_skill_path'),
+  prdSkillPath: text('prd_skill_path'),
+  designDocSkillPath: text('design_doc_skill_path'),
+  interviewModel: text('interview_model'),
+  prdModel: text('prd_model'),
+  designDocModel: text('design_doc_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });

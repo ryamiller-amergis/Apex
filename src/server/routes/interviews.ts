@@ -21,8 +21,22 @@ import {
   updatePrdContent,
   withdrawFromReview,
 } from '../services/prdService';
-import { readOutputBacklog, readOutputPrd } from '../services/chatAgentService';
-import type { InterviewStatus, PrdStatus, ReviewPrdRequest } from '../../shared/types/interview';
+import {
+  createDesignDoc,
+  deleteDesignDoc,
+  getDesignDoc,
+  listDesignDocs,
+  reviewDesignDoc,
+  startDesignDocWatcher,
+  submitForReview as submitDesignDocForReview,
+  syncDesignDocContent,
+  updateDesignDocContent,
+  withdrawFromReview as withdrawDesignDocFromReview,
+} from '../services/designDocService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, createThread } from '../services/chatAgentService';
+import { getSkillConfig } from '../services/projectSettingsService';
+import { getDefaultModel } from '../services/appSettingsService';
+import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
 
@@ -61,6 +75,8 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
     next(err);
   }
 });
+
+// ── PRDs ──────────────────────────────────────────────────────────────────────
 
 router.get('/prds', requirePermission('interviews:view'), async (req, res, next) => {
   try {
@@ -137,11 +153,285 @@ router.post('/prds/:prdId/review', requirePermission('interviews:manage'), async
     const userId = getUserId(req);
     const body = req.body as ReviewPrdRequest;
     await reviewPrd(req.params.prdId, userId, body);
+
+    if (body.action === 'approve') {
+      try {
+        const prd = await getPrd(req.params.prdId);
+        if (!prd) {
+          res.json({ ok: true });
+          return;
+        }
+
+        const skillConfig = await getSkillConfig(prd.project);
+        const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+
+        const freeformContext = [
+          '# PRD Content',
+          prd.content,
+          ...(prd.backlogJson
+            ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
+            : []),
+        ].join('\n');
+
+        const globalModel = await getDefaultModel();
+        const model = skillConfig?.designDocModel ?? globalModel;
+
+        const thread = await createThread(userId, {
+          project: prd.project,
+          repo: skillConfig?.skillRepo ?? prd.project,
+          branch: skillConfig?.skillBranch ?? 'main',
+          skillPath: designDocSkillPath,
+          freeformContext,
+          model,
+        });
+
+        const { designDocId } = await createDesignDoc({
+          prdId: req.params.prdId,
+          project: prd.project,
+          userId,
+          chatThreadId: thread.id,
+          title: prd.title,
+        });
+
+        startDesignDocWatcher(designDocId, thread.id);
+
+        res.json({ ok: true, designDocId });
+        return;
+      } catch {
+        // Design doc creation failed — PRD is still approved
+        res.json({ ok: true });
+        return;
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     next(err);
   }
 });
+
+// POST /prds/:prdId/sync — read PRD output from the generation thread and persist to DB
+router.post('/prds/:prdId/sync', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    if (!prd.chatThreadId) {
+      res.status(400).json({ error: 'PRD has no associated chat thread' });
+      return;
+    }
+
+    const content = readOutputPrd(prd.chatThreadId);
+    const backlogJson = readOutputBacklog(prd.chatThreadId);
+
+    if (!content) {
+      res.status(404).json({ error: 'PRD output not yet available from generation thread' });
+      return;
+    }
+
+    await syncPrdContent(req.params.prdId, content, backlogJson ?? undefined);
+    res.json({ ok: true, content });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/design-docs — create a design doc from an approved PRD
+router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prd = await getPrd(req.params.prdId);
+
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    if (prd.status !== 'approved') {
+      res.status(409).json({ error: 'Design docs can only be created from approved PRDs' });
+      return;
+    }
+
+    const skillConfig = await getSkillConfig(prd.project);
+    const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+
+    const freeformContext = [
+      '# PRD Content',
+      prd.content,
+      ...(prd.backlogJson
+        ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
+        : []),
+    ].join('\n');
+
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.designDocModel ?? globalModel;
+
+    const thread = await createThread(userId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: designDocSkillPath,
+      freeformContext,
+      model,
+    });
+
+    const { designDocId } = await createDesignDoc({
+      prdId: req.params.prdId,
+      project: prd.project,
+      userId,
+      chatThreadId: thread.id,
+      title: prd.title,
+    });
+
+    startDesignDocWatcher(designDocId, thread.id);
+
+    res.status(201).json({ designDocId, threadId: thread.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Design Docs ───────────────────────────────────────────────────────────────
+
+router.get('/design-docs', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const status = req.query.status as DesignDocStatus | undefined;
+    const project = req.query.project as string | undefined;
+    const prdId = req.query.prdId as string | undefined;
+    // When filtering by prdId, skip the userId filter so any viewer can see the linked design doc
+    const list = await listDesignDocs({
+      ...(prdId ? { prdId } : { userId }),
+      status,
+      ...(project ? { project } : {}),
+    });
+    res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/design-docs/:id', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/design-docs/:id/content', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { designContent, techSpecContent, assumptionsContent } = req.body as {
+      designContent?: string;
+      techSpecContent?: string;
+      assumptionsContent?: string;
+    };
+
+    if (
+      designContent !== undefined && typeof designContent !== 'string' ||
+      techSpecContent !== undefined && typeof techSpecContent !== 'string' ||
+      assumptionsContent !== undefined && typeof assumptionsContent !== 'string'
+    ) {
+      res.status(400).json({ error: 'content fields must be strings' });
+      return;
+    }
+
+    if (designContent === undefined && techSpecContent === undefined && assumptionsContent === undefined) {
+      res.status(400).json({ error: 'at least one content field must be provided' });
+      return;
+    }
+
+    await updateDesignDocContent(req.params.id, userId, { designContent, techSpecContent, assumptionsContent });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/design-docs/:id/submit', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await submitDesignDocForReview(req.params.id, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/design-docs/:id/withdraw', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await withdrawDesignDocFromReview(req.params.id, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/design-docs/:id/review', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const body = req.body as ReviewDesignDocRequest;
+    await reviewDesignDoc(req.params.id, userId, body);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/design-docs/:id/sync', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    if (!doc.chatThreadId) {
+      res.status(400).json({ error: 'Design doc has no associated chat thread' });
+      return;
+    }
+
+    const designContent = readOutputDesignDoc(doc.chatThreadId);
+    const techSpecContent = readOutputTechSpec(doc.chatThreadId);
+    const assumptionsContent = readOutputAssumptions(doc.chatThreadId);
+
+    if (!designContent && !techSpecContent && !assumptionsContent) {
+      res.status(404).json({ error: 'Design doc output not yet available from generation thread' });
+      return;
+    }
+
+    const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
+    if (designContent) syncOpts.designContent = designContent;
+    if (techSpecContent) syncOpts.techSpecContent = techSpecContent;
+    if (assumptionsContent) syncOpts.assumptionsContent = assumptionsContent;
+    const allPresent = !!designContent && !!techSpecContent && !!assumptionsContent;
+    if (allPresent) syncOpts.finalStatus = 'draft';
+
+    await syncDesignDocContent(req.params.id, syncOpts);
+    res.json({ ok: true, designContent, techSpecContent, assumptionsContent });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/design-docs/:id', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await deleteDesignDoc(req.params.id, userId);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Interview detail/update/delete ────────────────────────────────────────────
 
 router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
   try {
@@ -178,34 +468,6 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
-// POST /prds/:prdId/sync — read PRD output from the generation thread and persist to DB
-router.post('/prds/:prdId/sync', requirePermission('interviews:manage'), async (req, res, next) => {
-  try {
-    const prd = await getPrd(req.params.prdId);
-    if (!prd) {
-      res.status(404).json({ error: 'PRD not found' });
-      return;
-    }
-    if (!prd.chatThreadId) {
-      res.status(400).json({ error: 'PRD has no associated chat thread' });
-      return;
-    }
-
-    const content = readOutputPrd(prd.chatThreadId);
-    const backlogJson = readOutputBacklog(prd.chatThreadId);
-
-    if (!content) {
-      res.status(404).json({ error: 'PRD output not yet available from generation thread' });
-      return;
-    }
-
-    await syncPrdContent(req.params.prdId, content, backlogJson ?? undefined);
-    res.json({ ok: true, content });
-  } catch (err) {
-    next(err);
-  }
-});
-
 router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -216,8 +478,15 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       return;
     }
 
+    const interview = await getInterview(req.params.interviewId);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+
     const result = await createPrd({
       interviewId: req.params.interviewId,
+      project: interview.project,
       userId,
       chatThreadId,
       title,

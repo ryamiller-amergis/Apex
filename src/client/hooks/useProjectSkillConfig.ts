@@ -4,6 +4,7 @@ import type {
   UpsertProjectSkillConfigRequest,
   ProjectSkillConfigResponse,
 } from '../../shared/types/projectSettings';
+import type { AppSetting } from '../../shared/types/appSettings';
 
 export function useProjectSkillConfig(project: string | null | undefined) {
   return useQuery<ProjectSkillConfigResponse | null>({
@@ -73,5 +74,54 @@ export function useDeleteProjectSkillConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
     },
+  });
+}
+
+export function useGlobalDefaultModel() {
+  return useQuery<AppSetting>({
+    queryKey: ['admin', 'app-settings', 'defaultModel'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/app-settings/defaultModel', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch global default model');
+      return res.json() as Promise<AppSetting>;
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useSetGlobalDefaultModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (value: string) => {
+      const res = await fetch('/api/admin/app-settings/defaultModel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ value }),
+      });
+      if (!res.ok) throw new Error('Failed to save global default model');
+      return res.json() as Promise<AppSetting>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'app-settings', 'defaultModel'] });
+    },
+  });
+}
+
+export interface AvailableModel {
+  id: string;
+  displayName: string;
+}
+
+export function useAvailableModels() {
+  return useQuery<AvailableModel[]>({
+    queryKey: ['admin', 'available-models'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/available-models', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch available models');
+      const data = (await res.json()) as { models: AvailableModel[] };
+      return data.models;
+    },
+    staleTime: 5 * 60 * 1000,
   });
 }

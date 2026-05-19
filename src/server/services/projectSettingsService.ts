@@ -21,13 +21,43 @@ export async function upsertSkillConfig(
   skillRepo: string,
   skillBranch: string,
   updatedBy?: string,
+  interviewSkillPath?: string | null,
+  prdSkillPath?: string | null,
+  designDocSkillPath?: string | null,
+  interviewModel?: string | null,
+  prdModel?: string | null,
+  designDocModel?: string | null,
 ): Promise<ProjectSkillConfig> {
+  const now = new Date().toISOString();
   const rows = await db
     .insert(projectSkillSettings)
-    .values({ project, skillRepo, skillBranch, updatedBy, updatedAt: new Date().toISOString() })
+    .values({
+      project,
+      skillRepo,
+      skillBranch,
+      updatedBy,
+      interviewSkillPath: interviewSkillPath ?? null,
+      prdSkillPath: prdSkillPath ?? null,
+      designDocSkillPath: designDocSkillPath ?? null,
+      interviewModel: interviewModel ?? null,
+      prdModel: prdModel ?? null,
+      designDocModel: designDocModel ?? null,
+      updatedAt: now,
+    })
     .onConflictDoUpdate({
       target: projectSkillSettings.project,
-      set: { skillRepo, skillBranch, updatedBy, updatedAt: new Date().toISOString() },
+      set: {
+        skillRepo,
+        skillBranch,
+        updatedBy,
+        interviewSkillPath: interviewSkillPath ?? null,
+        prdSkillPath: prdSkillPath ?? null,
+        designDocSkillPath: designDocSkillPath ?? null,
+        interviewModel: interviewModel ?? null,
+        prdModel: prdModel ?? null,
+        designDocModel: designDocModel ?? null,
+        updatedAt: now,
+      },
     })
     .returning();
   return rows[0];

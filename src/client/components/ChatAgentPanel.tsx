@@ -8,7 +8,8 @@ import {
   useCloseThread,
   useSkillList,
 } from '../hooks/useChatThreads';
-import { AGENT_MODELS, DEFAULT_MODEL_ID, modelBadge } from '../config/models';
+import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
+import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
 import type { ChatAttachment, ChatThread, ChatMessage } from '../../shared/types/chat';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
@@ -321,6 +322,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const cancelRun = useCancelRun(thread?.id ?? '');
   const closeThread = useCloseThread();
 
+  const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
+
   // Skills for the current thread (used by the / picker)
   const { data: threadSkills = [] } = useSkillList(
     thread?.kickoff.project ?? null,
@@ -354,7 +358,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   useEffect(() => {
     if (thread) {
       // Sync the model dropdown to whatever the thread was started with
-      setSelectedModel(thread.kickoff.model ?? DEFAULT_MODEL_ID);
+      setSelectedModel(thread.kickoff.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
       // Reset auto-open guard for the new thread
       prdAutoOpenedRef.current = false;
     }
@@ -711,9 +715,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 title="Agent model"
                 aria-label="Select model"
               >
-                {AGENT_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
+                {modelsLoading || !availableModels?.length ? (
+                  <option value="">Loading models…</option>
+                ) : (
+                  availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))
+                )}
               </select>
 
               <button

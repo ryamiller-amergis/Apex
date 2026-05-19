@@ -18,6 +18,20 @@ jest.mock('../services/prdService');
 jest.mock('../services/chatAgentService', () => ({
   readOutputPrd: jest.fn().mockReturnValue(null),
   readOutputBacklog: jest.fn().mockReturnValue(null),
+  readOutputDesignDoc: jest.fn().mockReturnValue(null),
+  readOutputTechSpec: jest.fn().mockReturnValue(null),
+  readOutputAssumptions: jest.fn().mockReturnValue(null),
+  createThread: jest.fn().mockResolvedValue({ id: 'thread-mock' }),
+}));
+
+jest.mock('../services/designDocService');
+jest.mock('../services/projectSettingsService', () => ({
+  getSkillConfig: jest.fn().mockResolvedValue(null),
+}));
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: jest.fn().mockResolvedValue('global-default-model'),
+  getAppSetting: jest.fn().mockResolvedValue(null),
+  setAppSetting: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../middleware/rbac', () => ({
@@ -35,8 +49,29 @@ jest.mock('../utils/requestUser', () => ({
 const mockInterviewService = interviewService as jest.Mocked<typeof interviewService>;
 const mockPrdService = prdService as jest.Mocked<typeof prdService>;
 
-const { readOutputPrd: mockReadOutputPrd, readOutputBacklog: mockReadOutputBacklog } =
-  jest.requireMock('../services/chatAgentService') as { readOutputPrd: jest.Mock; readOutputBacklog: jest.Mock };
+const {
+  readOutputPrd: mockReadOutputPrd,
+  readOutputBacklog: mockReadOutputBacklog,
+  createThread: mockCreateThread,
+} = jest.requireMock('../services/chatAgentService') as {
+  readOutputPrd: jest.Mock;
+  readOutputBacklog: jest.Mock;
+  createThread: jest.Mock;
+};
+
+const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
+  '../services/projectSettingsService',
+) as { getSkillConfig: jest.Mock };
+
+const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
+  '../services/appSettingsService',
+) as { getDefaultModel: jest.Mock };
+
+const { createDesignDoc: mockCreateDesignDoc, startDesignDocWatcher: mockStartDesignDocWatcher } =
+  jest.requireMock('../services/designDocService') as {
+    createDesignDoc: jest.Mock;
+    startDesignDocWatcher: jest.Mock;
+  };
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -73,6 +108,7 @@ const prdSummary = {
   interviewId: 'interview-1',
   chatThreadId: 'thread-2',
   authorId: 'user-test',
+  project: 'proj-alpha',
   title: 'Feature PRD',
   status: 'draft' as const,
   createdAt: '2026-01-01T00:00:00Z',
@@ -537,6 +573,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns 201 with prdId and threadId and starts the watcher', async () => {
+    mockInterviewService.getInterview.mockResolvedValue(interview);
     mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
     mockPrdService.startPrdWatcher.mockReturnValue(undefined);
 
@@ -548,11 +585,23 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     expect(res.body).toMatchObject({ prdId: 'prd-new' });
     expect(mockPrdService.createPrd).toHaveBeenCalledWith({
       interviewId: 'interview-1',
+      project: 'proj-alpha',
       userId: 'user-test',
       chatThreadId: 'thread-new',
       title: 'My PRD',
     });
     expect(mockPrdService.startPrdWatcher).toHaveBeenCalledWith('prd-new', 'thread-new');
+  });
+
+  it('returns 404 when interview does not exist', async () => {
+    mockInterviewService.getInterview.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-missing/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: 'Interview not found' });
   });
 
   it('returns 400 when chatThreadId is missing', async () => {
@@ -565,3 +614,187 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     expect(mockPrdService.createPrd).not.toHaveBeenCalled();
   });
 });
+
+// ── POST /api/interviews/prds/:prdId/review — design doc model resolution ─────
+
+describe('POST /api/interviews/prds/:prdId/review (approve) — design doc model resolution', () => {
+  const approvedPrd = { ...prd, status: 'pending_review' as const };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrdService.reviewPrd.mockResolvedValue(undefined);
+    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
+    mockStartDesignDocWatcher.mockReturnValue(undefined);
+  });
+
+  it('passes designDocModel from skillConfig to createThread when set', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: 'gpt-4o',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews/prds/prd-1/review')
+      .send({ action: 'approve' });
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'gpt-4o' }),
+    );
+  });
+
+  it('falls back to global default model when skillConfig.designDocModel is null', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: null,
+    });
+    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
+
+    await request(buildApp())
+      .post('/api/interviews/prds/prd-1/review')
+      .send({ action: 'approve' });
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
+    );
+  });
+
+  it('falls back to global default model when skillConfig is null (no config for project)', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue(null);
+    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
+
+    await request(buildApp())
+      .post('/api/interviews/prds/prd-1/review')
+      .send({ action: 'approve' });
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
+    );
+  });
+
+  it('returns 200 { ok: true, designDocId } on successful approval with design doc creation', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: 'gpt-4o',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/review')
+      .send({ action: 'approve' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, designDocId: 'design-doc-1' });
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/design-docs — model resolution ───────────
+
+describe('POST /api/interviews/prds/:prdId/design-docs — design doc model resolution', () => {
+  const approvedPrd = { ...prd, status: 'approved' as const };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
+    mockStartDesignDocWatcher.mockReturnValue(undefined);
+  });
+
+  it('passes designDocModel from skillConfig to createThread when set', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: 'claude-3-opus',
+    });
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'claude-3-opus' }),
+    );
+  });
+
+  it('falls back to global default model when skillConfig.designDocModel is null', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: null,
+    });
+    mockGetDefaultModel.mockResolvedValue('global-default-model');
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'global-default-model' }),
+    );
+  });
+
+  it('falls back to global default model when there is no skill config for the project', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue(null);
+    mockGetDefaultModel.mockResolvedValue('global-default-model');
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ model: 'global-default-model' }),
+    );
+  });
+
+  it('returns 201 with designDocId and threadId', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: null,
+      designDocModel: 'gpt-4o',
+    });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ designDocId: 'design-doc-1', threadId: 'thread-mock' });
+  });
+
+  it('returns 404 when the PRD does not exist', async () => {
+    mockPrdService.getPrd.mockResolvedValue(null);
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-missing/design-docs');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: 'PRD not found' });
+  });
+
+  it('returns 409 when the PRD is not approved', async () => {
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'draft' as const });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: 'Design docs can only be created from approved PRDs' });
+  });
+});
+

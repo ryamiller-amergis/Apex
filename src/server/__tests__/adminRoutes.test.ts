@@ -16,6 +16,14 @@ import * as projectSettingsService from '../services/projectSettingsService';
 jest.mock('../services/rbacService');
 jest.mock('../services/projectSettingsService');
 
+jest.mock('@cursor/sdk', () => ({
+  Cursor: {
+    models: {
+      list: jest.fn(),
+    },
+  },
+}));
+
 // Default: all permission checks pass. Tests that verify auth behaviour
 // re-configure these mocks per test.
 jest.mock('../middleware/rbac', () => ({
@@ -28,6 +36,10 @@ jest.mock('../middleware/rbac', () => ({
 
 const mockService = rbacService as jest.Mocked<typeof rbacService>;
 const mockProjectSettings = projectSettingsService as jest.Mocked<typeof projectSettingsService>;
+
+const { Cursor: MockCursor } = jest.requireMock('@cursor/sdk') as {
+  Cursor: { models: { list: jest.Mock } };
+};
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -439,7 +451,13 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'proj-alpha',
       'org/updated-skills',
       'release',
-      undefined,
+      undefined,   // updatedBy
+      undefined,   // interviewSkillPath
+      undefined,   // prdSkillPath
+      undefined,   // designDocSkillPath
+      undefined,   // interviewModel
+      undefined,   // prdModel
+      undefined,   // designDocModel
     );
   });
 
@@ -483,6 +501,12 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'org/repo',
       'main',
       'Alice Admin',
+      undefined,   // interviewSkillPath
+      undefined,   // prdSkillPath
+      undefined,   // designDocSkillPath
+      undefined,   // interviewModel
+      undefined,   // prdModel
+      undefined,   // designDocModel
     );
   });
 
@@ -506,6 +530,39 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'org/repo',
       'main',
       'alice@example.com',
+      undefined,   // interviewSkillPath
+      undefined,   // prdSkillPath
+      undefined,   // designDocSkillPath
+      undefined,   // interviewModel
+      undefined,   // prdModel
+      undefined,   // designDocModel
+    );
+  });
+
+  it('forwards interviewModel, prdModel, and designDocModel to upsertSkillConfig', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        interviewModel: 'claude-3.5-sonnet',
+        prdModel: 'gpt-4o',
+        designDocModel: 'claude-3-opus',
+      });
+
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      'proj-alpha',
+      'org/repo',
+      'main',
+      undefined,               // updatedBy
+      undefined,               // interviewSkillPath
+      undefined,               // prdSkillPath
+      undefined,               // designDocSkillPath
+      'claude-3.5-sonnet',     // interviewModel
+      'gpt-4o',                // prdModel
+      'claude-3-opus',         // designDocModel
     );
   });
 
@@ -540,5 +597,45 @@ describe('DELETE /api/admin/project-settings/:project', () => {
     const res = await request(buildApp()).delete('/api/admin/project-settings/proj-alpha');
 
     expect(res.status).toBe(500);
+  });
+});
+
+// ── GET /api/admin/available-models ───────────────────────────────────────────
+//
+// NOTE: admin.ts holds the model list in module-level cache variables that
+// persist for the lifetime of the test process.  Tests are ordered so that
+// the cache is cold when the first test in this describe block runs, and
+// deliberately warm for the second (caching) test.
+
+describe('GET /api/admin/available-models', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with the model list in { id, displayName } shape', async () => {
+    MockCursor.models.list.mockResolvedValue([
+      { id: 'claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
+      { id: 'gpt-4o' }, // missing displayName — should fall back to id
+    ]);
+
+    const res = await request(buildApp()).get('/api/admin/available-models');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      models: [
+        { id: 'claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
+        { id: 'gpt-4o', displayName: 'gpt-4o' },
+      ],
+    });
+    expect(MockCursor.models.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves subsequent requests from cache without calling Cursor.models.list again', async () => {
+    // The previous test already populated the cache and the TTL is 5 minutes.
+    // clearAllMocks() reset the call count but not the module-level cache.
+    const res = await request(buildApp()).get('/api/admin/available-models');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('models');
+    // SDK must NOT have been called again — the cached result is served.
+    expect(MockCursor.models.list).not.toHaveBeenCalled();
   });
 });

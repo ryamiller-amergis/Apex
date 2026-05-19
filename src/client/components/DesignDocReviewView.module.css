@@ -175,19 +175,19 @@
 }
 
 /* Danger variant — "Delete" */
-.btnDeletePrd {
+.btnDeleteDoc {
   composes: actionBtn;
   border-color: color-mix(in srgb, var(--error-color) 60%, var(--border-color));
   color: var(--error-color);
 }
 
-.btnDeletePrd:hover:not(:disabled) {
+.btnDeleteDoc:hover:not(:disabled) {
   background: var(--error-color);
   border-color: var(--error-color);
   color: #fff;
 }
 
-.btnDeletePrd:disabled {
+.btnDeleteDoc:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -225,6 +225,29 @@
   color: #fff;
 }
 
+.commentBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commentInput {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  resize: none;
+  font-family: inherit;
+  min-width: 220px;
+  transition: border-color 0.2s ease;
+}
+
+.commentInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
 
 .tabs {
   display: flex;
@@ -257,6 +280,16 @@
   border-bottom-color: var(--accent-color);
 }
 
+.tab.tabDirty {
+  color: var(--text-primary);
+}
+
+.editingIndicator {
+  font-size: 0.75em;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
 .tabContent {
   flex: 1;
   overflow-y: auto;
@@ -265,12 +298,43 @@
   flex-direction: column;
 }
 
+.previewWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1;
+}
+
+.previewToolbar {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.btnEditInline {
+  padding: 5px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnEditInline:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
 .preview {
-  max-width: 760px;
-  margin: 0 auto;
+  margin: 0;
   line-height: 1.7;
   color: var(--text-primary);
   font-size: 0.9rem;
+  width: 100%;
 }
 
 .preview h1, .preview h2, .preview h3 {
@@ -287,6 +351,85 @@
 .preview table { border-collapse: collapse; width: 100%; }
 .preview th, .preview td { border: 1px solid var(--border-color); padding: 6px 12px; }
 
+.mermaidDiagram {
+  width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-sizing: border-box;
+}
+
+.mermaidDiagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  color: var(--text-primary);
+}
+
+.mermaidDiagram svg text,
+.mermaidDiagram svg .messageText,
+.mermaidDiagram svg .label,
+.mermaidDiagram svg .nodeLabel,
+.mermaidDiagram svg .edgeLabel,
+.mermaidDiagram svg .actor {
+  color: var(--text-primary) !important;
+  fill: var(--text-primary) !important;
+}
+
+.mermaidDiagram svg .edgeLabel,
+.mermaidDiagram svg .labelBkg {
+  background: var(--bg-primary) !important;
+}
+
+.mermaidDiagram svg .edgeLabel rect,
+.mermaidDiagram svg .labelBkg {
+  fill: var(--bg-primary) !important;
+}
+
+.mermaidDiagram svg .messageLine0,
+.mermaidDiagram svg .messageLine1,
+.mermaidDiagram svg .flowchart-link,
+.mermaidDiagram svg .edgePath path,
+.mermaidDiagram svg .actor-line {
+  stroke: var(--accent-color) !important;
+}
+
+.mermaidLoading {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mermaidError {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, var(--border-color));
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.mermaidErrorTitle {
+  margin-bottom: 8px;
+  color: var(--error-color);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.mermaidErrorMessage {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 .emptyPreview {
   text-align: center;
   color: var(--text-muted);
@@ -295,9 +438,8 @@
 }
 
 .editArea {
-  max-width: 760px;
   width: 100%;
-  margin: 0 auto;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -370,24 +512,6 @@
   color: var(--text-primary);
 }
 
-.backlogView {
-  max-width: 760px;
-  margin: 0 auto;
-}
-
-.backlogPre {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-  overflow-x: auto;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
 .loadingState,
 .errorState {
   display: flex;
@@ -403,121 +527,6 @@
   color: var(--text-muted);
   font-style: italic;
 }
-
-/* ── Generation panel ─────────────────────────────────────────────────────── */
-
-.genPanel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.genStatus {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.genWaiting {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.genSpinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--border-color);
-  border-top-color: var(--accent-color);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-
-.genStream {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.genAgent {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 14px 18px;
-  font-size: 0.88rem;
-  line-height: 1.7;
-  color: var(--text-primary);
-  max-width: 800px;
-}
-
-.genAgent h1, .genAgent h2, .genAgent h3 {
-  color: var(--text-primary);
-  margin-top: 1em;
-  margin-bottom: 0.4em;
-}
-
-.genAgent p { margin: 0.6em 0; }
-.genAgent code { background: var(--bg-tertiary); padding: 2px 5px; border-radius: 3px; font-size: 0.85em; }
-.genAgent pre { background: var(--bg-tertiary); padding: 10px 14px; border-radius: 6px; overflow-x: auto; }
-.genAgent ul, .genAgent ol { padding-left: 1.5em; }
-.genAgent table { border-collapse: collapse; width: 100%; }
-.genAgent th, .genAgent td { border: 1px solid var(--border-color); padding: 5px 10px; }
-
-.genTool {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-family: 'Consolas', 'Monaco', monospace;
-  padding: 4px 0;
-}
-
-.genError {
-  margin: 12px 24px;
-  padding: 10px 14px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  border-radius: 6px;
-  font-size: 0.84rem;
-  color: var(--error-color);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.genRetryBtn {
-  background: none;
-  border: 1px solid var(--error-color);
-  color: var(--error-color);
-  border-radius: 5px;
-  padding: 3px 10px;
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.genRetryBtn:hover {
-  background: var(--error-color);
-  color: #fff;
-}
-
-/* ── Status badge: generating ─────────────────────────────────────────────── */
-
-.badgeGenerating { background: rgba(99, 102, 241, 0.15); color: var(--accent-color); }
 
 /* ── Skeleton / generating state ──────────────────────────────────────────── */
 
@@ -547,14 +556,18 @@
 }
 
 .skeletonSection {
-  max-width: 760px;
-  margin: 0 auto 32px;
+  margin: 0 0 32px;
 }
 
 .skeletonArea {
   padding: 24px;
   flex: 1;
   overflow-y: auto;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .generatingBanner {
@@ -565,8 +578,7 @@
   border: 1px solid var(--accent-color);
   border-radius: 10px;
   background: var(--bg-secondary);
-  margin: 0 auto 32px;
-  max-width: 760px;
+  margin: 0 0 32px;
 }
 
 .bannerSpinner {
@@ -588,54 +600,4 @@
 .bannerSub {
   font-size: 0.82rem;
   color: var(--text-secondary);
-}
-
-/* ── Rejection callout banner ─────────────────────────────────────────────── */
-
-.rejectionBanner {
-  padding: 12px 24px;
-  background: rgba(239, 68, 68, 0.07);
-  border-bottom: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-color));
-  color: var(--error-color);
-  font-size: 0.875rem;
-  line-height: 1.55;
-  flex-shrink: 0;
-}
-
-/* ── Design doc callout banner ────────────────────────────────────────────── */
-
-.designDocBanner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 24px;
-  background: rgba(34, 197, 94, 0.07);
-  border-bottom: 1px solid color-mix(in srgb, var(--success-color) 40%, var(--border-color));
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
-.designDocBannerText {
-  color: var(--text-secondary);
-}
-
-.designDocBannerLink {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  border: 1px solid var(--success-color);
-  border-radius: 5px;
-  background: transparent;
-  color: var(--success-color);
-  font-size: 0.82rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-}
-
-.designDocBannerLink:hover {
-  background: var(--success-color);
-  color: #fff;
 }

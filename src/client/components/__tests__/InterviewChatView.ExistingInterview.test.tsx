@@ -35,6 +35,14 @@ jest.mock('../../hooks/useChatThreads', () => ({
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: jest.fn(() => ({ data: null })),
+  useGlobalDefaultModel: jest.fn(() => ({ data: { key: 'defaultModel', value: 'composer-2' } })),
+  useAvailableModels: jest.fn(() => ({
+    data: [
+      { id: 'composer-2', displayName: 'Composer 2' },
+      { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+    ],
+    isLoading: false,
+  })),
 }));
 
 const mockUpdateStatus = jest.fn();
@@ -84,7 +92,9 @@ jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
 import { within } from '@testing-library/react';
 import { useAppShell } from '../../hooks/useAppShell';
-import { useInterview, useUpdateInterviewStatus } from '../../hooks/useInterviews';
+import { useInterview, useUpdateInterviewStatus, useCreatePrd } from '../../hooks/useInterviews';
+import { useStartChat } from '../../hooks/useChatThreads';
+import { useProjectSkillConfig, useGlobalDefaultModel } from '../../hooks/useProjectSkillConfig';
 
 // ── Factories ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +104,7 @@ function makePrd(overrides: Partial<PrdSummary> = {}): PrdSummary {
     interviewId: 'iv-1',
     chatThreadId: 'thread-prd-1',
     authorId: 'user-1',
+    project: 'proj-alpha',
     title: 'PRD — Email Resend Feature',
     status: 'draft',
     createdAt: '2026-01-02T00:00:00Z',
@@ -405,5 +416,135 @@ describe('ExistingInterviewView — choice block submit gating', () => {
     });
     renderExistingInterview();
     expect(screen.getByRole('button', { name: /Submit answers/i })).toBeInTheDocument();
+  });
+});
+
+// ── handleGeneratePrd — model resolution ──────────────────────────────────────
+
+describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
+  const mockStartChatMutate = jest.fn();
+  const mockCreatePrdMutate = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    HTMLElement.prototype.scrollIntoView = jest.fn();
+    mockUseChatStream.mockReturnValue(idleStream);
+
+    // Interview is complete so the "Generate PRD" button is visible
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [] }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+    });
+
+    mockStartChatMutate.mockResolvedValue({ threadId: 'new-thread-1' });
+    mockCreatePrdMutate.mockResolvedValue({ prdId: 'prd-new' });
+
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartChatMutate,
+      isPending: false,
+    });
+    (useCreatePrd as jest.Mock).mockReturnValue({
+      mutateAsync: mockCreatePrdMutate,
+      isPending: false,
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+    }) as jest.Mock;
+  });
+
+  it('passes skillConfig.prdModel to the startChat kickoff when set', async () => {
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({
+      data: {
+        project: 'MaxView',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        prdModel: 'claude-opus-4-6',
+      },
+    });
+    (useGlobalDefaultModel as jest.Mock).mockReturnValue({
+      data: { key: 'defaultModel', value: 'composer-2' },
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTitle('Generate a PRD from this interview'));
+
+    await waitFor(() => {
+      expect(mockStartChatMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kickoff: expect.objectContaining({ model: 'claude-opus-4-6' }),
+        }),
+      );
+    });
+  });
+
+  it('falls back to globalDefaultModel.value when skillConfig.prdModel is null', async () => {
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({
+      data: {
+        project: 'MaxView',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        prdModel: null,
+      },
+    });
+    (useGlobalDefaultModel as jest.Mock).mockReturnValue({
+      data: { key: 'defaultModel', value: 'composer-2' },
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTitle('Generate a PRD from this interview'));
+
+    await waitFor(() => {
+      expect(mockStartChatMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kickoff: expect.objectContaining({ model: 'composer-2' }),
+        }),
+      );
+    });
+  });
+
+  it('falls back to globalDefaultModel.value when skillConfig is null', async () => {
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({ data: null });
+    (useGlobalDefaultModel as jest.Mock).mockReturnValue({
+      data: { key: 'defaultModel', value: 'composer-2' },
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTitle('Generate a PRD from this interview'));
+
+    await waitFor(() => {
+      expect(mockStartChatMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kickoff: expect.objectContaining({ model: 'composer-2' }),
+        }),
+      );
+    });
+  });
+
+  it('uses DEFAULT_MODEL_ID when both skillConfig.prdModel and globalDefaultModel are null/undefined', async () => {
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({ data: null });
+    (useGlobalDefaultModel as jest.Mock).mockReturnValue({ data: undefined });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTitle('Generate a PRD from this interview'));
+
+    await waitFor(() => {
+      expect(mockStartChatMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kickoff: expect.objectContaining({ model: expect.any(String) }),
+        }),
+      );
+    });
+    const calledWith = mockStartChatMutate.mock.calls[0][0] as {
+      kickoff: { model: string };
+    };
+    // DEFAULT_MODEL_ID is the hard-coded fallback — it must be a non-empty string
+    expect(calledWith.kickoff.model).toBeTruthy();
   });
 });

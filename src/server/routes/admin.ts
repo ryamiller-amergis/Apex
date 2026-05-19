@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
+import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
+import { Cursor } from '@cursor/sdk';
 import type {
   CreateRoleRequest,
   UpdateRoleRequest,
@@ -15,6 +17,35 @@ const router = Router();
 // All admin routes require authentication (ensureAuthenticated is applied globally upstream)
 // and the admin:roles permission
 router.use(requirePermission('admin:roles'));
+
+// ── Available Models cache ────────────────────────────────────────────────────
+
+interface AvailableModel {
+  id: string;
+  displayName: string;
+}
+
+let modelsCache: AvailableModel[] | null = null;
+let modelsCacheExpiry = 0;
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function fetchAvailableModels(): Promise<AvailableModel[]> {
+  const now = Date.now();
+  if (modelsCache && now < modelsCacheExpiry) return modelsCache;
+
+  try {
+    const result = await Cursor.models.list();
+    const models: AvailableModel[] = (result ?? []).map((m: { id: string; displayName?: string }) => ({
+      id: m.id,
+      displayName: m.displayName ?? m.id,
+    }));
+    modelsCache = models;
+    modelsCacheExpiry = now + MODELS_CACHE_TTL_MS;
+    return models;
+  } catch {
+    return modelsCache ?? [];
+  }
+}
 
 // ── Roles ──────────────────────────────────────────────────────────────────────
 
@@ -134,6 +165,17 @@ router.delete('/users/:oid/roles/:roleId', async (req: Request, res: Response): 
   }
 });
 
+// ── Available Models ──────────────────────────────────────────────────────────
+
+router.get('/available-models', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const models = await fetchAvailableModels();
+    res.json({ models });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── Project Skill Settings ────────────────────────────────────────────────────
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
@@ -148,13 +190,24 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, interviewModel, prdModel, designDocModel } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
     }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
-    const config = await projectSettingsService.upsertSkillConfig(project, skillRepo, skillBranch, updatedBy);
+    const config = await projectSettingsService.upsertSkillConfig(
+      project,
+      skillRepo,
+      skillBranch,
+      updatedBy,
+      interviewSkillPath,
+      prdSkillPath,
+      designDocSkillPath,
+      interviewModel,
+      prdModel,
+      designDocModel,
+    );
     res.json(config);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -166,6 +219,32 @@ router.delete('/project-settings/:project', async (req: Request, res: Response):
     const { project } = req.params;
     await projectSettingsService.deleteSkillConfig(project);
     res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── App Settings ──────────────────────────────────────────────────────────────
+
+router.get('/app-settings/defaultModel', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const value = await getDefaultModel();
+    res.json({ value });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/app-settings/defaultModel', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { value } = req.body as { value: string };
+    if (!value || typeof value !== 'string') {
+      res.status(400).json({ error: 'value is required' });
+      return;
+    }
+    const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
+    await setAppSetting('defaultModel', value, updatedBy);
+    res.json({ value });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

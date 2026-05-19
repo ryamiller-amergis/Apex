@@ -150,6 +150,30 @@ describe('AzureDevOpsService - Delete Operations', () => {
       expect(versions).toHaveLength(2); // Should deduplicate
     });
 
+    it('should fetch release version work items in batches of 200', async () => {
+      const queriedWorkItems = Array.from({ length: 246 }, (_, index) => ({ id: index + 1 }));
+
+      mockWitApi.queryByWiql = jest.fn().mockResolvedValue({
+        workItems: queriedWorkItems,
+      });
+      mockWitApi.getWorkItems = jest.fn().mockImplementation((ids: number[]) => Promise.resolve(
+        ids.map((id) => ({
+          id,
+          fields: {
+            'System.Tags': id <= 200 ? 'Release:v1.0.0' : 'Release:v2.0.0',
+          },
+        })),
+      ));
+
+      const versions = await service.getReleaseVersions();
+
+      expect(versions).toEqual(['v1.0.0', 'v2.0.0']);
+      expect(mockWitApi.getWorkItems).toHaveBeenCalledTimes(2);
+      expect(mockWitApi.getWorkItems.mock.calls[0][0]).toHaveLength(200);
+      expect(mockWitApi.getWorkItems.mock.calls[1][0]).toHaveLength(46);
+      expect(mockWitApi.getWorkItems.mock.calls[0][1]).toEqual(['System.Tags']);
+    });
+
     it('should return empty array when no release tags found', async () => {
       mockWitApi.queryByWiql = jest.fn().mockResolvedValue({
         workItems: [],

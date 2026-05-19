@@ -6,6 +6,10 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
 
+jest.mock('../services/projectSettingsService', () => ({
+  getSkillConfig: jest.fn(),
+}));
+
 describe('API Routes', () => {
   let app: express.Application;
   let mockAdoService: jest.Mocked<AzureDevOpsService>;
@@ -378,5 +382,91 @@ describe('API Routes', () => {
 
       expect(response.body).toEqual({ error: 'Failed to update work item field' });
     });
+  });
+});
+
+// ── GET /api/skill-config ─────────────────────────────────────────────────────
+
+const { getSkillConfig: mockGetSkillConfig } = jest.requireMock('../services/projectSettingsService') as {
+  getSkillConfig: jest.Mock;
+};
+
+describe('GET /api/skill-config', () => {
+  let app: express.Application;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    app.use('/api', apiRouter);
+  });
+
+  it('returns 200 with all skill config fields including per-skill model fields', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      interviewSkillPath: '.cursor/skills/interview/SKILL.md',
+      prdSkillPath: '.cursor/skills/prd/SKILL.md',
+      designDocSkillPath: '.cursor/skills/design/SKILL.md',
+      interviewModel: 'claude-3.5-sonnet',
+      prdModel: 'gpt-4o',
+      designDocModel: 'claude-3-opus',
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-alpha');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      project: 'proj-alpha',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      interviewSkillPath: '.cursor/skills/interview/SKILL.md',
+      prdSkillPath: '.cursor/skills/prd/SKILL.md',
+      designDocSkillPath: '.cursor/skills/design/SKILL.md',
+      interviewModel: 'claude-3.5-sonnet',
+      prdModel: 'gpt-4o',
+      designDocModel: 'claude-3-opus',
+    });
+  });
+
+  it('returns interviewModel, prdModel, designDocModel as null when not set', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-beta',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      interviewSkillPath: null,
+      prdSkillPath: null,
+      designDocSkillPath: null,
+      interviewModel: null,
+      prdModel: null,
+      designDocModel: null,
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-beta');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      interviewModel: null,
+      prdModel: null,
+      designDocModel: null,
+    });
+  });
+
+  it('returns 400 when project query param is missing', async () => {
+    const res = await request(app).get('/api/skill-config');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'project query parameter is required' });
+    expect(mockGetSkillConfig).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when no config exists for the project', async () => {
+    mockGetSkillConfig.mockResolvedValue(null);
+
+    const res = await request(app).get('/api/skill-config?project=unknown-project');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: 'No skill config found for this project' });
   });
 });

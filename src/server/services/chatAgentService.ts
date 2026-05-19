@@ -56,9 +56,19 @@ const threads = new Map<string, ThreadState>();
 function findOutputFile(dir: string, pattern: RegExp): string | null {
   if (!fs.existsSync(dir)) return null;
   try {
-    const names = fs.readdirSync(dir);
-    const match = names.find((n) => pattern.test(n));
-    return match ? path.join(dir, match) : null;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && pattern.test(entry.name)) {
+        return path.join(dir, entry.name);
+      }
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const found = findOutputFile(path.join(dir, entry.name), pattern);
+        if (found) return found;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -629,6 +639,9 @@ export async function sendMessage(
     const outputDir = path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
     const prdFile = findOutputFile(outputDir, /\.prd\.md$/i) ?? (fs.existsSync(path.join(outputDir, 'PRD.md')) ? path.join(outputDir, 'PRD.md') : null);
     const backlogFile = findOutputFile(outputDir, /\.backlog\.json$/i);
+    const designFile = findOutputFile(outputDir, /[-.]design\.md$/i);
+    const techSpecFile = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
+    const assumptionsFile = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
     const prdReady = prdFile !== null;
     const backlogReady = backlogFile !== null;
 
@@ -641,6 +654,21 @@ export async function sendMessage(
     if (backlogFile) {
       try {
         fs.copyFileSync(backlogFile, path.join(THREADS_DIR, `${threadId}.backlog.json`));
+      } catch { /* non-fatal */ }
+    }
+    if (designFile) {
+      try {
+        fs.copyFileSync(designFile, path.join(THREADS_DIR, `${threadId}.design.md`));
+      } catch { /* non-fatal */ }
+    }
+    if (techSpecFile) {
+      try {
+        fs.copyFileSync(techSpecFile, path.join(THREADS_DIR, `${threadId}.tech-spec.md`));
+      } catch { /* non-fatal */ }
+    }
+    if (assumptionsFile) {
+      try {
+        fs.copyFileSync(assumptionsFile, path.join(THREADS_DIR, `${threadId}.assumptions.md`));
       } catch { /* non-fatal */ }
     }
 
@@ -708,6 +736,9 @@ export async function closeThread(threadId: string): Promise<void> {
     fs.rmSync(path.join(THREADS_DIR, `${threadId}.json`), { force: true });
     fs.rmSync(path.join(THREADS_DIR, `${threadId}.prd.md`), { force: true });
     fs.rmSync(path.join(THREADS_DIR, `${threadId}.backlog.json`), { force: true });
+    fs.rmSync(path.join(THREADS_DIR, `${threadId}.design.md`), { force: true });
+    fs.rmSync(path.join(THREADS_DIR, `${threadId}.tech-spec.md`), { force: true });
+    fs.rmSync(path.join(THREADS_DIR, `${threadId}.assumptions.md`), { force: true });
   } catch { /* non-fatal */ }
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
@@ -808,4 +839,43 @@ export function writeOutputPrd(threadId: string, content: string): void {
     const named = findOutputFile(outputDir, /\.prd\.md$/i);
     fs.writeFileSync(named ?? path.join(outputDir, 'PRD.md'), content, 'utf-8');
   }
+}
+
+/**
+ * Read the main design doc output ({feature-slug}-design.md).
+ * Checks the durable threads dir first (survives restarts), then falls back to the ephemeral workspace.
+ */
+export function readOutputDesignDoc(threadId: string): string | null {
+  const durable = path.join(THREADS_DIR, `${threadId}.design.md`);
+  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const named = findOutputFile(outputDir, /[-.]design\.md$/i);
+  return named ? fs.readFileSync(named, 'utf-8') : null;
+}
+
+/**
+ * Read the tech spec output ({feature-slug}-tech-spec.md).
+ * Checks the durable threads dir first, then falls back to the ephemeral workspace.
+ */
+export function readOutputTechSpec(threadId: string): string | null {
+  const durable = path.join(THREADS_DIR, `${threadId}.tech-spec.md`);
+  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const named = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
+  return named ? fs.readFileSync(named, 'utf-8') : null;
+}
+
+/**
+ * Read the assumptions output ({feature-slug}-assumptions.md).
+ * Checks the durable threads dir first, then falls back to the ephemeral workspace.
+ */
+export function readOutputAssumptions(threadId: string): string | null {
+  const durable = path.join(THREADS_DIR, `${threadId}.assumptions.md`);
+  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const named = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
+  return named ? fs.readFileSync(named, 'utf-8') : null;
 }

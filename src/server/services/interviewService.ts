@@ -98,6 +98,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     interviewId: p.interviewId,
     chatThreadId: p.chatThreadId ?? '',
     authorId: p.authorId,
+    project: p.project,
     title: p.title,
     status: p.status as PrdStatus,
     reviewerId: p.reviewerId ?? undefined,

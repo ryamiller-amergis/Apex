@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.13.0",
+    "date": "2026-05-19",
+    "title": "Design Docs and Model Controls",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added design doc generation from approved PRDs, including a dedicated review page with editable design, tech spec, and assumptions sections"
+      },
+      {
+        "type": "feature",
+        "description": "Added a Design Docs tab in the interviews dashboard with status filters, search, review actions, and deletion support"
+      },
+      {
+        "type": "feature",
+        "description": "Admins can now choose project-specific interview, PRD, and design doc skills, plus per-skill model selections and a global default model"
+      },
+      {
+        "type": "improvement",
+        "description": "PRD approvals can now automatically start design doc generation and link reviewers directly to the generated design doc"
+      },
+      {
+        "type": "improvement",
+        "description": "Generated design docs now render Mermaid diagrams in the app with theme-aware styling"
+      },
+      {
+        "type": "bugfix",
+        "description": "Azure DevOps automation now skips retired area paths so stale team configurations do not trigger unnecessary checks"
+      }
+    ]
+  },
+  {
     "version": "1.12.1",
     "date": "2026-05-15",
     "title": "What's New Auto-Launch & Theming",

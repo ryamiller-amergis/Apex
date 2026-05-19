@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hooks/useChatThreads';
-import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
@@ -226,9 +226,12 @@ const NewInterviewCompose: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
+  const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   // Resolve repo + branch: admin config takes priority, then heuristic fallback
   const resolvedRepoName = skillConfig?.skillRepo
@@ -244,7 +247,9 @@ const NewInterviewCompose: React.FC = () => {
     resolvedRepoName,
     resolvedBranch,
   );
-  const grillSkill = skills.find((s) => s.name === 'grill-with-docs');
+  const grillSkill = skillConfig?.interviewSkillPath
+    ? skills.find((s) => s.path === skillConfig.interviewSkillPath)
+    : skills.find((s) => s.name === 'grill-with-docs');
 
   const {
     attachments,
@@ -265,6 +270,13 @@ const NewInterviewCompose: React.FC = () => {
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
+
+  useEffect(() => {
+    const newDefault = skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
+    const prevDefault = prevEffectiveDefaultRef.current;
+    prevEffectiveDefaultRef.current = newDefault;
+    setModel((current) => current === prevDefault ? newDefault : current);
+  }, [skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -354,7 +366,7 @@ const NewInterviewCompose: React.FC = () => {
           ) : null}
 
           <span className={`${styles.composePill} ${styles.composePillSkill}`}>
-            ✨ grill-with-docs
+            ✨ {grillSkill?.name ?? 'grill-with-docs'}
           </span>
         </div>
 
@@ -458,9 +470,13 @@ const NewInterviewCompose: React.FC = () => {
               onChange={(e) => setModel(e.target.value)}
               disabled={isSending}
             >
-              {AGENT_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
+              {modelsLoading || !availableModels?.length ? (
+                <option value={model}>Loading models…</option>
+              ) : (
+                availableModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.displayName}</option>
+                ))
+              )}
             </select>
             <button
               className={styles.sendBtn}
@@ -486,7 +502,7 @@ const NewInterviewCompose: React.FC = () => {
         </div>
 
         <p className={styles.composeHint}>
-          Enter to send · Shift+Enter for new line · The <strong>grill-with-docs</strong> skill will guide this structured interview
+          Enter to send · Shift+Enter for new line · The <strong>{grillSkill?.name ?? 'grill-with-docs'}</strong> skill will guide this structured interview
         </p>
       </div>
     </div>
@@ -501,6 +517,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
 
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -529,7 +546,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     resolvedPrdRepo,
     resolvedPrdBranch,
   );
-  const toPrdSkill = skills.find((s) => s.name === 'to-prd');
+  const toPrdSkill = skillConfig?.prdSkillPath
+    ? skills.find((s) => s.path === skillConfig.prdSkillPath)
+    : skills.find((s) => s.name === 'to-prd');
 
   const {
     attachments,
@@ -650,6 +669,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       const skillPath = toPrdSkill?.path ?? '.cursor/skills/to-prd/SKILL.md';
 
       // Create the generation thread — NOT skipAutoKickoff so the agent starts automatically
+      const prdModel = skillConfig?.prdModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
       const threadResult = await startChat.mutateAsync({
         kickoff: {
           project: interview.project,
@@ -657,6 +677,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           branch: resolvedPrdBranch,
           skillPath,
           transcript,
+          model: prdModel,
         },
       });
 
@@ -669,7 +690,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     } catch {
       // non-fatal — user can retry
     }
-  }, [id, interview, messages, toPrdSkill, startChat, createPrd, navigate]);
+  }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading interview…</div>;
   if (isError || !interview) return <div className={styles.errorState}>Interview not found.</div>;

@@ -1,4 +1,5 @@
 import { AzureDevOpsService } from './azureDevOps';
+import { parseAutoCheckTeams } from './adoTeamConfig';
 
 /**
  * Background service that automatically updates work items from "UAT - Test Done" 
@@ -56,12 +57,10 @@ export class UatAutoReleaseService {
     console.log(`[UatAutoRelease] Starting work item check at ${new Date().toISOString()}`);
 
     try {
-      // Get all configured teams from environment
-      const teamsEnv = process.env.VITE_TEAMS || '';
-      const teams = teamsEnv.split('~~~').map(team => {
-        const [project, areaPath] = team.trim().split('|');
-        return { project, areaPath };
-      }).filter(team => team.project && team.areaPath);
+      const { teams, skippedAreaPaths } = parseAutoCheckTeams();
+      skippedAreaPaths.forEach((team) => {
+        console.log(`[UatAutoRelease] Skipping retired area path ${team.project}/${team.areaPath}`);
+      });
 
       if (teams.length === 0) {
         console.log('[UatAutoRelease] No teams configured, skipping check');

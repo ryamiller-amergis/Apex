@@ -153,6 +153,77 @@ describe('upsertSkillConfig', () => {
 
     expect(result).toMatchObject({ project: 'proj-alpha' });
   });
+
+  it('persists interviewModel, prdModel, and designDocModel when provided', async () => {
+    const configWithModels = {
+      ...configRow,
+      interviewModel: 'claude-3.5-sonnet',
+      prdModel: 'gpt-4o',
+      designDocModel: 'claude-3-opus',
+    };
+    const returningMock = jest.fn().mockResolvedValue([configWithModels]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined,
+      undefined,
+      undefined,
+      'claude-3.5-sonnet',
+      'gpt-4o',
+      'claude-3-opus',
+    );
+
+    expect(result).toMatchObject({
+      interviewModel: 'claude-3.5-sonnet',
+      prdModel: 'gpt-4o',
+      designDocModel: 'claude-3-opus',
+    });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interviewModel: 'claude-3.5-sonnet',
+        prdModel: 'gpt-4o',
+        designDocModel: 'claude-3-opus',
+      }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({
+          interviewModel: 'claude-3.5-sonnet',
+          prdModel: 'gpt-4o',
+          designDocModel: 'claude-3-opus',
+        }),
+      }),
+    );
+  });
+
+  it('stores null for model fields when not provided (omitted)', async () => {
+    const configNoModels = {
+      ...configRow,
+      interviewModel: null,
+      prdModel: null,
+      designDocModel: null,
+    };
+    const returningMock = jest.fn().mockResolvedValue([configNoModels]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interviewModel: null,
+        prdModel: null,
+        designDocModel: null,
+      }),
+    );
+  });
 });
 
 // ── deleteSkillConfig ──────────────────────────────────────────────────────────

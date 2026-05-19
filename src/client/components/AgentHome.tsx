@@ -7,14 +7,14 @@ import {
   useStartChat,
   useSkillList,
 } from '../hooks/useChatThreads';
-import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { useChatStream } from '../hooks/useChatStream';
 import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
-import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
+import { DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
 import styles from './AgentHome.module.css';
 
@@ -448,6 +448,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
   const [isSending, setIsSending] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -477,6 +478,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     removeAttachment,
     clearAttachments,
   } = useChatAttachments();
+
+  const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
@@ -537,6 +540,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         s.path.toLowerCase().includes(slashQuery),
     );
   }, [slashQuery, skills]);
+
+  // Update model to global default once loaded, if user hasn't changed it yet
+  useEffect(() => {
+    if (globalDefaultModel?.value && model === DEFAULT_MODEL_ID) {
+      setModel(globalDefaultModel.value);
+    }
+  }, [globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Scroll messages to bottom
   useEffect(() => {
@@ -1033,9 +1043,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             onChange={(e) => setModel(e.target.value)}
             disabled={isRunning}
           >
-            {AGENT_MODELS.map((m) => (
-              <option key={m.id} value={m.id}>{m.label}</option>
-            ))}
+            {modelsLoading || !availableModels?.length ? (
+              <option value="">Loading models…</option>
+            ) : (
+              availableModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.displayName}</option>
+              ))
+            )}
           </select>
           {isRunning ? (
             <button

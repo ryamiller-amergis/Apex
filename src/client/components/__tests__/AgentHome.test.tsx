@@ -45,6 +45,14 @@ jest.mock('../../hooks/useChatAttachments', () => ({
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: jest.fn(() => ({ data: null })),
+  useGlobalDefaultModel: jest.fn(() => ({ data: { key: 'defaultModel', value: 'composer-2' } })),
+  useAvailableModels: jest.fn(() => ({
+    data: [
+      { id: 'composer-2', displayName: 'Composer 2' },
+      { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+    ],
+    isLoading: false,
+  })),
 }));
 
 jest.mock('../PRDPreviewDrawer', () => ({

@@ -32,11 +32,19 @@ const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ def
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
+const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
+
+const DEFAULT_PLANNING_TAB: PlanningTab = 'dev-stats';
+const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+
+const isPlanningTab = (value: string | undefined): value is PlanningTab => (
+  value !== undefined && PLANNING_TABS.includes(value as PlanningTab)
+);
 
 function App() {
   const navigate = useNavigate();
@@ -64,7 +72,10 @@ function App() {
                   ? 'admin'
                   : 'calendar';
 
-  const planningTab = (location.pathname.split('/')[2] as PlanningTab) || 'dev-stats';
+  const planningTabSegment = location.pathname.startsWith('/planning')
+    ? location.pathname.split('/')[2]
+    : undefined;
+  const planningTab = isPlanningTab(planningTabSegment) ? planningTabSegment : DEFAULT_PLANNING_TAB;
 
   // Close the slide-out panel when landing on the home view — the full-page
   // AgentHome already provides the complete chat experience there.
@@ -278,6 +289,8 @@ function App() {
                     <InterviewChatView />
                   ) : location.pathname.startsWith('/backlog/prd/') ? (
                     <PrdReviewView />
+                  ) : location.pathname.startsWith('/backlog/design-doc/') ? (
+                    <DesignDocReviewView />
                   ) : (
                     <InterviewsDashboard />
                   )}

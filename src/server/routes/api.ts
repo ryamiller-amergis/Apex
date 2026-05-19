@@ -3657,6 +3657,12 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       project: config.project,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
+      interviewSkillPath: config.interviewSkillPath ?? null,
+      prdSkillPath: config.prdSkillPath ?? null,
+      designDocSkillPath: config.designDocSkillPath ?? null,
+      interviewModel: config.interviewModel ?? null,
+      prdModel: config.prdModel ?? null,
+      designDocModel: config.designDocModel ?? null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });

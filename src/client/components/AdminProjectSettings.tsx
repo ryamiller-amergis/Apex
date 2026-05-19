@@ -3,8 +3,11 @@ import {
   useAllProjectSkillConfigs,
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
+  useGlobalDefaultModel,
+  useSetGlobalDefaultModel,
+  useAvailableModels,
 } from '../hooks/useProjectSkillConfig';
-import { useSkillProjects, useSkillRepos, useSkillBranches } from '../hooks/useChatThreads';
+import { useSkillProjects, useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import styles from './AdminProjectSettings.module.css';
 
@@ -222,6 +225,12 @@ interface EditState {
   project: string;
   skillRepo: string;
   skillBranch: string;
+  interviewSkillPath: string;
+  prdSkillPath: string;
+  designDocSkillPath: string;
+  interviewModel: string;
+  prdModel: string;
+  designDocModel: string;
   isNew: boolean;
 }
 
@@ -231,6 +240,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const { data: configs = [], isLoading, isError } = useAllProjectSkillConfigs();
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
+  const { data: globalModelData } = useGlobalDefaultModel();
+  const setGlobalModel = useSetGlobalDefaultModel();
+  const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
+  const [globalModelInput, setGlobalModelInput] = useState('');
+  const [globalModelSaved, setGlobalModelSaved] = useState(false);
+
+  useEffect(() => {
+    if (globalModelData?.value !== undefined) {
+      setGlobalModelInput(globalModelData.value);
+    }
+  }, [globalModelData?.value]);
 
   const [edit, setEdit] = useState<EditState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -244,6 +264,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillRepo || null,
   );
 
+  const { data: skillList = [], isLoading: isLoadingSkills } = useSkillList(
+    edit?.project || null,
+    edit?.skillRepo || null,
+    edit?.skillBranch || undefined,
+  );
+
   // When repo selection changes, auto-populate defaultBranch
   useEffect(() => {
     if (!edit?.skillRepo || !repos.length) return;
@@ -254,17 +280,28 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   }, [edit?.skillRepo, repos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAddNew = () => {
-    setEdit({ project: '', skillRepo: '', skillBranch: '', isNew: true });
+    setEdit({ project: '', skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', isNew: true });
     setFormError(null);
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
-    setEdit({ project: config.project, skillRepo: config.skillRepo, skillBranch: config.skillBranch, isNew: false });
+    setEdit({
+      project: config.project,
+      skillRepo: config.skillRepo,
+      skillBranch: config.skillBranch,
+      interviewSkillPath: config.interviewSkillPath ?? '',
+      prdSkillPath: config.prdSkillPath ?? '',
+      designDocSkillPath: config.designDocSkillPath ?? '',
+      interviewModel: config.interviewModel ?? '',
+      prdModel: config.prdModel ?? '',
+      designDocModel: config.designDocModel ?? '',
+      isNew: false,
+    });
     setFormError(null);
   };
 
   const handleProjectChange = (project: string) => {
-    setEdit((prev) => prev ? { ...prev, project, skillRepo: '', skillBranch: '' } : prev);
+    setEdit((prev) => prev ? { ...prev, project, skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '' } : prev);
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -288,7 +325,16 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     try {
       await upsert.mutateAsync({
         project: edit.project.trim(),
-        body: { skillRepo: edit.skillRepo.trim(), skillBranch: edit.skillBranch.trim() },
+        body: {
+          skillRepo: edit.skillRepo.trim(),
+          skillBranch: edit.skillBranch.trim(),
+          interviewSkillPath: edit.interviewSkillPath || null,
+          prdSkillPath: edit.prdSkillPath || null,
+          designDocSkillPath: edit.designDocSkillPath || null,
+          interviewModel: edit.interviewModel || null,
+          prdModel: edit.prdModel || null,
+          designDocModel: edit.designDocModel || null,
+        },
       });
       setEdit(null);
     } catch (err) {
@@ -316,6 +362,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       ? availableProjects
       : (edit ? [edit.project] : []);
 
+  const handleSaveGlobalModel = async () => {
+    if (!globalModelInput.trim()) return;
+    try {
+      await setGlobalModel.mutateAsync(globalModelInput.trim());
+      setGlobalModelSaved(true);
+      setTimeout(() => setGlobalModelSaved(false), 2000);
+    } catch {
+      // error is surfaced via setGlobalModel.isError
+    }
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
@@ -328,6 +385,38 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
               + Add Config
             </button>
+          )}
+        </div>
+
+        <div className={styles.formCard}>
+          <p className={styles.formTitle}>Global Default Model</p>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+            Used when a project skill has no per-skill model set. Falls back to <code>composer-2</code> if left blank.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <select
+              className={styles.select}
+              style={{ maxWidth: '24rem' }}
+              value={globalModelInput}
+              onChange={(e) => setGlobalModelInput(e.target.value)}
+              disabled={setGlobalModel.isPending || isLoadingModels}
+            >
+              <option value="">{isLoadingModels ? 'Loading models…' : '— select a model —'}</option>
+              {availableModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.displayName}</option>
+              ))}
+            </select>
+            <button
+              className={styles.btnPrimary}
+              type="button"
+              onClick={() => void handleSaveGlobalModel()}
+              disabled={setGlobalModel.isPending || !globalModelInput.trim()}
+            >
+              {setGlobalModel.isPending ? 'Saving…' : globalModelSaved ? 'Saved!' : 'Save'}
+            </button>
+          </div>
+          {setGlobalModel.isError && (
+            <p className={styles.formError}>Failed to save global default model.</p>
           )}
         </div>
 
@@ -388,6 +477,108 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 />
               </div>
             </div>
+
+            <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Process Skill Assignments</p>
+            <div className={styles.formGrid}>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-interview-skill">Interview Skill</label>
+                <select
+                  id="ps-interview-skill"
+                  className={styles.select}
+                  value={edit.interviewSkillPath}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewSkillPath: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  <option value="">None (use default)</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-prd-skill">PRD Skill</label>
+                <select
+                  id="ps-prd-skill"
+                  className={styles.select}
+                  value={edit.prdSkillPath}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, prdSkillPath: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  <option value="">None (use default)</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-skill">Design Doc Skill</label>
+                <select
+                  id="ps-design-doc-skill"
+                  className={styles.select}
+                  value={edit.designDocSkillPath}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocSkillPath: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  <option value="">None (use default)</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Model Config</p>
+            <div className={styles.formGrid}>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-interview-model">Interview Model</label>
+                <select
+                  id="ps-interview-model"
+                  className={styles.select}
+                  value={edit.interviewModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
+                >
+                  <option value="">Use global default</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-prd-model">PRD Model</label>
+                <select
+                  id="ps-prd-model"
+                  className={styles.select}
+                  value={edit.prdModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, prdModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
+                >
+                  <option value="">Use global default</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-model">Design Doc Model</label>
+                <select
+                  id="ps-design-doc-model"
+                  className={styles.select}
+                  value={edit.designDocModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
+                >
+                  <option value="">Use global default</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
             {formError && <p className={styles.formError}>{formError}</p>}
             <div className={styles.formActions}>
               <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending}>
@@ -412,6 +603,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   <th className={styles.th}>Project</th>
                   <th className={styles.th}>Skill Repo</th>
                   <th className={styles.th}>Skill Branch</th>
+                  <th className={styles.th}>Interview Model</th>
+                  <th className={styles.th}>PRD Model</th>
+                  <th className={styles.th}>Design Doc Model</th>
                   <th className={styles.th}>Last Updated By</th>
                   <th className={styles.th}>Actions</th>
                 </tr>
@@ -425,6 +619,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     </td>
                     <td className={styles.td}>
                       <span className={styles.branchText}>{config.skillBranch}</span>
+                    </td>
+                    <td className={styles.td}>
+                      <span className={styles.metaText}>{config.interviewModel ?? '—'}</span>
+                    </td>
+                    <td className={styles.td}>
+                      <span className={styles.metaText}>{config.prdModel ?? '—'}</span>
+                    </td>
+                    <td className={styles.td}>
+                      <span className={styles.metaText}>{config.designDocModel ?? '—'}</span>
                     </td>
                     <td className={styles.td}>
                       <span className={styles.metaText}>{config.updatedBy ?? '—'}</span>

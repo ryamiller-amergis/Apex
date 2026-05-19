@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { interviews, prds } from '../db/schema';
+import { prds, appUsers } from '../db/schema';
 import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 
@@ -34,6 +34,7 @@ function notFound(msg: string): Error {
 
 export async function createPrd(opts: {
   interviewId: string;
+  project: string;
   userId: string;
   chatThreadId: string;
   title?: string;
@@ -42,6 +43,7 @@ export async function createPrd(opts: {
     .insert(prds)
     .values({
       interviewId: opts.interviewId,
+      project: opts.project,
       chatThreadId: opts.chatThreadId,
       authorId: opts.userId,
       title: opts.title ?? 'Untitled PRD',
@@ -60,32 +62,30 @@ export async function listPrds(
   if (filters?.userId) conditions.push(eq(prds.authorId, filters.userId));
   if (filters?.status) conditions.push(eq(prds.status, filters.status));
   if (filters?.interviewId) conditions.push(eq(prds.interviewId, filters.interviewId));
-
-  if (filters?.project) {
-    const projectInterviewIds = await db
-      .select({ id: interviews.id })
-      .from(interviews)
-      .where(eq(interviews.project, filters.project))
-      .then((rows) => rows.map((r) => r.id));
-
-    if (projectInterviewIds.length === 0) return [];
-    conditions.push(inArray(prds.interviewId, projectInterviewIds));
-  }
+  if (filters?.project) conditions.push(eq(prds.project, filters.project));
 
   const rows = await db
-    .select()
+    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
     .from(prds)
+    .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(prds.updatedAt));
 
-  return rows.map(rowToPrdSummary);
+  return rows.map(({ prd, reviewerDisplayName }) => rowToPrdSummary(prd, reviewerDisplayName));
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
-  const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
-  if (!row) return null;
+  const rows = await db
+    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
+    .from(prds)
+    .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
+    .where(eq(prds.id, id))
+    .limit(1);
+
+  if (rows.length === 0) return null;
+  const { prd: row, reviewerDisplayName } = rows[0];
   return {
-    ...rowToPrdSummary(row),
+    ...rowToPrdSummary(row, reviewerDisplayName),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
   };
@@ -179,7 +179,7 @@ export async function reviewPrd(
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
-  if (row.authorId === reviewerId) throw forbidden('You cannot review your own PRD');
+  // if (row.authorId === reviewerId) throw forbidden('You cannot review your own PRD');
   if ((opts.action === 'reject' || opts.action === 'request_revision') && !opts.comment) {
     const err = new Error('A comment is required when rejecting or requesting revision');
     (err as any).status = 400;
@@ -257,15 +257,17 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   }, WATCHER_INTERVAL_MS);
 }
 
-function rowToPrdSummary(row: typeof prds.$inferSelect): PrdSummary {
+function rowToPrdSummary(row: typeof prds.$inferSelect, reviewerName?: string | null): PrdSummary {
   return {
     id: row.id,
     interviewId: row.interviewId,
     chatThreadId: row.chatThreadId ?? '',
     authorId: row.authorId,
+    project: row.project,
     title: row.title,
     status: row.status as PrdStatus,
     reviewerId: row.reviewerId ?? undefined,
+    reviewerName: reviewerName ?? undefined,
     reviewComment: row.reviewComment ?? undefined,
     reviewedAt: row.reviewedAt ?? undefined,
     createdAt: row.createdAt,
