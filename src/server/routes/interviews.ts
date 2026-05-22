@@ -1,6 +1,11 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { db } from '../db/drizzle';
+import { eq } from 'drizzle-orm';
+import { designDocs as designDocsTable, chatThreads as chatThreadsTable } from '../db/schema';
 import {
   createInterview,
   deleteInterview,
@@ -33,7 +38,7 @@ import {
   updateDesignDocContent,
   withdrawFromReview as withdrawDesignDocFromReview,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, createThread } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, createThread, getThreadAsync } from '../services/chatAgentService';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
@@ -163,9 +168,9 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
         }
 
         const skillConfig = await getSkillConfig(prd.project);
-        const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+        const globalModel = await getDefaultModel();
 
-        const freeformContext = [
+        const prdFreeformContext = [
           '# PRD Content',
           prd.content,
           ...(prd.backlogJson
@@ -173,30 +178,56 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
             : []),
         ].join('\n');
 
-        const globalModel = await getDefaultModel();
-        const model = skillConfig?.designDocModel ?? globalModel;
+        if (skillConfig?.designDocQaSkillPath) {
+          // ── Q&A phase: create interview thread, defer generation ──────────
+          const qaModel = skillConfig.designDocQaModel ?? globalModel;
+          const qaThread = await createThread(userId, {
+            project: prd.project,
+            repo: skillConfig.skillRepo,
+            branch: skillConfig.skillBranch ?? 'main',
+            skillPath: skillConfig.designDocQaSkillPath,
+            freeformContext: prdFreeformContext,
+            model: qaModel,
+          });
 
-        const thread = await createThread(userId, {
-          project: prd.project,
-          repo: skillConfig?.skillRepo ?? prd.project,
-          branch: skillConfig?.skillBranch ?? 'main',
-          skillPath: designDocSkillPath,
-          freeformContext,
-          model,
-        });
+          const { designDocId } = await createDesignDoc({
+            prdId: req.params.prdId,
+            project: prd.project,
+            userId,
+            qaChatThreadId: qaThread.id,
+            title: prd.title,
+            status: 'interviewing',
+          });
 
-        const { designDocId } = await createDesignDoc({
-          prdId: req.params.prdId,
-          project: prd.project,
-          userId,
-          chatThreadId: thread.id,
-          title: prd.title,
-        });
+          res.json({ ok: true, designDocId });
+          return;
+        } else {
+          // ── No Q&A: go straight to generation (original behavior) ─────────
+          const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+          const model = skillConfig?.designDocModel ?? globalModel;
 
-        startDesignDocWatcher(designDocId, thread.id);
+          const thread = await createThread(userId, {
+            project: prd.project,
+            repo: skillConfig?.skillRepo ?? prd.project,
+            branch: skillConfig?.skillBranch ?? 'main',
+            skillPath: designDocSkillPath,
+            freeformContext: prdFreeformContext,
+            model,
+          });
 
-        res.json({ ok: true, designDocId });
-        return;
+          const { designDocId } = await createDesignDoc({
+            prdId: req.params.prdId,
+            project: prd.project,
+            userId,
+            chatThreadId: thread.id,
+            title: prd.title,
+          });
+
+          startDesignDocWatcher(designDocId, thread.id);
+
+          res.json({ ok: true, designDocId });
+          return;
+        }
       } catch {
         // Design doc creation failed — PRD is still approved
         res.json({ ok: true });
@@ -287,6 +318,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     startDesignDocWatcher(designDocId, thread.id);
 
     res.status(201).json({ designDocId, threadId: thread.id });
+
   } catch (err) {
     next(err);
   }
@@ -416,6 +448,174 @@ router.post('/design-docs/:id/sync', requirePermission('interviews:manage'), asy
 
     await syncDesignDocContent(req.params.id, syncOpts);
     res.json({ ok: true, designContent, techSpecContent, assumptionsContent });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/generate — finish Q&A phase, create generation thread, start watcher
+router.post('/design-docs/:id/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    if (doc.status !== 'interviewing') {
+      res.status(409).json({ error: `Design doc is not in interviewing status (current: ${doc.status})` });
+      return;
+    }
+    if (!doc.qaChatThreadId) {
+      res.status(400).json({ error: 'Design doc has no Q&A thread' });
+      return;
+    }
+
+    // Check if the Q&A thread already produced the output artifacts
+    const qaDesign = readOutputDesignDoc(doc.qaChatThreadId);
+    const qaTechSpec = readOutputTechSpec(doc.qaChatThreadId);
+    const qaAssumptions = readOutputAssumptions(doc.qaChatThreadId);
+
+    if (qaDesign !== null && qaTechSpec !== null && qaAssumptions !== null) {
+      // All three artifacts already exist in the Q&A workspace — sync directly, skip generation thread
+      console.log(`[designDoc] Q&A thread already produced all artifacts — syncing directly (designDocId=${req.params.id})`);
+      await syncDesignDocContent(req.params.id, {
+        designContent: qaDesign,
+        techSpecContent: qaTechSpec,
+        assumptionsContent: qaAssumptions,
+        finalStatus: 'pending_review',
+      });
+      res.json({ ok: true });
+      return;
+    }
+
+    // Read Q&A thread messages to build transcript
+    const qaThread = await getThreadAsync(doc.qaChatThreadId);
+    const transcriptLines: string[] = ['# Design Doc Q&A Transcript', ''];
+    if (qaThread) {
+      for (const msg of qaThread.messages) {
+        if (msg.role === 'user' && msg.text !== 'Begin.') {
+          transcriptLines.push(`**User:** ${msg.text}`, '');
+        } else if (msg.role === 'agent') {
+          transcriptLines.push(`**Agent:** ${msg.text}`, '');
+        }
+      }
+    }
+    const transcript = transcriptLines.join('\n');
+
+    const skillConfig = await getSkillConfig(doc.project);
+    const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.designDocModel ?? globalModel;
+
+    const thread = await createThread(userId, {
+      project: doc.project,
+      repo: skillConfig?.skillRepo ?? doc.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: designDocSkillPath,
+      transcript,
+      model,
+    });
+
+    // Update design doc: set generation thread ID and transition to generating
+    await db
+      .update(designDocsTable)
+      .set({
+        chatThreadId: thread.id,
+        status: 'generating',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(designDocsTable.id, req.params.id));
+
+    startDesignDocWatcher(req.params.id, thread.id);
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Design Doc Assistant thread (lazy-create, one per doc) ───────────────────
+
+router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+
+    const skillConfig = await getSkillConfig(doc.project);
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.designDocAssistantModel ?? globalModel;
+
+    // Fetch the source PRD for additional context
+    const prd = await getPrd(doc.prdId);
+
+    const buildDocContext = (threadId: string) => [
+      '# Design Doc Assistant Context',
+      `doc_id: ${req.params.id}`,
+      `thread_id: ${threadId}`,
+      `status: ${doc.status}`,
+      '',
+      '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
+      '> Pass the doc_id and thread_id values above when calling the tool.',
+      '',
+      ...(prd ? [
+        '## Source PRD',
+        prd.content || '(empty)',
+        '',
+      ] : []),
+      '## Design',
+      doc.designContent || '(empty)',
+      '',
+      '## Tech Spec',
+      doc.techSpecContent || '(empty)',
+      '',
+      '## Assumptions',
+      doc.assumptionsContent || '(empty)',
+    ].join('\n');
+
+    // Return existing thread if already created, but refresh kickoff context
+    // so the assistant always sees the latest doc content from the database.
+    if (doc.docAssistantThreadId) {
+      const [threadRow] = await db
+        .select({ workspaceDir: chatThreadsTable.workspaceDir })
+        .from(chatThreadsTable)
+        .where(eq(chatThreadsTable.id, doc.docAssistantThreadId))
+        .limit(1);
+      if (threadRow?.workspaceDir) {
+        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
+        try {
+          fs.writeFileSync(contextPath, buildDocContext(doc.docAssistantThreadId), 'utf-8');
+        } catch {
+          // Non-fatal: workspace may have been cleaned up; the thread can still run
+        }
+      }
+      res.json({ threadId: doc.docAssistantThreadId });
+      return;
+    }
+
+    const thread = await createThread(userId, {
+      project: doc.project,
+      repo: skillConfig?.skillRepo ?? doc.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
+      freeformContext: buildDocContext('__THREAD_ID__'),
+      model,
+    }, { skipAutoKickoff: true });
+
+    // Rewrite the context file now that we have the real thread ID
+    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
+    fs.writeFileSync(contextPath, buildDocContext(thread.id), 'utf-8');
+
+    await db
+      .update(designDocsTable)
+      .set({ docAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(designDocsTable.id, req.params.id));
+
+    res.json({ threadId: thread.id });
   } catch (err) {
     next(err);
   }

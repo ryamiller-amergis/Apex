@@ -17,9 +17,11 @@ interface ChangelogProps {
   isOpen: boolean;
   onClose: () => void;
   onMarkAsRead: () => void;
+  showOnLogin: boolean;
+  onToggleShowOnLogin: (show: boolean) => void;
 }
 
-export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsRead }) => {
+export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsRead, showOnLogin, onToggleShowOnLogin }) => {
   const [changelog, setChangelog] = useState<ChangelogEntry[]>([]);
   const [expandedVersions, setExpandedVersions] = useState<Set<string>>(new Set());
 
@@ -114,6 +116,14 @@ export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsR
         </div>
 
         <div className={styles['changelog-footer']}>
+          <label className={styles['changelog-show-toggle']}>
+            <input
+              type="checkbox"
+              checked={showOnLogin}
+              onChange={(e) => onToggleShowOnLogin(e.target.checked)}
+            />
+            Show automatically on login
+          </label>
           <button onClick={handleClose} className={styles['changelog-done-btn']}>Got it!</button>
         </div>
       </div>

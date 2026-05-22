@@ -5,6 +5,7 @@ const baseProps = {
   currentView: 'home' as const,
   planningTab: 'dev-stats',
   theme: 'light' as const,
+  user: { name: 'Test User', email: 'test.user@example.com' },
   hasUnreadChangelog: false,
   onNavigateHome: jest.fn(),
   onNavigateCalendar: jest.fn(),
@@ -13,7 +14,7 @@ const baseProps = {
   onNavigateBacklog: jest.fn(),
   onNavigateAdmin: jest.fn(),
   onOpenChangelog: jest.fn(),
-  onToggleTheme: jest.fn(),
+  onThemeChange: jest.fn(),
   onLogout: jest.fn(),
 };
 

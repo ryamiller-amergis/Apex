@@ -97,13 +97,15 @@ export function prdBadgeClass(status: PrdStatus): string {
 
 // ── Design Doc types ──────────────────────────────────────────────────────────
 
-export type DesignDocStatus = 'generating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
+export type DesignDocStatus = 'interviewing' | 'generating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
   prdId: string;
   project: string;
   chatThreadId: string | null;
+  qaChatThreadId?: string | null;
+  docAssistantThreadId?: string | null;
   authorId: string;
   authorName?: string;
   title: string;
@@ -131,6 +133,7 @@ export interface ReviewDesignDocRequest {
 
 export function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
@@ -142,6 +145,7 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
 
 export function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return 'interviewing';
     case 'generating': return 'generating';
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';

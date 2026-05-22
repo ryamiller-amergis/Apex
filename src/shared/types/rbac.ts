@@ -69,4 +69,6 @@ export interface MyPermissionsResponse {
   permissions: string[];
   roles: string[];
   userId: string;
+  changelogUnread: boolean;
+  showChangelogOnLogin: boolean;
 }

@@ -458,6 +458,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // interviewModel
       undefined,   // prdModel
       undefined,   // designDocModel
+      undefined,   // designDocQaSkillPath
+      undefined,   // designDocQaModel
+      undefined,   // designDocAssistantSkillPath
+      undefined,   // designDocAssistantModel
     );
   });
 
@@ -507,6 +511,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // interviewModel
       undefined,   // prdModel
       undefined,   // designDocModel
+      undefined,   // designDocQaSkillPath
+      undefined,   // designDocQaModel
+      undefined,   // designDocAssistantSkillPath
+      undefined,   // designDocAssistantModel
     );
   });
 
@@ -536,6 +544,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // interviewModel
       undefined,   // prdModel
       undefined,   // designDocModel
+      undefined,   // designDocQaSkillPath
+      undefined,   // designDocQaModel
+      undefined,   // designDocAssistantSkillPath
+      undefined,   // designDocAssistantModel
     );
   });
 
@@ -563,6 +575,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'claude-3.5-sonnet',     // interviewModel
       'gpt-4o',                // prdModel
       'claude-3-opus',         // designDocModel
+      undefined,               // designDocQaSkillPath
+      undefined,               // designDocQaModel
+      undefined,               // designDocAssistantSkillPath
+      undefined,               // designDocAssistantModel
     );
   });
 

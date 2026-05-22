@@ -219,7 +219,7 @@ function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMet
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.branch ?? 'main';
-  return [
+  const parts: string[] = [
     `# Sandbox workspace`,
     `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
     `It is NOT a clone of the project repo. Project files live in the ADO repo and must be fetched via MCP — never search the local filesystem for them.`,
@@ -241,7 +241,33 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
     `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
     ``,
     `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
-  ].join('\n');
+  ];
+
+  if (kickoff.freeformContext) {
+    parts.push(
+      ``,
+      `# Design doc context`,
+      `The design doc content for this session has been written to \`.ai-pilot/kickoff-context.md\`.`,
+      `Read this file IMMEDIATELY before responding to any user message — it contains the full design doc (Design, Tech Spec, and Assumptions sections) that you are assisting with.`,
+      `The file also contains the \`doc_id\` and \`thread_id\` values you must pass when calling \`update_design_doc\`.`,
+      ``,
+      `# Applying edits`,
+      `You have an \`update_design_doc\` MCP tool available. Use it when the user asks you to apply, save, or write changes to the document.`,
+      `- Call it once per section that needs updating.`,
+      `- Pass the \`doc_id\` and \`thread_id\` from \`.ai-pilot/kickoff-context.md\`.`,
+      `- After a successful save, confirm to the user that the changes have been applied.`,
+    );
+  }
+
+  if (kickoff.transcript) {
+    parts.push(
+      ``,
+      `# Kickoff transcript`,
+      `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`. Read it as additional context.`,
+    );
+  }
+
+  return parts.join('\n');
 }
 
 function buildInitialPrompt(kickoff: ChatThreadKickoff): string {

@@ -258,6 +258,68 @@
   }
 }
 
+.theme-section {
+  padding: 8px 8px 10px;
+  border-radius: 12px;
+}
+
+.theme-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.theme-section-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.theme-section-subtitle {
+  margin-top: 1px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.theme-toggle {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+}
+
+.theme-toggle-option {
+  min-width: 0;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-option:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+.theme-toggle-option-active {
+  background: var(--accent-color);
+  color: white;
+}
+
+.theme-toggle-option-active:hover {
+  background: var(--accent-hover);
+  color: white;
+}
+
 .user-menu-divider {
   height: 1px;
   background: var(--border-color-light);

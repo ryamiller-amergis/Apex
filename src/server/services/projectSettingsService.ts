@@ -27,6 +27,10 @@ export async function upsertSkillConfig(
   interviewModel?: string | null,
   prdModel?: string | null,
   designDocModel?: string | null,
+  designDocQaSkillPath?: string | null,
+  designDocQaModel?: string | null,
+  designDocAssistantSkillPath?: string | null,
+  designDocAssistantModel?: string | null,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const rows = await db
@@ -39,9 +43,13 @@ export async function upsertSkillConfig(
       interviewSkillPath: interviewSkillPath ?? null,
       prdSkillPath: prdSkillPath ?? null,
       designDocSkillPath: designDocSkillPath ?? null,
+      designDocQaSkillPath: designDocQaSkillPath ?? null,
+      designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
       interviewModel: interviewModel ?? null,
       prdModel: prdModel ?? null,
       designDocModel: designDocModel ?? null,
+      designDocQaModel: designDocQaModel ?? null,
+      designDocAssistantModel: designDocAssistantModel ?? null,
       updatedAt: now,
     })
     .onConflictDoUpdate({
@@ -53,9 +61,13 @@ export async function upsertSkillConfig(
         interviewSkillPath: interviewSkillPath ?? null,
         prdSkillPath: prdSkillPath ?? null,
         designDocSkillPath: designDocSkillPath ?? null,
+        designDocQaSkillPath: designDocQaSkillPath ?? null,
+        designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
         interviewModel: interviewModel ?? null,
         prdModel: prdModel ?? null,
         designDocModel: designDocModel ?? null,
+        designDocQaModel: designDocQaModel ?? null,
+        designDocAssistantModel: designDocAssistantModel ?? null,
         updatedAt: now,
       },
     })

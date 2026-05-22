@@ -1,5 +1,51 @@
 [
   {
+    "version": "1.16.0",
+    "date": "2026-05-21",
+    "title": "Design Doc Q&A Phase & AI Assistant",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design docs now support a pre-generation Q&A interview phase — when a Q&A skill is configured, an AI-guided conversation collects requirements before the document is generated"
+      },
+      {
+        "type": "feature",
+        "description": "Added a persistent AI Assistant panel on each Design Doc page for interactive editing, Q&A, and refinement against the live document content"
+      },
+      {
+        "type": "improvement",
+        "description": "Admin project settings now expose dedicated skill and model selectors for the Design Doc Q&A phase and the Design Doc Assistant"
+      }
+    ]
+  },
+  {
+    "version": "1.15.0",
+    "date": "2026-05-21",
+    "title": "Amergis Theme & Changelog Controls",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added Amergis dark theme with teal accents — select it alongside Light and Dark in the user menu theme picker"
+      },
+      {
+        "type": "improvement",
+        "description": "Upgraded theme selector from a two-state toggle to a dedicated Light / Dark / Amergis picker in the user menu"
+      },
+      {
+        "type": "feature",
+        "description": "What's New popup now reliably appears after each deployment, tracked server-side per user instead of relying on browser cache"
+      },
+      {
+        "type": "feature",
+        "description": "Added 'Show automatically on login' toggle in the What's New modal so users can opt out of the auto-popup while still seeing the unread indicator"
+      },
+      {
+        "type": "improvement",
+        "description": "User display name now shown at the top of the user menu for quick account identification"
+      }
+    ]
+  },
+  {
     "version": "1.14.0",
     "date": "2026-05-20",
     "title": "Apex Brand Refresh",

@@ -5,7 +5,7 @@ import type { DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocReque
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 
-const VALID_STATUSES: DesignDocStatus[] = ['generating', 'draft', 'pending_review', 'approved', 'rejected', 'revision_requested'];
+const VALID_STATUSES: DesignDocStatus[] = ['interviewing', 'generating', 'draft', 'pending_review', 'approved', 'rejected', 'revision_requested'];
 
 function assertValidStatus(status: string): asserts status is DesignDocStatus {
   if (!VALID_STATUSES.includes(status as DesignDocStatus)) {
@@ -37,25 +37,29 @@ export async function createDesignDoc(opts: {
   prdId: string;
   project: string;
   userId: string;
-  chatThreadId: string;
+  chatThreadId?: string;
+  qaChatThreadId?: string;
   title?: string;
-}): Promise<{ designDocId: string; threadId: string }> {
+  status?: DesignDocStatus;
+}): Promise<{ designDocId: string }> {
+  const status = opts.status ?? (opts.qaChatThreadId && !opts.chatThreadId ? 'interviewing' : 'generating');
   const [row] = await db
     .insert(designDocs)
     .values({
       prdId: opts.prdId,
       project: opts.project,
-      chatThreadId: opts.chatThreadId,
+      chatThreadId: opts.chatThreadId ?? null,
+      qaChatThreadId: opts.qaChatThreadId ?? null,
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
       designContent: '',
       techSpecContent: '',
       assumptionsContent: '',
-      status: 'generating',
+      status,
     })
     .returning({ id: designDocs.id });
 
-  return { designDocId: row.id, threadId: opts.chatThreadId };
+  return { designDocId: row.id };
 }
 
 export async function listDesignDocs(
@@ -308,6 +312,7 @@ function rowToSummary(row: typeof designDocs.$inferSelect, reviewerName?: string
     prdId: row.prdId,
     project: row.project,
     chatThreadId: row.chatThreadId,
+    qaChatThreadId: row.qaChatThreadId ?? null,
     authorId: row.authorId,
     title: row.title,
     status: row.status as DesignDocStatus,

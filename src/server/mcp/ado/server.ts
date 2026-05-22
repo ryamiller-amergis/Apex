@@ -16,6 +16,8 @@ import {
   getWikiPage,
 } from '../../services/wikiCatalog';
 import { AzureDevOpsService } from '../../services/azureDevOps';
+import { getThread } from '../../services/chatAgentService';
+import { updateDesignDocContent } from '../../services/designDocService';
 
 export function createAdoMcpServer(): McpServer {
   const server = new McpServer({
@@ -156,6 +158,38 @@ export function createAdoMcpServer(): McpServer {
       return {
         content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
       };
+    },
+  );
+
+  // ── Design Doc write-back ───────────────────────────────────────────────────
+
+  server.tool(
+    'update_design_doc',
+    'Update one section of the current design doc (design, tech-spec, or assumptions) and save it to the database. ' +
+    'Call this when the user explicitly asks you to apply, save, or write changes to the doc. ' +
+    'Only one section can be updated per call — make multiple calls to update multiple sections.',
+    {
+      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
+      docId: z.string().describe('The design doc ID (from .ai-pilot/kickoff-context.md)'),
+      section: z.enum(['design', 'tech-spec', 'assumptions']).describe('Which section to update'),
+      content: z.string().describe('The full new markdown content for the section'),
+    },
+    async ({ threadId, docId, section, content }) => {
+      const thread = getThread(threadId);
+      if (!thread) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+      }
+      const opts =
+        section === 'design'      ? { designContent: content } :
+        section === 'tech-spec'   ? { techSpecContent: content } :
+                                    { assumptionsContent: content };
+      try {
+        await updateDesignDocContent(docId, thread.userId, opts);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section }) }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
     },
   );
 

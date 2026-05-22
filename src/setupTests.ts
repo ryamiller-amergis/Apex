@@ -31,3 +31,6 @@ global.IntersectionObserver = class IntersectionObserver {
   }
   unobserve() {}
 } as any;
+
+// jsdom does not implement scrollIntoView — stub it globally
+window.HTMLElement.prototype.scrollIntoView = jest.fn();

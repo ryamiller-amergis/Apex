@@ -41,6 +41,18 @@ export function normalizeMermaidBlocks(markdown: string): string {
 
 export function normalizeMermaidChart(chart: string): string {
   return chart
+    // ([[" text "]]) → (["text"]) — subroutine shape wrapped in parens (AI over-nests)
     .replace(/\(\[\["([^"]+)"\]\]\)/g, '(["$1"])')
-    .replace(/\(\[\[([^\]]+)\]\]\)/g, '([$1])');
+    .replace(/\(\[\[([^\]]+)\]\]\)/g, '([$1])')
+    // {{"quoted text"}} → {"quoted text"} — quoted hexagon shape invalid in Mermaid v11+
+    .replace(/\{\{"([^"]+)"\}\}/g, '{"$1"}')
+    // Sequence diagram: -->>- on a never-activated participant.
+    // ApiJs-->>-Hook: → ApiJs-->>Hook: (remove stray deactivation suffix)
+    // More generally: if a participant sends a return arrow with - but the - is on an
+    // incorrect target, the normalizer cannot safely rebalance full activation stacks,
+    // so we only strip the - from plain (non-activation) return arrows that follow a
+    // pattern like "Foo-->>-Bar:" where neither Foo nor Bar had a preceding "+".
+    // That heuristic is too risky to apply here; content-level fixes are preferred.
+    // The transforms above cover the known AI-generation issues at this time.
+    ;
 }

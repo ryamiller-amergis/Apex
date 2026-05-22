@@ -62,6 +62,36 @@
   --calendar-event-text: #E5E7FF;
 }
 
+[data-theme="amergis"] {
+  --brand-primary: #5ACCA6;
+  --brand-primary-light: #5ACCA6;
+  --brand-navy: #1e1e1e;
+  --brand-surface: #eaf7f3;
+  --brand-surface-dark: #2d2d2d;
+  --brand-text-inverse: #e0e0e0;
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #2d2d2d;
+  --bg-tertiary: #3d3d3d;
+  --text-primary: #e0e0e0;
+  --text-secondary: #b0b0b0;
+  --text-muted: #808080;
+  --border-color: #404040;
+  --border-color-light: #505050;
+  --accent-color: #5ACCA6;
+  --accent-hover: #6ed9b4;
+  --accent-teal: #5ACCA6;
+  --accent-teal-hover: #6ed9b4;
+  --success-color: #5ACCA6;
+  --success-hover: #6ed9b4;
+  --error-color: #ef5350;
+  --shadow-sm: rgba(0, 0, 0, 0.3);
+  --shadow-md: rgba(0, 0, 0, 0.5);
+  --calendar-bg: #2d2d2d;
+  --calendar-event-bg: #1a3330;
+  --calendar-event-border: #5ACCA6;
+  --calendar-event-text: #5ACCA6;
+}
+
 body {
   margin: 0;
   font-family:

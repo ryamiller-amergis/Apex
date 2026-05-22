@@ -93,7 +93,7 @@ function makeDocRow(overrides: Partial<Record<string, any>> = {}) {
 describe('createDesignDoc', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('inserts a new design doc in "generating" status and returns designDocId + threadId', async () => {
+  it('inserts a new design doc in "generating" status and returns designDocId', async () => {
     const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
     mockDb.insert.mockReturnValue({ values: valuesMock });
@@ -106,7 +106,7 @@ describe('createDesignDoc', () => {
       title: 'My Design Doc',
     });
 
-    expect(result).toEqual({ designDocId: 'doc-new', threadId: 'thread-abc' });
+    expect(result).toEqual({ designDocId: 'doc-new' });
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prdId: 'prd-1',

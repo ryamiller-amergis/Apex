@@ -40,6 +40,7 @@ const PRD_FILTERS: { label: string; value: PrdStatus | undefined }[] = [
 
 const DESIGN_DOC_FILTERS: { label: string; value: DesignDocStatus | undefined }[] = [
   { label: 'All', value: undefined },
+  { label: 'Interviewing', value: 'interviewing' },
   { label: 'Draft', value: 'draft' },
   { label: 'Pending Review', value: 'pending_review' },
   { label: 'Approved', value: 'approved' },
@@ -87,6 +88,7 @@ function prdStatusLabel(status: PrdStatus): string {
 
 function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return styles.badgeInterviewing;
     case 'generating': return styles.badgeGenerating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
@@ -98,6 +100,7 @@ function designDocBadgeClass(status: DesignDocStatus): string {
 
 function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating…';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';

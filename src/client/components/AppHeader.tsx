@@ -1,11 +1,16 @@
 import React from 'react';
 import { BrandLogo } from './BrandLogo';
 import { UserMenu } from './UserMenu';
+import type { ThemeMode } from '../hooks/useAppShell';
 
 interface AppHeaderProps {
   currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
   planningTab: string;
-  theme: 'light' | 'dark';
+  theme: ThemeMode;
+  user: {
+    name: string;
+    email?: string;
+  } | null;
   hasUnreadChangelog: boolean;
   can: (key: string) => boolean;
   onNavigateHome: () => void;
@@ -16,7 +21,7 @@ interface AppHeaderProps {
   onNavigateBacklog: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
-  onToggleTheme: () => void;
+  onThemeChange: (theme: ThemeMode) => void;
   onLogout: () => void;
   onOpenAgentChat?: () => void;
 }
@@ -24,6 +29,7 @@ interface AppHeaderProps {
 export const AppHeader: React.FC<AppHeaderProps> = ({
   currentView,
   theme,
+  user,
   hasUnreadChangelog,
   can,
   onNavigateHome,
@@ -34,7 +40,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateBacklog,
   onNavigateAdmin,
   onOpenChangelog,
-  onToggleTheme,
+  onThemeChange,
   onLogout,
   onOpenAgentChat,
 }) => (
@@ -117,9 +123,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
       <UserMenu
         onOpenChangelog={onOpenChangelog}
-        onToggleTheme={onToggleTheme}
+        onThemeChange={onThemeChange}
         onLogout={onLogout}
         theme={theme}
+        user={user}
         hasUnreadChangelog={hasUnreadChangelog}
       />
     </div>

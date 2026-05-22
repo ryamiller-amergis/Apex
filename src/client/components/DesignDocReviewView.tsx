@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,10 +14,14 @@ import {
   useWithdrawDesignDoc,
   useReviewDesignDoc,
   useDeleteDesignDoc,
+  useGenerateDesignDoc,
 } from '../hooks/useInterviews';
+import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
 import type { DesignDocStatus } from '../../shared/types/interview';
+import { parseAgentMessage } from '../utils/parseAgentMessage';
+import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
 import styles from './DesignDocReviewView.module.css';
 
@@ -32,6 +37,7 @@ let mermaidDiagramCounter = 0;
 
 function statusBadgeClass(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return styles.badgeInterviewing;
     case 'generating': return styles.badgeGenerating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
@@ -43,6 +49,7 @@ function statusBadgeClass(status: DesignDocStatus): string {
 
 function statusLabel(status: DesignDocStatus): string {
   switch (status) {
+    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
@@ -249,6 +256,697 @@ const ContentPane: React.FC<ContentPaneProps> = ({
   );
 };
 
+// ── Q&A embedded chat components ──────────────────────────────────────────────
+
+interface QaChoiceBlockUIProps {
+  block: ChoiceBlock;
+  questionNumber: number;
+  selection: string | null;
+  freeform: string;
+  locked: boolean;
+  onSelect: (letter: string) => void;
+  onFreeform: (text: string) => void;
+}
+
+const QaChoiceBlockUI: React.FC<QaChoiceBlockUIProps> = ({
+  block, questionNumber, selection, freeform, locked, onSelect, onFreeform,
+}) => (
+  <div className={`${styles.qaChoiceBlock} ${locked ? styles.qaChoiceBlockLocked : ''}`}>
+    {block.question && (
+      <div className={styles.qaChoiceQuestion}>
+        <span className={styles.qaChoiceQNum}>Q{questionNumber}</span>
+        <div className={styles.qaMarkdownBody} style={{ flex: 1 }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+        </div>
+      </div>
+    )}
+    <div className={styles.qaChoiceOptions}>
+      {block.options.map((opt) => {
+        const isSelected = selection === opt.letter;
+        return (
+          <button
+            key={opt.letter}
+            className={`${styles.qaChoiceOption} ${isSelected ? styles.qaChoiceOptionSelected : ''}`}
+            onClick={() => !locked && onSelect(opt.letter)}
+            disabled={locked}
+            type="button"
+          >
+            <span className={styles.qaChoiceOptionLetter}>{opt.letter.toUpperCase()}</span>
+            <span className={styles.qaChoiceOptionText}>{opt.text}</span>
+          </button>
+        );
+      })}
+      <button
+        className={`${styles.qaChoiceOption} ${selection === 'other' ? styles.qaChoiceOptionSelected : ''}`}
+        onClick={() => !locked && onSelect('other')}
+        disabled={locked}
+        type="button"
+      >
+        <span className={styles.qaChoiceOptionLetter}>✎</span>
+        <span className={styles.qaChoiceOptionText}>Other / free-form</span>
+      </button>
+    </div>
+    {selection === 'other' && !locked && (
+      <textarea
+        className={styles.qaChoiceFreeform}
+        placeholder="Type your answer here…"
+        value={freeform}
+        onChange={(e) => onFreeform(e.target.value)}
+        rows={2}
+      />
+    )}
+    {locked && freeform && (
+      <div className={styles.qaChoiceFreeformLocked}>{freeform}</div>
+    )}
+  </div>
+);
+
+interface QaQuestionState { selected: string | null; freeform: string; }
+
+interface QaAgentMessageProps {
+  text: string;
+  threadId: string;
+  model: string;
+  isRunning: boolean;
+  questionOffset: number;
+}
+
+const QaAgentMessage: React.FC<QaAgentMessageProps> = ({ text, threadId, model, isRunning, questionOffset }) => {
+  const parts = parseAgentMessage(text);
+  const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
+
+  const [selections, setSelections] = useState<Record<string, QaQuestionState>>(() => {
+    const init: Record<string, QaQuestionState> = {};
+    for (const b of choiceBlocks) init[b.id] = { selected: null, freeform: '' };
+    return init;
+  });
+  const [sent, setSent] = useState(false);
+
+  const allAnswered = choiceBlocks.every((b) => {
+    const s = selections[b.id];
+    if (!s) return false;
+    if (s.selected === 'other') return s.freeform.trim().length > 0;
+    return s.selected !== null;
+  });
+
+  const handleSelect = useCallback((blockId: string, letter: string) => {
+    setSelections((prev) => ({ ...prev, [blockId]: { ...prev[blockId], selected: letter } }));
+  }, []);
+
+  const handleFreeform = useCallback((blockId: string, t: string) => {
+    setSelections((prev) => ({ ...prev, [blockId]: { ...prev[blockId], freeform: t } }));
+  }, []);
+
+  const handleSubmit = useCallback(() => {
+    if (!allAnswered || sent) return;
+    const lines: string[] = [];
+    let qNum = questionOffset + 1;
+    for (const block of choiceBlocks) {
+      const s = selections[block.id];
+      if (!s) continue;
+      if (s.selected === 'other') {
+        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
+      } else if (s.selected) {
+        const opt = block.options.find((o) => o.letter === s.selected);
+        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
+      }
+      qNum++;
+    }
+    const messageText = lines.join('\n');
+    void fetch(`/api/chat/threads/${threadId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: messageText, model }),
+    });
+    setSent(true);
+  }, [allAnswered, sent, choiceBlocks, selections, questionOffset, threadId, model]);
+
+  if (choiceBlocks.length === 0) {
+    return (
+      <div className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  let questionCounter = questionOffset;
+  return (
+    <div className={styles.qaAssistantBubble}>
+      {parts.map((part) => {
+        if (part.type === 'markdown') {
+          return (
+            <div key={part.id} className={styles.qaMarkdownBody}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.content}</ReactMarkdown>
+            </div>
+          );
+        }
+        questionCounter++;
+        const qNum = questionCounter;
+        const s = selections[part.id] ?? { selected: null, freeform: '' };
+        return (
+          <QaChoiceBlockUI
+            key={part.id}
+            block={part}
+            questionNumber={qNum}
+            selection={s.selected}
+            freeform={s.freeform}
+            locked={sent}
+            onSelect={(letter) => handleSelect(part.id, letter)}
+            onFreeform={(t) => handleFreeform(part.id, t)}
+          />
+        );
+      })}
+      {!sent && (
+        <button
+          className={styles.qaChoiceSendBtn}
+          onClick={handleSubmit}
+          disabled={!allAnswered || isRunning}
+          type="button"
+        >
+          {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
+        </button>
+      )}
+      {sent && <div className={styles.qaChoiceSentLabel}>✓ Answers sent</div>}
+    </div>
+  );
+};
+
+// ── Doc Assistant slide-in panel ─────────────────────────────────────────────
+
+const ASSISTANT_THREAD_LS_KEY = (docId: string) => `design-doc-assistant-thread:${docId}`;
+
+interface DesignDocAssistantPanelProps {
+  designDocId: string;
+  onClose: () => void;
+}
+
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 800;
+const DEFAULT_PANEL_WIDTH = 380;
+
+const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ designDocId, onClose }) => {
+  const [threadId, setThreadId] = useState<string | null>(() =>
+    localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId)),
+  );
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [isDragging, setIsDragging] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const qc = useQueryClient();
+
+  const { messages, streamingText, status: threadStatus } = useChatStream(threadId);
+  const isRunning = threadStatus === 'running';
+  const wasRunningRef = useRef(false);
+
+  // When the assistant finishes a run, invalidate the design doc so the main
+  // pane picks up any content changes saved by the update_design_doc MCP tool.
+  useEffect(() => {
+    if (wasRunningRef.current && !isRunning) {
+      void qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+    }
+    wasRunningRef.current = isRunning;
+  }, [isRunning, qc, designDocId]);
+
+  // Horizontal resize via drag handle on the left edge of the panel.
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = panelWidth;
+    setIsDragging(true);
+  }, [panelWidth]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const delta = dragStartXRef.current - e.clientX;
+      const next = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, dragStartWidthRef.current + delta));
+      setPanelWidth(next);
+    };
+    const onMouseUp = () => setIsDragging(false);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [isDragging]);
+
+  useEffect(() => {
+    if (threadId) return;
+    setIsCreating(true);
+    setCreateError(null);
+    fetch(`/api/interviews/design-docs/${designDocId}/assistant-thread`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((r) => r.json() as Promise<{ threadId: string }>)
+      .then((data) => {
+        setThreadId(data.threadId);
+        localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
+      })
+      .catch(() => setCreateError('Failed to start assistant. Please try again.'))
+      .finally(() => setIsCreating(false));
+  }, [designDocId, threadId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length, streamingText]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text || isRunning || isSending || !threadId) return;
+    setInput('');
+    setIsSending(true);
+    try {
+      await fetch(`/api/chat/threads/${threadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text }),
+      });
+    } finally {
+      setIsSending(false);
+    }
+  }, [input, isRunning, isSending, threadId]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void handleSend();
+    }
+  }, [handleSend]);
+
+  const visibleMessages = messages.filter((m) => m.role !== 'tool');
+
+  return (
+    <>
+    {showNewConvConfirm && (
+      <div
+        className={styles.confirmOverlay}
+        onClick={(e) => { if (e.target === e.currentTarget) setShowNewConvConfirm(false); }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-conv-confirm-title"
+      >
+        <div className={styles.confirmCard}>
+          <div className={styles.confirmIconWrap} aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+            </svg>
+          </div>
+          <h2 className={styles.confirmTitle} id="new-conv-confirm-title">Start new conversation?</h2>
+          <p className={styles.confirmBody}>The current thread will be cleared and a fresh session with Apex will begin.</p>
+          <div className={styles.confirmActions}>
+            <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button">Cancel</button>
+            <button
+              className={styles.confirmBtnConfirm}
+              onClick={() => {
+                setShowNewConvConfirm(false);
+                localStorage.removeItem(ASSISTANT_THREAD_LS_KEY(designDocId));
+                setThreadId(null);
+                setCreateError(null);
+              }}
+              type="button"
+            >
+              Start new
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    <div className={styles.assistantPanel} style={{ width: panelWidth }}>
+      <div
+        className={`${styles.assistantResizeHandle} ${isDragging ? styles.assistantResizeHandleDragging : ''}`}
+        onMouseDown={handleResizeMouseDown}
+        role="separator"
+        aria-label="Resize panel"
+        aria-orientation="vertical"
+      />
+      <div className={styles.assistantPanelHeader}>
+        <div className={styles.assistantPanelHeaderLeft}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          <span className={styles.assistantPanelTitle}>Apex Assistant</span>
+        </div>
+        <div className={styles.assistantPanelHeaderActions}>
+          <button
+            className={styles.assistantPanelIconBtn}
+            onClick={() => setShowNewConvConfirm(true)}
+            type="button"
+            title="New conversation"
+            aria-label="New conversation"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+            </svg>
+          </button>
+          <button className={styles.assistantPanelClose} onClick={onClose} type="button" aria-label="Close assistant">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M1 1l12 12M13 1L1 13" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.assistantMessages}>
+        <div className={styles.assistantMessageList}>
+          {isCreating && (
+            <div className={styles.assistantInitializing}>
+              <div className={styles.qaTypingIndicator}>
+                <span className={styles.qaTypingDot} />
+                <span className={styles.qaTypingDot} />
+                <span className={styles.qaTypingDot} />
+              </div>
+              <span>Starting assistant…</span>
+            </div>
+          )}
+          {createError && (
+            <div className={styles.qaMessageBubbleSystem}>{createError}</div>
+          )}
+          {visibleMessages.map((msg) => {
+            if (msg.role === 'system') {
+              return <div key={msg.id} className={styles.qaMessageBubbleSystem}>{msg.text}</div>;
+            }
+            if (msg.role === 'user') {
+              return (
+                <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
+                  {msg.text}
+                </div>
+              );
+            }
+            return (
+              <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+              </div>
+            );
+          })}
+          {isRunning && !streamingText && (
+            <div className={styles.qaTypingIndicator}>
+              <span className={styles.qaTypingDot} />
+              <span className={styles.qaTypingDot} />
+              <span className={styles.qaTypingDot} />
+            </div>
+          )}
+          {streamingText && (
+            <div className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      <div className={styles.qaInputArea}>
+        <div className={styles.qaInputBox}>
+          <textarea
+            ref={textareaRef}
+            className={styles.qaInputField}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              isCreating ? 'Starting assistant…' :
+              isRunning ? 'Agent is thinking…' :
+              'Ask about this design doc… (Enter to send)'
+            }
+            rows={1}
+            disabled={isRunning || isSending || isCreating || !threadId}
+          />
+          <button
+            className={styles.qaSendBtn}
+            onClick={() => void handleSend()}
+            disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
+            type="button"
+            aria-label="Send"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    </>
+  );
+};
+
+// ── Q&A Transcript (collapsible read-only, post-generation) ───────────────────
+
+interface DesignDocQaTranscriptProps {
+  qaChatThreadId: string;
+}
+
+const DesignDocQaTranscript: React.FC<DesignDocQaTranscriptProps> = ({ qaChatThreadId }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const { messages } = useChatStream(qaChatThreadId);
+  const visibleMessages = messages.filter(
+    (m) => !(m.role === 'user' && m.text === 'Begin.') && m.role !== 'tool' && m.role !== 'system',
+  );
+
+  return (
+    <div className={styles.qaTranscript}>
+      <button
+        className={styles.qaTranscriptToggle}
+        onClick={() => setIsOpen((v) => !v)}
+        type="button"
+        aria-expanded={isOpen}
+      >
+        <svg
+          className={`${styles.qaTranscriptChevron} ${isOpen ? styles.qaTranscriptChevronOpen : ''}`}
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+        <span className={styles.qaTranscriptLabel}>Q&amp;A Context</span>
+        <span className={styles.qaTranscriptCount}>({visibleMessages.length} messages)</span>
+      </button>
+      {isOpen && (
+        <div className={styles.qaTranscriptBody}>
+          <div className={styles.qaTranscriptMessages}>
+            {visibleMessages.length === 0 ? (
+              <div className={styles.qaTranscriptEmpty}>No Q&amp;A messages recorded.</div>
+            ) : (
+              visibleMessages.map((msg) => {
+                if (msg.role === 'user') {
+                  return (
+                    <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
+                      {msg.text}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface DesignDocQaChatProps {
+  designDocId: string;
+  qaChatThreadId: string;
+  canTriggerGenerate: boolean;
+}
+
+const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatThreadId, canTriggerGenerate }) => {
+  const { messages, streamingText, status: threadStatus } = useChatStream(qaChatThreadId);
+  const generateDoc = useGenerateDesignDoc();
+  const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const isRunning = threadStatus === 'running';
+  const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length, streamingText]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text || isRunning || isSending) return;
+    setInput('');
+    setIsSending(true);
+    try {
+      await fetch(`/api/chat/threads/${qaChatThreadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text }),
+      });
+    } finally {
+      setIsSending(false);
+    }
+  }, [input, isRunning, isSending, qaChatThreadId]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void handleSend();
+    }
+  }, [handleSend]);
+
+  const handleGenerate = useCallback(async () => {
+    await generateDoc.mutateAsync(designDocId);
+  }, [designDocId, generateDoc]);
+
+  // Compute running question offset per agent message
+  let runningQCount = 0;
+  const messageQOffsets = new Map<string, number>();
+  for (const msg of visibleMessages) {
+    if (msg.role === 'agent') {
+      messageQOffsets.set(msg.id, runningQCount);
+      const parts = parseAgentMessage(msg.text);
+      runningQCount += parts.filter((p): p is ChoiceBlock => p.type === 'choices').length;
+    }
+  }
+
+  return (
+    <div className={styles.qaContainer}>
+      <div className={styles.qaHeader}>
+        <div className={styles.qaHeaderLeft}>
+          <span className={styles.qaHeaderTitle}>Design Doc Q&A</span>
+          <span className={styles.qaHeaderSub}>Answer the agent's questions, then generate your design doc.</span>
+        </div>
+        {canTriggerGenerate && (
+          <button
+            className={styles.qaGenerateBtn}
+            onClick={() => void handleGenerate()}
+            disabled={generateDoc.isPending || isRunning}
+            type="button"
+          >
+            {generateDoc.isPending ? (
+              <>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.spinIcon}>
+                  <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+                </svg>
+                Creating…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="1" width="10" height="14" rx="1.5" />
+                  <path d="M6 5h4M6 8h4M6 11h2" />
+                </svg>
+                Generate Design Doc
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      <div className={styles.qaMessages}>
+        <div className={styles.qaMessageList}>
+          {visibleMessages.map((msg) => {
+            if (msg.role === 'tool') {
+              return <div key={msg.id} className={styles.qaMessageBubbleTool}>→ {msg.text}</div>;
+            }
+            if (msg.role === 'system') {
+              return <div key={msg.id} className={styles.qaMessageBubbleSystem}>{msg.text}</div>;
+            }
+            if (msg.role === 'user') {
+              return (
+                <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
+                  {msg.text}
+                </div>
+              );
+            }
+            return (
+              <QaAgentMessage
+                key={msg.id}
+                text={msg.text}
+                threadId={qaChatThreadId}
+                model="composer-2"
+                isRunning={isRunning}
+                questionOffset={messageQOffsets.get(msg.id) ?? 0}
+              />
+            );
+          })}
+
+          {isRunning && !streamingText && (
+            <div className={styles.qaTypingIndicator}>
+              <span className={styles.qaTypingDot} />
+              <span className={styles.qaTypingDot} />
+              <span className={styles.qaTypingDot} />
+            </div>
+          )}
+
+          {streamingText && (
+            <div className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      <div className={styles.qaInputArea}>
+        <div className={styles.qaInputBox}>
+          <textarea
+            ref={textareaRef}
+            className={styles.qaInputField}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isRunning ? 'Agent is thinking…' : 'Continue the conversation… (Enter to send)'}
+            rows={1}
+            disabled={isRunning || isSending}
+          />
+          <button
+            className={styles.qaSendBtn}
+            onClick={() => void handleSend()}
+            disabled={!input.trim() || isRunning || isSending}
+            type="button"
+            aria-label="Send"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const DesignDocReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
@@ -329,8 +1027,10 @@ export const DesignDocReviewView: React.FC = () => {
 
   const [reviewAction, setReviewAction] = useState<'reject' | 'revision' | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
-  const isGenerating = !!doc && (
+  const isInterviewing = doc?.status === 'interviewing';
+  const isGenerating = !isInterviewing && !!doc && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
   );
 
@@ -412,6 +1112,8 @@ export const DesignDocReviewView: React.FC = () => {
   const canReview = can('design-docs:review');
   const isReviewer = canReview && (!isAuthor || isAdmin);
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
+  const canUseAssistant = (isReviewer || isAdmin) &&
+    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
 
@@ -480,6 +1182,20 @@ export const DesignDocReviewView: React.FC = () => {
         </div>
 
         <div className={styles.headerRight}>
+          {canUseAssistant && (
+            <button
+              className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
+              onClick={() => setAssistantOpen((v) => !v)}
+              type="button"
+              title="Apex Assistant"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14 10.667A2.667 2.667 0 0 1 11.333 13.333H4.667L2 16V4.667A2.667 2.667 0 0 1 4.667 2h6.666A2.667 2.667 0 0 1 14 4.667z" />
+              </svg>
+              Ask Apex
+            </button>
+          )}
+
           {doc.status === 'approved' && (
             <span className={styles.reviewOnlyBadge}>Read-only — approved</span>
           )}
@@ -559,7 +1275,14 @@ export const DesignDocReviewView: React.FC = () => {
         </div>
       )}
 
-      {isGenerating ? (
+      {isInterviewing ? (
+        /* ── Q&A interviewing phase ───────────────────────────────── */
+        <DesignDocQaChat
+          designDocId={doc.id}
+          qaChatThreadId={doc.qaChatThreadId ?? ''}
+          canTriggerGenerate={canManage && (isAuthor || isAdmin)}
+        />
+      ) : isGenerating ? (
         /* ── Generating skeleton ─────────────────────────────────────── */
         <>
           <div className={styles.tabs}>
@@ -615,6 +1338,9 @@ export const DesignDocReviewView: React.FC = () => {
       ) : (
         /* ── Normal tabs ─────────────────────────────────────────────── */
         <>
+          {doc.qaChatThreadId && (
+            <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
+          )}
           <div className={styles.tabs}>
             {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
               <button
@@ -650,6 +1376,13 @@ export const DesignDocReviewView: React.FC = () => {
             />
           </div>
         </>
+      )}
+
+      {assistantOpen && canUseAssistant && (
+        <DesignDocAssistantPanel
+          designDocId={doc.id}
+          onClose={() => setAssistantOpen(false)}
+        />
       )}
 
       {showDeleteModal && doc && (

@@ -227,6 +227,32 @@ export async function getUserRoleNames(userId: string): Promise<string[]> {
   return assignments.map((a) => a.role.name);
 }
 
+// ── getChangelogPrefs ──────────────────────────────────────────────────────────
+
+export async function getChangelogPrefs(userId: string): Promise<{
+  lastSeenVersion: string | null;
+  showOnLogin: boolean;
+}> {
+  const user = await db.query.appUsers.findFirst({ where: eq(appUsers.oid, userId) });
+  return {
+    lastSeenVersion: user?.lastSeenChangelogVersion ?? null,
+    showOnLogin: user?.showChangelogOnLogin ?? true,
+  };
+}
+
+// ── updateChangelogPrefs ───────────────────────────────────────────────────────
+
+export async function updateChangelogPrefs(
+  userId: string,
+  updates: { lastSeenChangelogVersion?: string; showChangelogOnLogin?: boolean },
+): Promise<void> {
+  const set: Partial<typeof appUsers.$inferInsert> = {};
+  if (updates.lastSeenChangelogVersion !== undefined) set.lastSeenChangelogVersion = updates.lastSeenChangelogVersion;
+  if (updates.showChangelogOnLogin !== undefined) set.showChangelogOnLogin = updates.showChangelogOnLogin;
+  if (Object.keys(set).length === 0) return;
+  await db.update(appUsers).set(set).where(eq(appUsers.oid, userId));
+}
+
 // ── upsertAppUser ─────────────────────────────────────────────────────────────
 
 export async function upsertAppUser(

@@ -228,9 +228,13 @@ interface EditState {
   interviewSkillPath: string;
   prdSkillPath: string;
   designDocSkillPath: string;
+  designDocQaSkillPath: string;
+  designDocAssistantSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
+  designDocQaModel: string;
+  designDocAssistantModel: string;
   isNew: boolean;
 }
 
@@ -280,7 +284,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   }, [edit?.skillRepo, repos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAddNew = () => {
-    setEdit({ project: '', skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', isNew: true });
+    setEdit({ project: '', skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', designDocQaSkillPath: '', designDocAssistantSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', designDocQaModel: '', designDocAssistantModel: '', isNew: true });
     setFormError(null);
   };
 
@@ -292,16 +296,20 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
       designDocSkillPath: config.designDocSkillPath ?? '',
+      designDocQaSkillPath: config.designDocQaSkillPath ?? '',
+      designDocAssistantSkillPath: config.designDocAssistantSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
+      designDocQaModel: config.designDocQaModel ?? '',
+      designDocAssistantModel: config.designDocAssistantModel ?? '',
       isNew: false,
     });
     setFormError(null);
   };
 
   const handleProjectChange = (project: string) => {
-    setEdit((prev) => prev ? { ...prev, project, skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '' } : prev);
+    setEdit((prev) => prev ? { ...prev, project, skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', designDocQaSkillPath: '', designDocAssistantSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', designDocQaModel: '', designDocAssistantModel: '' } : prev);
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -331,9 +339,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           interviewSkillPath: edit.interviewSkillPath || null,
           prdSkillPath: edit.prdSkillPath || null,
           designDocSkillPath: edit.designDocSkillPath || null,
+          designDocQaSkillPath: edit.designDocQaSkillPath || null,
+          designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
           interviewModel: edit.interviewModel || null,
           prdModel: edit.prdModel || null,
           designDocModel: edit.designDocModel || null,
+          designDocQaModel: edit.designDocQaModel || null,
+          designDocAssistantModel: edit.designDocAssistantModel || null,
         },
       });
       setEdit(null);
@@ -527,6 +539,38 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   ))}
                 </select>
               </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-qa-skill">Design Doc Q&amp;A Skill</label>
+                <select
+                  id="ps-design-doc-qa-skill"
+                  className={styles.select}
+                  value={edit.designDocQaSkillPath}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocQaSkillPath: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  <option value="">None (skip Q&amp;A phase)</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-assistant-skill">Design Doc Assistant Skill</label>
+                <select
+                  id="ps-design-doc-assistant-skill"
+                  className={styles.select}
+                  value={edit.designDocAssistantSkillPath}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocAssistantSkillPath: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  <option value="">None (use default model, no skill)</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Model Config</p>
@@ -570,6 +614,38 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   className={styles.select}
                   value={edit.designDocModel}
                   onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
+                >
+                  <option value="">Use global default</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-qa-model">Design Doc Q&amp;A Model</label>
+                <select
+                  id="ps-design-doc-qa-model"
+                  className={styles.select}
+                  value={edit.designDocQaModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocQaModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
+                >
+                  <option value="">Use global default</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-design-doc-assistant-model">Design Doc Assistant Model</label>
+                <select
+                  id="ps-design-doc-assistant-model"
+                  className={styles.select}
+                  value={edit.designDocAssistantModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocAssistantModel: e.target.value } : prev)}
                   disabled={upsert.isPending || isLoadingModels}
                 >
                   <option value="">Use global default</option>

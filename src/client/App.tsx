@@ -87,6 +87,7 @@ function App() {
 
   const {
     isAuthenticated,
+    authenticatedUser,
     can,
     permissionsLoaded,
     workItems,
@@ -96,11 +97,13 @@ function App() {
     selectedItem,
     setSelectedItem,
     theme,
-    toggleTheme,
+    setThemeMode,
     showChangelog,
     setShowChangelog,
     hasUnreadChangelog,
+    showChangelogOnLogin,
     handleMarkChangelogAsRead,
+    handleToggleShowChangelogOnLogin,
     handleLogout,
     selectedProject,
     selectedAreaPath,
@@ -127,14 +130,15 @@ function App() {
     if (currentView === 'backlog'   && !can('interviews:view'))  navigate('/home');
   }, [currentView, permissionsLoaded, can, navigate]);
 
-  // Auto-show changelog once per session when the user lands on /home with an unread version.
+  // Auto-show changelog once per session when the user lands on /home with an
+  // unread version, unless they've opted out via showChangelogOnLogin.
   const hasAutoShownChangelog = useRef(false);
   useEffect(() => {
-    if (currentView === 'home' && hasUnreadChangelog && !hasAutoShownChangelog.current) {
+    if (currentView === 'home' && hasUnreadChangelog && showChangelogOnLogin && !hasAutoShownChangelog.current) {
       hasAutoShownChangelog.current = true;
       setShowChangelog(true);
     }
-  }, [currentView, hasUnreadChangelog, setShowChangelog]);
+  }, [currentView, hasUnreadChangelog, showChangelogOnLogin, setShowChangelog]);
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
@@ -204,6 +208,7 @@ function App() {
             currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin'}
             planningTab={planningTab}
             theme={theme}
+            user={authenticatedUser}
             hasUnreadChangelog={hasUnreadChangelog}
             can={can}
             onNavigateHome={() => navigate('/home')}
@@ -214,7 +219,7 @@ function App() {
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
-            onToggleTheme={toggleTheme}
+            onThemeChange={setThemeMode}
             onLogout={handleLogout}
             onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
           />
@@ -404,6 +409,8 @@ function App() {
           isOpen={showChangelog}
           onClose={() => setShowChangelog(false)}
           onMarkAsRead={handleMarkChangelogAsRead}
+          showOnLogin={showChangelogOnLogin}
+          onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
         />
 
         <ChatAgentPanel

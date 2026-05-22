@@ -7,7 +7,16 @@ import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
 
-const CURRENT_VERSION = '1.14.0';
+export type ThemeMode = 'light' | 'dark' | 'amergis';
+
+const isThemeMode = (value: string | null): value is ThemeMode => (
+  value === 'light' || value === 'dark' || value === 'amergis'
+);
+
+interface AuthenticatedUser {
+  name: string;
+  email?: string;
+}
 
 interface DueDateChange {
   workItemId: number;
@@ -47,14 +56,19 @@ export function useAppShell() {
   const queryClient = useQueryClient();
   const [currentDate] = useState(new Date());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('theme') as 'light' | 'dark') || 'dark');
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const storedTheme = localStorage.getItem('theme');
+    return isThemeMode(storedTheme) ? storedTheme : 'amergis';
+  });
   const [showChangelog, setShowChangelog] = useState(false);
-  const [hasUnreadChangelog, setHasUnreadChangelog] = useState(() => localStorage.getItem('lastReadChangelogVersion') !== CURRENT_VERSION);
+  const [hasUnreadChangelog, setHasUnreadChangelog] = useState(false);
+  const [showChangelogOnLogin, setShowChangelogOnLogin] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -72,8 +86,14 @@ export function useAppShell() {
   useEffect(() => {
     fetch('/auth/status', { credentials: 'include' })
       .then(r => r.json())
-      .then(d => setIsAuthenticated(d.authenticated))
-      .catch(() => setIsAuthenticated(false));
+      .then(d => {
+        setIsAuthenticated(d.authenticated);
+        setAuthenticatedUser(d.authenticated ? d.user ?? null : null);
+      })
+      .catch(() => {
+        setIsAuthenticated(false);
+        setAuthenticatedUser(null);
+      });
   }, []);
 
   useEffect(() => {
@@ -86,6 +106,8 @@ export function useAppShell() {
           setPermissions(d.permissions);
           setRoles(d.roles);
           setUserId(d.userId ?? '');
+          setHasUnreadChangelog(d.changelogUnread);
+          setShowChangelogOnLogin(d.showChangelogOnLogin);
         }
       })
       .catch(() => { /* ignore */ })
@@ -196,8 +218,23 @@ export function useAppShell() {
   const can = useCallback((key: string) => permissions.includes(key), [permissions]);
 
   const handleMarkChangelogAsRead = useCallback(() => {
-    localStorage.setItem('lastReadChangelogVersion', CURRENT_VERSION);
     setHasUnreadChangelog(false);
+    void fetch('/api/me/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ markChangelogRead: true }),
+    });
+  }, []);
+
+  const handleToggleShowChangelogOnLogin = useCallback((show: boolean) => {
+    setShowChangelogOnLogin(show);
+    void fetch('/api/me/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ showChangelogOnLogin: show }),
+    });
   }, []);
 
   const handleLogout = useCallback(async () => {
@@ -214,6 +251,7 @@ export function useAppShell() {
 
   return {
     isAuthenticated,
+    authenticatedUser,
     permissions,
     roles,
     userId,
@@ -228,11 +266,14 @@ export function useAppShell() {
     selectedItem,
     setSelectedItem,
     theme,
-    toggleTheme: () => setTheme(p => p === 'light' ? 'dark' : 'light'),
+    setThemeMode: setTheme,
+    toggleTheme: () => setTheme(p => p === 'light' ? 'dark' : p === 'dark' ? 'amergis' : 'light'),
     showChangelog,
     setShowChangelog,
     hasUnreadChangelog,
+    showChangelogOnLogin,
     handleMarkChangelogAsRead,
+    handleToggleShowChangelogOnLogin,
     handleLogout,
     selectedProject,
     selectedAreaPath,

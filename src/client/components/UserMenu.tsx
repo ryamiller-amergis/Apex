@@ -1,19 +1,45 @@
 import React, { useState, useRef, useEffect } from 'react';
+import type { ThemeMode } from '../hooks/useAppShell';
 import styles from './UserMenu.module.css';
 
 interface UserMenuProps {
   onOpenChangelog: () => void;
-  onToggleTheme: () => void;
+  onThemeChange: (theme: ThemeMode) => void;
   onLogout: () => void;
-  theme: 'light' | 'dark';
+  theme: ThemeMode;
+  user: {
+    name: string;
+    email?: string;
+  } | null;
   hasUnreadChangelog: boolean;
+}
+
+const themeOptions: Array<{ value: ThemeMode; label: string }> = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'amergis', label: 'Amergis' },
+];
+
+function getUserInitials(user: UserMenuProps['user']): string {
+  const displayName = user?.name?.trim();
+  if (displayName) {
+    const parts = displayName.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+    }
+    return displayName.slice(0, 2).toUpperCase();
+  }
+
+  const emailPrefix = user?.email?.split('@')[0]?.trim();
+  return emailPrefix ? emailPrefix.slice(0, 2).toUpperCase() : '??';
 }
 
 export const UserMenu: React.FC<UserMenuProps> = ({
   onOpenChangelog,
-  onToggleTheme,
+  onThemeChange,
   onLogout,
   theme,
+  user,
   hasUnreadChangelog,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -30,8 +56,10 @@ export const UserMenu: React.FC<UserMenuProps> = ({
   }, [isOpen]);
 
   const handleChangelogClick = () => { onOpenChangelog(); setIsOpen(false); };
-  const handleThemeClick = () => { onToggleTheme(); setIsOpen(false); };
+  const handleThemeSelect = (nextTheme: ThemeMode) => { onThemeChange(nextTheme); };
   const handleLogoutClick = () => { onLogout(); setIsOpen(false); };
+  const userInitials = getUserInitials(user);
+  const userDisplayName = user?.name?.trim() || user?.email || 'User';
 
   return (
     <div className={styles['user-menu']} ref={menuRef}>
@@ -59,10 +87,10 @@ export const UserMenu: React.FC<UserMenuProps> = ({
       {isOpen && (
         <div className={styles['user-menu-dropdown']}>
           <div className={styles['user-menu-header']}>
-            <span className={styles['user-menu-header-mark']}>ASM</span>
+            <span className={styles['user-menu-header-mark']}>{userInitials}</span>
             <div>
-              <div className={styles['user-menu-header-title']}>Workspace</div>
-              <div className={styles['user-menu-header-subtitle']}>Application settings</div>
+              <div className={styles['user-menu-header-title']}>{userDisplayName}</div>
+              <div className={styles['user-menu-header-subtitle']}>{user?.email ?? 'Application settings'}</div>
             </div>
           </div>
 
@@ -77,23 +105,34 @@ export const UserMenu: React.FC<UserMenuProps> = ({
             {hasUnreadChangelog && <span className={styles['menu-item-badge']}>NEW</span>}
           </button>
 
-          <button className={styles['user-menu-item']} onClick={handleThemeClick}>
-            <span className={styles['menu-item-icon']} aria-hidden="true">
-              {theme === 'light' ? (
-                <svg viewBox="0 0 18 18" fill="none">
-                  <path d="M14.25 11.35A5.75 5.75 0 016.65 3.75a6 6 0 107.6 7.6z" />
-                </svg>
-              ) : (
+          <div className={styles['theme-section']}>
+            <div className={styles['theme-section-header']}>
+              <span className={styles['menu-item-icon']} aria-hidden="true">
                 <svg viewBox="0 0 18 18" fill="none">
                   <circle cx="9" cy="9" r="3.25" />
                   <path d="M9 1.75v1.5M9 14.75v1.5M1.75 9h1.5M14.75 9h1.5M3.9 3.9l1.05 1.05M13.05 13.05l1.05 1.05M14.1 3.9l-1.05 1.05M4.95 13.05L3.9 14.1" />
                 </svg>
-              )}
-            </span>
-            <span className={styles['menu-item-text']}>
-              {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
-            </span>
-          </button>
+              </span>
+              <div>
+                <div className={styles['theme-section-title']}>Theme</div>
+                <div className={styles['theme-section-subtitle']}>Choose your display mode</div>
+              </div>
+            </div>
+            <div className={styles['theme-toggle']} role="radiogroup" aria-label="Theme">
+              {themeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`${styles['theme-toggle-option']} ${theme === option.value ? styles['theme-toggle-option-active'] : ''}`}
+                  onClick={() => handleThemeSelect(option.value)}
+                  type="button"
+                  role="radio"
+                  aria-checked={theme === option.value}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className={styles['user-menu-divider']}></div>
 

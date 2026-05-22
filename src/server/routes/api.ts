@@ -3617,11 +3617,27 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 });
 
 // ── GET /api/me/permissions ────────────────────────────────────────────────────
-// Returns the current user's permission keys and role names.
+// Returns the current user's permission keys, role names, and changelog state.
 // ensureAuthenticated is applied upstream in index.ts for all /api routes.
 
+import fs from 'fs';
+import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
-import { getUserPermissions, getUserRoleNames } from '../services/rbacService';
+import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+
+function readCurrentChangelogVersion(): string {
+  try {
+    const raw = fs.readFileSync(path.resolve(process.cwd(), 'public/CHANGELOG.json'), 'utf8');
+    const entries = JSON.parse(raw) as Array<{ version: string }>;
+    return entries[0]?.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+// Cached at startup — the version only changes on deployment so a module-level
+// read is sufficient and avoids a file-system hit on every permissions request.
+const CURRENT_CHANGELOG_VERSION = readCurrentChangelogVersion();
 
 router.get('/me/permissions', attachPermissions, async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3630,11 +3646,43 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const [permSet, roles] = await Promise.all([
+    const [permSet, roles, changelogPrefs] = await Promise.all([
       getUserPermissions(userId),
       getUserRoleNames(userId),
+      getChangelogPrefs(userId),
     ]);
-    res.json({ permissions: [...permSet], roles, userId });
+    res.json({
+      permissions: [...permSet],
+      roles,
+      userId,
+      changelogUnread: changelogPrefs.lastSeenVersion !== CURRENT_CHANGELOG_VERSION,
+      showChangelogOnLogin: changelogPrefs.showOnLogin,
+    });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── PATCH /api/me/preferences ─────────────────────────────────────────────────
+// Updates the authenticated user's preferences.
+// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean }
+
+router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { markChangelogRead, showChangelogOnLogin } = req.body as {
+      markChangelogRead?: boolean;
+      showChangelogOnLogin?: boolean;
+    };
+    const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
+    if (markChangelogRead === true) updates.lastSeenChangelogVersion = CURRENT_CHANGELOG_VERSION;
+    if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
+    await updateChangelogPrefs(userId, updates);
+    res.json({ ok: true });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

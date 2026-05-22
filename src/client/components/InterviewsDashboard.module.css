@@ -270,6 +270,11 @@
   color: var(--text-muted);
 }
 
+.badgeInterviewing {
+  background: rgba(14, 165, 233, 0.15);
+  color: #0284c7;
+}
+
 .badgeGenerating {
   background: rgba(99, 102, 241, 0.15);
   color: #6366f1;

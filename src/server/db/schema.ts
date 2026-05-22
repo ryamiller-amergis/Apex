@@ -44,7 +44,8 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   messages: many(chatMessages),
   interviews: many(interviews),
   prds: many(prds),
-  designDocs: many(designDocs),
+  designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
+  designDocsAsQa: many(designDocs, { relationName: 'designDocQaChatThread' }),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -69,6 +70,8 @@ export const appUsers = pgTable('app_users', {
   displayName: text('display_name'),
   email: text('email'),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+  lastSeenChangelogVersion: text('last_seen_changelog_version'),
+  showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
 });
 
 export const appRoles = pgTable('app_roles', {
@@ -163,6 +166,8 @@ export const designDocs = pgTable('design_docs', {
   prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
   project: text('project').notNull(),
   chatThreadId: uuid('chat_thread_id'),
+  qaChatThreadId: uuid('qa_chat_thread_id'),
+  docAssistantThreadId: uuid('doc_assistant_thread_id'),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   designContent: text('design_content').notNull().default(''),
@@ -204,7 +209,18 @@ export const designDocsRelations = relations(designDocs, ({ one }) => ({
     references: [prds.id],
   }),
   chatThread: one(chatThreads, {
+    relationName: 'designDocChatThread',
     fields: [designDocs.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  qaChatThread: one(chatThreads, {
+    relationName: 'designDocQaChatThread',
+    fields: [designDocs.qaChatThreadId],
+    references: [chatThreads.id],
+  }),
+  docAssistantThread: one(chatThreads, {
+    relationName: 'designDocAssistantThread',
+    fields: [designDocs.docAssistantThreadId],
     references: [chatThreads.id],
   }),
 }));
@@ -220,9 +236,13 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
   designDocSkillPath: text('design_doc_skill_path'),
+  designDocQaSkillPath: text('design_doc_qa_skill_path'),
+  designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
   designDocModel: text('design_doc_model'),
+  designDocQaModel: text('design_doc_qa_model'),
+  designDocAssistantModel: text('design_doc_assistant_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
