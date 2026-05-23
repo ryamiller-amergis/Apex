@@ -2,6 +2,8 @@ export interface QuickSkillPill {
   label: string;
   skillPath: string;
   model?: string | null;
+  /** Plain-English description shown to users when the pill is selected */
+  description?: string | null;
 }
 
 export interface ProjectSkillConfig {

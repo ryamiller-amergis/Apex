@@ -606,8 +606,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             {edit.quickSkillPills.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
                 {edit.quickSkillPills.map((pill, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ minWidth: '10rem', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0.5rem', border: '1px solid var(--border-color-light)', borderRadius: '6px', background: 'var(--bg-secondary)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ minWidth: '10rem', fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 500 }}>
                       {pill.label}
                     </span>
                     <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -666,6 +667,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     >
                       Remove
                     </button>
+                    </div>
+                    <input
+                      className={styles.input}
+                      style={{ fontSize: '0.8rem', padding: '4px 8px' }}
+                      placeholder="User-facing description (e.g. Get help troubleshooting production issues)"
+                      value={pill.description ?? ''}
+                      onChange={(e) => {
+                        const pills = [...edit.quickSkillPills];
+                        pills[idx] = { ...pills[idx], description: e.target.value || null };
+                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                      }}
+                      disabled={upsert.isPending}
+                    />
                   </div>
                 ))}
               </div>

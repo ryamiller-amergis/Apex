@@ -1154,7 +1154,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
 
             {selectedQuickSkill && (
               <div className={styles.pillDescription}>
-                {skills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
+                {selectedQuickSkill.description
+                  || skills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
                   || `Skill: ${selectedQuickSkill.label}`}
               </div>
             )}
