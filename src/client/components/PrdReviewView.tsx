@@ -9,6 +9,7 @@ import {
   useUpdatePrdContent,
   useSubmitPrd,
   useWithdrawPrd,
+  useReopenPrd,
   useReviewPrd,
   useDeletePrd,
   useDesignDocsByPrd,
@@ -61,6 +62,7 @@ export const PrdReviewView: React.FC = () => {
   const updateContent = useUpdatePrdContent();
   const submitPrd = useSubmitPrd();
   const withdrawPrd = useWithdrawPrd();
+  const reopenPrd = useReopenPrd();
   const reviewPrd = useReviewPrd();
   const deletePrd = useDeletePrd();
 
@@ -215,6 +217,18 @@ export const PrdReviewView: React.FC = () => {
                 Delete
               </button>
             </>
+          )}
+
+          {isAdmin && prd.status !== 'pending_review' && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => reopenPrd.mutate(prd.id)}
+              disabled={reopenPrd.isPending}
+              type="button"
+              title="Admin: force this PRD back to Pending Review"
+            >
+              {reopenPrd.isPending ? 'Reopening…' : 'Reopen for Review'}
+            </button>
           )}
 
           {canReview && (!isAuthor || isAdmin) && prd.status === 'pending_review' && (

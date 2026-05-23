@@ -8,11 +8,13 @@ export interface ProjectSkillConfig {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designDocValidationModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -25,11 +27,13 @@ export interface UpsertProjectSkillConfigRequest {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designDocValidationModel?: string | null;
 }
 
 export interface ProjectSkillConfigResponse {
@@ -41,9 +45,11 @@ export interface ProjectSkillConfigResponse {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designDocValidationModel?: string | null;
 }

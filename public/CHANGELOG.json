@@ -1,5 +1,44 @@
 [
   {
+    "version": "1.17.0",
+    "date": "2026-05-23",
+    "title": "Design Doc Validation & Cloud Resilience",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design docs can now be scored by an AI validation agent before approval — a configurable validation skill produces a structured scorecard and blocks approval until the score reaches 90%"
+      },
+      {
+        "type": "feature",
+        "description": "Added a Validation Report tab on design doc pages that displays the agent's scorecard in real time, with a color-coded score badge visible from the header"
+      },
+      {
+        "type": "feature",
+        "description": "Admins can now configure a dedicated validation skill and model per project in Admin Project Settings"
+      },
+      {
+        "type": "feature",
+        "description": "Added admin-only 'Reopen for Review' action on PRDs to force any PRD back to Pending Review status"
+      },
+      {
+        "type": "improvement",
+        "description": "Agent output artifacts (PRDs, design docs, validation scorecards) are now synced directly to Postgres after each run, replacing file-based durable storage for better cloud resilience"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat threads now load from Postgres instead of disk JSON files, so conversations survive restarts and multi-instance deployments"
+      },
+      {
+        "type": "improvement",
+        "description": "Added startup recovery loop that re-hydrates in-flight PRD, design doc, and validation watchers after a server restart, plus graceful shutdown to drain connections cleanly"
+      },
+      {
+        "type": "bugfix",
+        "description": "Fixed an async call in the ADO MCP server that could silently fail when looking up a chat thread"
+      }
+    ]
+  },
+  {
     "version": "1.16.0",
     "date": "2026-05-21",
     "title": "Design Doc Q&A Phase & AI Assistant",

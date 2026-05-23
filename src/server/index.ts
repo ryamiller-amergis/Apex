@@ -28,6 +28,7 @@ import {
 } from './utils/agentTokens';
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
+import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -168,7 +169,7 @@ async function bootstrapAdmin(): Promise<void> {
   }
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -183,4 +184,11 @@ app.listen(PORT, () => {
   console.log('UAT auto-release service started');
 
   bootstrapAdmin();
+
+  // Recover in-flight PRD/design-doc/validation watchers lost to a restart,
+  // and re-check every 60s for work orphaned by rolling deployments.
+  startRecoveryLoop();
+
+  // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.
+  registerGracefulShutdown(server);
 });

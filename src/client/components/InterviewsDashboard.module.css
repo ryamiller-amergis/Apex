@@ -280,6 +280,11 @@
   color: #6366f1;
 }
 
+.badgeValidating {
+  background: rgba(20, 42, 103, 0.15);
+  color: var(--accent-color);
+}
+
 .badgeDraft {
   background: rgba(107, 114, 128, 0.15);
   color: var(--text-muted);

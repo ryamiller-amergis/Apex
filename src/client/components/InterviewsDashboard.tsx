@@ -90,6 +90,7 @@ function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return styles.badgeInterviewing;
     case 'generating': return styles.badgeGenerating;
+    case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
@@ -102,6 +103,7 @@ function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating…';
+    case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';

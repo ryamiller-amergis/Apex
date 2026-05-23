@@ -15,6 +15,10 @@ import {
   useReviewDesignDoc,
   useDeleteDesignDoc,
   useGenerateDesignDoc,
+  useMarkValidationReady,
+  useRefreshValidation,
+  useCreateValidationThread,
+  useValidationReport,
 } from '../hooks/useInterviews';
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -25,7 +29,7 @@ import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
 import styles from './DesignDocReviewView.module.css';
 
-type TabId = 'design' | 'tech-spec' | 'assumptions';
+type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -39,6 +43,7 @@ function statusBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return styles.badgeInterviewing;
     case 'generating': return styles.badgeGenerating;
+    case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
@@ -51,6 +56,7 @@ function statusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
+    case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
@@ -771,6 +777,7 @@ const DesignDocQaTranscript: React.FC<DesignDocQaTranscriptProps> = ({ qaChatThr
   );
 };
 
+
 interface DesignDocQaChatProps {
   designDocId: string;
   qaChatThreadId: string;
@@ -960,6 +967,10 @@ export const DesignDocReviewView: React.FC = () => {
   const withdrawDoc = useWithdrawDesignDoc();
   const reviewDoc = useReviewDesignDoc();
   const deleteDoc = useDeleteDesignDoc();
+  const markValidationReady = useMarkValidationReady();
+  const refreshValidation = useRefreshValidation();
+  const createValidationThread = useCreateValidationThread();
+  const { data: validationReport } = useValidationReport(id, doc?.validationThreadId, doc?.status);
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
@@ -1094,6 +1105,27 @@ export const DesignDocReviewView: React.FC = () => {
     await reviewDoc.mutateAsync({ designDocId: id, action: 'approve' });
   }, [id, reviewDoc]);
 
+  const handleMarkValidationReady = useCallback(async () => {
+    if (!id) return;
+    await markValidationReady.mutateAsync(id);
+  }, [id, markValidationReady]);
+
+  // When the validation report first appears while the doc is still validating,
+  // auto-trigger a score refresh so the DB/status update happens without user action.
+  const didAutoRefreshRef = useRef(false);
+  useEffect(() => {
+    if (
+      validationReport &&
+      doc?.status === 'validating' &&
+      id &&
+      !didAutoRefreshRef.current &&
+      !refreshValidation.isPending
+    ) {
+      didAutoRefreshRef.current = true;
+      refreshValidation.mutate(id);
+    }
+  }, [validationReport, doc?.status, id, refreshValidation]);
+
   const handleRejectOrRevision = useCallback(async (reason: string) => {
     if (!id || !reviewAction) return;
     await reviewDoc.mutateAsync({
@@ -1108,6 +1140,7 @@ export const DesignDocReviewView: React.FC = () => {
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
   const isAuthor = doc.authorId === userId;
+  const validationBlocking = doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isReviewer = canReview && (!isAuthor || isAdmin);
@@ -1116,23 +1149,27 @@ export const DesignDocReviewView: React.FC = () => {
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
+  const hasValidationTab = !!doc.validationThreadId;
 
   const tabLabel: Record<TabId, string> = {
     design: 'Design',
     'tech-spec': 'Tech Spec',
     assumptions: 'Assumptions',
+    validation: 'Validation Report',
   };
 
   const tabContent: Record<TabId, string> = {
     design: editingTab === 'design' ? designEdit : doc.designContent,
     'tech-spec': editingTab === 'tech-spec' ? techSpecEdit : doc.techSpecContent,
     assumptions: editingTab === 'assumptions' ? assumptionsEdit : doc.assumptionsContent,
+    validation: validationReport?.markdown ?? doc.validationReportMd ?? '',
   };
 
   const tabPlaceholder: Record<TabId, string> = {
     design: 'Write the main design doc in Markdown…',
     'tech-spec': 'Write the technical spec in Markdown…',
     assumptions: 'Write the shared assumptions in Markdown…',
+    validation: '',
   };
 
   return (
@@ -1148,6 +1185,11 @@ export const DesignDocReviewView: React.FC = () => {
               <span className={`${styles.statusBadge} ${statusBadgeClass(doc.status)}`}>
                 {statusLabel(doc.status)}
               </span>
+              {doc.validationScore !== null && doc.validationScore !== undefined && (
+                <span className={`${styles.validationBadge} ${doc.validationScore >= 90 ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
+                  {doc.validationScore}% validated
+                </span>
+              )}
             </div>
             {sourcePrd && (
               <div className={styles.parentLinks}>
@@ -1202,6 +1244,18 @@ export const DesignDocReviewView: React.FC = () => {
 
           {canManage && (isAuthor || isAdmin) && (
             <>
+              {!doc.validationThreadId && hasAnyContent &&
+                (doc.status === 'draft' || doc.status === 'revision_requested' || doc.status === 'rejected') && (
+                <button
+                  className={styles.actionBtn}
+                  onClick={() => void createValidationThread.mutateAsync(doc.id)}
+                  disabled={createValidationThread.isPending}
+                  type="button"
+                  title="Run the validation agent against this design doc"
+                >
+                  {createValidationThread.isPending ? 'Starting…' : 'Run Validation'}
+                </button>
+              )}
               {(doc.status === 'draft' || doc.status === 'revision_requested' || doc.status === 'rejected') && (
                 <button
                   className={styles.actionBtnPrimary}
@@ -1210,6 +1264,16 @@ export const DesignDocReviewView: React.FC = () => {
                   type="button"
                 >
                   Submit for Review
+                </button>
+              )}
+              {doc.status === 'validating' && doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore >= 90 && (
+                <button
+                  className={styles.actionBtnPrimary}
+                  onClick={() => void handleMarkValidationReady()}
+                  disabled={markValidationReady.isPending}
+                  type="button"
+                >
+                  {markValidationReady.isPending ? 'Submitting…' : 'Submit for Review (Score ≥ 90%)'}
                 </button>
               )}
               {doc.status === 'pending_review' && (
@@ -1245,7 +1309,8 @@ export const DesignDocReviewView: React.FC = () => {
               <button
                 className={styles.btnApprove}
                 onClick={() => void handleApprove()}
-                disabled={reviewDoc.isPending}
+                disabled={reviewDoc.isPending || validationBlocking}
+                title={validationBlocking ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)` : undefined}
                 type="button"
               >
                 Approve
@@ -1336,7 +1401,7 @@ export const DesignDocReviewView: React.FC = () => {
           </div>
         </>
       ) : (
-        /* ── Normal tabs ─────────────────────────────────────────────── */
+        /* ── Normal tabs (always shown — validation is a tab, not a takeover) ── */
         <>
           {doc.qaChatThreadId && (
             <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
@@ -1353,27 +1418,102 @@ export const DesignDocReviewView: React.FC = () => {
                 {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
               </button>
             ))}
+            {hasValidationTab && (
+              <button
+                className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
+                onClick={() => setActiveTab('validation')}
+                type="button"
+              >
+                {tabLabel['validation']}
+                {doc.status === 'validating' && !validationReport && !doc.validationReportMd && (
+                  <svg
+                    className={styles.spinIcon}
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ width: 10, height: 10, marginLeft: 5 }}
+                    aria-label="Validation in progress"
+                  >
+                    <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+                  </svg>
+                )}
+              </button>
+            )}
           </div>
 
           <div className={styles.tabContent}>
-            <ContentPane
-              content={tabContent[activeTab]}
-              isEditing={editingTab === activeTab}
-              editValue={
-                activeTab === 'design' ? designEdit :
-                activeTab === 'tech-spec' ? techSpecEdit :
-                assumptionsEdit
-              }
-              isDirty={dirtyTabs.has(activeTab)}
-              isSaving={updateContent.isPending}
-              canEdit={canEdit}
-              placeholder={tabPlaceholder[activeTab]}
-              markdownComponents={markdownComponents}
-              onEditToggle={() => handleEditToggle(activeTab)}
-              onEditChange={(v) => handleEditChange(activeTab, v)}
-              onSave={() => void handleSave(activeTab)}
-              onDiscard={() => handleDiscard(activeTab)}
-            />
+            {activeTab === 'validation' ? (
+              (() => {
+                const reportMarkdown = validationReport?.markdown ?? doc.validationReportMd ?? null;
+                if (doc.status === 'validating' && !reportMarkdown) {
+                  return (
+                    <div className={styles.validationReportEmpty}>
+                      <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                      <div className={styles.validatingBannerTitle}>Validation in progress…</div>
+                      <div className={styles.validationReportEmptySub}>
+                        The validation agent is reviewing your design doc. The score will appear automatically when the agent finishes.
+                      </div>
+                    </div>
+                  );
+                }
+                if (reportMarkdown) {
+                  return (
+                    <div className={styles.preview}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {reportMarkdown}
+                      </ReactMarkdown>
+                    </div>
+                  );
+                }
+                return (
+                  <div className={styles.validationReportEmpty}>
+                    <div className={styles.validatingBannerTitle}>No validation report yet</div>
+                    <div className={styles.validationReportEmptySub}>
+                      The validation agent hasn't produced a report for this doc yet. Results will appear here automatically when available.
+                    </div>
+                  </div>
+                );
+              })()
+            ) : (
+              <>
+                {doc.status === 'validating' && (
+                  <div className={styles.validatingBanner}>
+                    <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                    <div className={styles.validatingBannerText}>
+                      <div className={styles.validatingBannerTitle}>Validation in progress</div>
+                      <div className={styles.validatingBannerSub}>
+                        The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <ContentPane
+                  content={tabContent[activeTab]}
+                  isEditing={editingTab === activeTab}
+                  editValue={
+                    activeTab === 'design' ? designEdit :
+                    activeTab === 'tech-spec' ? techSpecEdit :
+                    assumptionsEdit
+                  }
+                  isDirty={dirtyTabs.has(activeTab)}
+                  isSaving={updateContent.isPending}
+                  canEdit={canEdit}
+                  placeholder={tabPlaceholder[activeTab]}
+                  markdownComponents={markdownComponents}
+                  onEditToggle={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
+                  onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
+                  onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
+                  onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
+                />
+              </>
+            )}
           </div>
         </>
       )}

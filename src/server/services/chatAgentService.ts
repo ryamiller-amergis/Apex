@@ -22,7 +22,10 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { eq } from 'drizzle-orm';
-import { interviews } from '../db/schema';
+import { interviews, prds, designDocs } from '../db/schema';
+import { syncPrdContent } from './prdService';
+import { syncDesignDocContent, syncValidationResult } from './designDocService';
+import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
 
 const DATA_ROOT = resolveDataRoot();
@@ -31,7 +34,6 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
   : isAzureWwwroot()
     ? path.join(DATA_ROOT, 'workspaces')
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
-const THREADS_DIR = path.join(DATA_ROOT, 'chat-threads');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── In-memory state ───────────────────────────────────────────────────────────
@@ -78,28 +80,17 @@ function findOutputFile(dir: string, pattern: RegExp): string | null {
 
 function ensureDirs() {
   fs.mkdirSync(WORKSPACE_BASE, { recursive: true });
-  fs.mkdirSync(THREADS_DIR, { recursive: true });
   cleanupStaleWorkspaces();
 }
 
 function persistThread(thread: ChatThread) {
-  ensureDirs();
-  const file = path.join(THREADS_DIR, `${thread.id}.json`);
-  fs.writeFileSync(file, JSON.stringify(thread, null, 2), 'utf-8');
-  // Dual-write to Postgres — fire-and-forget (JSON file is the sync fallback)
   pgUpsertThread(thread).catch((err: Error) =>
     console.error('[chat] pg upsertThread failed:', err.message),
   );
 }
 
-function loadThread(threadId: string): ChatThread | null {
-  const file = path.join(THREADS_DIR, `${threadId}.json`);
-  if (!fs.existsSync(file)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as ChatThread;
-  } catch {
-    return null;
-  }
+async function loadThread(threadId: string): Promise<ChatThread | null> {
+  return pgLoadFullThread(threadId);
 }
 
 // ── Workspace helpers ─────────────────────────────────────────────────────────
@@ -345,15 +336,13 @@ function resetIdleTimer(state: ThreadState) {
 }
 
 /**
- * Return live ThreadState from memory, or hydrate from disk (e.g. after server restart).
- * `getThread` used to return `loadThread()` without registering in `threads`, so POST
- * /messages passed the route check then `sendMessage` threw "Thread not found".
+ * Return live ThreadState from memory, or hydrate from Postgres (e.g. after server restart).
  */
-function ensureThreadState(threadId: string): ThreadState | null {
+async function ensureThreadState(threadId: string): Promise<ThreadState | null> {
   const existing = threads.get(threadId);
   if (existing) return existing;
 
-  const thread = loadThread(threadId);
+  const thread = await loadThread(threadId);
   if (!thread) return null;
 
   // A thread persisted as 'running' means the server was killed mid-run.
@@ -374,30 +363,13 @@ function ensureThreadState(threadId: string): ThreadState | null {
 }
 
 /**
- * Async variant: falls back to Postgres when not in memory and not on disk.
- * Used by getThreadAsync for historical thread loading.
+ * Load a thread into memory (from Postgres) so that resolveOutputDir and
+ * readOutput* helpers can locate its workspace.  Used by startup recovery
+ * to re-hydrate threads whose watchers were lost during a restart.
  */
-async function ensureThreadStateAsync(threadId: string): Promise<ThreadState | null> {
-  const sync = ensureThreadState(threadId);
-  if (sync) return sync;
-
-  const thread = await pgLoadFullThread(threadId);
-  if (!thread) return null;
-
-  // Same as ensureThreadState: reset stale 'running' status from before a server restart.
-  if (thread.status === 'running') {
-    thread.status = 'idle';
-  }
-
-  const state: ThreadState = {
-    thread,
-    subscribers: new Set(),
-    agent: null,
-    idleTimer: null,
-  };
-  threads.set(threadId, state);
-  resetIdleTimer(state);
-  return state;
+export async function hydrateThread(threadId: string): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  return state !== null;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -457,13 +429,12 @@ export async function createThread(
   return thread;
 }
 
-export function getThread(threadId: string): ChatThread | null {
-  return ensureThreadState(threadId)?.thread ?? null;
+export async function getThread(threadId: string): Promise<ChatThread | null> {
+  return (await ensureThreadState(threadId))?.thread ?? null;
 }
 
-export async function getThreadAsync(threadId: string): Promise<ChatThread | null> {
-  return (await ensureThreadStateAsync(threadId))?.thread ?? null;
-}
+/** Alias kept for backward compatibility with callers that imported the explicitly async name. */
+export const getThreadAsync = getThread;
 
 export async function listThreadSummaries(
   userId: string,
@@ -483,7 +454,9 @@ export function subscribeToThread(
   threadId: string,
   callback: (event: SseEvent) => void,
 ): () => void {
-  const state = ensureThreadState(threadId);
+  // Only check the in-memory map (sync). The thread is guaranteed to be
+  // loaded by requireThreadOwner middleware before this is called.
+  const state = threads.get(threadId);
   if (!state) return () => {};
   state.subscribers.add(callback);
   return () => state.subscribers.delete(callback);
@@ -516,13 +489,109 @@ function logAgentError(threadId: string, err: unknown): void {
   console.error(`[chat] Agent failed for thread ${threadId}:`, err);
 }
 
+/**
+ * After an agent run completes, sync workspace output files directly to Postgres
+ * by looking up which entity (PRD or design doc) owns this thread.
+ */
+async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<void> {
+  let fullySynced = false;
+
+  // Check if this thread belongs to a PRD
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.chatThreadId, threadId),
+  });
+  if (prdRow) {
+    const content = readOutputPrd(threadId);
+    const backlog = readOutputBacklog(threadId);
+    if (content) {
+      await syncPrdContent(prdRow.id, content, backlog ?? undefined);
+      console.log(`[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`);
+      fullySynced = content !== null && backlog !== null;
+    }
+    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
+    return;
+  }
+
+  // Check if this thread belongs to a design doc (generation thread)
+  const ddGenRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.chatThreadId, threadId),
+  });
+  if (ddGenRow) {
+    const design = readOutputDesignDoc(threadId);
+    const techSpec = readOutputTechSpec(threadId);
+    const assumptions = readOutputAssumptions(threadId);
+    if (design || techSpec || assumptions) {
+      const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
+      if (design) syncOpts.designContent = design;
+      if (techSpec) syncOpts.techSpecContent = techSpec;
+      if (assumptions) syncOpts.assumptionsContent = assumptions;
+      await syncDesignDocContent(ddGenRow.id, syncOpts);
+      console.log(`[chat] post-run: synced design doc output to DB (designDocId=${ddGenRow.id})`);
+    }
+    // Do NOT clean up workspace here — the design doc watcher handles status
+    // transitions (generating → validating/pending_review), validation triggers,
+    // and workspace cleanup. Deleting the workspace would prevent the watcher
+    // from finding the output files.
+    return;
+  }
+
+  // Check if this thread is a validation thread
+  const ddValRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.validationThreadId, threadId),
+  });
+  if (ddValRow) {
+    const scorecardRaw = readOutputValidationScorecard(threadId);
+    if (scorecardRaw) {
+      try {
+        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        await syncValidationResult(ddValRow.id, scorecard, reportMd);
+        console.log(`[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`);
+        fullySynced = true;
+      } catch (err) {
+        console.error(`[chat] post-run: failed to parse validation scorecard`, err);
+      }
+    }
+    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
+    return;
+  }
+
+  // Check if this thread is a Q&A thread
+  const ddQaRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.qaChatThreadId, threadId),
+  });
+  if (ddQaRow) {
+    const design = readOutputDesignDoc(threadId);
+    const techSpec = readOutputTechSpec(threadId);
+    const assumptions = readOutputAssumptions(threadId);
+    if (design || techSpec || assumptions) {
+      const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
+      if (design) syncOpts.designContent = design;
+      if (techSpec) syncOpts.techSpecContent = techSpec;
+      if (assumptions) syncOpts.assumptionsContent = assumptions;
+      await syncDesignDocContent(ddQaRow.id, syncOpts);
+      console.log(`[chat] post-run: synced Q&A design doc output to DB (designDocId=${ddQaRow.id})`);
+      fullySynced = design !== null && techSpec !== null && assumptions !== null;
+    }
+    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
+    return;
+  }
+}
+
+function cleanupWorkspaceDir(workspaceDir: string): void {
+  try {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    console.log(`[chat] post-run: cleaned up workspace ${workspaceDir}`);
+  } catch { /* non-fatal */ }
+}
+
 export async function sendMessage(
   threadId: string,
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
 ): Promise<void> {
-  const state = ensureThreadState(threadId);
+  const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
@@ -662,40 +731,16 @@ export async function sendMessage(
       broadcast(state, { type: 'status', status: 'idle' });
     }
 
-    const outputDir = path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
-    const prdFile = findOutputFile(outputDir, /\.prd\.md$/i) ?? (fs.existsSync(path.join(outputDir, 'PRD.md')) ? path.join(outputDir, 'PRD.md') : null);
-    const backlogFile = findOutputFile(outputDir, /\.backlog\.json$/i);
-    const designFile = findOutputFile(outputDir, /[-.]design\.md$/i);
-    const techSpecFile = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
-    const assumptionsFile = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
-    const prdReady = prdFile !== null;
-    const backlogReady = backlogFile !== null;
+    const prdContent = readOutputPrd(threadId);
+    const backlogContent = readOutputBacklog(threadId);
+    const prdReady = prdContent !== null;
+    const backlogReady = backlogContent !== null;
 
-    // Persist output to the durable threads dir so previews survive restarts/workspace cleanup
-    if (prdFile) {
-      try {
-        fs.copyFileSync(prdFile, path.join(THREADS_DIR, `${threadId}.prd.md`));
-      } catch { /* non-fatal */ }
-    }
-    if (backlogFile) {
-      try {
-        fs.copyFileSync(backlogFile, path.join(THREADS_DIR, `${threadId}.backlog.json`));
-      } catch { /* non-fatal */ }
-    }
-    if (designFile) {
-      try {
-        fs.copyFileSync(designFile, path.join(THREADS_DIR, `${threadId}.design.md`));
-      } catch { /* non-fatal */ }
-    }
-    if (techSpecFile) {
-      try {
-        fs.copyFileSync(techSpecFile, path.join(THREADS_DIR, `${threadId}.tech-spec.md`));
-      } catch { /* non-fatal */ }
-    }
-    if (assumptionsFile) {
-      try {
-        fs.copyFileSync(assumptionsFile, path.join(THREADS_DIR, `${threadId}.assumptions.md`));
-      } catch { /* non-fatal */ }
+    // Sync output artifacts directly to Postgres
+    try {
+      await syncOutputToDb(threadId, state.thread.workspaceDir);
+    } catch (err) {
+      console.error(`[chat] post-run DB sync failed for thread ${threadId}:`, err);
     }
 
     broadcast(state, { type: 'done', runId: state.thread.activeRunId, prdReady, backlogReady });
@@ -724,7 +769,7 @@ export async function sendMessage(
 }
 
 export async function cancelRun(threadId: string): Promise<void> {
-  const state = ensureThreadState(threadId);
+  const state = await ensureThreadState(threadId);
   if (!state || !state.agent) return;
 
   const activeRunId = state.thread.activeRunId;
@@ -745,7 +790,7 @@ export async function cancelRun(threadId: string): Promise<void> {
 }
 
 export async function closeThread(threadId: string): Promise<void> {
-  const state = ensureThreadState(threadId);
+  const state = await ensureThreadState(threadId);
   if (!state) return;
 
   if (state.idleTimer) clearTimeout(state.idleTimer);
@@ -757,15 +802,7 @@ export async function closeThread(threadId: string): Promise<void> {
 
   threads.delete(threadId);
 
-  // Remove JSON file and workspace directory from disk
-  try {
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.json`), { force: true });
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.prd.md`), { force: true });
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.backlog.json`), { force: true });
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.design.md`), { force: true });
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.tech-spec.md`), { force: true });
-    fs.rmSync(path.join(THREADS_DIR, `${threadId}.assumptions.md`), { force: true });
-  } catch { /* non-fatal */ }
+  // Clean up workspace directory
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
   } catch { /* non-fatal */ }
@@ -790,20 +827,13 @@ export async function closeThread(threadId: string): Promise<void> {
 function resolveOutputDir(threadId: string): string | null {
   const state = threads.get(threadId);
   if (state) return path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
-  const thread = loadThread(threadId);
-  return thread ? path.join(thread.workspaceDir, '.ai-pilot', 'output') : null;
+  return null;
 }
 
 /**
- * Read the output PRD. Checks the durable threads dir first (survives restarts),
- * then falls back to the ephemeral workspace.
+ * Read the output PRD from the ephemeral workspace.
  */
 export function readOutputPrd(threadId: string): string | null {
-  // 1. Durable copy next to the thread JSON
-  const durablePrd = path.join(THREADS_DIR, `${threadId}.prd.md`);
-  if (fs.existsSync(durablePrd)) return fs.readFileSync(durablePrd, 'utf-8');
-
-  // 2. Ephemeral workspace (still exists in the current session)
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const named = findOutputFile(outputDir, /\.prd\.md$/i);
@@ -813,11 +843,10 @@ export function readOutputPrd(threadId: string): string | null {
 }
 
 /**
- * Returns true if a PRD output file exists for the thread (durable or ephemeral).
+ * Returns true if a PRD output file exists in the ephemeral workspace.
  * Cheaper than readOutputPrd — does not read file contents.
  */
 export function isPrdReady(threadId: string): boolean {
-  if (fs.existsSync(path.join(THREADS_DIR, `${threadId}.prd.md`))) return true;
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return false;
   const named = findOutputFile(outputDir, /\.prd\.md$/i);
@@ -826,19 +855,9 @@ export function isPrdReady(threadId: string): boolean {
 }
 
 /**
- * Read the output backlog JSON. Checks the durable threads dir first,
- * then falls back to the ephemeral workspace.
+ * Read the output backlog JSON from the ephemeral workspace.
  */
 export function readOutputBacklog(threadId: string): unknown | null {
-  // 1. Durable copy next to the thread JSON
-  const durableBacklog = path.join(THREADS_DIR, `${threadId}.backlog.json`);
-  if (fs.existsSync(durableBacklog)) {
-    try {
-      return JSON.parse(fs.readFileSync(durableBacklog, 'utf-8'));
-    } catch { /* fall through */ }
-  }
-
-  // 2. Ephemeral workspace
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const file = findOutputFile(outputDir, /\.backlog\.json$/i);
@@ -850,30 +869,11 @@ export function readOutputBacklog(threadId: string): unknown | null {
   }
 }
 
-/**
- * Overwrite the output PRD on disk with edited content.
- * Writes to both the durable threads dir and the workspace (if it exists).
- */
-export function writeOutputPrd(threadId: string, content: string): void {
-  // Always update the durable copy
-  ensureDirs();
-  fs.writeFileSync(path.join(THREADS_DIR, `${threadId}.prd.md`), content, 'utf-8');
-
-  // Also keep the workspace copy in sync if it still exists
-  const outputDir = resolveOutputDir(threadId);
-  if (outputDir && fs.existsSync(outputDir)) {
-    const named = findOutputFile(outputDir, /\.prd\.md$/i);
-    fs.writeFileSync(named ?? path.join(outputDir, 'PRD.md'), content, 'utf-8');
-  }
-}
 
 /**
- * Read the main design doc output ({feature-slug}-design.md).
- * Checks the durable threads dir first (survives restarts), then falls back to the ephemeral workspace.
+ * Read the main design doc output ({feature-slug}-design.md) from the ephemeral workspace.
  */
 export function readOutputDesignDoc(threadId: string): string | null {
-  const durable = path.join(THREADS_DIR, `${threadId}.design.md`);
-  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const named = findOutputFile(outputDir, /[-.]design\.md$/i);
@@ -881,12 +881,9 @@ export function readOutputDesignDoc(threadId: string): string | null {
 }
 
 /**
- * Read the tech spec output ({feature-slug}-tech-spec.md).
- * Checks the durable threads dir first, then falls back to the ephemeral workspace.
+ * Read the tech spec output ({feature-slug}-tech-spec.md) from the ephemeral workspace.
  */
 export function readOutputTechSpec(threadId: string): string | null {
-  const durable = path.join(THREADS_DIR, `${threadId}.tech-spec.md`);
-  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const named = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
@@ -894,14 +891,31 @@ export function readOutputTechSpec(threadId: string): string | null {
 }
 
 /**
- * Read the assumptions output ({feature-slug}-assumptions.md).
- * Checks the durable threads dir first, then falls back to the ephemeral workspace.
+ * Read the assumptions output ({feature-slug}-assumptions.md) from the ephemeral workspace.
  */
 export function readOutputAssumptions(threadId: string): string | null {
-  const durable = path.join(THREADS_DIR, `${threadId}.assumptions.md`);
-  if (fs.existsSync(durable)) return fs.readFileSync(durable, 'utf-8');
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const named = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
   return named ? fs.readFileSync(named, 'utf-8') : null;
+}
+
+/**
+ * Read the human-readable validation scorecard (review-scorecard.md) from the ephemeral workspace.
+ */
+export function readOutputValidationScorecardMd(threadId: string): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const found = findOutputFile(outputDir, /review-scorecard\.md$/);
+  return found ? fs.readFileSync(found, 'utf-8') : null;
+}
+
+/**
+ * Read the validation scorecard (review-scorecard.json) from the ephemeral workspace.
+ */
+export function readOutputValidationScorecard(threadId: string): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const found = findOutputFile(outputDir, /review-scorecard\.json$/);
+  return found ? fs.readFileSync(found, 'utf-8') : null;
 }

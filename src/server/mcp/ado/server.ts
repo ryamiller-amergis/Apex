@@ -175,7 +175,7 @@ export function createAdoMcpServer(): McpServer {
       content: z.string().describe('The full new markdown content for the section'),
     },
     async ({ threadId, docId, section, content }) => {
-      const thread = getThread(threadId);
+      const thread = await getThread(threadId);
       if (!thread) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
       }

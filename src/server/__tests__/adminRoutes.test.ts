@@ -462,6 +462,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designDocValidationSkillPath
+      undefined,   // designDocValidationModel
     );
   });
 
@@ -515,6 +517,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designDocValidationSkillPath
+      undefined,   // designDocValidationModel
     );
   });
 
@@ -548,6 +552,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designDocValidationSkillPath
+      undefined,   // designDocValidationModel
     );
   });
 
@@ -579,6 +585,40 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designDocQaModel
       undefined,               // designDocAssistantSkillPath
       undefined,               // designDocAssistantModel
+      undefined,               // designDocValidationSkillPath
+      undefined,               // designDocValidationModel
+    );
+  });
+
+  it('forwards designDocValidationSkillPath and designDocValidationModel to upsertSkillConfig', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+        designDocValidationModel: 'claude-3-opus',
+      });
+
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      'proj-alpha',
+      'org/repo',
+      'main',
+      undefined,                            // updatedBy
+      undefined,                            // interviewSkillPath
+      undefined,                            // prdSkillPath
+      undefined,                            // designDocSkillPath
+      undefined,                            // interviewModel
+      undefined,                            // prdModel
+      undefined,                            // designDocModel
+      undefined,                            // designDocQaSkillPath
+      undefined,                            // designDocQaModel
+      undefined,                            // designDocAssistantSkillPath
+      undefined,                            // designDocAssistantModel
+      '.cursor/skills/validate/SKILL.md',   // designDocValidationSkillPath
+      'claude-3-opus',                      // designDocValidationModel
     );
   });
 

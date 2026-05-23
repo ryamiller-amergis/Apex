@@ -97,7 +97,42 @@ export function prdBadgeClass(status: PrdStatus): string {
 
 // ── Design Doc types ──────────────────────────────────────────────────────────
 
-export type DesignDocStatus = 'interviewing' | 'generating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
+export interface ValidationScorecardGap {
+  id: string;
+  file: string;
+  section: string;
+  score: number;
+  description: string;
+  what_3_looks_like: string;
+  resolution: 'pending' | 'filled' | 'deferred' | 'accepted';
+}
+
+export interface ValidationScorecardFeature {
+  feature_slug: string;
+  feature_title: string;
+  design_score: number;
+  tech_spec_score: number;
+  assumptions_score: number;
+  overall_score: number;
+  verdict: string;
+  gaps: ValidationScorecardGap[];
+}
+
+export interface ValidationScorecard {
+  slug: string;
+  generated_at: string;
+  review_phase: 'initial' | 'final';
+  overall_score: number;
+  ready_threshold: number;
+  is_ready: boolean;
+  verdict: 'ready' | 'gaps' | 'significant_gaps';
+  features: ValidationScorecardFeature[];
+  cross_cutting_checks: Record<string, string>;
+  accepted_gaps: string[];
+  deferred_gaps: string[];
+}
+
+export type DesignDocStatus = 'interviewing' | 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
@@ -106,6 +141,11 @@ export interface DesignDocSummary {
   chatThreadId: string | null;
   qaChatThreadId?: string | null;
   docAssistantThreadId?: string | null;
+  validationThreadId?: string | null;
+  validationScore?: number | null;
+  validationScorecard?: ValidationScorecard | null;
+  validationReportMd?: string | null;
+  validationPhase?: string | null;
   authorId: string;
   authorName?: string;
   title: string;
@@ -135,6 +175,7 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
+    case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
@@ -147,6 +188,7 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return 'interviewing';
     case 'generating': return 'generating';
+    case 'validating': return 'validating';
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';
     case 'approved': return 'approved';

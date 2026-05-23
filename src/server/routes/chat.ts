@@ -9,10 +9,12 @@ import {
   cancelRun,
   closeThread,
   readOutputPrd,
-  writeOutputPrd,
   readOutputBacklog,
   isPrdReady,
 } from '../services/chatAgentService';
+import { db } from '../db/drizzle';
+import { eq } from 'drizzle-orm';
+import { prds } from '../db/schema';
 import { toggleFlag } from '../services/chatThreadRepository';
 import { getUserId } from '../utils/requestUser';
 import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
@@ -246,11 +248,16 @@ router.get('/threads/:id/backlog', requireThreadOwner, (req: Request, res: Respo
  * Overwrite the PRD with user-edited content.
  * Body: plain text (text/markdown or text/plain)
  */
-router.put('/threads/:id/prd', requireThreadOwner, (req: Request, res: Response) => {
+router.put('/threads/:id/prd', requireThreadOwner, async (req: Request, res: Response) => {
   const content = typeof req.body === 'string' ? req.body : req.body?.content;
   if (typeof content !== 'string') return res.status(400).json({ error: 'body must be the markdown text' });
   try {
-    writeOutputPrd(req.params.id, content);
+    const threadId = req.params.id;
+    const prdRow = await db.query.prds.findFirst({ where: eq(prds.chatThreadId, threadId) });
+    if (!prdRow) {
+      return res.status(404).json({ error: 'No PRD found for this thread' });
+    }
+    await db.update(prds).set({ content, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdRow.id));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to write PRD' });

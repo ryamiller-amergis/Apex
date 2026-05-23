@@ -21,7 +21,10 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputDesignDoc: jest.fn().mockReturnValue(null),
   readOutputTechSpec: jest.fn().mockReturnValue(null),
   readOutputAssumptions: jest.fn().mockReturnValue(null),
+  readOutputValidationScorecard: jest.fn().mockReturnValue(null),
+  readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-mock' }),
+  getThreadAsync: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../services/designDocService');
@@ -67,11 +70,38 @@ const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
   '../services/appSettingsService',
 ) as { getDefaultModel: jest.Mock };
 
-const { createDesignDoc: mockCreateDesignDoc, startDesignDocWatcher: mockStartDesignDocWatcher } =
-  jest.requireMock('../services/designDocService') as {
-    createDesignDoc: jest.Mock;
-    startDesignDocWatcher: jest.Mock;
-  };
+const {
+  createDesignDoc: mockCreateDesignDoc,
+  startDesignDocWatcher: mockStartDesignDocWatcher,
+  getDesignDoc: mockGetDesignDoc,
+  listDesignDocs: mockListDesignDocs,
+  updateDesignDocContent: mockUpdateDesignDocContent,
+  submitForReview: mockSubmitDesignDocForReview,
+  withdrawFromReview: mockWithdrawDesignDocFromReview,
+  reviewDesignDoc: mockReviewDesignDoc,
+  deleteDesignDoc: mockDeleteDesignDoc,
+  syncDesignDocContent: mockSyncDesignDocContent,
+  markValidationReady: mockMarkValidationReady,
+  autoStartValidation: mockAutoStartValidation,
+  syncValidationResult: mockSyncValidationResult,
+} = jest.requireMock('../services/designDocService') as {
+  createDesignDoc: jest.Mock;
+  startDesignDocWatcher: jest.Mock;
+  getDesignDoc: jest.Mock;
+  listDesignDocs: jest.Mock;
+  updateDesignDocContent: jest.Mock;
+  submitForReview: jest.Mock;
+  withdrawFromReview: jest.Mock;
+  reviewDesignDoc: jest.Mock;
+  deleteDesignDoc: jest.Mock;
+  syncDesignDocContent: jest.Mock;
+  markValidationReady: jest.Mock;
+  autoStartValidation: jest.Mock;
+  syncValidationResult: jest.Mock;
+};
+
+// autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
+mockAutoStartValidation.mockResolvedValue(undefined);
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -795,6 +825,287 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ error: 'Design docs can only be created from approved PRDs' });
+  });
+});
+
+// ── Design Doc fixtures ────────────────────────────────────────────────────────
+
+const designDocSummary = {
+  id: 'dd-1',
+  prdId: 'prd-1',
+  project: 'proj-alpha',
+  chatThreadId: 'thread-dd',
+  authorId: 'user-test',
+  title: 'Feature Design',
+  status: 'draft' as const,
+  designContent: 'Design',
+  techSpecContent: 'Tech',
+  assumptionsContent: 'Assumptions',
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-02T00:00:00Z',
+};
+
+// ── GET /api/interviews/design-docs ───────────────────────────────────────────
+
+describe('GET /api/interviews/design-docs', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with design doc list', async () => {
+    mockListDesignDocs.mockResolvedValue([designDocSummary]);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 'dd-1', title: 'Feature Design' });
+  });
+
+  it('passes project filter', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs?project=proj-alpha');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ project: 'proj-alpha' }),
+    );
+  });
+
+  it('passes status filter', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs?status=approved');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved' }),
+    );
+  });
+});
+
+// ── GET /api/interviews/design-docs/:id ───────────────────────────────────────
+
+describe('GET /api/interviews/design-docs/:id', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with the design doc', async () => {
+    mockGetDesignDoc.mockResolvedValue(designDocSummary);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 'dd-1' });
+  });
+
+  it('returns 404 when design doc does not exist', async () => {
+    mockGetDesignDoc.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-missing');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: 'Design doc not found' });
+  });
+});
+
+// ── PUT /api/interviews/design-docs/:id/content ──────────────────────────────
+
+describe('PUT /api/interviews/design-docs/:id/content', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 on success', async () => {
+    mockUpdateDesignDocContent.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/content')
+      .send({ designContent: 'Updated design' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockUpdateDesignDocContent).toHaveBeenCalledWith(
+      'dd-1',
+      'user-test',
+      { designContent: 'Updated design', techSpecContent: undefined, assumptionsContent: undefined },
+    );
+  });
+
+  it('returns 400 when no content fields provided', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/content')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'at least one content field must be provided' });
+  });
+
+  it('returns 400 when content field is not a string', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/content')
+      .send({ designContent: 123 });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'content fields must be strings' });
+  });
+
+  it('propagates service errors', async () => {
+    const err = Object.assign(new Error('Approved design docs cannot be edited'), { status: 409 });
+    mockUpdateDesignDocContent.mockRejectedValue(err);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/content')
+      .send({ designContent: 'x' });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+// ── POST /api/interviews/design-docs/:id/submit ──────────────────────────────
+
+describe('POST /api/interviews/design-docs/:id/submit', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockAutoStartValidation.mockResolvedValue(undefined);
+  });
+
+  it('returns 200 on success', async () => {
+    mockSubmitDesignDocForReview.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/dd-1/submit');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('propagates service errors', async () => {
+    const err = Object.assign(new Error('Cannot submit'), { status: 409 });
+    mockSubmitDesignDocForReview.mockRejectedValue(err);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/dd-1/submit');
+
+    expect(res.status).toBe(409);
+  });
+});
+
+// ── POST /api/interviews/design-docs/:id/withdraw ────────────────────────────
+
+describe('POST /api/interviews/design-docs/:id/withdraw', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 on success', async () => {
+    mockWithdrawDesignDocFromReview.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/dd-1/withdraw');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+});
+
+// ── POST /api/interviews/design-docs/:id/review ──────────────────────────────
+
+describe('POST /api/interviews/design-docs/:id/review', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 on approve', async () => {
+    mockReviewDesignDoc.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/review')
+      .send({ action: 'approve' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockReviewDesignDoc).toHaveBeenCalledWith('dd-1', 'user-test', { action: 'approve' });
+  });
+
+  it('propagates 403 when author tries to self-review', async () => {
+    const err = Object.assign(new Error('You cannot review your own design doc'), { status: 403 });
+    mockReviewDesignDoc.mockRejectedValue(err);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/review')
+      .send({ action: 'approve' });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// ── DELETE /api/interviews/design-docs/:id ────────────────────────────────────
+
+describe('DELETE /api/interviews/design-docs/:id', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 204 on success', async () => {
+    mockDeleteDesignDoc.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).delete('/api/interviews/design-docs/dd-1');
+
+    expect(res.status).toBe(204);
+    expect(mockDeleteDesignDoc).toHaveBeenCalledWith('dd-1', 'user-test');
+  });
+
+  it('propagates 403 when non-author tries to delete', async () => {
+    const err = Object.assign(new Error('Only the author can delete this design doc'), { status: 403 });
+    mockDeleteDesignDoc.mockRejectedValue(err);
+
+    const res = await request(buildApp()).delete('/api/interviews/design-docs/dd-1');
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// ── POST /api/interviews/design-docs/:id/validation/mark-ready ───────────────
+
+describe('POST /api/interviews/design-docs/:id/validation/mark-ready', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 on success', async () => {
+    mockMarkValidationReady.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/dd-1/validation/mark-ready');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockMarkValidationReady).toHaveBeenCalledWith('dd-1', 'user-test');
+  });
+
+  it('propagates 409 when score is too low', async () => {
+    const err = Object.assign(new Error('Validation score must be >= 90'), { status: 409 });
+    mockMarkValidationReady.mockRejectedValue(err);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/dd-1/validation/mark-ready');
+
+    expect(res.status).toBe(409);
+  });
+});
+
+// ── GET /api/interviews/design-docs/:id/validation ───────────────────────────
+
+describe('GET /api/interviews/design-docs/:id/validation', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns validation state', async () => {
+    mockGetDesignDoc.mockResolvedValue({
+      ...designDocSummary,
+      validationThreadId: 'val-thread-1',
+      validationScore: 92,
+      validationScorecard: { overall_score: 92 },
+      validationPhase: 'final',
+    });
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-1/validation');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      validationThreadId: 'val-thread-1',
+      validationScore: 92,
+      validationPhase: 'final',
+    });
+  });
+
+  it('returns 404 when design doc not found', async () => {
+    mockGetDesignDoc.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-missing/validation');
+
+    expect(res.status).toBe(404);
   });
 });
 

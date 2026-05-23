@@ -1,11 +1,25 @@
+import fs from 'fs';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { prds, appUsers } from '../db/schema';
+import { prds, appUsers, chatThreads } from '../db/schema';
 import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'pending_review', 'approved', 'rejected', 'revision_requested'];
+
+async function cleanupWorkspace(threadId: string): Promise<void> {
+  try {
+    const row = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, threadId),
+      columns: { workspaceDir: true },
+    });
+    if (row?.workspaceDir) {
+      fs.rmSync(row.workspaceDir, { recursive: true, force: true });
+      console.log(`[prdWatcher] Cleaned up workspace for thread ${threadId}`);
+    }
+  } catch { /* non-fatal */ }
+}
 
 function assertValidPrdStatus(status: string): asserts status is PrdStatus {
   if (!VALID_PRD_STATUSES.includes(status as PrdStatus)) {
@@ -178,6 +192,22 @@ export async function withdrawFromReview(id: string, requestingUserId: string): 
     .where(eq(prds.id, id));
 }
 
+export async function reopenForReview(id: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
+  if (!row) throw notFound('PRD not found');
+
+  await db
+    .update(prds)
+    .set({
+      status: 'pending_review',
+      reviewerId: null,
+      reviewComment: null,
+      reviewedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, id));
+}
+
 export async function reviewPrd(
   id: string,
   reviewerId: string,
@@ -233,7 +263,19 @@ export async function syncPrdContent(
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
 
+const activePrdWatchers = new Map<string, ReturnType<typeof setInterval>>();
+
+function stopPrdWatcher(prdId: string): void {
+  const handle = activePrdWatchers.get(prdId);
+  if (handle !== undefined) {
+    clearInterval(handle);
+    activePrdWatchers.delete(prdId);
+    console.log(`[prdWatcher] Cancelled — prdId=${prdId}`);
+  }
+}
+
 export function startPrdWatcher(prdId: string, chatThreadId: string): void {
+  stopPrdWatcher(prdId);
   let attempts = 0;
   console.log(`[prdWatcher] Started — prdId=${prdId} threadId=${chatThreadId}`);
 
@@ -242,6 +284,7 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
 
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
+      activePrdWatchers.delete(prdId);
       console.warn(`[prdWatcher] Timed out waiting for PRD output (prdId=${prdId}, threadId=${chatThreadId})`);
       return;
     }
@@ -255,15 +298,19 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
 
     if (content !== null && backlog !== null) {
       clearInterval(interval);
+      activePrdWatchers.delete(prdId);
       console.log(`[prdWatcher] Both files ready — syncing to DB (prdId=${prdId})`);
       try {
         await syncPrdContent(prdId, content, backlog);
         console.log(`[prdWatcher] Sync complete — PRD is now pending_review (prdId=${prdId})`);
+        cleanupWorkspace(chatThreadId);
       } catch (err) {
         console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);
       }
     }
   }, WATCHER_INTERVAL_MS);
+
+  activePrdWatchers.set(prdId, interval);
 }
 
 function rowToPrdSummary(row: typeof prds.$inferSelect, reviewerName?: string | null): PrdSummary {
@@ -290,6 +337,7 @@ export async function deletePrd(id: string, requestingUserId: string): Promise<v
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
     throw forbidden('Only the author can delete this PRD');
   }
+  stopPrdWatcher(id);
   await db.delete(prds).where(eq(prds.id, id));
 }
 

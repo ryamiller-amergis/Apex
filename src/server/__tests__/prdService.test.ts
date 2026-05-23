@@ -55,8 +55,10 @@ import {
   listPrds,
   getPrd,
   updatePrdContent,
+  updatePrdBacklog,
   submitForReview,
   withdrawFromReview,
+  reopenForReview,
   reviewPrd,
   deletePrd,
   syncPrdContent,
@@ -560,6 +562,110 @@ describe('syncPrdContent', () => {
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ backlogJson: backlog }),
+    );
+  });
+});
+
+// ── updatePrdBacklog ──────────────────────────────────────────────────────────
+
+describe('updatePrdBacklog', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('updates backlogJson when author edits a draft PRD', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const backlog = { items: [{ id: 1, title: 'Task A' }] };
+    await updatePrdBacklog('prd-1', 'user-1', backlog);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backlogJson: backlog }),
+    );
+  });
+
+  it('throws 404 when PRD does not exist', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    await expect(updatePrdBacklog('prd-missing', 'user-1', {})).rejects.toMatchObject({
+      message: 'PRD not found',
+    });
+  });
+
+  it('throws 403 when a non-author tries to update', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
+
+    await expect(updatePrdBacklog('prd-1', 'user-other', {})).rejects.toMatchObject({
+      message: 'Only the author can update backlog',
+    });
+  });
+
+  it('throws 409 when PRD status is approved', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'approved' }));
+
+    await expect(updatePrdBacklog('prd-1', 'user-1', {})).rejects.toMatchObject({
+      message: 'Approved PRDs cannot be edited',
+    });
+  });
+});
+
+// ── reopenForReview ───────────────────────────────────────────────────────────
+
+describe('reopenForReview', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('sets status to pending_review and clears review fields', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(
+      makePrdRow({ status: 'approved', reviewerId: 'reviewer-1', reviewComment: 'LGTM', reviewedAt: '2026-01-03T00:00:00Z' }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reopenForReview('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending_review',
+        reviewerId: null,
+        reviewComment: null,
+        reviewedAt: null,
+      }),
+    );
+  });
+
+  it('throws 404 when PRD does not exist', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    await expect(reopenForReview('prd-missing')).rejects.toMatchObject({
+      message: 'PRD not found',
+    });
+  });
+
+  it('works from draft status', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reopenForReview('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('works from rejected status', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'rejected' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reopenForReview('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
     );
   });
 });

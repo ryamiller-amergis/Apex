@@ -51,6 +51,16 @@ jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
 
+jest.mock('../services/projectSettingsService', () => ({
+  getSkillConfig: jest.fn().mockResolvedValue(null),
+}));
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: jest.fn().mockResolvedValue('default-model'),
+}));
+jest.mock('../services/prdService', () => ({
+  getPrd: jest.fn().mockResolvedValue(null),
+}));
+
 import {
   createDesignDoc,
   listDesignDocs,
@@ -61,9 +71,12 @@ import {
   reviewDesignDoc,
   deleteDesignDoc,
   syncDesignDocContent,
+  syncValidationResult,
+  markValidationReady,
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { getSkillConfig: mockGetSkillConfig } = jest.requireMock('../services/projectSettingsService') as { getSkillConfig: jest.Mock };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -631,6 +644,208 @@ describe('syncDesignDocContent', () => {
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ techSpecContent: 'Tech spec', assumptionsContent: 'Assumptions' }),
+    );
+  });
+});
+
+// ── syncValidationResult ──────────────────────────────────────────────────────
+
+describe('syncValidationResult', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('sets validationScore, validationScorecard, and validationPhase from the scorecard', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const scorecard = { overall_score: 85, is_ready: false, review_phase: 'initial' } as any;
+
+    await syncValidationResult('doc-1', scorecard);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        validationScore: 85,
+        validationScorecard: scorecard,
+        validationPhase: 'initial',
+      }),
+    );
+  });
+
+  it('sets status to pending_review when scorecard.is_ready is true', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const scorecard = { overall_score: 95, is_ready: true, review_phase: 'final' } as any;
+
+    await syncValidationResult('doc-1', scorecard);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('does not change status when scorecard.is_ready is false', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const scorecard = { overall_score: 70, is_ready: false, review_phase: 'initial' } as any;
+
+    await syncValidationResult('doc-1', scorecard);
+
+    const callArg = setMock.mock.calls[0][0];
+    expect(callArg).not.toHaveProperty('status');
+  });
+
+  it('persists validationReportMd when provided', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const scorecard = { overall_score: 92, is_ready: true, review_phase: 'final' } as any;
+
+    await syncValidationResult('doc-1', scorecard, '## Validation Report\nAll good.');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationReportMd: '## Validation Report\nAll good.' }),
+    );
+  });
+
+  it('does not include validationReportMd when not provided', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const scorecard = { overall_score: 80, is_ready: false, review_phase: 'initial' } as any;
+
+    await syncValidationResult('doc-1', scorecard);
+
+    const callArg = setMock.mock.calls[0][0];
+    expect(callArg).not.toHaveProperty('validationReportMd');
+  });
+});
+
+// ── markValidationReady ───────────────────────────────────────────────────────
+
+describe('markValidationReady', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('transitions to pending_review when status is validating and score >= 90', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'validating', validationScore: 95 }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await markValidationReady('doc-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('throws 404 when design doc does not exist', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+
+    await expect(markValidationReady('doc-missing', 'user-1')).rejects.toMatchObject({
+      message: 'Design doc not found',
+      status: 404,
+    });
+  });
+
+  it('throws 403 when a non-author/non-admin tries to mark ready', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'validating', validationScore: 95 }),
+    );
+
+    await expect(markValidationReady('doc-1', 'user-other')).rejects.toMatchObject({
+      message: 'Only the author can mark validation as ready',
+      status: 403,
+    });
+  });
+
+  it('throws 409 when status is not validating', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'draft', validationScore: 95 }),
+    );
+
+    await expect(markValidationReady('doc-1', 'user-1')).rejects.toMatchObject({
+      message: expect.stringContaining("Cannot mark ready from status 'draft'"),
+      status: 409,
+    });
+  });
+
+  it('throws 409 when validation score is below 90', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'validating', validationScore: 75 }),
+    );
+
+    await expect(markValidationReady('doc-1', 'user-1')).rejects.toMatchObject({
+      message: expect.stringContaining('Validation score must be >= 90'),
+      status: 409,
+    });
+  });
+
+  it('throws 409 when validation score is null', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'validating', validationScore: null }),
+    );
+
+    await expect(markValidationReady('doc-1', 'user-1')).rejects.toMatchObject({
+      message: expect.stringContaining('Validation score must be >= 90'),
+      status: 409,
+    });
+  });
+});
+
+// ── reviewDesignDoc (approve with validation gate) ────────────────────────────
+
+describe('reviewDesignDoc (approve with validation gate)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('throws 409 when validation is configured and score is below 90', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 50 }),
+    );
+    mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
+
+    await expect(
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('Validation score must be >= 90'),
+      status: 409,
+    });
+  });
+
+  it('throws 409 when validation is configured and score is null', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: null }),
+    );
+    mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
+
+    await expect(
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('not scored'),
+      status: 409,
+    });
+  });
+
+  it('allows approve when validation is configured and score >= 90', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 92 }),
+    );
+    mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
     );
   });
 });

@@ -224,6 +224,56 @@ describe('upsertSkillConfig', () => {
       }),
     );
   });
+
+  it('persists designDocValidationSkillPath and designDocValidationModel when provided', async () => {
+    const configWithValidation = {
+      ...configRow,
+      designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+      designDocValidationModel: 'claude-3-opus',
+    };
+    const returningMock = jest.fn().mockResolvedValue([configWithValidation]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocQaSkillPath
+      undefined, // designDocQaModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      '.cursor/skills/validate/SKILL.md', // designDocValidationSkillPath
+      'claude-3-opus', // designDocValidationModel
+    );
+
+    expect(result).toMatchObject({
+      designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+      designDocValidationModel: 'claude-3-opus',
+    });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+        designDocValidationModel: 'claude-3-opus',
+      }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({
+          designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+          designDocValidationModel: 'claude-3-opus',
+        }),
+      }),
+    );
+  });
 });
 
 // ── deleteSkillConfig ──────────────────────────────────────────────────────────

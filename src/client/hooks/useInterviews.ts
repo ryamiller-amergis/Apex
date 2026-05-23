@@ -106,6 +106,7 @@ export function useDesignDoc(id: string | null) {
       const d = query.state.data;
       if (!d) return false;
       if (d.status === 'interviewing') return 10_000;
+      if (d.status === 'validating') return 10_000;
       return (d.designContent === '' || d.techSpecContent === '' || d.assumptionsContent === '') ? 5_000 : false;
     },
   });
@@ -225,6 +226,18 @@ export function useWithdrawPrd() {
   return useMutation<void, Error, string>({
     mutationFn: (prdId) =>
       apiFetch(`/api/interviews/prds/${prdId}/withdraw`, { method: 'POST' }),
+    onSuccess: (_data, prdId) => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+export function useReopenPrd() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/reopen`, { method: 'POST' }),
     onSuccess: (_data, prdId) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
@@ -362,6 +375,75 @@ export function useGenerateDesignDoc() {
     onSuccess: (_data, designDocId) => {
       qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
       qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useDesignDocValidation(docId: string | null) {
+  return useQuery({
+    queryKey: ['design-doc-validation', docId],
+    queryFn: () => apiFetch<{
+      validationThreadId: string | null;
+      validationScore: number | null;
+      validationScorecard: unknown | null;
+      validationPhase: string | null;
+    }>(`/api/interviews/design-docs/${docId}/validation`),
+    enabled: !!docId,
+    refetchInterval: (query) => {
+      const score = (query.state.data as any)?.validationScore;
+      return score === null || score === undefined ? 5000 : false;
+    },
+  });
+}
+
+export function useCreateValidationThread() {
+  const qc = useQueryClient();
+  return useMutation<{ threadId: string }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/validation-thread`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-doc-validation', docId] });
+    },
+  });
+}
+
+export function useRefreshValidation() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; score: number; is_ready: boolean }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/validation/refresh`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-doc-validation', docId] });
+      void qc.invalidateQueries({ queryKey: ['validation-report', docId] });
+    },
+  });
+}
+
+export function useMarkValidationReady() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/validation/mark-ready`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useValidationReport(docId: string | null, validationThreadId: string | null | undefined, docStatus?: string) {
+  return useQuery<{ markdown: string }, Error>({
+    queryKey: ['validation-report', docId],
+    queryFn: () => apiFetch(`/api/interviews/design-docs/${docId!}/validation/report`),
+    enabled: !!docId && !!validationThreadId,
+    staleTime: 30_000,
+    retry: false,
+    refetchInterval: (query) => {
+      if (query.state.data) return false;
+      if (docStatus === 'validating') return 10_000;
+      return 5_000;
     },
   });
 }

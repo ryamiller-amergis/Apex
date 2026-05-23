@@ -1,6 +1,7 @@
 import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
+import type { ValidationScorecard } from '../../shared/types/interview';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,11 @@ export const designDocs = pgTable('design_docs', {
   chatThreadId: uuid('chat_thread_id'),
   qaChatThreadId: uuid('qa_chat_thread_id'),
   docAssistantThreadId: uuid('doc_assistant_thread_id'),
+  validationThreadId: uuid('validation_thread_id'),
+  validationScore: integer('validation_score'),
+  validationScorecard: jsonb('validation_scorecard').$type<ValidationScorecard>(),
+  validationReportMd: text('validation_report_md'),
+  validationPhase: text('validation_phase'),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   designContent: text('design_content').notNull().default(''),
@@ -243,6 +249,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocModel: text('design_doc_model'),
   designDocQaModel: text('design_doc_qa_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
+  designDocValidationSkillPath: text('design_doc_validation_skill_path'),
+  designDocValidationModel: text('design_doc_validation_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });

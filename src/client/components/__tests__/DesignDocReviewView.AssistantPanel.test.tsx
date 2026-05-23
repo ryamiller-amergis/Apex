@@ -41,6 +41,11 @@ jest.mock('../../hooks/useInterviews', () => ({
   useReviewDesignDoc: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useGenerateDesignDoc: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useMarkValidationReady: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useRefreshValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useCreateValidationThread: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useValidationReport: jest.fn(() => ({ data: null })),
+  useDesignDocsByPrd: jest.fn(() => ({ data: [] })),
 }));
 
 const mockUseChatStream = jest.fn();

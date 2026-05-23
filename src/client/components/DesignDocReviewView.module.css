@@ -96,11 +96,92 @@
 
 .badgeInterviewing { background: rgba(14, 165, 233, 0.15); color: #0284c7; }
 .badgeGenerating { background: rgba(99, 102, 241, 0.15); color: #6366f1; }
+.badgeValidating { background: rgba(20, 42, 103, 0.15); color: var(--accent-color); }
 .badgeDraft { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
 .badgePendingReview { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .badgeApproved { background: rgba(34, 197, 94, 0.15); color: var(--success-color); }
 .badgeRejected { background: rgba(239, 68, 68, 0.15); color: var(--error-color); }
 .badgeRevisionRequested { background: rgba(249, 115, 22, 0.15); color: #ea580c; }
+
+/* ── Validation score badge (theme-safe, dark mode compatible) ─────────────── */
+
+.validationBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.validationBadgeGood {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success-color);
+}
+
+.validationBadgeMid {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.validationBadgeBad {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error-color);
+}
+
+/* ── Validating-in-progress banner (shown inside the tabs view) ────────────── */
+
+.validatingBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, var(--border-color));
+  border-radius: 8px;
+  margin-bottom: 20px;
+  flex-shrink: 0;
+}
+
+.validatingBannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.validatingBannerTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.validatingBannerSub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* ── Validation report tab content ────────────────────────────────────────── */
+
+.validationReportEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 24px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.validationReportEmptySub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  max-width: 340px;
+}
 
 .reviewInfo {
   font-size: 0.78rem;

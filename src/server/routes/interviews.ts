@@ -20,6 +20,7 @@ import {
   getPrd,
   listPrds,
   reviewPrd,
+  reopenForReview,
   startPrdWatcher,
   submitForReview,
   syncPrdContent,
@@ -37,8 +38,11 @@ import {
   syncDesignDocContent,
   updateDesignDocContent,
   withdrawFromReview as withdrawDesignDocFromReview,
+  autoStartValidation,
+  markValidationReady,
+  syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, createThread, getThreadAsync } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync } from '../services/chatAgentService';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
@@ -147,6 +151,16 @@ router.post('/prds/:prdId/withdraw', requirePermission('interviews:manage'), asy
   try {
     const userId = getUserId(req);
     await withdrawFromReview(req.params.prdId, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/reopen — admin-only: force any PRD back to pending_review
+router.post('/prds/:prdId/reopen', requirePermission('admin:roles'), async (req, res, next) => {
+  try {
+    await reopenForReview(req.params.prdId);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -391,6 +405,12 @@ router.post('/design-docs/:id/submit', requirePermission('interviews:manage'), a
   try {
     const userId = getUserId(req);
     await submitDesignDocForReview(req.params.id, userId);
+    // Auto-start validation in the background if a validation skill is configured.
+    // This takes the doc directly from pending_review → validating without requiring
+    // the user to manually click "Run Validation".
+    autoStartValidation(req.params.id).catch((err) => {
+      console.error(`[submit] autoStartValidation failed (docId=${req.params.id})`, err);
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -471,20 +491,35 @@ router.post('/design-docs/:id/generate', requirePermission('interviews:manage'),
       return;
     }
 
-    // Check if the Q&A thread already produced the output artifacts
+    // Check if the Q&A thread already produced the output artifacts.
+    // First check the workspace files, then fall back to DB content
+    // (workspace may have been cleaned up after syncOutputToDb ran).
     const qaDesign = readOutputDesignDoc(doc.qaChatThreadId);
     const qaTechSpec = readOutputTechSpec(doc.qaChatThreadId);
     const qaAssumptions = readOutputAssumptions(doc.qaChatThreadId);
 
-    if (qaDesign !== null && qaTechSpec !== null && qaAssumptions !== null) {
-      // All three artifacts already exist in the Q&A workspace — sync directly, skip generation thread
-      console.log(`[designDoc] Q&A thread already produced all artifacts — syncing directly (designDocId=${req.params.id})`);
+    const hasAllInWorkspace = qaDesign !== null && qaTechSpec !== null && qaAssumptions !== null;
+    const hasAllInDb = !!doc.designContent && !!doc.techSpecContent && !!doc.assumptionsContent;
+
+    if (hasAllInWorkspace || hasAllInDb) {
+      const designContent = qaDesign ?? doc.designContent!;
+      const techSpecContent = qaTechSpec ?? doc.techSpecContent!;
+      const assumptionsContent = qaAssumptions ?? doc.assumptionsContent!;
+
+      console.log(`[designDoc] Q&A already produced all artifacts (source=${hasAllInWorkspace ? 'workspace' : 'db'}) — syncing directly (designDocId=${req.params.id})`);
+      const skillConfig = await getSkillConfig(doc.project);
+      const finalStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
       await syncDesignDocContent(req.params.id, {
-        designContent: qaDesign,
-        techSpecContent: qaTechSpec,
-        assumptionsContent: qaAssumptions,
-        finalStatus: 'pending_review',
+        designContent,
+        techSpecContent,
+        assumptionsContent,
+        finalStatus,
       });
+      if (finalStatus === 'validating') {
+        autoStartValidation(req.params.id).catch((err) => {
+          console.error(`[designDoc] autoStartValidation failed on fast-path generate (designDocId=${req.params.id})`, err);
+        });
+      }
       res.json({ ok: true });
       return;
     }
@@ -616,6 +651,86 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       .where(eq(designDocsTable.id, req.params.id));
 
     res.json({ threadId: thread.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/validation-thread — create (or return existing) validation thread
+router.post('/design-docs/:id/validation-thread', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+
+    if (doc.validationThreadId) {
+      res.json({ threadId: doc.validationThreadId });
+      return;
+    }
+
+    await autoStartValidation(req.params.id);
+    const updated = await getDesignDoc(req.params.id);
+    res.json({ threadId: updated?.validationThreadId ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /design-docs/:id/validation — get validation state
+router.get('/design-docs/:id/validation', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+    res.json({
+      validationThreadId: doc.validationThreadId ?? null,
+      validationScore: doc.validationScore ?? null,
+      validationScorecard: doc.validationScorecard ?? null,
+      validationPhase: doc.validationPhase ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/validation/refresh — manually re-read scorecard from workspace and sync to DB
+router.post('/design-docs/:id/validation/refresh', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+    if (!doc.validationThreadId) { res.status(400).json({ error: 'No validation thread exists' }); return; }
+
+    const scorecardRaw = readOutputValidationScorecard(doc.validationThreadId);
+    if (!scorecardRaw) { res.status(404).json({ error: 'Scorecard not yet available' }); return; }
+
+    const scorecard = JSON.parse(scorecardRaw);
+    const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
+    await syncValidationResult(req.params.id, scorecard, reportMd);
+    res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /design-docs/:id/validation/report — return human-readable scorecard markdown
+router.get('/design-docs/:id/validation/report', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+
+    const md = doc.validationReportMd;
+    if (!md) { res.status(404).json({ error: 'Validation report not yet available' }); return; }
+
+    res.json({ markdown: md });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/validation/mark-ready — manually transition validating → draft when score >= 90
+router.post('/design-docs/:id/validation/mark-ready', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await markValidationReady(req.params.id, userId);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
