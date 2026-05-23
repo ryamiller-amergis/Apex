@@ -464,6 +464,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocAssistantModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
+      undefined,   // quickSkillPills
     );
   });
 
@@ -519,6 +520,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocAssistantModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
+      undefined,   // quickSkillPills
     );
   });
 
@@ -554,6 +556,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocAssistantModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
+      undefined,   // quickSkillPills
     );
   });
 
@@ -587,6 +590,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designDocAssistantModel
       undefined,               // designDocValidationSkillPath
       undefined,               // designDocValidationModel
+      undefined,               // quickSkillPills
     );
   });
 
@@ -619,6 +623,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // designDocAssistantModel
       '.cursor/skills/validate/SKILL.md',   // designDocValidationSkillPath
       'claude-3-opus',                      // designDocValidationModel
+      undefined,                            // quickSkillPills
     );
   });
 
