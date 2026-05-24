@@ -56,23 +56,33 @@ const threads = new Map<string, ThreadState>();
  * or null if not found / dir doesn't exist.
  */
 function findOutputFile(dir: string, pattern: RegExp): string | null {
-  if (!fs.existsSync(dir)) return null;
+  const all = findAllOutputFiles(dir, pattern);
+  return all.length > 0 ? all[0] : null;
+}
+
+/**
+ * Returns all file paths in `dir` (recursively) whose names match `pattern`,
+ * sorted alphabetically so multi-feature output is deterministic.
+ */
+function findAllOutputFiles(dir: string, pattern: RegExp): string[] {
+  if (!fs.existsSync(dir)) return [];
   try {
+    const results: string[] = [];
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isFile() && pattern.test(entry.name)) {
-        return path.join(dir, entry.name);
+        results.push(path.join(dir, entry.name));
       }
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        const found = findOutputFile(path.join(dir, entry.name), pattern);
-        if (found) return found;
+        results.push(...findAllOutputFiles(path.join(dir, entry.name), pattern));
       }
     }
-    return null;
+    results.sort();
+    return results;
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -872,32 +882,38 @@ export function readOutputBacklog(threadId: string): unknown | null {
 
 /**
  * Read the main design doc output ({feature-slug}-design.md) from the ephemeral workspace.
+ * When multiple features are present, all matching files are concatenated in alphabetical order.
  */
 export function readOutputDesignDoc(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const named = findOutputFile(outputDir, /[-.]design\.md$/i);
-  return named ? fs.readFileSync(named, 'utf-8') : null;
+  const files = findAllOutputFiles(outputDir, /[-.]design\.md$/i);
+  if (files.length === 0) return null;
+  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
 }
 
 /**
  * Read the tech spec output ({feature-slug}-tech-spec.md) from the ephemeral workspace.
+ * When multiple features are present, all matching files are concatenated in alphabetical order.
  */
 export function readOutputTechSpec(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const named = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
-  return named ? fs.readFileSync(named, 'utf-8') : null;
+  const files = findAllOutputFiles(outputDir, /[-.]tech-spec\.md$/i);
+  if (files.length === 0) return null;
+  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
 }
 
 /**
  * Read the assumptions output ({feature-slug}-assumptions.md) from the ephemeral workspace.
+ * When multiple features are present, all matching files are concatenated in alphabetical order.
  */
 export function readOutputAssumptions(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const named = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
-  return named ? fs.readFileSync(named, 'utf-8') : null;
+  const files = findAllOutputFiles(outputDir, /[-.]assumptions\.md$/i);
+  if (files.length === 0) return null;
+  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
 }
 
 /**
