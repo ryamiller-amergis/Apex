@@ -21,10 +21,10 @@ import {
   deleteThread as pgDeleteThread,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { interviews, prds, designDocs } from '../db/schema';
 import { syncPrdContent } from './prdService';
-import { syncDesignDocContent, syncValidationResult } from './designDocService';
+import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
 
@@ -382,6 +382,17 @@ export async function hydrateThread(threadId: string): Promise<boolean> {
   return state !== null;
 }
 
+/**
+ * Returns true if the thread exists in memory and its agent is NOT running.
+ * Used by startup recovery to decide whether to re-kick a dead agent.
+ */
+export function isThreadIdle(threadId: string): boolean {
+  const state = threads.get(threadId);
+  if (!state) return false;
+  return state.thread.status !== 'running';
+}
+
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function createThread(
@@ -430,7 +441,17 @@ export async function createThread(
   // the real first message next so the transcript shows the user request before the agent.
   if (!options?.skipAutoKickoff) {
     setImmediate(() => {
-      sendMessage(threadId, 'Begin.').catch((err: Error) => {
+      // #region agent log
+      try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-firing',message:'auto-kickoff setImmediate fired',data:{threadId,skillPath:kickoff.skillPath},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+      // #endregion
+      sendMessage(threadId, 'Begin.').then(() => {
+        // #region agent log
+        try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-success',message:'auto-kickoff sendMessage completed successfully',data:{threadId},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+        // #endregion
+      }).catch((err: Error) => {
+        // #region agent log
+        try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-error',message:'auto-kickoff sendMessage FAILED',data:{threadId,error:err.message,name:err.name},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+        // #endregion
         console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
       });
     });
@@ -527,22 +548,25 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
     where: eq(designDocs.chatThreadId, threadId),
   });
   if (ddGenRow) {
-    const design = readOutputDesignDoc(threadId);
-    const techSpec = readOutputTechSpec(threadId);
-    const assumptions = readOutputAssumptions(threadId);
-    if (design || techSpec || assumptions) {
-      const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
-      if (design) syncOpts.designContent = design;
-      if (techSpec) syncOpts.techSpecContent = techSpec;
-      if (assumptions) syncOpts.assumptionsContent = assumptions;
-      await syncDesignDocContent(ddGenRow.id, syncOpts);
-      console.log(`[chat] post-run: synced design doc output to DB (designDocId=${ddGenRow.id})`);
-    }
-    // Do NOT clean up workspace here — the design doc watcher handles status
-    // transitions (generating → validating/pending_review), validation triggers,
-    // and workspace cleanup. Deleting the workspace would prevent the watcher
-    // from finding the output files.
+    await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
+    console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
     return;
+  }
+
+  // Fallback: the watcher may have nulled chatThreadId prematurely while the
+  // agent was still running. If the workspace has feature triplets, look for
+  // the seed doc in generating status (chatThreadId=NULL) and sync the features.
+  const orphanFeatures = readAllOutputDesignDocFeatures(threadId);
+  if (orphanFeatures.length > 0) {
+    const seedRow = await db.query.designDocs.findFirst({
+      where: and(eq(designDocs.status, 'generating'), isNull(designDocs.chatThreadId)),
+      columns: { id: true, prdId: true, project: true, authorId: true },
+    });
+    if (seedRow) {
+      await syncPerFeatureDesignDocs(seedRow.id, seedRow.prdId, seedRow.project, seedRow.authorId, threadId);
+      console.log(`[chat] post-run: synced ${orphanFeatures.length} orphan features to DB (seedDocId=${seedRow.id})`);
+      return;
+    }
   }
 
   // Check if this thread is a validation thread
@@ -553,6 +577,16 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
     const scorecardRaw = readOutputValidationScorecard(threadId);
     if (scorecardRaw) {
       try {
+        // Re-verify thread ownership — another validation may have started
+        const freshDoc = await db.query.designDocs.findFirst({
+          where: eq(designDocs.id, ddValRow.id),
+          columns: { validationThreadId: true },
+        });
+        if (freshDoc?.validationThreadId !== threadId) {
+          console.log(`[chat] post-run: discarded stale validation scorecard — thread ${threadId} no longer active (designDocId=${ddValRow.id})`);
+          cleanupWorkspaceDir(workspaceDir);
+          return;
+        }
         const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
         await syncValidationResult(ddValRow.id, scorecard, reportMd);
@@ -561,16 +595,33 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
       } catch (err) {
         console.error(`[chat] post-run: failed to parse validation scorecard`, err);
       }
+    } else {
+      // Agent completed (success path) but wrote no scorecard file.
+      // Reset the doc from 'validating' → 'draft' so the user can re-run.
+      // The WHERE status='validating' guard prevents overwriting an already-scored doc.
+      const freshDoc = await db.query.designDocs.findFirst({
+        where: eq(designDocs.id, ddValRow.id),
+        columns: { validationThreadId: true, status: true },
+      });
+      if (freshDoc?.validationThreadId === threadId && freshDoc?.status === 'validating') {
+        await db.update(designDocs)
+          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .where(eq(designDocs.id, ddValRow.id));
+        console.warn(`[chat] post-run: validation agent wrote no scorecard, reset to draft (designDocId=${ddValRow.id})`);
+      }
+      fullySynced = true; // workspace can be cleaned
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
   }
 
-  // Check if this thread is a Q&A thread
-  const ddQaRow = await db.query.designDocs.findFirst({
-    where: eq(designDocs.qaChatThreadId, threadId),
+  // Check if this thread is a doc assistant thread (used by fix-validation and "Ask Apex")
+  const ddAssistantRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.docAssistantThreadId, threadId),
   });
-  if (ddQaRow) {
+  if (ddAssistantRow) {
+    // The fix-validation flow uses MCP tool calls to save content in real-time,
+    // but as a fallback, check if output workspace files exist and sync them.
     const design = readOutputDesignDoc(threadId);
     const techSpec = readOutputTechSpec(threadId);
     const assumptions = readOutputAssumptions(threadId);
@@ -579,9 +630,37 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
       if (design) syncOpts.designContent = design;
       if (techSpec) syncOpts.techSpecContent = techSpec;
       if (assumptions) syncOpts.assumptionsContent = assumptions;
-      await syncDesignDocContent(ddQaRow.id, syncOpts);
-      console.log(`[chat] post-run: synced Q&A design doc output to DB (designDocId=${ddQaRow.id})`);
-      fullySynced = design !== null && techSpec !== null && assumptions !== null;
+      await syncDesignDocContent(ddAssistantRow.id, syncOpts);
+      console.log(`[chat] post-run: synced doc-assistant output to DB (designDocId=${ddAssistantRow.id})`);
+    }
+    return;
+  }
+
+  // Check if this thread is a Q&A thread
+  const ddQaRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.qaChatThreadId, threadId),
+  });
+  if (ddQaRow) {
+    // Try multi-feature output first — the agent may have written per-feature triplets
+    const features = readAllOutputDesignDocFeatures(threadId);
+    if (features.length > 1) {
+      await syncPerFeatureDesignDocs(ddQaRow.id, ddQaRow.prdId, ddQaRow.project, ddQaRow.authorId, threadId);
+      console.log(`[chat] post-run: synced ${features.length} per-feature design docs from Q&A (prdId=${ddQaRow.prdId})`);
+      fullySynced = true;
+    } else {
+      // Single-feature fallback — write to the seed row directly
+      const design = readOutputDesignDoc(threadId);
+      const techSpec = readOutputTechSpec(threadId);
+      const assumptions = readOutputAssumptions(threadId);
+      if (design || techSpec || assumptions) {
+        const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
+        if (design) syncOpts.designContent = design;
+        if (techSpec) syncOpts.techSpecContent = techSpec;
+        if (assumptions) syncOpts.assumptionsContent = assumptions;
+        await syncDesignDocContent(ddQaRow.id, syncOpts);
+        console.log(`[chat] post-run: synced Q&A design doc output to DB (designDocId=${ddQaRow.id})`);
+        fullySynced = design !== null && techSpec !== null && assumptions !== null;
+      }
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -603,6 +682,9 @@ export async function sendMessage(
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
+  // #region agent log
+  try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:sendMessage:start',message:'sendMessage called',data:{threadId,currentStatus:state.thread.status,textPrefix:text.slice(0,30)},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+  // #endregion
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
   const apiKey = process.env.CURSOR_API_KEY;
@@ -701,6 +783,9 @@ export async function sendMessage(
                 toolName: block.name,
                 input: block.input,
               });
+              // #region agent log
+              try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:tool_call',message:'agent tool call',data:{threadId,toolName:block.name,inputKeys:Object.keys(block.input||{})},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+              // #endregion
             }
           }
         }
@@ -711,14 +796,20 @@ export async function sendMessage(
 
     if (result.status === 'error') {
       const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
+      console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
+      // #region agent log
+      try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:run-error',message:'agent run returned error status',data:{threadId,model:state.thread.kickoff.model,result:result.result??null,skillPath:state.thread.kickoff.skillPath},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+      // #endregion
       state.thread.lastError = reason;
       broadcast(state, { type: 'error', error: reason });
-      // Dispose the agent so the next send creates a fresh one instead of
-      // reusing a run that already ended in an error state.
+      // Dispose the agent and clear the stored agent ID so the next send
+      // creates a fresh agent rather than resuming a broken one.
       if (state.agent) {
         await state.agent[Symbol.asyncDispose]().catch(() => {});
         state.agent = null;
       }
+      state.thread.cursorAgentId = undefined;
+      state.thread.activeRunId = undefined;
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
     } else {
@@ -757,13 +848,29 @@ export async function sendMessage(
     state.thread.activeRunId = undefined;
   } catch (err: any) {
     logAgentError(threadId, err);
-    if (err instanceof CursorAgentError) {
-      state.thread.status = 'error';
-      state.thread.lastError = describeError(err);
-      // Startup failure — dispose and clear so next send creates a fresh agent
+
+    // The SDK throws "Agent <id> already has active run" when the agent has a
+    // stale live run — typically after a server restart mid-turn. Dispose the
+    // agent and clear the stored agent ID so the next send creates a fresh one.
+    const isStaleRun =
+      err instanceof Error && err.message.includes('already has active run');
+
+    if (err instanceof CursorAgentError || isStaleRun) {
+      state.thread.lastError = isStaleRun
+        ? 'A previous run is still active on the agent. Please try again.'
+        : describeError(err);
       if (state.agent) {
         await state.agent[Symbol.asyncDispose]().catch(() => {});
         state.agent = null;
+      }
+      if (isStaleRun) {
+        // Clear the agent ID so the next send starts a fresh agent rather than
+        // resuming the one that still owns the active run.
+        state.thread.cursorAgentId = undefined;
+        state.thread.activeRunId = undefined;
+        state.thread.status = 'idle';
+      } else {
+        state.thread.status = 'error';
       }
     } else {
       state.thread.status = 'error';
@@ -882,38 +989,69 @@ export function readOutputBacklog(threadId: string): unknown | null {
 
 /**
  * Read the main design doc output ({feature-slug}-design.md) from the ephemeral workspace.
- * When multiple features are present, all matching files are concatenated in alphabetical order.
+ * Returns the first matching file (used by Q&A / validation threads which operate on a single doc).
  */
 export function readOutputDesignDoc(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const files = findAllOutputFiles(outputDir, /[-.]design\.md$/i);
-  if (files.length === 0) return null;
-  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
+  const file = findOutputFile(outputDir, /[-.]design\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**
  * Read the tech spec output ({feature-slug}-tech-spec.md) from the ephemeral workspace.
- * When multiple features are present, all matching files are concatenated in alphabetical order.
+ * Returns the first matching file (used by Q&A / validation threads which operate on a single doc).
  */
 export function readOutputTechSpec(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const files = findAllOutputFiles(outputDir, /[-.]tech-spec\.md$/i);
-  if (files.length === 0) return null;
-  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
+  const file = findOutputFile(outputDir, /[-.]tech-spec\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**
  * Read the assumptions output ({feature-slug}-assumptions.md) from the ephemeral workspace.
- * When multiple features are present, all matching files are concatenated in alphabetical order.
+ * Returns the first matching file (used by Q&A / validation threads which operate on a single doc).
  */
 export function readOutputAssumptions(threadId: string): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const files = findAllOutputFiles(outputDir, /[-.]assumptions\.md$/i);
-  if (files.length === 0) return null;
-  return files.map((f) => fs.readFileSync(f, 'utf-8').trim()).join('\n\n---\n\n');
+  const file = findOutputFile(outputDir, /[-.]assumptions\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
+}
+
+/**
+ * Read all per-feature design doc output sets from the ephemeral workspace.
+ * Returns one entry per feature for which all three files (design, tech-spec, assumptions)
+ * are present. Results are sorted alphabetically by slug.
+ */
+export function readAllOutputDesignDocFeatures(
+  threadId: string,
+): Array<{ slug: string; design: string; techSpec: string; assumptions: string }> {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return [];
+
+  const designFiles = findAllOutputFiles(outputDir, /[-.]design\.md$/i);
+  const results: Array<{ slug: string; design: string; techSpec: string; assumptions: string }> = [];
+
+  for (const designFile of designFiles) {
+    const slug = path.basename(designFile).replace(/[-.]design\.md$/i, '');
+    const techSpecFile = designFile.replace(/[-.]design\.md$/i, '-tech-spec.md');
+    const assumptionsFile = designFile.replace(/[-.]design\.md$/i, '-assumptions.md');
+
+    if (!fs.existsSync(techSpecFile) || !fs.existsSync(assumptionsFile)) continue;
+
+    try {
+      results.push({
+        slug,
+        design: fs.readFileSync(designFile, 'utf-8').trim(),
+        techSpec: fs.readFileSync(techSpecFile, 'utf-8').trim(),
+        assumptions: fs.readFileSync(assumptionsFile, 'utf-8').trim(),
+      });
+    } catch { /* skip unreadable files */ }
+  }
+
+  return results;
 }
 
 /**

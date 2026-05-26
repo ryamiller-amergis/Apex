@@ -300,14 +300,83 @@
   color: var(--success-color);
 }
 
-.badgeRejected {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--error-color);
-}
-
 .badgeRevisionRequested {
   background: rgba(249, 115, 22, 0.15);
   color: #ea580c;
+}
+
+.groupCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  grid-column: 1 / -1;
+}
+
+.groupCardHeaderRow {
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+.groupCardHeaderRow:hover {
+  background: var(--bg-tertiary);
+}
+
+.groupCardHeaderRow:hover .cardDeleteBtn {
+  opacity: 1;
+}
+
+.groupCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.groupCardTitleArea {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.groupCardMeta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.expandChevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.expandChevronExpanded {
+  transform: rotate(90deg);
+}
+
+.groupCardChildren {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 260px));
+  gap: 12px;
+  padding: 0 16px 14px 16px;
 }
 
 .emptyState {

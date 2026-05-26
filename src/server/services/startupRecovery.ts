@@ -2,9 +2,9 @@ import type { Server } from 'http';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs } from '../db/schema';
-import { hydrateThread } from './chatAgentService';
+import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { startPrdWatcher } from './prdService';
-import { startDesignDocWatcher, startValidationWatcher } from './designDocService';
+import { startDesignDocWatcher, startValidationWatcher, isValidationWatcherActive } from './designDocService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -18,6 +18,12 @@ let recoveryTimer: ReturnType<typeof setInterval> | null = null;
  *   - Rolling deployments where the old instance dies after the new one starts
  *
  * Safe to call repeatedly — watchers are idempotent (stop-then-start).
+ *
+ * For validation threads, if the agent was killed mid-run (status idle after
+ * hydration), the agent is re-kicked via sendMessage so the run resumes.
+ * Generation agents are NOT re-kicked here — dead generation agents must be
+ * retried manually via POST /design-docs/:id/retry-generate to avoid ENOENT
+ * crashes from missing local workspaces.
  */
 export async function recoverInFlightWork(): Promise<void> {
   let recovered = 0;
@@ -60,11 +66,23 @@ export async function recoverInFlightWork(): Promise<void> {
   });
   for (const doc of validatingDocs) {
     if (!doc.validationThreadId) continue;
+    // Skip docs that already have an active watcher — avoids clobbering a
+    // watcher that was just started by autoStartValidation or acceptFixValidation.
+    if (isValidationWatcherActive(doc.id)) continue;
     const ok = await hydrateThread(doc.validationThreadId);
     if (ok) {
       startValidationWatcher(doc.id, doc.validationThreadId);
       recovered++;
       console.log(`[recovery] Restarted validation watcher (designDocId=${doc.id})`);
+
+      // If the agent was killed mid-run (thread is idle after hydration), re-kick
+      // it so the validation run actually resumes rather than the watcher polling forever.
+      if (isThreadIdle(doc.validationThreadId)) {
+        sendMessage(doc.validationThreadId, 'Begin.').catch((err: Error) => {
+          console.error(`[recovery] Failed to re-kick validation agent (designDocId=${doc.id}, threadId=${doc.validationThreadId}):`, err.message);
+        });
+        console.log(`[recovery] Re-kicked dead validation agent (designDocId=${doc.id})`);
+      }
     } else {
       console.warn(`[recovery] Could not hydrate thread for validation (designDocId=${doc.id}, threadId=${doc.validationThreadId})`);
     }

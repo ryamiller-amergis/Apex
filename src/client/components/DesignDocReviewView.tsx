@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useReducer } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -17,13 +17,19 @@ import {
   useGenerateDesignDoc,
   useMarkValidationReady,
   useRefreshValidation,
+  useCancelValidation,
   useCreateValidationThread,
   useValidationReport,
+  useFixValidation,
+  useAcceptFixValidation,
+  useRevertDesignDocSection,
 } from '../hooks/useInterviews';
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
-import type { DesignDocStatus } from '../../shared/types/interview';
+import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
+import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
+import type { DesignDocStatus, ValidationScorecardGap } from '../../shared/types/interview';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
@@ -39,6 +45,61 @@ mermaid.initialize({
 
 let mermaidDiagramCounter = 0;
 
+// ── Fix Validation Flow state machine ─────────────────────────────────────────
+
+type FixFlowState =
+  | { phase: 'idle' }
+  | { phase: 'fixing'; baseline: ContentSnapshot; threadId: string }
+  | { phase: 'reviewing'; baseline: ContentSnapshot; gapChanges: GapChangeEntry[]; agentError?: string }
+  | { phase: 'discussing'; baseline: ContentSnapshot; gapChanges: GapChangeEntry[]; activeSection: string };
+
+type FixFlowAction =
+  | { type: 'START_FIX'; baseline: ContentSnapshot; threadId: string }
+  | { type: 'FIX_COMPLETE'; gapChanges: GapChangeEntry[]; agentError?: string }
+  | { type: 'START_DISCUSS'; activeSection: string }
+  | { type: 'END_DISCUSS' }
+  | { type: 'RESET' };
+
+function parseGapChangesFromMessages(messages: Array<{ role: string; text: string }>): GapChangeEntry[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' && msg.role !== 'agent') continue;
+    const startMarker = '<!-- GAP_CHANGES_START -->';
+    const endMarker = '<!-- GAP_CHANGES_END -->';
+    const startIdx = msg.text.indexOf(startMarker);
+    const endIdx = msg.text.indexOf(endMarker);
+    if (startIdx === -1 || endIdx === -1) continue;
+    const jsonStr = msg.text.slice(startIdx + startMarker.length, endIdx).trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed?.gap_changes && Array.isArray(parsed.gap_changes)) {
+        return parsed.gap_changes;
+      }
+    } catch { /* AI didn't produce valid JSON */ }
+  }
+  return [];
+}
+
+function fixFlowReducer(state: FixFlowState, action: FixFlowAction): FixFlowState {
+  switch (action.type) {
+    case 'START_FIX':
+      return { phase: 'fixing', baseline: action.baseline, threadId: action.threadId };
+    case 'FIX_COMPLETE':
+      if (state.phase !== 'fixing') return state;
+      return { phase: 'reviewing', baseline: state.baseline, gapChanges: action.gapChanges, agentError: action.agentError };
+    case 'START_DISCUSS':
+      if (state.phase !== 'reviewing' && state.phase !== 'discussing') return state;
+      return { phase: 'discussing', baseline: (state as any).baseline, gapChanges: (state as any).gapChanges ?? [], activeSection: action.activeSection };
+    case 'END_DISCUSS':
+      if (state.phase !== 'discussing') return state;
+      return { phase: 'reviewing', baseline: state.baseline, gapChanges: state.gapChanges };
+    case 'RESET':
+      return { phase: 'idle' };
+    default:
+      return state;
+  }
+}
+
 function statusBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'interviewing': return styles.badgeInterviewing;
@@ -47,7 +108,6 @@ function statusBadgeClass(status: DesignDocStatus): string {
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
-    case 'rejected': return styles.badgeRejected;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
@@ -60,7 +120,6 @@ function statusLabel(status: DesignDocStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -442,18 +501,26 @@ const QaAgentMessage: React.FC<QaAgentMessageProps> = ({ text, threadId, model, 
 
 const ASSISTANT_THREAD_LS_KEY = (docId: string) => `design-doc-assistant-thread:${docId}`;
 
+interface DiscussContext {
+  section: 'design' | 'tech-spec' | 'assumptions';
+  sectionLabel: string;
+  gaps: ValidationScorecardGap[];
+  gapChanges: GapChangeEntry[];
+}
+
 interface DesignDocAssistantPanelProps {
   designDocId: string;
   onClose: () => void;
+  discussContext?: DiscussContext;
 }
 
 const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 800;
 const DEFAULT_PANEL_WIDTH = 380;
 
-const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ designDocId, onClose }) => {
+const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ designDocId, onClose, discussContext }) => {
   const [threadId, setThreadId] = useState<string | null>(() =>
-    localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId)),
+    discussContext ? null : localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId)),
   );
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -464,6 +531,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
   const { messages, streamingText, status: threadStatus } = useChatStream(threadId);
@@ -508,20 +576,74 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
 
   useEffect(() => {
     if (threadId) return;
+    if (skipAutoCreateRef.current) {
+      skipAutoCreateRef.current = false;
+      return;
+    }
     setIsCreating(true);
     setCreateError(null);
     fetch(`/api/interviews/design-docs/${designDocId}/assistant-thread`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      body: discussContext ? JSON.stringify({ forceNew: true }) : undefined,
     })
       .then((r) => r.json() as Promise<{ threadId: string }>)
       .then((data) => {
         setThreadId(data.threadId);
-        localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
+        if (!discussContext) {
+          localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
+        }
       })
       .catch(() => setCreateError('Failed to start assistant. Please try again.'))
       .finally(() => setIsCreating(false));
-  }, [designDocId, threadId]);
+  }, [designDocId, threadId, discussContext]);
+
+  const discussContextSentRef = useRef(false);
+  useEffect(() => {
+    if (!discussContext || !threadId || isRunning || discussContextSentRef.current) return;
+    discussContextSentRef.current = true;
+
+    const { sectionLabel, gaps, gapChanges } = discussContext;
+
+    // Extract the first meaningful sentence from what_changed.
+    // The AI sometimes writes multi-paragraph descriptions with ## headings despite
+    // being instructed to write one sentence — we strip heading markers and take
+    // only the first non-empty line to keep the message clean.
+    const firstSentence = (text: string): string => {
+      const firstLine = text.split('\n')
+        .map((l) => l.replace(/^#+\s*/, '').trim())
+        .find((l) => l.length > 0) ?? text.trim();
+      return firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+    };
+
+    const gapLines = gaps.length > 0
+      ? gaps.map((g) => `- **${g.description}** (score: ${g.score}/3)\n  → What a score of 3 looks like: *${g.what_3_looks_like}*`).join('\n')
+      : '_(no gaps recorded for this section)_';
+
+    const changeLines = gapChanges.length > 0
+      ? gapChanges.map((c) => `- **${c.gap_id}**: ${firstSentence(c.what_changed)}`).join('\n')
+      : '_(no changes recorded for this section)_';
+
+    const contextMsg = [
+      `I'd like to discuss the proposed **${sectionLabel}** changes from the Apex fix validation.`,
+      '',
+      `## Gaps in the ${sectionLabel} section`,
+      gapLines,
+      '',
+      '## What Apex changed',
+      changeLines,
+      '',
+      'Please help me review whether these changes adequately address the gaps and discuss any concerns.',
+    ].join('\n');
+
+    void fetch(`/api/chat/threads/${threadId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: contextMsg }),
+    });
+  }, [threadId, isRunning, discussContext]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -582,11 +704,28 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
             <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button">Cancel</button>
             <button
               className={styles.confirmBtnConfirm}
-              onClick={() => {
+              onClick={async () => {
                 setShowNewConvConfirm(false);
+                skipAutoCreateRef.current = true;
                 localStorage.removeItem(ASSISTANT_THREAD_LS_KEY(designDocId));
                 setThreadId(null);
                 setCreateError(null);
+                setIsCreating(true);
+                try {
+                  const r = await fetch(`/api/interviews/design-docs/${designDocId}/assistant-thread`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ forceNew: true }),
+                  });
+                  const data = await r.json() as { threadId: string };
+                  setThreadId(data.threadId);
+                  localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
+                } catch {
+                  setCreateError('Failed to start new conversation. Please try again.');
+                } finally {
+                  setIsCreating(false);
+                }
               }}
               type="button"
             >
@@ -969,8 +1108,51 @@ export const DesignDocReviewView: React.FC = () => {
   const deleteDoc = useDeleteDesignDoc();
   const markValidationReady = useMarkValidationReady();
   const refreshValidation = useRefreshValidation();
+  const cancelValidation = useCancelValidation();
   const createValidationThread = useCreateValidationThread();
   const { data: validationReport } = useValidationReport(id, doc?.validationThreadId, doc?.status);
+  const fixValidation = useFixValidation();
+  const acceptFixValidation = useAcceptFixValidation();
+  const revertSection = useRevertDesignDocSection();
+
+  const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
+
+  // Restore fix review state from server's fixBaseline on page load.
+  // If the doc has a fixBaseline stored (fix was done but not yet accepted/reverted),
+  // fetch the assistant thread to recover gap changes and enter reviewing phase.
+  // Prefer fixBaseline.fixThreadId (stable) over docAssistantThreadId (can be overwritten by discuss).
+  const fixRecoveryAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (fixRecoveryAttemptedRef.current) return;
+    if (!doc || fixFlow.phase !== 'idle') return;
+    if (!doc.fixBaseline) return;
+
+    const baseline = doc.fixBaseline as ContentSnapshot;
+    const threadId = baseline.fixThreadId ?? doc.docAssistantThreadId;
+    if (!threadId) return;
+
+    fixRecoveryAttemptedRef.current = true;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
+        if (!res.ok) {
+          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+          return;
+        }
+        const thread = await res.json();
+        if (thread.status === 'idle' || thread.status === 'error') {
+          const gapChanges = parseGapChangesFromMessages(thread.messages ?? []);
+          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+          fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges });
+        } else {
+          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+        }
+      } catch {
+        fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      }
+    })();
+  }, [doc, fixFlow.phase]);
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
@@ -1036,9 +1218,10 @@ export const DesignDocReviewView: React.FC = () => {
   const [assumptionsEdit, setAssumptionsEdit] = useState('');
   const [dirtyTabs, setDirtyTabs] = useState<Set<TabId>>(new Set());
 
-  const [reviewAction, setReviewAction] = useState<'reject' | 'revision' | null>(null);
+  const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
 
   const isInterviewing = doc?.status === 'interviewing';
   const isGenerating = !isInterviewing && !!doc && (
@@ -1110,12 +1293,156 @@ export const DesignDocReviewView: React.FC = () => {
     await markValidationReady.mutateAsync(id);
   }, [id, markValidationReady]);
 
+  // ── Fix Validation Flow handlers ─────────────────────────────────────────
+
+  const handleStartFixWithAI = useCallback(async () => {
+    if (!id || !doc) return;
+    const baseline: ContentSnapshot = {
+      design: doc.designContent,
+      techSpec: doc.techSpecContent,
+      assumptions: doc.assumptionsContent,
+      capturedAt: new Date().toISOString(),
+    };
+    try {
+      const result = await fixValidation.mutateAsync(id);
+      fixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
+    } catch {
+      fixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, doc, fixValidation]);
+
+  // Poll the assistant thread status during the fixing phase.
+  // Only transition to reviewing once the agent is idle (done with all MCP calls).
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (fixFlow.phase !== 'fixing' || !id) return;
+    const { threadId } = fixFlow;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
+        if (!res.ok) return;
+        const thread = await res.json();
+        if (cancelled) return;
+        if (thread.status === 'idle' || thread.status === 'error') {
+          await qc.refetchQueries({ queryKey: ['design-doc', id] });
+          const gapChanges = parseGapChangesFromMessages(thread.messages ?? []);
+          const agentError = thread.status === 'error'
+            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
+            : undefined;
+          if (!cancelled) {
+            fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges, agentError });
+          }
+        }
+      } catch { /* keep polling */ }
+    };
+
+    // Initial delay to let the agent start, then poll every 5s
+    const timeout = window.setTimeout(() => {
+      if (cancelled) return;
+      void poll();
+    }, 5_000);
+    const interval = window.setInterval(() => {
+      if (!cancelled) void poll();
+    }, 5_000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [fixFlow, id, qc]);
+
+  const handleFixAcceptSection = useCallback((_section: 'design' | 'tech-spec' | 'assumptions') => {
+    // Accept = keep current AI changes (already persisted) — no-op on server
+  }, []);
+
+  const handleFixRevertSection = useCallback(async (section: 'design' | 'tech-spec' | 'assumptions') => {
+    if (!id || fixFlow.phase === 'idle') return;
+    const bl = (fixFlow as any).baseline as ContentSnapshot;
+    const body: { designDocId: string; designContent?: string; techSpecContent?: string; assumptionsContent?: string } = { designDocId: id };
+    if (section === 'design') body.designContent = bl.design;
+    if (section === 'tech-spec') body.techSpecContent = bl.techSpec;
+    if (section === 'assumptions') body.assumptionsContent = bl.assumptions;
+    await revertSection.mutateAsync(body);
+  }, [id, fixFlow, revertSection]);
+
+  const handleFixDiscuss = useCallback((section: 'design' | 'tech-spec' | 'assumptions') => {
+    fixFlowDispatch({ type: 'START_DISCUSS', activeSection: section });
+
+    const sectionLabels = { 'design': 'Design', 'tech-spec': 'Tech Spec', 'assumptions': 'Assumptions' } as const;
+    const mapGapSection = (gap: ValidationScorecardGap): 'design' | 'tech-spec' | 'assumptions' => {
+      const s = gap.section.toLowerCase();
+      if (s.includes('tech') || s.includes('spec')) return 'tech-spec';
+      if (s.includes('assumption')) return 'assumptions';
+      return 'design';
+    };
+
+    const allGaps = doc?.validationScorecard?.features?.flatMap((f) => f.gaps) ?? [];
+    const sectionGaps = allGaps.filter((g) => mapGapSection(g) === section);
+    const sectionGapIds = new Set(sectionGaps.map((g) => g.id));
+    const allGapChanges = (fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing')
+      ? fixFlow.gapChanges
+      : [];
+    const sectionGapChanges = allGapChanges.filter((c) => sectionGapIds.has(c.gap_id));
+
+    setDiscussContext({
+      section,
+      sectionLabel: sectionLabels[section],
+      gaps: sectionGaps,
+      gapChanges: sectionGapChanges,
+    });
+    setAssistantOpen(true);
+  }, [doc?.validationScorecard, fixFlow]);
+
+  const handleFixApplyAndRevalidate = useCallback(async () => {
+    if (!id) return;
+    try {
+      await acceptFixValidation.mutateAsync(id);
+    } finally {
+      fixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, acceptFixValidation]);
+
+  const handleFixRevertAll = useCallback(async () => {
+    if (!id || fixFlow.phase === 'idle') return;
+    const bl = (fixFlow as any).baseline as ContentSnapshot;
+    await revertSection.mutateAsync({
+      designDocId: id,
+      designContent: bl.design,
+      techSpecContent: bl.techSpec,
+      assumptionsContent: bl.assumptions,
+    });
+    fixFlowDispatch({ type: 'RESET' });
+  }, [id, fixFlow, revertSection]);
+
+  const handleFixCancel = useCallback(() => {
+    fixFlowDispatch({ type: 'RESET' });
+  }, []);
+
+  // When the assistant panel closes during discuss phase, return to reviewing
+  const handleAssistantClose = useCallback(() => {
+    setAssistantOpen(false);
+    setDiscussContext(null);
+    if (fixFlow.phase === 'discussing') {
+      fixFlowDispatch({ type: 'END_DISCUSS' });
+    }
+  }, [fixFlow.phase]);
+
   // When the validation report first appears while the doc is still validating,
   // auto-trigger a score refresh so the DB/status update happens without user action.
   const didAutoRefreshRef = useRef(false);
+  const prevThreadIdRef = useRef(doc?.validationThreadId);
+  useEffect(() => {
+    if (doc?.validationThreadId !== prevThreadIdRef.current) {
+      prevThreadIdRef.current = doc?.validationThreadId;
+      didAutoRefreshRef.current = false;
+    }
+  }, [doc?.validationThreadId]);
   useEffect(() => {
     if (
-      validationReport &&
+      validationReport?.markdown &&
       doc?.status === 'validating' &&
       id &&
       !didAutoRefreshRef.current &&
@@ -1126,15 +1453,15 @@ export const DesignDocReviewView: React.FC = () => {
     }
   }, [validationReport, doc?.status, id, refreshValidation]);
 
-  const handleRejectOrRevision = useCallback(async (reason: string) => {
-    if (!id || !reviewAction) return;
+  const handleRequestRevision = useCallback(async (reason: string) => {
+    if (!id) return;
     await reviewDoc.mutateAsync({
       designDocId: id,
-      action: reviewAction === 'revision' ? 'request_revision' : 'reject',
+      action: 'request_revision',
       comment: reason,
     });
-    setReviewAction(null);
-  }, [id, reviewAction, reviewDoc]);
+    setShowRevisionModal(false);
+  }, [id, reviewDoc]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
@@ -1150,6 +1477,27 @@ export const DesignDocReviewView: React.FC = () => {
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
+
+  const showFixBanner =
+    validationBlocking &&
+    (doc.status === 'draft' || doc.status === 'revision_requested') &&
+    fixFlow.phase === 'idle';
+
+  const pendingGapCount = (() => {
+    if (!doc.validationScorecard?.features) return 0;
+    let count = 0;
+    for (const f of doc.validationScorecard.features) {
+      for (const g of f.gaps) {
+        if (g.resolution === 'pending') count++;
+      }
+    }
+    return count;
+  })();
+
+  const bannerSeverity: 'amber' | 'red' =
+    doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore < 70 ? 'red' : 'amber';
+
+  const showFixFlow = fixFlow.phase !== 'idle';
 
   const tabLabel: Record<TabId, string> = {
     design: 'Design',
@@ -1244,19 +1592,30 @@ export const DesignDocReviewView: React.FC = () => {
 
           {canManage && (isAuthor || isAdmin) && (
             <>
-              {!doc.validationThreadId && hasAnyContent &&
-                (doc.status === 'draft' || doc.status === 'revision_requested' || doc.status === 'rejected') && (
+              {hasAnyContent &&
+                (doc.status === 'draft' || doc.status === 'revision_requested') && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void createValidationThread.mutateAsync(doc.id)}
                   disabled={createValidationThread.isPending}
                   type="button"
-                  title="Run the validation agent against this design doc"
+                  title={doc.validationThreadId ? 'Re-run the validation agent with the latest content' : 'Run the validation agent against this design doc'}
                 >
-                  {createValidationThread.isPending ? 'Starting…' : 'Run Validation'}
+                  {createValidationThread.isPending ? 'Starting…' : doc.validationThreadId ? 'Re-run Validation' : 'Run Validation'}
                 </button>
               )}
-              {(doc.status === 'draft' || doc.status === 'revision_requested' || doc.status === 'rejected') && (
+              {doc.status === 'validating' && (
+                <button
+                  className={styles.actionBtn}
+                  onClick={() => void cancelValidation.mutateAsync(doc.id)}
+                  disabled={cancelValidation.isPending}
+                  type="button"
+                  title="Stop validation and return to draft"
+                >
+                  {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
+                </button>
+              )}
+              {(doc.status === 'draft' || doc.status === 'revision_requested') && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={() => void handleSubmit()}
@@ -1317,28 +1676,15 @@ export const DesignDocReviewView: React.FC = () => {
               </button>
               <button
                 className={styles.btnRevision}
-                onClick={() => setReviewAction('revision')}
+                onClick={() => setShowRevisionModal(true)}
                 type="button"
               >
                 Request Revision
-              </button>
-              <button
-                className={styles.btnReject}
-                onClick={() => setReviewAction('reject')}
-                type="button"
-              >
-                Reject
               </button>
             </div>
           )}
         </div>
       </div>
-
-      {doc.status === 'rejected' && doc.reviewComment && (
-        <div className={styles.rejectionBanner}>
-          <strong>Rejected:</strong> {doc.reviewComment}
-        </div>
-      )}
 
       {isInterviewing ? (
         /* ── Q&A interviewing phase ───────────────────────────────── */
@@ -1403,125 +1749,212 @@ export const DesignDocReviewView: React.FC = () => {
       ) : (
         /* ── Normal tabs (always shown — validation is a tab, not a takeover) ── */
         <>
-          {doc.qaChatThreadId && (
-            <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
-          )}
-          <div className={styles.tabs}>
-            {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
-              <button
-                key={t}
-                className={`${styles.tab} ${activeTab === t ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
-                onClick={() => setActiveTab(t)}
-                type="button"
+          {/* ── Validation failure banner ─────────────────────────────── */}
+          {showFixBanner && (
+            <div className={bannerSeverity === 'red' ? styles.validationFailureBannerRed : styles.validationFailureBannerAmber}>
+              <svg
+                className={`${styles.failureBannerIcon} ${bannerSeverity === 'red' ? styles.failureBannerIconRed : styles.failureBannerIconAmber}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
               >
-                {tabLabel[t]}
-                {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
-              </button>
-            ))}
-            {hasValidationTab && (
-              <button
-                className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
-                onClick={() => setActiveTab('validation')}
-                type="button"
-              >
-                {tabLabel['validation']}
-                {doc.status === 'validating' && !validationReport && !doc.validationReportMd && (
-                  <svg
-                    className={styles.spinIcon}
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ width: 10, height: 10, marginLeft: 5 }}
-                    aria-label="Validation in progress"
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <div className={styles.failureBannerBody}>
+                <div className={styles.failureBannerTitle}>
+                  Validation needs attention
+                  <span className={bannerSeverity === 'red' ? styles.failureBannerScoreBadgeRed : styles.failureBannerScoreBadgeAmber}>
+                    {doc.validationScore}%
+                  </span>
+                </div>
+                <div className={styles.failureBannerSummary}>
+                  {pendingGapCount > 0
+                    ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
+                    : 'The validation score is below the 90% threshold required for submission.'}
+                </div>
+                <div className={styles.failureBannerActions}>
+                  <button
+                    className={bannerSeverity === 'red' ? styles.failureBannerBtnPrimaryRed : styles.failureBannerBtnPrimaryAmber}
+                    onClick={() => void handleStartFixWithAI()}
+                    disabled={fixValidation.isPending}
+                    type="button"
                   >
-                    <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
-                  </svg>
-                )}
-              </button>
-            )}
-          </div>
-
-          <div className={styles.tabContent}>
-            {activeTab === 'validation' ? (
-              (() => {
-                const reportMarkdown = validationReport?.markdown ?? doc.validationReportMd ?? null;
-                if (doc.status === 'validating' && !reportMarkdown) {
-                  return (
-                    <div className={styles.validationReportEmpty}>
-                      <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                      </svg>
-                      <div className={styles.validatingBannerTitle}>Validation in progress…</div>
-                      <div className={styles.validationReportEmptySub}>
-                        The validation agent is reviewing your design doc. The score will appear automatically when the agent finishes.
-                      </div>
-                    </div>
-                  );
-                }
-                if (reportMarkdown) {
-                  return (
-                    <div className={styles.preview}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                        {reportMarkdown}
-                      </ReactMarkdown>
-                    </div>
-                  );
-                }
-                return (
-                  <div className={styles.validationReportEmpty}>
-                    <div className={styles.validatingBannerTitle}>No validation report yet</div>
-                    <div className={styles.validationReportEmptySub}>
-                      The validation agent hasn't produced a report for this doc yet. Results will appear here automatically when available.
-                    </div>
-                  </div>
-                );
-              })()
-            ) : (
-              <>
-                {doc.status === 'validating' && (
-                  <div className={styles.validatingBanner}>
-                    <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
-                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
+                      <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
                     </svg>
-                    <div className={styles.validatingBannerText}>
-                      <div className={styles.validatingBannerTitle}>Validation in progress</div>
-                      <div className={styles.validatingBannerSub}>
-                        The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
-                      </div>
-                    </div>
-                  </div>
+                    {fixValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                  </button>
+                  <button
+                    className={styles.failureBannerBtnSecondary}
+                    onClick={() => setActiveTab('validation')}
+                    type="button"
+                  >
+                    Review Report
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Fix flow: fixing progress ────────────────────────────── */}
+          {fixFlow.phase === 'fixing' && (
+            <FixingProgressView onCancel={handleFixCancel} />
+          )}
+
+          {/* ── Fix flow: reviewing/discussing diff panel ────────────── */}
+          {(fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing') && (
+            <FixValidationPanel
+              baseline={(fixFlow as any).baseline as ContentSnapshot}
+              currentDesign={doc.designContent}
+              currentTechSpec={doc.techSpecContent}
+              currentAssumptions={doc.assumptionsContent}
+              scorecard={doc.validationScorecard}
+              gapChanges={(fixFlow as any).gapChanges ?? []}
+              agentError={(fixFlow as any).agentError}
+              isApplying={acceptFixValidation.isPending}
+              isReverting={revertSection.isPending}
+              onAcceptSection={handleFixAcceptSection}
+              onRevertSection={(s) => void handleFixRevertSection(s)}
+              onDiscuss={handleFixDiscuss}
+              onApplyAndRevalidate={() => void handleFixApplyAndRevalidate()}
+              onRevertAll={() => void handleFixRevertAll()}
+              onCancel={handleFixCancel}
+              onRetry={() => void handleStartFixWithAI()}
+            />
+          )}
+
+          {/* ── Normal content (hidden during fix flow) ──────────────── */}
+          {!showFixFlow && (
+            <>
+              {doc.qaChatThreadId && (
+                <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
+              )}
+              <div className={styles.tabs}>
+                {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
+                  <button
+                    key={t}
+                    className={`${styles.tab} ${activeTab === t ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
+                    onClick={() => setActiveTab(t)}
+                    type="button"
+                  >
+                    {tabLabel[t]}
+                    {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
+                  </button>
+                ))}
+                {hasValidationTab && (
+                  <button
+                    className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
+                    onClick={() => setActiveTab('validation')}
+                    type="button"
+                  >
+                    {tabLabel['validation']}
+                    {doc.status === 'validating' && !validationReport?.markdown && !doc.validationReportMd && (
+                      <svg
+                        className={styles.spinIcon}
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ width: 10, height: 10, marginLeft: 5 }}
+                        aria-label="Validation in progress"
+                      >
+                        <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+                      </svg>
+                    )}
+                  </button>
                 )}
-                <ContentPane
-                  content={tabContent[activeTab]}
-                  isEditing={editingTab === activeTab}
-                  editValue={
-                    activeTab === 'design' ? designEdit :
-                    activeTab === 'tech-spec' ? techSpecEdit :
-                    assumptionsEdit
-                  }
-                  isDirty={dirtyTabs.has(activeTab)}
-                  isSaving={updateContent.isPending}
-                  canEdit={canEdit}
-                  placeholder={tabPlaceholder[activeTab]}
-                  markdownComponents={markdownComponents}
-                  onEditToggle={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
-                  onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
-                  onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
-                  onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
-                />
-              </>
-            )}
-          </div>
+              </div>
+
+              <div className={styles.tabContent}>
+                {activeTab === 'validation' ? (
+                  (() => {
+                    const reportMarkdown = validationReport?.markdown ?? doc.validationReportMd ?? null;
+                    if (doc.status === 'validating' && !reportMarkdown) {
+                      return (
+                        <div className={styles.validationReportEmpty}>
+                          <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                          </svg>
+                          <div className={styles.validatingBannerTitle}>Validation in progress…</div>
+                          <div className={styles.validationReportEmptySub}>
+                            The validation agent is reviewing your design doc. The score will appear automatically when the agent finishes.
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (reportMarkdown) {
+                      return (
+                        <div className={styles.preview}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                            {reportMarkdown}
+                          </ReactMarkdown>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className={styles.validationReportEmpty}>
+                        <div className={styles.validatingBannerTitle}>No validation report yet</div>
+                        <div className={styles.validationReportEmptySub}>
+                          The validation agent hasn't produced a report for this doc yet. Results will appear here automatically when available.
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <>
+                    {doc.status === 'validating' && (
+                      <div className={styles.validatingBanner}>
+                        <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                        <div className={styles.validatingBannerText}>
+                          <div className={styles.validatingBannerTitle}>Validation in progress</div>
+                          <div className={styles.validatingBannerSub}>
+                            The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <ContentPane
+                      content={tabContent[activeTab]}
+                      isEditing={editingTab === activeTab}
+                      editValue={
+                        activeTab === 'design' ? designEdit :
+                        activeTab === 'tech-spec' ? techSpecEdit :
+                        assumptionsEdit
+                      }
+                      isDirty={dirtyTabs.has(activeTab)}
+                      isSaving={updateContent.isPending}
+                      canEdit={canEdit}
+                      placeholder={tabPlaceholder[activeTab]}
+                      markdownComponents={markdownComponents}
+                      onEditToggle={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
+                      onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
+                      onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
+                      onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
+                    />
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
 
-      {assistantOpen && canUseAssistant && (
+      {assistantOpen && (canUseAssistant || fixFlow.phase === 'discussing') && (
         <DesignDocAssistantPanel
           designDocId={doc.id}
-          onClose={() => setAssistantOpen(false)}
+          onClose={handleAssistantClose}
+          discussContext={discussContext ?? undefined}
         />
       )}
 
@@ -1540,14 +1973,13 @@ export const DesignDocReviewView: React.FC = () => {
         />
       )}
 
-      {reviewAction && (
+      {showRevisionModal && (
         <ReviewReasonModal
-          mode={reviewAction}
           itemName={doc.title}
           docTypeName="Design Doc"
           isPending={reviewDoc.isPending}
-          onConfirm={(reason) => void handleRejectOrRevision(reason)}
-          onCancel={() => setReviewAction(null)}
+          onConfirm={(reason) => void handleRequestRevision(reason)}
+          onCancel={() => setShowRevisionModal(false)}
         />
       )}
     </div>

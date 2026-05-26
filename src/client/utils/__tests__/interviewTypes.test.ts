@@ -11,7 +11,6 @@ describe('prdStatusLabel', () => {
     ['draft', 'Draft'],
     ['pending_review', 'Pending Review'],
     ['approved', 'Approved'],
-    ['rejected', 'Rejected'],
     ['revision_requested', 'Revision Requested'],
   ] as const)('returns "%s" → "%s"', (status, expected) => {
     expect(prdStatusLabel(status)).toBe(expected);
@@ -24,7 +23,6 @@ describe('prdBadgeClass', () => {
     ['draft', 'draft'],
     ['pending_review', 'pending-review'],
     ['approved', 'approved'],
-    ['rejected', 'rejected'],
     ['revision_requested', 'revision-requested'],
   ] as const)('returns "%s" → "%s"', (status, expected) => {
     expect(prdBadgeClass(status)).toBe(expected);
@@ -39,7 +37,6 @@ describe('designDocStatusLabel', () => {
     ['draft', 'Draft'],
     ['pending_review', 'Pending Review'],
     ['approved', 'Approved'],
-    ['rejected', 'Rejected'],
     ['revision_requested', 'Revision Requested'],
   ] as const)('returns "%s" → "%s"', (status, expected) => {
     expect(designDocStatusLabel(status)).toBe(expected);
@@ -54,7 +51,6 @@ describe('designDocBadgeClass', () => {
     ['draft', 'draft'],
     ['pending_review', 'pending-review'],
     ['approved', 'approved'],
-    ['rejected', 'rejected'],
     ['revision_requested', 'revision-requested'],
   ] as const)('returns "%s" → "%s"', (status, expected) => {
     expect(designDocBadgeClass(status)).toBe(expected);

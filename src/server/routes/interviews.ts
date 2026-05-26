@@ -28,21 +28,26 @@ import {
   withdrawFromReview,
 } from '../services/prdService';
 import {
+  acceptFixValidation,
+  cancelValidation,
   createDesignDoc,
   deleteDesignDoc,
+  generateFallbackReport,
   getDesignDoc,
   listDesignDocs,
   reviewDesignDoc,
   startDesignDocWatcher,
   submitForReview as submitDesignDocForReview,
   syncDesignDocContent,
+  triggerFixValidation,
   updateDesignDocContent,
   withdrawFromReview as withdrawDesignDocFromReview,
   autoStartValidation,
   markValidationReady,
   syncValidationResult,
+  syncPerFeatureDesignDocs,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync } from '../services/chatAgentService';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
@@ -473,6 +478,50 @@ router.post('/design-docs/:id/sync', requirePermission('interviews:manage'), asy
   }
 });
 
+// POST /design-docs/:id/retry-generate — re-trigger generation for a stuck seed doc
+router.post('/design-docs/:id/retry-generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+    if (doc.status !== 'generating') {
+      res.status(409).json({ error: `Design doc is not in generating status (current: ${doc.status})` });
+      return;
+    }
+
+    const skillConfig = await getSkillConfig(doc.project);
+    const prd = await getPrd(doc.prdId);
+    const freeformContext = [
+      '# PRD Content',
+      prd?.content ?? '(empty)',
+      ...(prd?.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
+    ].join('\n');
+
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.designDocModel ?? globalModel;
+
+    const thread = await createThread(userId, {
+      project: doc.project,
+      repo: skillConfig?.skillRepo ?? doc.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: skillConfig?.designDocSkillPath ?? undefined,
+      freeformContext,
+      model,
+    });
+
+    await db
+      .update(designDocsTable)
+      .set({ chatThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(designDocsTable.id, req.params.id));
+
+    startDesignDocWatcher(req.params.id, thread.id);
+
+    res.json({ ok: true, threadId: thread.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /design-docs/:id/generate — finish Q&A phase, create generation thread, start watcher
 router.post('/design-docs/:id/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -492,8 +541,17 @@ router.post('/design-docs/:id/generate', requirePermission('interviews:manage'),
     }
 
     // Check if the Q&A thread already produced the output artifacts.
-    // First check the workspace files, then fall back to DB content
-    // (workspace may have been cleaned up after syncOutputToDb ran).
+    // Multi-feature check first: if the agent wrote multiple feature triplets,
+    // create separate design doc rows for each instead of writing to the seed row.
+    const qaFeatures = readAllOutputDesignDocFeatures(doc.qaChatThreadId);
+    if (qaFeatures.length > 1) {
+      console.log(`[designDoc] Q&A produced ${qaFeatures.length} feature triplets — creating per-feature rows (designDocId=${req.params.id})`);
+      await syncPerFeatureDesignDocs(req.params.id, doc.prdId, doc.project, doc.authorId, doc.qaChatThreadId);
+      res.json({ ok: true });
+      return;
+    }
+
+    // Single-feature fast path: check workspace files then fall back to DB content
     const qaDesign = readOutputDesignDoc(doc.qaChatThreadId);
     const qaTechSpec = readOutputTechSpec(doc.qaChatThreadId);
     const qaAssumptions = readOutputAssumptions(doc.qaChatThreadId);
@@ -614,7 +672,8 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
 
     // Return existing thread if already created, but refresh kickoff context
     // so the assistant always sees the latest doc content from the database.
-    if (doc.docAssistantThreadId) {
+    // If forceNew is set, skip reuse and create a fresh thread below.
+    if (doc.docAssistantThreadId && !req.body?.forceNew) {
       const [threadRow] = await db
         .select({ workspaceDir: chatThreadsTable.workspaceDir })
         .from(chatThreadsTable)
@@ -656,16 +715,11 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
   }
 });
 
-// POST /design-docs/:id/validation-thread — create (or return existing) validation thread
+// POST /design-docs/:id/validation-thread — start (or re-start) a validation run
 router.post('/design-docs/:id/validation-thread', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const doc = await getDesignDoc(req.params.id);
     if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
-
-    if (doc.validationThreadId) {
-      res.json({ threadId: doc.validationThreadId });
-      return;
-    }
 
     await autoStartValidation(req.params.id);
     const updated = await getDesignDoc(req.params.id);
@@ -691,7 +745,7 @@ router.get('/design-docs/:id/validation', requirePermission('interviews:view'), 
   }
 });
 
-// POST /design-docs/:id/validation/refresh — manually re-read scorecard from workspace and sync to DB
+// POST /design-docs/:id/validation/refresh — re-read scorecard from workspace (or DB) and sync status
 router.post('/design-docs/:id/validation/refresh', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const doc = await getDesignDoc(req.params.id);
@@ -699,12 +753,26 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
     if (!doc.validationThreadId) { res.status(400).json({ error: 'No validation thread exists' }); return; }
 
     const scorecardRaw = readOutputValidationScorecard(doc.validationThreadId);
-    if (!scorecardRaw) { res.status(404).json({ error: 'Scorecard not yet available' }); return; }
+    if (scorecardRaw) {
+      const scorecard = JSON.parse(scorecardRaw);
+      const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
+      await syncValidationResult(req.params.id, scorecard, reportMd);
+      res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });
+      return;
+    }
 
-    const scorecard = JSON.parse(scorecardRaw);
-    const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
-    await syncValidationResult(req.params.id, scorecard, reportMd);
-    res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });
+    if (doc.validationScorecard && doc.status !== 'validating') {
+      await syncValidationResult(req.params.id, doc.validationScorecard, doc.validationReportMd ?? undefined);
+      res.json({ ok: true, score: doc.validationScorecard.overall_score, is_ready: doc.validationScorecard.is_ready });
+      return;
+    }
+
+    if (doc.status === 'validating') {
+      res.json({ ok: true, still_validating: true, score: null, is_ready: false });
+      return;
+    }
+
+    res.status(404).json({ error: 'Scorecard not yet available' });
   } catch (err) {
     next(err);
   }
@@ -716,10 +784,32 @@ router.get('/design-docs/:id/validation/report', requirePermission('interviews:v
     const doc = await getDesignDoc(req.params.id);
     if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
 
-    const md = doc.validationReportMd;
-    if (!md) { res.status(404).json({ error: 'Validation report not yet available' }); return; }
+    let md = doc.validationReportMd;
+    if (!md && doc.validationScorecard) {
+      md = generateFallbackReport(doc.validationScorecard);
+      await syncValidationResult(req.params.id, doc.validationScorecard, md);
+    }
+    if (!md) {
+      if (doc.status === 'validating') {
+        res.json({ markdown: null, still_validating: true });
+        return;
+      }
+      res.status(404).json({ error: 'Validation report not yet available' });
+      return;
+    }
 
     res.json({ markdown: md });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/validation/cancel — stop validation and return to draft
+router.post('/design-docs/:id/validation/cancel', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await cancelValidation(req.params.id, userId);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -730,6 +820,27 @@ router.post('/design-docs/:id/validation/mark-ready', requirePermission('intervi
   try {
     const userId = getUserId(req);
     await markValidationReady(req.params.id, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/fix-validation — trigger AI fix for validation gaps
+router.post('/design-docs/:id/fix-validation', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const result = await triggerFixValidation(req.params.id, userId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/fix-validation/accept — clear baseline and re-run validation
+router.post('/design-docs/:id/fix-validation/accept', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await acceptFixValidation(req.params.id);
     res.json({ ok: true });
   } catch (err) {
     next(err);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -34,7 +34,6 @@ const PRD_FILTERS: { label: string; value: PrdStatus | undefined }[] = [
   { label: 'Draft', value: 'draft' },
   { label: 'Pending Review', value: 'pending_review' },
   { label: 'Approved', value: 'approved' },
-  { label: 'Rejected', value: 'rejected' },
   { label: 'Revision Requested', value: 'revision_requested' },
 ];
 
@@ -44,7 +43,6 @@ const DESIGN_DOC_FILTERS: { label: string; value: DesignDocStatus | undefined }[
   { label: 'Draft', value: 'draft' },
   { label: 'Pending Review', value: 'pending_review' },
   { label: 'Approved', value: 'approved' },
-  { label: 'Rejected', value: 'rejected' },
   { label: 'Revision Requested', value: 'revision_requested' },
 ];
 
@@ -70,7 +68,6 @@ function prdBadgeClass(status: PrdStatus): string {
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
-    case 'rejected': return styles.badgeRejected;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
@@ -81,7 +78,6 @@ function prdStatusLabel(status: PrdStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -94,7 +90,6 @@ function designDocBadgeClass(status: DesignDocStatus): string {
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
-    case 'rejected': return styles.badgeRejected;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
@@ -107,7 +102,6 @@ function designDocStatusLabel(status: DesignDocStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -249,6 +243,84 @@ const DesignDocCard: React.FC<DesignDocCardProps> = ({ doc, canDelete, onDelete 
   );
 };
 
+interface DesignDocGroupCardProps {
+  prdTitle: string;
+  docs: DesignDocSummary[];
+  expanded: boolean;
+  onToggle: () => void;
+  canDelete: boolean;
+  onDelete: (doc: DesignDocSummary) => void;
+  onDeleteAll: (docs: DesignDocSummary[]) => void;
+}
+
+const DesignDocGroupCard: React.FC<DesignDocGroupCardProps> = ({ prdTitle, docs, expanded, onToggle, canDelete, onDelete, onDeleteAll }) => {
+  const statusCounts = useMemo(() => {
+    const counts = new Map<DesignDocStatus, number>();
+    for (const doc of docs) {
+      counts.set(doc.status, (counts.get(doc.status) ?? 0) + 1);
+    }
+    return counts;
+  }, [docs]);
+
+  const summaryParts: string[] = [];
+  const approved = statusCounts.get('approved') ?? 0;
+  if (approved > 0) summaryParts.push(`${approved} approved`);
+  const pending = statusCounts.get('pending_review') ?? 0;
+  if (pending > 0) summaryParts.push(`${pending} pending`);
+  const remaining = docs.length - approved - pending;
+  if (remaining > 0) summaryParts.push(`${remaining} other`);
+
+  return (
+    <div className={styles.groupCard}>
+      <div className={styles.groupCardHeaderRow}>
+        <button className={styles.groupCardHeader} onClick={onToggle} type="button">
+          <svg
+            className={`${styles.expandChevron} ${expanded ? styles.expandChevronExpanded : ''}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="6 4 10 8 6 12" />
+          </svg>
+          <div className={styles.groupCardTitleArea}>
+            <h3 className={styles.cardTitle}>{prdTitle}</h3>
+            <span className={styles.groupCardMeta}>
+              {docs.length} design doc{docs.length !== 1 ? 's' : ''}
+              {summaryParts.length > 0 && ` \u2014 ${summaryParts.join(', ')}`}
+            </span>
+          </div>
+        </button>
+        {canDelete && (
+          <button
+            className={styles.cardDeleteBtn}
+            title={`Delete all ${docs.length} design docs`}
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDeleteAll(docs); }}
+            aria-label={`Delete all design docs for "${prdTitle}"`}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="2 4 4 4 14 4" />
+              <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+              <path d="M6.5 7v4M9.5 7v4" />
+              <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className={styles.groupCardChildren}>
+          {docs.map((doc) => (
+            <DesignDocCard key={doc.id} doc={doc} canDelete={canDelete} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const InterviewsDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -268,9 +340,12 @@ export const InterviewsDashboard: React.FC = () => {
   const [prdSearch, setPrdSearch] = useState('');
   const [designDocSearch, setDesignDocSearch] = useState('');
 
+  const [expandedPrdGroups, setExpandedPrdGroups] = useState<Set<string>>(new Set());
   const [pendingDeleteInterview, setPendingDeleteInterview] = useState<InterviewSummary | null>(null);
   const [pendingDeletePrd, setPendingDeletePrd] = useState<PrdSummary | null>(null);
   const [pendingDeleteDesignDoc, setPendingDeleteDesignDoc] = useState<DesignDocSummary | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<{ prdTitle: string; docs: DesignDocSummary[] } | null>(null);
+  const [isDeletingGroup, setIsDeletingGroup] = useState(false);
 
   const deleteInterview = useDeleteInterview();
   const deletePrd = useDeletePrd();
@@ -302,6 +377,25 @@ export const InterviewsDashboard: React.FC = () => {
   const filteredDesignDocs = designDocSearch.trim()
     ? designDocs.filter((doc) => doc.title.toLowerCase().includes(designDocSearch.toLowerCase()))
     : designDocs;
+
+  const groupedDesignDocs = useMemo(() => {
+    const byPrd = new Map<string, DesignDocSummary[]>();
+    for (const doc of filteredDesignDocs) {
+      const key = doc.prdId;
+      if (!byPrd.has(key)) byPrd.set(key, []);
+      byPrd.get(key)!.push(doc);
+    }
+    return byPrd;
+  }, [filteredDesignDocs]);
+
+  const togglePrdGroup = (prdId: string) => {
+    setExpandedPrdGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(prdId)) next.delete(prdId);
+      else next.add(prdId);
+      return next;
+    });
+  };
 
   return (
     <div className={styles.dashboard}>
@@ -520,14 +614,27 @@ export const InterviewsDashboard: React.FC = () => {
             </div>
           ) : (
             <div className={styles.grid}>
-              {filteredDesignDocs.map((doc) => (
-                <DesignDocCard
-                  key={doc.id}
-                  doc={doc}
-                  canDelete={canManage}
-                  onDelete={setPendingDeleteDesignDoc}
-                />
-              ))}
+              {Array.from(groupedDesignDocs.entries()).map(([prdId, docs]) =>
+                docs.length >= 2 ? (
+                  <DesignDocGroupCard
+                    key={prdId}
+                    prdTitle={docs[0].prdTitle ?? 'Untitled PRD'}
+                    docs={docs}
+                    expanded={expandedPrdGroups.has(prdId)}
+                    onToggle={() => togglePrdGroup(prdId)}
+                    canDelete={canManage}
+                    onDelete={setPendingDeleteDesignDoc}
+                    onDeleteAll={(d) => setPendingDeleteGroup({ prdTitle: d[0].prdTitle ?? 'Untitled PRD', docs: d })}
+                  />
+                ) : (
+                  <DesignDocCard
+                    key={docs[0].id}
+                    doc={docs[0]}
+                    canDelete={canManage}
+                    onDelete={setPendingDeleteDesignDoc}
+                  />
+                ),
+              )}
             </div>
           )}
         </>
@@ -575,6 +682,27 @@ export const InterviewsDashboard: React.FC = () => {
             });
           }}
           onCancel={() => setPendingDeleteDesignDoc(null)}
+        />
+      )}
+
+      {pendingDeleteGroup && (
+        <ConfirmDeleteModal
+          title="Delete All Design Docs"
+          itemName={`${pendingDeleteGroup.docs.length} design docs for "${pendingDeleteGroup.prdTitle}"`}
+          description={`Are you sure you want to permanently delete all ${pendingDeleteGroup.docs.length} design docs`}
+          isPending={isDeletingGroup}
+          onConfirm={async () => {
+            setIsDeletingGroup(true);
+            try {
+              for (const doc of pendingDeleteGroup.docs) {
+                await deleteDesignDoc.mutateAsync(doc.id);
+              }
+            } finally {
+              setIsDeletingGroup(false);
+              setPendingDeleteGroup(null);
+            }
+          }}
+          onCancel={() => setPendingDeleteGroup(null)}
         />
       )}
     </div>

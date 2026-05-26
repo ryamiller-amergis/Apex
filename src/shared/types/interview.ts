@@ -18,7 +18,7 @@ export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
 }
 
-export type PrdStatus = 'generating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
+export type PrdStatus = 'generating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface PrdSummary {
   id: string;
@@ -64,7 +64,7 @@ export interface CreatePrdResponse {
 }
 
 export interface ReviewPrdRequest {
-  action: 'approve' | 'reject' | 'request_revision';
+  action: 'approve' | 'request_revision';
   comment?: string;
 }
 
@@ -79,7 +79,6 @@ export function prdStatusLabel(status: PrdStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -90,7 +89,6 @@ export function prdBadgeClass(status: PrdStatus): string {
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';
     case 'approved': return 'approved';
-    case 'rejected': return 'rejected';
     case 'revision_requested': return 'revision-requested';
   }
 }
@@ -132,11 +130,20 @@ export interface ValidationScorecard {
   deferred_gaps: string[];
 }
 
-export type DesignDocStatus = 'interviewing' | 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'rejected' | 'revision_requested';
+export interface ContentSnapshot {
+  design: string;
+  techSpec: string;
+  assumptions: string;
+  capturedAt: string;
+  fixThreadId?: string;
+}
+
+export type DesignDocStatus = 'interviewing' | 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
   prdId: string;
+  prdTitle?: string;
   project: string;
   chatThreadId: string | null;
   qaChatThreadId?: string | null;
@@ -146,6 +153,7 @@ export interface DesignDocSummary {
   validationScorecard?: ValidationScorecard | null;
   validationReportMd?: string | null;
   validationPhase?: string | null;
+  fixBaseline?: ContentSnapshot | null;
   authorId: string;
   authorName?: string;
   title: string;
@@ -167,7 +175,7 @@ export interface DesignDoc extends DesignDocSummary {
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };
 
 export interface ReviewDesignDocRequest {
-  action: 'approve' | 'reject' | 'request_revision';
+  action: 'approve' | 'request_revision';
   comment?: string;
 }
 
@@ -179,7 +187,6 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -192,7 +199,6 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';
     case 'approved': return 'approved';
-    case 'rejected': return 'rejected';
     case 'revision_requested': return 'revision-requested';
   }
 }

@@ -42,7 +42,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenChangelog,
   onThemeChange,
   onLogout,
-  onOpenAgentChat,
+  onOpenAgentChat: _onOpenAgentChat,
 }) => (
   <div className="app-header">
     <div className="header-main">
@@ -106,21 +106,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
     </div>
     <div className="header-controls">
-      {onOpenAgentChat && can('chat:view') && (
-        <button
-          className="agent-launch-btn"
-          onClick={onOpenAgentChat}
-          title="Open Agent Studio"
-        >
-          <span className="agent-launch-mark" aria-hidden="true">
-            <svg viewBox="0 0 18 18" fill="none">
-              <path d="M9 2.25l1.2 3.3 3.3 1.2-3.3 1.2L9 11.25l-1.2-3.3-3.3-1.2 3.3-1.2L9 2.25z" />
-              <path d="M13 11l.6 1.6 1.65.65-1.65.6L13 15.5l-.6-1.65-1.65-.6 1.65-.65L13 11z" />
-            </svg>
-          </span>
-          <span>Agent Studio</span>
-        </button>
-      )}
       <UserMenu
         onOpenChangelog={onOpenChangelog}
         onThemeChange={onThemeChange}

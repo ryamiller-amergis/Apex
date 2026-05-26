@@ -413,19 +413,6 @@ describe('reviewPrd', () => {
     );
   });
 
-  it('rejects a pending_review PRD with a comment', async () => {
-    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'reject', comment: 'Not ready' });
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'rejected', reviewComment: 'Not ready' }),
-    );
-  });
-
   it('requests revision with a comment', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
     const whereMock = jest.fn().mockResolvedValue(undefined);
@@ -439,23 +426,13 @@ describe('reviewPrd', () => {
     );
   });
 
-  it('throws 400 when rejecting without a comment', async () => {
-    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
-
-    await expect(
-      reviewPrd('prd-1', 'user-reviewer', { action: 'reject' }),
-    ).rejects.toMatchObject({
-      message: 'A comment is required when rejecting or requesting revision',
-    });
-  });
-
   it('throws 400 when requesting revision without a comment', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
 
     await expect(
       reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision' }),
     ).rejects.toMatchObject({
-      message: 'A comment is required when rejecting or requesting revision',
+      message: 'A comment is required when requesting revision',
     });
   });
 
@@ -645,19 +622,6 @@ describe('reopenForReview', () => {
 
   it('works from draft status', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reopenForReview('prd-1');
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'pending_review' }),
-    );
-  });
-
-  it('works from rejected status', async () => {
-    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'rejected' }));
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });

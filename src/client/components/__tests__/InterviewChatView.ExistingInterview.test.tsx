@@ -105,7 +105,7 @@ function makePrd(overrides: Partial<PrdSummary> = {}): PrdSummary {
     chatThreadId: 'thread-prd-1',
     authorId: 'user-1',
     project: 'proj-alpha',
-    title: 'PRD — Email Resend Feature',
+    title: 'Email Resend Feature',
     status: 'draft',
     createdAt: '2026-01-02T00:00:00Z',
     updatedAt: '2026-01-02T00:00:00Z',
@@ -188,8 +188,8 @@ describe('ExistingInterviewView — PRD link chips', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({
         prds: [
-          makePrd({ id: 'prd-1', title: 'PRD — Feature A' }),
-          makePrd({ id: 'prd-2', title: 'PRD — Feature B' }),
+          makePrd({ id: 'prd-1', title: 'Feature A' }),
+          makePrd({ id: 'prd-2', title: 'Feature B' }),
         ],
         prdCount: 2,
       }),
@@ -197,34 +197,37 @@ describe('ExistingInterviewView — PRD link chips', () => {
       isError: false,
     });
     renderExistingInterview();
-    expect(screen.getByTitle('View PRD: PRD — Feature A')).toBeInTheDocument();
-    expect(screen.getByTitle('View PRD: PRD — Feature B')).toBeInTheDocument();
+    expect(screen.getByTitle('View PRD: Feature A')).toBeInTheDocument();
+    expect(screen.getByTitle('View PRD: Feature B')).toBeInTheDocument();
   });
 
   it('displays the PRD title text inside the chip', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({
-        prds: [makePrd({ title: 'PRD — Email Resend Feature' })],
+        prds: [makePrd({ title: 'Email Resend Feature' })],
         prdCount: 1,
       }),
       isLoading: false,
       isError: false,
     });
     renderExistingInterview();
-    expect(screen.getByText('PRD — Email Resend Feature')).toBeInTheDocument();
+    // The chip button has a unique title attribute — scope text query inside it
+    // so we don't collide with the interview page title which has the same text.
+    const chip = screen.getByTitle('View PRD: Email Resend Feature');
+    expect(within(chip).getByText('Email Resend Feature')).toBeInTheDocument();
   });
 
   it('navigates to the PRD route when a chip is clicked', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({
-        prds: [makePrd({ id: 'prd-42', title: 'PRD — Feature A' })],
+        prds: [makePrd({ id: 'prd-42', title: 'Feature A' })],
         prdCount: 1,
       }),
       isLoading: false,
       isError: false,
     });
     renderExistingInterview();
-    fireEvent.click(screen.getByTitle('View PRD: PRD — Feature A'));
+    fireEvent.click(screen.getByTitle('View PRD: Feature A'));
     expect(mockNavigate).toHaveBeenCalledWith('/backlog/prd/prd-42');
   });
 });

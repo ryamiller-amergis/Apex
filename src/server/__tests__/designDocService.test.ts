@@ -152,12 +152,23 @@ describe('createDesignDoc', () => {
 describe('listDesignDocs', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns all design docs when no filters are given', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ designDoc: makeDocRow(), reviewerDisplayName: null }]);
+  /**
+   * Helper: builds a mock select chain that supports two consecutive leftJoin calls
+   * (one for appUsers, one for prds) before where/orderBy.
+   */
+  function mockListSelectChain(rows: any[]) {
+    const orderByMock = jest.fn().mockResolvedValue(rows);
     const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
+    // The chain object is shared across all leftJoin calls so chaining works naturally.
+    const chain: any = {};
+    chain.leftJoin = jest.fn().mockReturnValue(chain);
+    chain.where = whereMock;
+    const fromMock = jest.fn().mockReturnValue(chain);
     mockDb.select.mockReturnValue({ from: fromMock });
+  }
+
+  it('returns all design docs when no filters are given', async () => {
+    mockListSelectChain([{ designDoc: makeDocRow(), reviewerDisplayName: null, prdTitle: null }]);
 
     const result = await listDesignDocs();
 
@@ -166,11 +177,7 @@ describe('listDesignDocs', () => {
   });
 
   it('returns an empty array when no design docs match', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockListSelectChain([]);
 
     const result = await listDesignDocs({ userId: 'user-nobody' });
 
@@ -178,11 +185,7 @@ describe('listDesignDocs', () => {
   });
 
   it('returns only design docs linked to the specified prdId', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ designDoc: makeDocRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockListSelectChain([{ designDoc: makeDocRow(), reviewerDisplayName: null, prdTitle: 'My PRD' }]);
 
     const result = await listDesignDocs({ prdId: 'prd-1' });
 
@@ -192,11 +195,7 @@ describe('listDesignDocs', () => {
   });
 
   it('returns empty array when no design docs exist for the given project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockListSelectChain([]);
 
     const result = await listDesignDocs({ project: 'proj-nonexistent' });
 
@@ -204,17 +203,23 @@ describe('listDesignDocs', () => {
   });
 
   it('includes reviewerName when the reviewer display name is available', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([
-      { designDoc: makeDocRow({ reviewerId: 'reviewer-1' }), reviewerDisplayName: 'Alice' },
+    mockListSelectChain([
+      { designDoc: makeDocRow({ reviewerId: 'reviewer-1' }), reviewerDisplayName: 'Alice', prdTitle: null },
     ]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
 
     const result = await listDesignDocs();
 
     expect(result[0].reviewerName).toBe('Alice');
+  });
+
+  it('exposes prdTitle on the summary when the joined prd has a title', async () => {
+    mockListSelectChain([
+      { designDoc: makeDocRow(), reviewerDisplayName: null, prdTitle: 'Payment Service PRD' },
+    ]);
+
+    const result = await listDesignDocs();
+
+    expect(result[0].prdTitle).toBe('Payment Service PRD');
   });
 });
 
@@ -470,19 +475,6 @@ describe('reviewDesignDoc', () => {
     );
   });
 
-  it('rejects a pending_review design doc with a comment', async () => {
-    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'reject', comment: 'Not ready' });
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'rejected', reviewComment: 'Not ready' }),
-    );
-  });
-
   it('requests revision with a comment', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
     const whereMock = jest.fn().mockResolvedValue(undefined);
@@ -496,23 +488,13 @@ describe('reviewDesignDoc', () => {
     );
   });
 
-  it('throws 400 when rejecting without a comment', async () => {
-    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
-
-    await expect(
-      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'reject' }),
-    ).rejects.toMatchObject({
-      message: 'A comment is required when rejecting or requesting revision',
-    });
-  });
-
   it('throws 400 when requesting revision without a comment', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
 
     await expect(
       reviewDesignDoc('doc-1', 'user-reviewer', { action: 'request_revision' }),
     ).rejects.toMatchObject({
-      message: 'A comment is required when rejecting or requesting revision',
+      message: 'A comment is required when requesting revision',
     });
   });
 
@@ -653,14 +635,32 @@ describe('syncDesignDocContent', () => {
 describe('syncValidationResult', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  /** Minimal valid scorecard — generateFallbackReport requires verdict + features. */
+  function makeScorecardFixture(overrides: Partial<Record<string, any>> = {}) {
+    return {
+      slug: 'feature-a',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'initial',
+      overall_score: 85,
+      ready_threshold: 90,
+      is_ready: false,
+      verdict: 'gaps',
+      features: [],
+      cross_cutting_checks: {},
+      accepted_gaps: [],
+      deferred_gaps: [],
+      ...overrides,
+    };
+  }
+
   it('sets validationScore, validationScorecard, and validationPhase from the scorecard', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    const scorecard = { overall_score: 85, is_ready: false, review_phase: 'initial' } as any;
+    const scorecard = makeScorecardFixture({ overall_score: 85, review_phase: 'initial' });
 
-    await syncValidationResult('doc-1', scorecard);
+    await syncValidationResult('doc-1', scorecard as any);
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -676,26 +676,27 @@ describe('syncValidationResult', () => {
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    const scorecard = { overall_score: 95, is_ready: true, review_phase: 'final' } as any;
+    const scorecard = makeScorecardFixture({ overall_score: 95, is_ready: true, review_phase: 'final', verdict: 'ready' });
 
-    await syncValidationResult('doc-1', scorecard);
+    await syncValidationResult('doc-1', scorecard as any);
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_review' }),
     );
   });
 
-  it('does not change status when scorecard.is_ready is false', async () => {
+  it('sets status to draft when scorecard.is_ready is false', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    const scorecard = { overall_score: 70, is_ready: false, review_phase: 'initial' } as any;
+    const scorecard = makeScorecardFixture({ overall_score: 70, is_ready: false });
 
-    await syncValidationResult('doc-1', scorecard);
+    await syncValidationResult('doc-1', scorecard as any);
 
-    const callArg = setMock.mock.calls[0][0];
-    expect(callArg).not.toHaveProperty('status');
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft' }),
+    );
   });
 
   it('persists validationReportMd when provided', async () => {
@@ -703,26 +704,27 @@ describe('syncValidationResult', () => {
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    const scorecard = { overall_score: 92, is_ready: true, review_phase: 'final' } as any;
+    const scorecard = makeScorecardFixture({ overall_score: 92, is_ready: true, verdict: 'ready', review_phase: 'final' });
 
-    await syncValidationResult('doc-1', scorecard, '## Validation Report\nAll good.');
+    await syncValidationResult('doc-1', scorecard as any, '## Validation Report\nAll good.');
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ validationReportMd: '## Validation Report\nAll good.' }),
     );
   });
 
-  it('does not include validationReportMd when not provided', async () => {
+  it('generates a fallback markdown report when none is provided', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    const scorecard = { overall_score: 80, is_ready: false, review_phase: 'initial' } as any;
+    const scorecard = makeScorecardFixture({ overall_score: 80, is_ready: false });
 
-    await syncValidationResult('doc-1', scorecard);
+    await syncValidationResult('doc-1', scorecard as any);
 
     const callArg = setMock.mock.calls[0][0];
-    expect(callArg).not.toHaveProperty('validationReportMd');
+    expect(typeof callArg.validationReportMd).toBe('string');
+    expect(callArg.validationReportMd).toContain('Validation Report');
   });
 });
 

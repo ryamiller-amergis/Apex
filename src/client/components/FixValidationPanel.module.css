@@ -1,0 +1,1034 @@
+/* ── FixValidationPanel: section-based review with per-gap verdicts ─────────── */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.panelHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelHeaderIcon {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.panelTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.panelHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progressText {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Section stepper tabs ──────────────────────────────────────────────────── */
+
+.stepper {
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  padding: 0 24px;
+}
+
+.stepperTabs {
+  display: flex;
+  gap: 2px;
+}
+
+.stepperTab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.2s ease;
+  min-width: 0;
+}
+
+.stepperTab:hover {
+  background: var(--bg-tertiary);
+}
+
+.stepperTabActive {
+  border-bottom-color: var(--accent-color);
+}
+
+.stepperTabActive .stepperTabLabel {
+  color: var(--accent-color);
+}
+
+.stepperTabAccepted .stepperTabLabel {
+  color: var(--success-color);
+}
+
+.stepperTabReverted .stepperTabLabel {
+  color: var(--error-color);
+}
+
+.stepperTabLabel {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.stepperTabMeta {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────────── */
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ── Section review layout ─────────────────────────────────────────────────── */
+
+.sectionReview {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* ── Section diff area ─────────────────────────────────────────────────────── */
+
+.sectionDiffArea {
+  display: flex;
+  flex-direction: column;
+}
+
+.sectionDiffHeader {
+  padding: 10px 24px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.sectionDiffNoChange {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.sectionDiffContent {
+  overflow-y: visible;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* ── Gap checklist ─────────────────────────────────────────────────────────── */
+
+.gapChecklist {
+  display: flex;
+  flex-direction: column;
+}
+
+.gapChecklistHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.gapChecklistCount {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.gapChecklistList {
+  display: flex;
+  flex-direction: column;
+}
+
+.gapChecklistItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border-color-light, var(--border-color));
+  transition: background 0.15s ease;
+}
+
+.gapChecklistItem:last-child {
+  border-bottom: none;
+}
+
+.gapItemAddressed {
+  background: color-mix(in srgb, var(--success-color) 12%, var(--bg-primary));
+  border-left: 3px solid var(--success-color);
+  padding-left: 21px;
+}
+
+.gapItemNotAddressed {
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-primary));
+  border-left: 3px solid var(--error-color);
+  padding-left: 21px;
+}
+
+:global([data-theme="dark"]) .gapItemAddressed {
+  background: color-mix(in srgb, var(--success-color) 22%, var(--bg-primary));
+}
+
+:global([data-theme="dark"]) .gapItemNotAddressed {
+  background: color-mix(in srgb, var(--error-color) 22%, var(--bg-primary));
+}
+
+:global([data-theme="amergis"]) .gapItemAddressed {
+  background: color-mix(in srgb, var(--success-color) 22%, var(--bg-primary));
+}
+
+:global([data-theme="amergis"]) .gapItemNotAddressed {
+  background: color-mix(in srgb, var(--error-color) 22%, var(--bg-primary));
+}
+
+.gapItemTop {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gapItemInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gapItemFeature {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.gapItemScoreBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.gapItemDesc {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.gapItemDetails {
+  margin-top: 2px;
+}
+
+.gapItemDetailsSummary {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.gapItemDetailsSummary:hover {
+  color: var(--text-secondary);
+}
+
+.gapItemDetailsContent {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  padding: 6px 12px;
+  margin-top: 4px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+
+/* ── Per-gap change report ─────────────────────────────────────────────────── */
+
+.gapChangeDetails {
+  margin-top: 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 25%, var(--border-color));
+  overflow: hidden;
+}
+
+.gapChangeDetails[open] .gapChangeChevron {
+  transform: rotate(0deg);
+}
+
+.gapChangeDetails:not([open]) .gapChangeChevron {
+  transform: rotate(-90deg);
+}
+
+.gapChangeDetailsSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-tertiary));
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.gapChangeDetailsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.gapChangeDetailsSummary:hover {
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-tertiary));
+}
+
+.gapChangeChevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.gapChangeMarkdownWrap {
+  padding: 12px 16px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  line-height: 1.6;
+  background: var(--bg-primary);
+  border-top: 1px solid color-mix(in srgb, var(--accent-color) 15%, var(--border-color));
+  overflow-x: auto;
+}
+
+.gapChangeMarkdownWrap h1,
+.gapChangeMarkdownWrap h2,
+.gapChangeMarkdownWrap h3,
+.gapChangeMarkdownWrap h4,
+.gapChangeMarkdownWrap h5,
+.gapChangeMarkdownWrap h6 {
+  margin: 12px 0 6px 0;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.gapChangeMarkdownWrap h1 { font-size: 1rem; }
+.gapChangeMarkdownWrap h2 { font-size: 0.94rem; }
+.gapChangeMarkdownWrap h3 { font-size: 0.88rem; }
+.gapChangeMarkdownWrap h4 { font-size: 0.84rem; }
+
+.gapChangeMarkdownWrap p {
+  margin: 6px 0;
+}
+
+.gapChangeSummary {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.gapChangeMarkdownWrap ul,
+.gapChangeMarkdownWrap ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.gapChangeMarkdownWrap li {
+  margin: 3px 0;
+}
+
+.gapChangeMarkdownWrap code {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.78rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.gapChangeMarkdownWrap pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.gapChangeMarkdownWrap pre code {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.gapChangeMarkdownWrap blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 5%, var(--bg-secondary));
+  color: var(--text-secondary);
+}
+
+.gapChangeMarkdownWrap table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 0.78rem;
+}
+
+.gapChangeMarkdownWrap th,
+.gapChangeMarkdownWrap td {
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.gapChangeMarkdownWrap th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.gapChangeReport {
+  margin-top: 6px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 25%, var(--border-color));
+  overflow: hidden;
+}
+
+.gapChangeReportLabel {
+  padding: 5px 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-tertiary));
+}
+
+.gapChangeReportContent {
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  background: var(--bg-primary);
+  white-space: pre-wrap;
+}
+
+.gapItemVerdictRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+.gapItemQuestion {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.gapItemVerdictBtns {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.verdictBtn {
+  padding: 4px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.verdictBtn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.verdictBtnActiveGood {
+  border-color: var(--success-color);
+  background: var(--success-color);
+  color: #fff;
+}
+
+.verdictBtnActiveGood:hover {
+  background: var(--success-color);
+  border-color: var(--success-color);
+  color: #fff;
+}
+
+.verdictBtnActiveBad {
+  border-color: var(--error-color);
+  background: var(--error-color);
+  color: #fff;
+}
+
+.verdictBtnActiveBad:hover {
+  background: var(--error-color);
+  border-color: var(--error-color);
+  color: #fff;
+}
+
+/* ── Section action bar ────────────────────────────────────────────────────── */
+
+.sectionActionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.sectionActionSpacer {
+  flex: 1;
+}
+
+.sectionBtnAccept {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--success-color);
+  background: transparent;
+  color: var(--success-color);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.sectionBtnAccept:hover:not(:disabled) {
+  background: var(--success-color);
+  color: #fff;
+}
+
+.sectionBtnAccept:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sectionBtnRevert {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--error-color);
+  background: transparent;
+  color: var(--error-color);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.sectionBtnRevert:hover:not(:disabled) {
+  background: var(--error-color);
+  color: #fff;
+}
+
+.sectionBtnRevert:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sectionBtnDiscuss {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.sectionBtnDiscuss:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.sectionStatusAccepted {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--success-color);
+}
+
+.sectionStatusReverted {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* ── Summary view ──────────────────────────────────────────────────────────── */
+
+.summaryView {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  gap: 20px;
+}
+
+.summaryTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summarySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summarySectionLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.summaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+
+.summaryRowLabel {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.summaryRowStatus {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.summaryStatusGood {
+  color: var(--success-color);
+}
+
+.summaryStatusBad {
+  color: var(--error-color);
+}
+
+.summaryStatusPending {
+  color: var(--text-muted);
+}
+
+.summaryCards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+}
+
+.summaryGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summaryGroupLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summaryDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.summaryItem {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 4px 12px 4px 24px;
+  line-height: 1.45;
+}
+
+.summaryActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+/* ── Diff rendering ────────────────────────────────────────────────────────── */
+
+.diffTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  table-layout: fixed;
+}
+
+.diffLineNum {
+  width: 42px;
+  min-width: 42px;
+  padding: 1px 8px 1px 4px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  user-select: none;
+  vertical-align: top;
+  border-right: 1px solid var(--border-color);
+}
+
+.diffLineContent {
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.diffLineAdded {
+  background: color-mix(in srgb, #22c55e 10%, var(--bg-primary));
+}
+
+.diffLineAdded .diffLineContent {
+  color: var(--text-primary);
+}
+
+.diffLineAdded .diffLineNum {
+  background: color-mix(in srgb, #22c55e 15%, var(--bg-primary));
+  color: #16a34a;
+}
+
+.diffLineRemoved {
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-primary));
+}
+
+.diffLineRemoved .diffLineContent {
+  color: var(--text-primary);
+}
+
+.diffLineRemoved .diffLineNum {
+  background: color-mix(in srgb, #ef4444 15%, var(--bg-primary));
+  color: #dc2626;
+}
+
+.diffLineContext {
+  background: var(--bg-primary);
+}
+
+.diffPrefix {
+  user-select: none;
+  display: inline-block;
+  width: 14px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.diffPrefixAdd {
+  color: #16a34a;
+}
+
+.diffPrefixRemove {
+  color: #dc2626;
+}
+
+/* ── Word-level highlights (GitHub style) ──────────────────────────────────── */
+
+/* Darker red chip on the red removed row */
+.wordRemoved {
+  background: color-mix(in srgb, #ef4444 40%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Darker green chip on the green added row */
+.wordAdded {
+  background: color-mix(in srgb, #22c55e 40%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ── Gap-level diff view ─────────────────────────────────────────────────────── */
+
+.gapChangeWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 0.78rem;
+  color: #92400e;
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-primary));
+  border-top: 1px solid color-mix(in srgb, #f59e0b 30%, var(--border-color));
+  line-height: 1.45;
+}
+
+:global([data-theme="dark"]) .gapChangeWarning {
+  color: #fbbf24;
+  background: color-mix(in srgb, #f59e0b 15%, var(--bg-primary));
+}
+
+:global([data-theme="amergis"]) .gapChangeWarning {
+  color: #fbbf24;
+  background: color-mix(in srgb, #f59e0b 15%, var(--bg-primary));
+}
+
+.gapChangeDiffWrap {
+  border-top: 1px solid color-mix(in srgb, var(--accent-color) 15%, var(--border-color));
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.diffNoChanges {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  gap: 8px;
+}
+
+.diffNoChangesIcon {
+  width: 28px;
+  height: 28px;
+  color: var(--success-color);
+}
+
+/* ── Footer actions ────────────────────────────────────────────────────────── */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footerBtnPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: none;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.footerBtnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.footerBtnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.footerBtnSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.footerBtnSecondary:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.footerBtnSecondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.footerBtnDanger {
+  composes: footerBtnSecondary;
+  border-color: color-mix(in srgb, var(--error-color) 60%, var(--border-color));
+  color: var(--error-color);
+}
+
+.footerBtnDanger:hover:not(:disabled) {
+  background: var(--error-color);
+  border-color: var(--error-color);
+  color: #fff;
+}
+
+/* ── Fixing / progress overlay ─────────────────────────────────────────────── */
+
+.fixingOverlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  gap: 16px;
+  flex: 1;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.fixingSpinner {
+  width: 32px;
+  height: 32px;
+  color: var(--accent-color);
+  animation: spin 1.2s linear infinite;
+}
+
+.fixingTitle {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fixingSub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  max-width: 340px;
+  text-align: center;
+}
+
+.fixingCancelBtn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fixingCancelBtn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.fixingRetryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 7px;
+  border: none;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  margin-top: 8px;
+}
+
+.fixingRetryBtn:hover {
+  background: var(--accent-hover);
+}

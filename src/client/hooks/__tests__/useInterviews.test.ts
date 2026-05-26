@@ -485,20 +485,20 @@ describe('useReviewPrd', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when rejecting', async () => {
+  it('includes a comment when requesting revision', async () => {
     mockFetchOk({ ok: true });
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useReviewPrd(), { wrapper });
 
     await act(async () => {
-      result.current.mutate({ prdId: 'prd-1', action: 'reject', comment: 'Needs more work' });
+      result.current.mutate({ prdId: 'prd-1', action: 'request_revision', comment: 'Needs more work' });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'reject', comment: 'Needs more work' });
+    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs more work' });
   });
 });
 
@@ -764,20 +764,20 @@ describe('useReviewDesignDoc', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when rejecting', async () => {
+  it('includes a comment when requesting revision', async () => {
     mockFetchOk({ ok: true });
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useReviewDesignDoc(), { wrapper });
 
     await act(async () => {
-      result.current.mutate({ designDocId: 'dd-1', action: 'reject', comment: 'Needs work' });
+      result.current.mutate({ designDocId: 'dd-1', action: 'request_revision', comment: 'Needs work' });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'reject', comment: 'Needs work' });
+    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs work' });
   });
 });
 

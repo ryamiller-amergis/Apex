@@ -408,6 +408,19 @@ export function useCreateValidationThread() {
   });
 }
 
+export function useCancelValidation() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/validation/cancel`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-docs'] });
+      qc.removeQueries({ queryKey: ['validation-report', docId] });
+    },
+  });
+}
+
 export function useRefreshValidation() {
   const qc = useQueryClient();
   return useMutation<{ ok: boolean; score: number; is_ready: boolean }, Error, string>({
@@ -433,17 +446,58 @@ export function useMarkValidationReady() {
   });
 }
 
+export function useFixValidation() {
+  const qc = useQueryClient();
+  return useMutation<{ threadId: string }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/fix-validation`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useAcceptFixValidation() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/fix-validation/accept`, { method: 'POST' }),
+    onSuccess: (_data, docId) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+      void qc.invalidateQueries({ queryKey: ['design-docs'] });
+      void qc.invalidateQueries({ queryKey: ['design-doc-validation', docId] });
+      qc.removeQueries({ queryKey: ['validation-report', docId] });
+    },
+  });
+}
+
+export function useRevertDesignDocSection() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { designDocId: string; designContent?: string; techSpecContent?: string; assumptionsContent?: string }>({
+    mutationFn: ({ designDocId, ...body }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { designDocId }) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+    },
+  });
+}
+
 export function useValidationReport(docId: string | null, validationThreadId: string | null | undefined, docStatus?: string) {
-  return useQuery<{ markdown: string }, Error>({
+  return useQuery<{ markdown: string | null; still_validating?: boolean }, Error>({
     queryKey: ['validation-report', docId],
     queryFn: () => apiFetch(`/api/interviews/design-docs/${docId!}/validation/report`),
-    enabled: !!docId && !!validationThreadId,
+    enabled: !!docId && !!validationThreadId && docStatus === 'validating',
     staleTime: 30_000,
     retry: false,
     refetchInterval: (query) => {
-      if (query.state.data) return false;
+      if (query.state.data?.markdown) return false;
       if (docStatus === 'validating') return 10_000;
-      return 5_000;
+      return false;
     },
   });
 }

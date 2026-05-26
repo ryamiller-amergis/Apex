@@ -6,7 +6,7 @@ import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 
-const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'pending_review', 'approved', 'rejected', 'revision_requested'];
+const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'pending_review', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -123,7 +123,7 @@ export async function updatePrdContent(
     updatedAt: new Date().toISOString(),
   };
 
-  if (row.status === 'revision_requested' || row.status === 'rejected') {
+  if (row.status === 'revision_requested') {
     updates.status = 'draft';
     updates.reviewerId = null;
     updates.reviewComment = null;
@@ -155,7 +155,7 @@ export async function submitForReview(id: string, requestingUserId: string): Pro
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
     throw forbidden('Only the author can submit for review');
   }
-  if (row.status !== 'draft' && row.status !== 'revision_requested' && row.status !== 'rejected') {
+  if (row.status !== 'draft' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
@@ -219,15 +219,19 @@ export async function reviewPrd(
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own PRD');
   }
-  if ((opts.action === 'reject' || opts.action === 'request_revision') && !opts.comment) {
-    const err = new Error('A comment is required when rejecting or requesting revision');
+  if (opts.action !== 'approve' && opts.action !== 'request_revision') {
+    const err = new Error(`Invalid review action: ${opts.action}`);
+    (err as any).status = 400;
+    throw err;
+  }
+  if (opts.action === 'request_revision' && !opts.comment) {
+    const err = new Error('A comment is required when requesting revision');
     (err as any).status = 400;
     throw err;
   }
 
   const statusMap: Record<ReviewPrdRequest['action'], PrdStatus> = {
     approve: 'approved',
-    reject: 'rejected',
     request_revision: 'revision_requested',
   };
 

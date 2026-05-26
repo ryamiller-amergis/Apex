@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.19.0",
+    "date": "2026-05-26",
+    "title": "AI Fix Validation & Per-Feature Design Docs",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Users can now trigger an AI-powered fix for validation gaps on design docs — the agent proposes targeted edits and surfaces a side-by-side review panel before any changes are accepted or reverted"
+      },
+      {
+        "type": "feature",
+        "description": "Users can cancel an in-progress validation run to immediately return a design doc to draft status"
+      },
+      {
+        "type": "feature",
+        "description": "When Q&A produces content for multiple features, the system now automatically creates separate design doc rows per feature instead of collapsing them into one"
+      },
+      {
+        "type": "improvement",
+        "description": "Design docs from the same PRD are now grouped in the dashboard with an expandable card showing per-status counts and a bulk-delete action"
+      },
+      {
+        "type": "improvement",
+        "description": "Removed the 'Rejected' status from PRDs and design docs — reviewers now use 'Request Revision' as the only decline action, simplifying the review workflow"
+      },
+      {
+        "type": "improvement",
+        "description": "Validation report now auto-generates a fallback from the scorecard when no markdown report exists yet, so the Validation Report tab is never blank after scoring completes"
+      },
+      {
+        "type": "bugfix",
+        "description": "Fixed validation report polling firing when the doc was not actively validating, which caused unnecessary background requests"
+      }
+    ]
+  },
+  {
     "version": "1.18.0",
     "date": "2026-05-23",
     "title": "Quick Skill Pills & Guided Home",

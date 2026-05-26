@@ -1,7 +1,7 @@
 import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
-import type { ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
 import type { QuickSkillPill } from '../../shared/types/projectSettings';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
@@ -175,6 +175,7 @@ export const designDocs = pgTable('design_docs', {
   validationScorecard: jsonb('validation_scorecard').$type<ValidationScorecard>(),
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
+  fixBaseline: jsonb('fix_baseline').$type<ContentSnapshot>(),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   designContent: text('design_content').notNull().default(''),

@@ -4,18 +4,13 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import styles from './ReviewReasonModal.module.css';
 
-const rejectSchema = z.object({
-  reason: z.string().min(1, 'Rejection reason is required'),
-});
-
 const revisionSchema = z.object({
   reason: z.string().min(1, 'Revision notes are required'),
 });
 
-type FormValues = z.infer<typeof rejectSchema>;
+type FormValues = z.infer<typeof revisionSchema>;
 
 interface ReviewReasonModalProps {
-  mode: 'reject' | 'revision';
   itemName: string;
   docTypeName?: string;
   isPending: boolean;
@@ -24,34 +19,21 @@ interface ReviewReasonModalProps {
 }
 
 const COPY = {
-  reject: {
-    title: (docType: string) => `Reject ${docType}`,
-    body: 'Provide a reason for rejecting',
-    placeholder: 'Reason for rejection…',
-    pendingLabel: 'Rejecting…',
-    confirmLabel: 'Confirm Reject',
-  },
-  revision: {
-    title: () => 'Request Revision',
-    body: 'Describe what needs to change in',
-    placeholder: 'What needs to change?',
-    pendingLabel: 'Submitting…',
-    confirmLabel: 'Confirm',
-  },
+  title: (docType: string) => `Request ${docType} Revision`,
+  body: 'Describe what needs to change in',
+  placeholder: 'What needs to change?',
+  pendingLabel: 'Submitting…',
+  confirmLabel: 'Confirm',
 } as const;
 
 export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
-  mode,
   itemName,
   docTypeName = 'document',
   isPending,
   onConfirm,
   onCancel,
 }) => {
-  const schema = useMemo(
-    () => (mode === 'reject' ? rejectSchema : revisionSchema),
-    [mode],
-  );
+  const schema = useMemo(() => revisionSchema, []);
 
   const {
     register,
@@ -74,9 +56,6 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
     onConfirm(values.reason);
   };
 
-  const copy = COPY[mode];
-  const btnClass = mode === 'reject' ? styles.btnReject : styles.btnConfirm;
-
   return (
     <div
       className={styles.overlay}
@@ -87,11 +66,11 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
     >
       <form className={styles.card} onSubmit={handleSubmit(onSubmit)}>
         <h2 className={styles.title} id="review-reason-title">
-          {copy.title(docTypeName)}
+          {COPY.title(docTypeName)}
         </h2>
 
         <p className={styles.body}>
-          {copy.body}{' '}
+          {COPY.body}{' '}
           <span className={styles.itemName}>&ldquo;{itemName}&rdquo;</span>.
           This will be shown to the author.
         </p>
@@ -100,7 +79,7 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
           <textarea
             className={`${styles.textarea} ${errors.reason ? styles.textareaError : ''}`}
             rows={4}
-            placeholder={copy.placeholder}
+            placeholder={COPY.placeholder}
             autoFocus
             {...register('reason')}
           />
@@ -119,11 +98,11 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
             Cancel
           </button>
           <button
-            className={btnClass}
+            className={styles.btnConfirm}
             type="submit"
             disabled={isPending}
           >
-            {isPending ? copy.pendingLabel : copy.confirmLabel}
+            {isPending ? COPY.pendingLabel : COPY.confirmLabel}
           </button>
         </div>
       </form>

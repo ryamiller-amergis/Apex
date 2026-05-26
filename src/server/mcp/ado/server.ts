@@ -17,7 +17,7 @@ import {
 } from '../../services/wikiCatalog';
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
-import { updateDesignDocContent } from '../../services/designDocService';
+import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
 
 export function createAdoMcpServer(): McpServer {
   const server = new McpServer({
@@ -184,10 +184,21 @@ export function createAdoMcpServer(): McpServer {
         section === 'tech-spec'   ? { techSpecContent: content } :
                                     { assumptionsContent: content };
       try {
-        await updateDesignDocContent(docId, thread.userId, opts);
+        // Check if the doc is in fix mode (has fixBaseline set). If so, the
+        // update was initiated by the fix-validation flow and the thread may
+        // have been created by a different user (e.g. a reviewer). Use the
+        // auth-free syncDesignDocContent to avoid permission mismatches.
+        const doc = await getDesignDoc(docId);
+        if (doc?.fixBaseline) {
+          await syncDesignDocContent(docId, opts);
+        } else {
+          await updateDesignDocContent(docId, thread.userId, opts);
+        }
+        console.log(`[MCP] update_design_doc: saved ${section} for doc ${docId} (fixMode=${!!doc?.fixBaseline})`);
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section }) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] update_design_doc: FAILED ${section} for doc ${docId} — ${message}`);
         return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
       }
     },

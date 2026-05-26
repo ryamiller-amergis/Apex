@@ -120,28 +120,6 @@
   cursor: not-allowed;
 }
 
-/* Reject mode — destructive red */
-.btnReject {
-  padding: 8px 18px;
-  background: var(--error-color);
-  color: #fff;
-  border: none;
-  border-radius: 7px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease, opacity 0.2s ease;
-}
-
-.btnReject:hover:not(:disabled) {
-  background: #dc2626;
-}
-
-.btnReject:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 /* Revision mode — accent blue */
 .btnConfirm {
   padding: 8px 18px;

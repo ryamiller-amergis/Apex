@@ -43,9 +43,13 @@ jest.mock('../../hooks/useInterviews', () => ({
   useGenerateDesignDoc: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useMarkValidationReady: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRefreshValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useCancelValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreateValidationThread: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useValidationReport: jest.fn(() => ({ data: null })),
   useDesignDocsByPrd: jest.fn(() => ({ data: [] })),
+  useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
 }));
 
 const mockUseChatStream = jest.fn();

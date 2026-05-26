@@ -684,7 +684,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       const prdResult = await createPrd.mutateAsync({
         interviewId: id,
         chatThreadId: threadResult.threadId,
-        title: `PRD — ${interview.title}`,
+        title: interview.title,
       });
       navigate(`/backlog/prd/${prdResult.prdId}`);
     } catch {

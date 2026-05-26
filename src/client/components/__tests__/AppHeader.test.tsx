@@ -52,11 +52,6 @@ describe('AppHeader — viewer permissions (planning:view only)', () => {
     expect(screen.queryByRole('button', { name: 'Interview' })).not.toBeInTheDocument();
   });
 
-  it('does NOT render the Agent Studio button', () => {
-    render(<AppHeader {...baseProps} can={can} onOpenAgentChat={jest.fn()} />);
-    expect(screen.queryByRole('button', { name: /Agent Studio/i })).not.toBeInTheDocument();
-  });
-
   it('does NOT render the Admin button', () => {
     render(<AppHeader {...baseProps} can={can} />);
     expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
@@ -93,18 +88,8 @@ describe('AppHeader — full permissions (all keys)', () => {
     expect(screen.getByRole('button', { name: 'Interview' })).toBeInTheDocument();
   });
 
-  it('renders the Agent Studio button when onOpenAgentChat is provided', () => {
-    render(<AppHeader {...baseProps} can={can} onOpenAgentChat={jest.fn()} />);
-    expect(screen.getByRole('button', { name: /Agent Studio/i })).toBeInTheDocument();
-  });
-
   it('renders the Admin button', () => {
     render(<AppHeader {...baseProps} can={can} />);
     expect(screen.getByRole('button', { name: 'Admin' })).toBeInTheDocument();
-  });
-
-  it('does NOT render Agent Studio button when onOpenAgentChat is not provided', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.queryByRole('button', { name: /Agent Studio/i })).not.toBeInTheDocument();
   });
 });

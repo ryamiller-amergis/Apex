@@ -1,7 +1,7 @@
 -- Up Migration
 INSERT INTO app_permissions (id, key, description, category) VALUES
-  (gen_random_uuid(), 'prds:review', 'Approve, reject, or request revision on PRDs', 'prds'),
-  (gen_random_uuid(), 'design-docs:review', 'Approve, reject, or request revision on design docs', 'design-docs');
+  (gen_random_uuid(), 'prds:review', 'Approve or request revision on PRDs', 'prds'),
+  (gen_random_uuid(), 'design-docs:review', 'Approve or request revision on design docs', 'design-docs');
 
 INSERT INTO app_role_permissions (role_id, permission_id)
 SELECT r.id, p.id

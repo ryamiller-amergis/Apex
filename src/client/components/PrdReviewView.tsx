@@ -28,7 +28,6 @@ function statusBadgeClass(status: PrdStatus): string {
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
-    case 'rejected': return styles.badgeRejected;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
@@ -39,7 +38,6 @@ function statusLabel(status: PrdStatus): string {
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
-    case 'rejected': return 'Rejected';
     case 'revision_requested': return 'Revision Requested';
   }
 }
@@ -56,7 +54,6 @@ export const PrdReviewView: React.FC = () => {
 
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
-  const linkedDesignDoc = relatedDesignDocs?.[0];
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
 
   const updateContent = useUpdatePrdContent();
@@ -70,7 +67,7 @@ export const PrdReviewView: React.FC = () => {
   const [editContent, setEditContent] = useState('');
   const [isDirty, setIsDirty] = useState(false);
 
-  const [reviewAction, setReviewAction] = useState<'reject' | 'revision' | null>(null);
+  const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const isGenerating = !!prd && prd.content === '';
@@ -107,11 +104,10 @@ export const PrdReviewView: React.FC = () => {
   }, [id, reviewPrd, navigate]);
 
   const handleReviewConfirm = useCallback(async (reason: string) => {
-    if (!id || !reviewAction) return;
-    const action = reviewAction === 'reject' ? 'reject' : 'request_revision';
-    await reviewPrd.mutateAsync({ prdId: id, action, comment: reason });
-    setReviewAction(null);
-  }, [id, reviewAction, reviewPrd]);
+    if (!id) return;
+    await reviewPrd.mutateAsync({ prdId: id, action: 'request_revision', comment: reason });
+    setShowRevisionModal(false);
+  }, [id, reviewPrd]);
 
   const handleTabChange = useCallback((tab: TabId) => {
     if (tab === 'edit' && prd) {
@@ -181,7 +177,7 @@ export const PrdReviewView: React.FC = () => {
 
           {canManage && (isAuthor || isAdmin) && (
             <>
-              {(prd.status === 'draft' || prd.status === 'revision_requested' || prd.status === 'rejected') && (
+              {(prd.status === 'draft' || prd.status === 'revision_requested') && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={() => void handleSubmit()}
@@ -243,41 +239,33 @@ export const PrdReviewView: React.FC = () => {
               </button>
               <button
                 className={styles.btnRevision}
-                onClick={() => setReviewAction('revision')}
+                onClick={() => setShowRevisionModal(true)}
                 type="button"
               >
                 Request Revision
-              </button>
-              <button
-                className={styles.btnReject}
-                onClick={() => setReviewAction('reject')}
-                type="button"
-              >
-                Reject
               </button>
             </div>
           )}
         </div>
       </div>
 
-      {prd.status === 'rejected' && prd.reviewComment && (
-        <div className={styles.rejectionBanner}>
-          <strong>Rejected:</strong> {prd.reviewComment}
-        </div>
-      )}
-
-      {prd.status === 'approved' && linkedDesignDoc && (
+      {prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0 && (
         <div className={styles.designDocBanner}>
           <span className={styles.designDocBannerText}>
-            A design doc was created from this PRD.
+            {relatedDesignDocs.length === 1
+              ? 'A design doc was created from this PRD.'
+              : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
           </span>
-          <button
-            className={styles.designDocBannerLink}
-            onClick={() => navigate(`/backlog/design-doc/${linkedDesignDoc.id}`)}
-            type="button"
-          >
-            View Design Doc →
-          </button>
+          {relatedDesignDocs.map((doc) => (
+            <button
+              key={doc.id}
+              className={styles.designDocBannerLink}
+              onClick={() => navigate(`/backlog/design-doc/${doc.id}`)}
+              type="button"
+            >
+              {relatedDesignDocs.length === 1 ? 'View Design Doc' : doc.title} →
+            </button>
+          ))}
         </div>
       )}
 
@@ -430,14 +418,13 @@ export const PrdReviewView: React.FC = () => {
         />
       )}
 
-      {reviewAction && (
+      {showRevisionModal && (
         <ReviewReasonModal
-          mode={reviewAction}
           itemName={prd.title}
           docTypeName="PRD"
           isPending={reviewPrd.isPending}
           onConfirm={(reason) => void handleReviewConfirm(reason)}
-          onCancel={() => setReviewAction(null)}
+          onCancel={() => setShowRevisionModal(false)}
         />
       )}
     </div>
