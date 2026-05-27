@@ -54,9 +54,20 @@ export function useUpsertProjectSkillConfig() {
       if (!res.ok) throw new Error('Failed to save project settings');
       return res.json() as Promise<ProjectSkillConfig>;
     },
-    onSuccess: (_data, { project }) => {
+    onSuccess: (data, { project }) => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
       queryClient.invalidateQueries({ queryKey: ['skill-config', project] });
+      // Bust server-side skill catalog cache so newly added/changed skills on
+      // the configured branch appear immediately instead of waiting up to 5 min.
+      if (data.skillRepo) {
+        fetch(
+          `/api/skills/refresh?project=${encodeURIComponent(project)}&repo=${encodeURIComponent(data.skillRepo)}`,
+          { method: 'POST', credentials: 'include' },
+        ).catch(() => { /* best-effort */ });
+      }
+      // Also invalidate client-side skill-list cache for this project so
+      // React Query refetches from the now-fresh server cache.
+      queryClient.invalidateQueries({ queryKey: ['skill-list', project] });
     },
   });
 }
