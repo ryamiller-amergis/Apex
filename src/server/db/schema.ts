@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
@@ -253,10 +253,33 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocAssistantModel: text('design_doc_assistant_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
+  defaultModel: text('default_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
+
+export const projectApprovers = pgTable('project_approvers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  documentType: text('document_type').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.project, t.userId, t.documentType),
+}));
+
+export const projectApproversRelations = relations(projectApprovers, ({ one }) => ({
+  projectSkillSetting: one(projectSkillSettings, {
+    fields: [projectApprovers.project],
+    references: [projectSkillSettings.project],
+  }),
+  user: one(appUsers, {
+    fields: [projectApprovers.userId],
+    references: [appUsers.oid],
+  }),
+}));
 
 export const appSettings = pgTable('app_settings', {
   key: text('key').primaryKey(),

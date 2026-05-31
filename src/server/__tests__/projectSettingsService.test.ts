@@ -23,6 +23,7 @@ jest.mock('../db/drizzle', () => {
 
   const makeSelectChain = () => ({
     from: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     limit: jest.fn().mockResolvedValue([]),
     orderBy: jest.fn().mockResolvedValue([]),
@@ -34,6 +35,13 @@ jest.mock('../db/drizzle', () => {
       update: jest.fn().mockImplementation(makeUpdateChain),
       delete: jest.fn().mockImplementation(makeDeleteChain),
       select: jest.fn().mockImplementation(makeSelectChain),
+      transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
+        const tx = {
+          delete: jest.fn().mockImplementation(makeDeleteChain),
+          insert: jest.fn().mockImplementation(makeInsertChain),
+        };
+        await fn(tx);
+      }),
     },
   };
 });
@@ -43,6 +51,10 @@ import {
   listSkillConfigs,
   upsertSkillConfig,
   deleteSkillConfig,
+  listApprovers,
+  listApproversForAllProjects,
+  setApprovers,
+  getApproversForDocument,
 } from '../services/projectSettingsService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -202,6 +214,45 @@ describe('upsertSkillConfig', () => {
     );
   });
 
+  it('persists defaultModel when provided', async () => {
+    const configWithDefault = { ...configRow, defaultModel: 'composer-2' };
+    const returningMock = jest.fn().mockResolvedValue([configWithDefault]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'composer-2',
+    );
+
+    expect(result).toMatchObject({ defaultModel: 'composer-2' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultModel: 'composer-2' }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ defaultModel: 'composer-2' }),
+      }),
+    );
+  });
+
   it('stores null for model fields when not provided (omitted)', async () => {
     const configNoModels = {
       ...configRow,
@@ -289,5 +340,101 @@ describe('deleteSkillConfig', () => {
 
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(whereMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Approver management ───────────────────────────────────────────────────────
+
+const approverRow = {
+  id: 'appr-1',
+  project: 'proj-alpha',
+  userId: 'user-oid-1',
+  displayName: 'Alice Admin',
+  email: 'alice@example.com',
+  documentType: 'design_doc',
+  assignedBy: 'admin-oid',
+  assignedAt: '2026-01-01T00:00:00Z',
+};
+
+describe('listApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns approvers joined with user display data', async () => {
+    const whereMock = jest.fn().mockResolvedValue([approverRow]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApprovers('proj-alpha');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      project: 'proj-alpha',
+      userId: 'user-oid-1',
+      documentType: 'design_doc',
+      displayName: 'Alice Admin',
+    });
+  });
+});
+
+describe('listApproversForAllProjects', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('groups approvers by project', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([
+      approverRow,
+      { ...approverRow, id: 'appr-2', documentType: 'prd', userId: 'user-oid-2' },
+      { ...approverRow, id: 'appr-3', project: 'proj-beta', userId: 'user-oid-3' },
+    ]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproversForAllProjects();
+
+    expect(result['proj-alpha']).toHaveLength(2);
+    expect(result['proj-beta']).toHaveLength(1);
+  });
+
+  it('returns an empty object when no approvers exist', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproversForAllProjects();
+
+    expect(result).toEqual({});
+  });
+});
+
+describe('setApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('replaces approvers in a transaction and returns the new list', async () => {
+    const whereMock = jest.fn().mockResolvedValue([approverRow]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await setApprovers('proj-alpha', 'design_doc', ['user-oid-1'], 'admin-oid');
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(result).toHaveLength(1);
+    expect(result[0].documentType).toBe('design_doc');
+  });
+});
+
+describe('getApproversForDocument', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns approvers filtered by project and document type', async () => {
+    const whereMock = jest.fn().mockResolvedValue([{ ...approverRow, documentType: 'prd' }]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await getApproversForDocument('proj-alpha', 'prd');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].documentType).toBe('prd');
   });
 });

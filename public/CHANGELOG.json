@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.20.0",
+    "date": "2026-05-30",
+    "title": "Project Settings & Approvers",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Admins can assign designated design doc and PRD approvers per project — any listed approver with review permission can approve that document type"
+      },
+      {
+        "type": "feature",
+        "description": "Each project can override the global default AI model with its own per-project default"
+      },
+      {
+        "type": "improvement",
+        "description": "Project settings admin page is reorganized into accordion sections with contextual help, making skill paths, models, and pills easier to configure"
+      },
+      {
+        "type": "improvement",
+        "description": "Project list view shows approver counts at a glance instead of a wide table of truncated model IDs"
+      }
+    ]
+  },
+  {
     "version": "1.19.2",
     "date": "2026-05-28",
     "title": "PRD & Interview Guardrails",

@@ -12,8 +12,20 @@ import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionS
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
+import { fetchAvailableModels } from '../services/modelsService';
 
 const router = express.Router();
+
+// GET /api/available-models — accessible to all authenticated users so that
+// non-admin roles (e.g. interviews:manage) can populate model dropdowns.
+router.get('/available-models', async (_req: Request, res: Response) => {
+  try {
+    const models = await fetchAvailableModels();
+    res.json({ models });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // GET /api/projects - List ADO projects accessible to the configured PAT,
 // filtered to the allowlist in ADO_ALLOWED_PROJECTS (comma-separated).

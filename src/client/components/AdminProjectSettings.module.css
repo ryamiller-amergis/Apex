@@ -67,7 +67,7 @@
   margin-bottom: 16px;
 }
 
-/* ── Table ───────────────────────────────────────────────────────────────── */
+/* ── Project list cards ──────────────────────────────────────────────────── */
 
 .tableWrapper {
   background: var(--bg-secondary);
@@ -115,6 +115,12 @@
   vertical-align: middle;
 }
 
+.projectName {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
 .repoText {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 13px;
@@ -130,6 +136,29 @@
 .metaText {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.approverBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  white-space: nowrap;
+}
+
+.approverBadgeEmpty {
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  color: var(--text-muted);
+}
+
+.approverBadgeSeparator {
+  color: var(--text-muted);
+  margin: 0 2px;
 }
 
 /* ── Row action buttons ──────────────────────────────────────────────────── */
@@ -201,7 +230,7 @@
 
 .btnCancel:hover { background: var(--bg-secondary); }
 
-/* ── Inline add/edit form ────────────────────────────────────────────────── */
+/* ── Form card / edit view ───────────────────────────────────────────────── */
 
 .formCard {
   background: var(--bg-secondary);
@@ -221,6 +250,14 @@
 }
 
 .formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+  overflow: visible;
+}
+
+.formGridThreeCol {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 12px;
@@ -301,6 +338,241 @@
   justify-content: flex-end;
 }
 
+.formError {
+  font-size: 12px;
+  color: var(--error-color);
+  margin-bottom: 8px;
+}
+
+/* ── Accordion sections ──────────────────────────────────────────────────── */
+
+.accordionSection {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--bg-secondary);
+  overflow: visible;
+}
+
+.accordionHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 0.15s ease;
+  font-family: inherit;
+}
+
+.accordionHeader:hover {
+  background: color-mix(in srgb, var(--accent-color) 4%, transparent);
+}
+
+.accordionChevron {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.accordionChevronOpen {
+  transform: rotate(90deg);
+}
+
+.accordionTitle {
+  flex: 1;
+}
+
+.accordionHint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.accordionBody {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+  padding: 0 16px;
+}
+
+.accordionBodyOpen {
+  max-height: 2000px;
+  opacity: 1;
+  padding: 0 16px 16px;
+}
+
+.accordionHelp {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.skillDescription {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.modelDefault {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  font-style: italic;
+}
+
+/* ── User picker (approver section) ──────────────────────────────────────── */
+
+.approverSubSection {
+  margin-bottom: 16px;
+}
+
+.approverSubSection:last-child {
+  margin-bottom: 0;
+}
+
+.approverSubTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+
+.userChipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-height: 24px;
+}
+
+.userChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.userChipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.userChipRemove:hover {
+  background: color-mix(in srgb, var(--error-color) 15%, transparent);
+  color: var(--error-color);
+}
+
+.userPicker {
+  position: relative;
+  max-width: 320px;
+}
+
+.userPickerInput {
+  width: 100%;
+  padding: 6px 10px;
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+.userPickerInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.userPickerInput::placeholder {
+  color: var(--text-muted);
+}
+
+.userPickerDropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px var(--shadow-md, rgba(0,0,0,0.12)), 0 2px 6px var(--shadow-sm, rgba(0,0,0,0.06));
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.userPickerOption {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.userPickerOption:hover {
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+}
+
+.userPickerOptionEmail {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.userPickerEmpty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.noApprovers {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+
 /* ── Branch combobox ──────────────────────────────────────────────────────── */
 
 .branchComboWrap {
@@ -309,7 +581,6 @@
   min-width: 0;
 }
 
-/* Trigger button (closed state) */
 .branchComboTrigger {
   display: flex;
   align-items: center;
@@ -389,7 +660,6 @@
   color: var(--accent-color);
 }
 
-/* Dropdown panel */
 .branchComboDropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -406,7 +676,6 @@
   min-width: 220px;
 }
 
-/* Search row inside dropdown */
 .branchComboSearchRow {
   display: flex;
   align-items: center;
@@ -456,7 +725,6 @@
   background: var(--bg-tertiary);
 }
 
-/* Result count hint */
 .branchComboMeta {
   padding: 4px 12px;
   font-size: 10px;
@@ -468,7 +736,6 @@
   border-bottom: 1px solid var(--border-color-light);
 }
 
-/* Scrollable list */
 .branchComboList {
   overflow-y: auto;
   max-height: 220px;
@@ -522,16 +789,60 @@
   color: var(--accent-color);
 }
 
-.formError {
-  font-size: 12px;
-  color: var(--error-color);
-  margin-bottom: 8px;
+/* ── Quick skill pills ───────────────────────────────────────────────────── */
+
+.pillList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
 }
+
+.pillItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.pillItemRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pillLabel {
+  min-width: 10rem;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.pillPath {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pillAddRow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
   .page { padding: 20px 16px; }
   .pageHeader { flex-direction: column; align-items: stretch; }
   .formGrid { grid-template-columns: 1fr; }
+  .formGridThreeCol { grid-template-columns: 1fr; }
   .tableWrapper { overflow-x: auto; }
   .table { min-width: 600px; }
 }

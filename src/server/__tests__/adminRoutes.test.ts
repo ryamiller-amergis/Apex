@@ -397,7 +397,10 @@ describe('DELETE /api/admin/users/:oid/roles/:roleId', () => {
 // ── GET /api/admin/project-settings ──────────────────────────────────────────
 
 describe('GET /api/admin/project-settings', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({});
+  });
 
   const configs = [
     { project: 'proj-alpha', skillRepo: 'org/skills', skillBranch: 'main', updatedBy: 'alice', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
@@ -412,6 +415,27 @@ describe('GET /api/admin/project-settings', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0]).toMatchObject({ project: 'proj-alpha', skillBranch: 'main' });
+    expect(mockProjectSettings.listApproversForAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes approver counts per project', async () => {
+    mockProjectSettings.listSkillConfigs.mockResolvedValue([configs[0]]);
+    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({
+      'proj-alpha': [
+        { id: 'a1', project: 'proj-alpha', userId: 'u1', documentType: 'design_doc', displayName: 'Alice', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+        { id: 'a2', project: 'proj-alpha', userId: 'u2', documentType: 'design_doc', displayName: 'Bob', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+        { id: 'a3', project: 'proj-alpha', userId: 'u3', documentType: 'prd', displayName: 'Carol', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+      ],
+    });
+
+    const res = await request(buildApp()).get('/api/admin/project-settings');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      project: 'proj-alpha',
+      designDocApproverCount: 2,
+      prdApproverCount: 1,
+    });
   });
 
   it('returns 500 when listSkillConfigs throws', async () => {
@@ -465,6 +489,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
+      undefined,   // defaultModel
     );
   });
 
@@ -521,6 +546,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
+      undefined,   // defaultModel
     );
   });
 
@@ -557,6 +583,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
+      undefined,   // defaultModel
     );
   });
 
@@ -591,6 +618,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designDocValidationSkillPath
       undefined,               // designDocValidationModel
       undefined,               // quickSkillPills
+      undefined,               // defaultModel
     );
   });
 
@@ -624,6 +652,36 @@ describe('PUT /api/admin/project-settings/:project', () => {
       '.cursor/skills/validate/SKILL.md',   // designDocValidationSkillPath
       'claude-3-opus',                      // designDocValidationModel
       undefined,                            // quickSkillPills
+      undefined,                            // defaultModel
+    );
+  });
+
+  it('forwards defaultModel to upsertSkillConfig', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({ skillRepo: 'org/repo', skillBranch: 'main', defaultModel: 'composer-2' });
+
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      'proj-alpha',
+      'org/repo',
+      'main',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'composer-2',
     );
   });
 
@@ -661,9 +719,128 @@ describe('DELETE /api/admin/project-settings/:project', () => {
   });
 });
 
+// ── GET/PUT /api/admin/project-settings/:project/approvers ────────────────────
+
+describe('GET /api/admin/project-settings/:project/approvers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const approvers = [
+    {
+      id: 'a1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      documentType: 'design_doc' as const,
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      assignedBy: 'admin-oid',
+      assignedAt: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  it('returns 200 with approvers for the project', async () => {
+    mockProjectSettings.listApprovers.mockResolvedValue(approvers);
+
+    const res = await request(buildApp()).get('/api/admin/project-settings/proj-alpha/approvers');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(approvers);
+    expect(mockProjectSettings.listApprovers).toHaveBeenCalledWith('proj-alpha');
+  });
+
+  it('returns 500 when listApprovers throws', async () => {
+    mockProjectSettings.listApprovers.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).get('/api/admin/project-settings/proj-alpha/approvers');
+
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('PUT /api/admin/project-settings/:project/approvers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const designDoc = [
+    {
+      id: 'a1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      documentType: 'design_doc' as const,
+      displayName: 'Alice',
+      email: null,
+      assignedBy: 'oid-1',
+      assignedAt: '2026-01-01T00:00:00Z',
+    },
+  ];
+  const prd = [
+    {
+      id: 'a2',
+      project: 'proj-alpha',
+      userId: 'user-2',
+      documentType: 'prd' as const,
+      displayName: 'Bob',
+      email: null,
+      assignedBy: 'oid-1',
+      assignedAt: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  it('returns 200 with designDoc and prd approver lists', async () => {
+    mockProjectSettings.setApprovers
+      .mockResolvedValueOnce(designDoc)
+      .mockResolvedValueOnce(prd);
+
+    const res = await request(buildApp('oid-1'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({ designDocApprovers: ['user-1'], prdApprovers: ['user-2'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ designDoc, prd });
+    expect(mockProjectSettings.setApprovers).toHaveBeenCalledWith(
+      'proj-alpha',
+      'design_doc',
+      ['user-1'],
+      'oid-1',
+    );
+    expect(mockProjectSettings.setApprovers).toHaveBeenCalledWith(
+      'proj-alpha',
+      'prd',
+      ['user-2'],
+      'oid-1',
+    );
+  });
+
+  it('returns 400 when designDocApprovers is not an array', async () => {
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({ designDocApprovers: 'user-1', prdApprovers: [] });
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.setApprovers).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when prdApprovers is not an array', async () => {
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({ designDocApprovers: [], prdApprovers: null });
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.setApprovers).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when setApprovers throws', async () => {
+    mockProjectSettings.setApprovers.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({ designDocApprovers: [], prdApprovers: [] });
+
+    expect(res.status).toBe(500);
+  });
+});
+
 // ── GET /api/admin/available-models ───────────────────────────────────────────
 //
-// NOTE: admin.ts holds the model list in module-level cache variables that
+// NOTE: modelsService holds the model list in module-level cache variables that
 // persist for the lifetime of the test process.  Tests are ordered so that
 // the cache is cold when the first test in this describe block runs, and
 // deliberately warm for the second (caching) test.
