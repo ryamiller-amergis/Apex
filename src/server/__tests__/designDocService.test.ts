@@ -61,6 +61,14 @@ jest.mock('../services/prdService', () => ({
   getPrd: jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('../services/documentApprovalService', () => ({
+  assignApprovers: jest.fn().mockResolvedValue([]),
+  recordApproverResponse: jest.fn().mockResolvedValue(undefined),
+  isAssignedApprover: jest.fn().mockResolvedValue(true),
+  isApprovalComplete: jest.fn().mockResolvedValue({ complete: true, mode: 'any_one' }),
+  propagateDesignDocApprovers: jest.fn().mockResolvedValue(undefined),
+}));
+
 import {
   createDesignDoc,
   listDesignDocs,
@@ -77,6 +85,20 @@ import {
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock('../services/projectSettingsService') as { getSkillConfig: jest.Mock };
+
+const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
+  isAdminUser: jest.Mock;
+};
+
+const {
+  assignApprovers: mockAssignApprovers,
+  isAssignedApprover: mockIsAssignedApprover,
+  isApprovalComplete: mockIsApprovalComplete,
+} = jest.requireMock('../services/documentApprovalService') as {
+  assignApprovers: jest.Mock;
+  isAssignedApprover: jest.Mock;
+  isApprovalComplete: jest.Mock;
+};
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -412,6 +434,17 @@ describe('submitForReview', () => {
       message: 'Only the author can submit for review',
     });
   });
+
+  it('calls assignApprovers when approverIds provided', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'draft' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('doc-1', 'user-1', { approverIds: ['a1', 'a2'] });
+
+    expect(mockAssignApprovers).toHaveBeenCalledWith('doc-1', 'design_doc', ['a1', 'a2'], 'user-1');
+  });
 });
 
 // ── withdrawFromReview ─────────────────────────────────────────────────────────
@@ -525,6 +558,46 @@ describe('reviewDesignDoc', () => {
     await expect(
       reviewDesignDoc('doc-missing', 'user-reviewer', { action: 'approve' }),
     ).rejects.toMatchObject({ message: 'Design doc not found' });
+  });
+
+  it('throws 403 when reviewer is not assigned and not admin', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
+    mockIsAssignedApprover.mockResolvedValue(false);
+    mockIsAdminUser.mockResolvedValue(false);
+
+    await expect(
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: 'You are not an assigned approver for this design doc',
+      status: 403,
+    });
+  });
+
+  it('allows admin to review even if not assigned', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
+    mockIsAssignedApprover.mockResolvedValue(false);
+    mockIsAdminUser.mockResolvedValue(true);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved' }),
+    );
+  });
+
+  it('gates approval transition on isApprovalComplete', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: false, mode: 'all_required' });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 });
 
@@ -840,6 +913,8 @@ describe('reviewDesignDoc (approve with validation gate)', () => {
       makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 92 }),
     );
     mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });

@@ -409,6 +409,7 @@
   max-height: 2000px;
   opacity: 1;
   padding: 0 16px 16px;
+  overflow: visible;
 }
 
 .accordionHelp {
@@ -845,4 +846,61 @@
   .formGridThreeCol { grid-template-columns: 1fr; }
   .tableWrapper { overflow-x: auto; }
   .table { min-width: 600px; }
+}
+
+/* ── Approval Mode ──────────────────────────────────────────────── */
+
+.approvalModeSection {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.approvalModeOptions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.approvalModeOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1.5px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  flex: 1;
+  transition: all 0.2s ease;
+}
+
+.approvalModeOption:hover {
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+}
+
+.approvalModeOptionSelected {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-primary));
+}
+
+.approvalModeRadio {
+  margin-top: 2px;
+  accent-color: var(--accent-color);
+}
+
+.approvalModeLabel {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.approvalModeDesc {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.4;
 }

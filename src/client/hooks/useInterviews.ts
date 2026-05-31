@@ -18,6 +18,11 @@ import type {
   ReviewPrdRequest,
   ReviewPrdResponse,
 } from '../../shared/types/interview';
+import type {
+  DocumentApproverAssignment,
+  SubmitDesignDocForReviewRequest,
+  SubmitForReviewRequest,
+} from '../../shared/types/approvals';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -116,6 +121,52 @@ export function useDesignDoc(id: string | null) {
 
 // ── Interview mutations ────────────────────────────────────────────────────────
 
+// ── Approver queries ──────────────────────────────────────────────────────────
+
+export function useAvailableApprovers(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
+  const qs = excludeSelf ? '?excludeSelf=true' : '';
+  return useQuery<{ userId: string; displayName: string }[]>({
+    queryKey: ['available-approvers', project, documentType, excludeSelf],
+    queryFn: () => apiFetch(`/api/interviews/available-approvers/${encodeURIComponent(project)}/${documentType}${qs}`),
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+}
+
+export function useReassignApprovers() {
+  const qc = useQueryClient();
+  return useMutation<DocumentApproverAssignment[], Error, { documentId: string; documentType: 'prd' | 'design_doc'; approverUserIds: string[] }>({
+    mutationFn: ({ documentId, documentType, approverUserIds }) => {
+      const endpoint = documentType === 'prd'
+        ? `/api/interviews/prds/${documentId}/assignments`
+        : `/api/interviews/design-docs/${documentId}/assignments`;
+      return apiFetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approverUserIds }),
+      });
+    },
+    onSuccess: (_data, { documentId, documentType }) => {
+      qc.invalidateQueries({ queryKey: ['document-assignments', documentId, documentType] });
+    },
+  });
+}
+
+export function useDocumentAssignments(documentId: string | null, documentType: 'prd' | 'design_doc') {
+  const endpoint = documentType === 'prd'
+    ? `/api/interviews/prds/${documentId}/assignments`
+    : `/api/interviews/design-docs/${documentId}/assignments`;
+  return useQuery<DocumentApproverAssignment[]>({
+    queryKey: ['document-assignments', documentId, documentType],
+    queryFn: () => apiFetch(endpoint),
+    enabled: !!documentId,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+  });
+}
+
+// ── Interview mutations (continued) ──────────────────────────────────────────
+
 export function useCreateInterview() {
   const qc = useQueryClient();
   return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string }>({
@@ -213,12 +264,17 @@ export function useUpdatePrdContent() {
 
 export function useSubmitPrd() {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (prdId) =>
-      apiFetch(`/api/interviews/prds/${prdId}/submit`, { method: 'POST' }),
-    onSuccess: (_data, prdId) => {
+  return useMutation<void, Error, { prdId: string } & SubmitForReviewRequest>({
+    mutationFn: ({ prdId, ...body }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { prdId }) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
+      qc.invalidateQueries({ queryKey: ['document-assignments', prdId] });
     },
   });
 }
@@ -308,12 +364,17 @@ export function useUpdateDesignDocContent() {
 
 export function useSubmitDesignDoc() {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (designDocId) =>
-      apiFetch(`/api/interviews/design-docs/${designDocId}/submit`, { method: 'POST' }),
-    onSuccess: (_data, designDocId) => {
+  return useMutation<void, Error, { designDocId: string } & SubmitDesignDocForReviewRequest>({
+    mutationFn: ({ designDocId, ...body }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { designDocId }) => {
       qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
       qc.invalidateQueries({ queryKey: ['design-docs'] });
+      qc.invalidateQueries({ queryKey: ['document-assignments', designDocId] });
     },
   });
 }

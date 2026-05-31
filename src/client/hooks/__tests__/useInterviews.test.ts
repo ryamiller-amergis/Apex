@@ -424,7 +424,11 @@ describe('useSubmitPrd', () => {
     const { result } = renderHook(() => useSubmitPrd(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('prd-1');
+      result.current.mutate({
+        prdId: 'prd-1',
+        prdApproverIds: ['approver-1'],
+        designDocApproverIds: ['approver-2'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -703,7 +707,10 @@ describe('useSubmitDesignDoc', () => {
     const { result } = renderHook(() => useSubmitDesignDoc(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('dd-1');
+      result.current.mutate({
+        designDocId: 'dd-1',
+        approverIds: ['approver-1'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

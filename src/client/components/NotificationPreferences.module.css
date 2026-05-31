@@ -1,0 +1,125 @@
+.prefs-container {
+  padding: 8px 12px 12px;
+}
+
+.prefs-loading {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.prefs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.prefs-row:last-child {
+  border-bottom: none;
+}
+
+.prefs-row-coming-soon {
+  opacity: 0.5;
+}
+
+.prefs-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.prefs-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.prefs-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.prefs-description {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.prefs-toggles {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.prefs-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.prefs-toggle-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.prefs-toggle-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.prefs-checkbox {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.prefs-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.prefs-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.prefs-checkbox:checked + .prefs-switch {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.prefs-checkbox:checked + .prefs-switch::after {
+  transform: translateX(14px);
+  background: #fff;
+}

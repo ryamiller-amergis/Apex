@@ -3,6 +3,7 @@ import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
 import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ApprovalMode } from '../../shared/types/approvals';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,7 @@ export const prds = pgTable('prds', {
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -255,6 +257,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocValidationModel: text('design_doc_validation_model'),
   defaultModel: text('default_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
+  approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
@@ -277,6 +280,69 @@ export const projectApproversRelations = relations(projectApprovers, ({ one }) =
   }),
   user: one(appUsers, {
     fields: [projectApprovers.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Document Approver Assignments ─────────────────────────────────────────────
+
+export const documentApproverAssignments = pgTable('document_approver_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  documentId: uuid('document_id').notNull(),
+  documentType: text('document_type').notNull(),
+  approverUserId: text('approver_user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('pending'),
+  comment: text('comment'),
+  respondedAt: timestamp('responded_at', { withTimezone: true, mode: 'string' }),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  assignedBy: text('assigned_by').notNull(),
+}, (t) => ({
+  uniq: unique().on(t.documentId, t.documentType, t.approverUserId),
+}));
+
+export const documentApproverAssignmentsRelations = relations(documentApproverAssignments, ({ one }) => ({
+  approver: one(appUsers, {
+    fields: [documentApproverAssignments.approverUserId],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Notification Tables ───────────────────────────────────────────────────────
+
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  type: text('type').notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  link: text('link'),
+  read: boolean('read').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const notificationPreferences = pgTable('notification_preferences', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  notificationType: text('notification_type').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  toastEnabled: boolean('toast_enabled').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.userId, t.notificationType),
+}));
+
+// ── Notification Relations ────────────────────────────────────────────────────
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [notifications.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const notificationPreferencesRelations = relations(notificationPreferences, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [notificationPreferences.userId],
     references: [appUsers.oid],
   }),
 }));

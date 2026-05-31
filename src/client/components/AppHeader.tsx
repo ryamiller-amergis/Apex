@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrandLogo } from './BrandLogo';
+import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import type { ThemeMode } from '../hooks/useAppShell';
 
@@ -106,6 +107,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
     </div>
     <div className="header-controls">
+      {can('notifications:view') && <NotificationBell />}
       <UserMenu
         onOpenChangelog={onOpenChangelog}
         onThemeChange={onThemeChange}

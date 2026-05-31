@@ -1,3 +1,5 @@
+import type { ApprovalMode } from './approvals';
+
 export interface QuickSkillPill {
   label: string;
   skillPath: string;
@@ -25,6 +27,7 @@ export interface ProjectSkillConfig {
   designDocValidationModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
+  approvalMode?: ApprovalMode;
   designDocApproverCount?: number;
   prdApproverCount?: number;
   createdAt?: string;
@@ -48,6 +51,7 @@ export interface UpsertProjectSkillConfigRequest {
   designDocValidationModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
+  approvalMode?: ApprovalMode;
 }
 
 export interface ProjectApprover {

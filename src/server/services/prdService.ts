@@ -6,6 +6,7 @@ import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
+import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete } from './documentApprovalService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
@@ -153,7 +154,11 @@ export async function updatePrdBacklog(
     .where(eq(prds.id, id));
 }
 
-export async function submitForReview(id: string, requestingUserId: string): Promise<void> {
+export async function submitForReview(
+  id: string,
+  requestingUserId: string,
+  opts?: { prdApproverIds?: string[]; designDocApproverIds?: string[] },
+): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
@@ -164,16 +169,23 @@ export async function submitForReview(id: string, requestingUserId: string): Pro
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
 
-  await db
-    .update(prds)
-    .set({
-      status: 'pending_review',
-      reviewerId: null,
-      reviewComment: null,
-      reviewedAt: null,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(prds.id, id));
+  const updates: Partial<typeof prds.$inferInsert> = {
+    status: 'pending_review',
+    reviewerId: null,
+    reviewComment: null,
+    reviewedAt: null,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (opts?.designDocApproverIds && opts.designDocApproverIds.length > 0) {
+    updates.designDocApproverIds = opts.designDocApproverIds;
+  }
+
+  await db.update(prds).set(updates).where(eq(prds.id, id));
+
+  if (opts?.prdApproverIds && opts.prdApproverIds.length > 0) {
+    await assignApprovers(id, 'prd', opts.prdApproverIds, requestingUserId);
+  }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
@@ -232,6 +244,24 @@ export async function reviewPrd(
     const err = new Error('A comment is required when requesting revision');
     (err as any).status = 400;
     throw err;
+  }
+
+  const admin = await isAdminUser(reviewerId);
+  const assigned = await isAssignedApprover(id, 'prd', reviewerId);
+  if (!assigned && !admin) {
+    throw forbidden('You are not an assigned approver for this PRD');
+  }
+
+  const responseStatus = opts.action === 'approve' ? 'approved' as const : 'revision_requested' as const;
+  if (assigned) {
+    await recordApproverResponse(id, 'prd', reviewerId, responseStatus, opts.comment ?? undefined);
+  }
+
+  if (opts.action === 'approve') {
+    const { complete } = await isApprovalComplete(id, 'prd', row.project);
+    if (!complete) {
+      return;
+    }
   }
 
   const statusMap: Record<ReviewPrdRequest['action'], PrdStatus> = {

@@ -2,6 +2,11 @@ import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, appUsers } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ApprovalMode } from '../../shared/types/approvals';
+
+function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
+  return { ...row, approvalMode: row.approvalMode as ApprovalMode | undefined } as ProjectSkillConfig;
+}
 
 export async function getSkillConfig(project: string): Promise<ProjectSkillConfig | null> {
   const rows = await db
@@ -9,11 +14,12 @@ export async function getSkillConfig(project: string): Promise<ProjectSkillConfi
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.project, project))
     .limit(1);
-  return rows[0] ?? null;
+  return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {
-  return db.select().from(projectSkillSettings).orderBy(projectSkillSettings.project);
+  const rows = await db.select().from(projectSkillSettings).orderBy(projectSkillSettings.project);
+  return rows.map(toSkillConfig);
 }
 
 export async function upsertSkillConfig(
@@ -35,8 +41,10 @@ export async function upsertSkillConfig(
   designDocValidationModel?: string | null,
   quickSkillPills?: QuickSkillPill[] | null | undefined,
   defaultModel?: string | null,
+  approvalMode?: ApprovalMode,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
+  const approvalModeValue = approvalMode ?? 'any_one';
   const rows = await db
     .insert(projectSkillSettings)
     .values({
@@ -58,6 +66,7 @@ export async function upsertSkillConfig(
       designDocValidationModel: designDocValidationModel ?? null,
       quickSkillPills: quickSkillPills ?? null,
       defaultModel: defaultModel ?? null,
+      approvalMode: approvalModeValue,
       updatedAt: now,
     })
     .onConflictDoUpdate({
@@ -80,11 +89,12 @@ export async function upsertSkillConfig(
         designDocValidationModel: designDocValidationModel ?? null,
         quickSkillPills: quickSkillPills ?? null,
         defaultModel: defaultModel ?? null,
+        approvalMode: approvalModeValue,
         updatedAt: now,
       },
     })
     .returning();
-  return rows[0];
+  return toSkillConfig(rows[0]);
 }
 
 export async function deleteSkillConfig(project: string): Promise<void> {

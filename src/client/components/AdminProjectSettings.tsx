@@ -10,6 +10,7 @@ import {
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import type { ProjectSkillConfig, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ApprovalMode } from '../../shared/types/approvals';
 import type { UserWithRoles } from '../../shared/types/rbac';
 import styles from './AdminProjectSettings.module.css';
 
@@ -375,6 +376,7 @@ interface EditState {
   designDocValidationModel: string;
   defaultModel: string;
   quickSkillPills: QuickSkillPill[];
+  approvalMode: ApprovalMode;
   isNew: boolean;
 }
 
@@ -385,7 +387,7 @@ const emptyEdit = (): EditState => ({
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '',
   defaultModel: '',
-  quickSkillPills: [], isNew: true,
+  quickSkillPills: [], approvalMode: 'any_one', isNew: true,
 });
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -445,17 +447,16 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   }, [edit?.skillRepo, repos]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync approver local state when remote data arrives
+  // Sync approver local state when remote data arrives or edit mode changes
   useEffect(() => {
-    if (approvers.length > 0) {
-      setDesignDocApproverIds(
-        approvers.filter((a) => a.documentType === 'design_doc').map((a) => a.userId),
-      );
-      setPrdApproverIds(
-        approvers.filter((a) => a.documentType === 'prd').map((a) => a.userId),
-      );
-    }
-  }, [approvers]);
+    if (!edit) return;
+    setDesignDocApproverIds(
+      approvers.filter((a) => a.documentType === 'design_doc').map((a) => a.userId),
+    );
+    setPrdApproverIds(
+      approvers.filter((a) => a.documentType === 'prd').map((a) => a.userId),
+    );
+  }, [approvers, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ───────────────────────────────────────────────────────────
 
@@ -474,8 +475,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const handleAddNew = () => {
     setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
-    setDesignDocApproverIds([]);
-    setPrdApproverIds([]);
     setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
   };
 
@@ -498,11 +497,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationModel: config.designDocValidationModel ?? '',
       defaultModel: config.defaultModel ?? '',
       quickSkillPills: config.quickSkillPills ?? [],
+      approvalMode: config.approvalMode ?? 'any_one',
       isNew: false,
     });
     setFormError(null);
-    setDesignDocApproverIds([]);
-    setPrdApproverIds([]);
     setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
   };
 
@@ -544,6 +542,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocValidationModel: edit.designDocValidationModel || null,
           defaultModel: edit.defaultModel || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
+          approvalMode: edit.approvalMode,
         },
       });
 
@@ -800,6 +799,43 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               <p className={styles.accordionHelp}>
                 Designate who can approve documents for this project. Users must also have the appropriate review permission.
               </p>
+
+              <div className={styles.approvalModeSection}>
+                <p className={styles.approverSubTitle}>Approval Mode</p>
+                <div className={styles.approvalModeOptions}>
+                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
+                    <input
+                      type="radio"
+                      name="approvalMode"
+                      value="any_one"
+                      checked={edit.approvalMode === 'any_one'}
+                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
+                      disabled={upsert.isPending}
+                      className={styles.approvalModeRadio}
+                    />
+                    <div>
+                      <span className={styles.approvalModeLabel}>Any One</span>
+                      <span className={styles.approvalModeDesc}>Document is approved when any assigned approver approves</span>
+                    </div>
+                  </label>
+                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
+                    <input
+                      type="radio"
+                      name="approvalMode"
+                      value="all_required"
+                      checked={edit.approvalMode === 'all_required'}
+                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
+                      disabled={upsert.isPending}
+                      className={styles.approvalModeRadio}
+                    />
+                    <div>
+                      <span className={styles.approvalModeLabel}>All Required</span>
+                      <span className={styles.approvalModeDesc}>All assigned approvers must approve the document</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               {renderApproverSection('Design Doc Approvers', designDocApproverIds, setDesignDocApproverIds)}
               {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
             </AccordionSection>

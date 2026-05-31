@@ -1,0 +1,76 @@
+.bell-wrapper {
+  position: relative;
+}
+
+.bell-button {
+  position: relative;
+  height: 38px;
+  width: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-color) 5%, var(--bg-primary));
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.bell-button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-primary));
+}
+
+.bell-button:active {
+  transform: translateY(0);
+}
+
+.bell-button-open {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
+}
+
+.bell-icon {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--error-color);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  border: 2px solid var(--bg-secondary);
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--error-color) 65%, transparent);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--error-color) 0%, transparent);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--error-color) 0%, transparent);
+  }
+}

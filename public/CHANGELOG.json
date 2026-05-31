@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.21.0",
+    "date": "2026-05-31",
+    "title": "Document Approver Assignments & Notifications",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Approvers are now assigned per-document at submit time — a modal lets authors pick specific PRD and design doc approvers from the project pool before submitting for review"
+      },
+      {
+        "type": "feature",
+        "description": "In-app notification center — a bell icon in the header shows unread notifications; approvers receive a notification when assigned to review a document"
+      },
+      {
+        "type": "feature",
+        "description": "Real-time notification delivery via Server-Sent Events — new notifications appear instantly without page refresh, with optional toast popups"
+      },
+      {
+        "type": "feature",
+        "description": "Notification preferences — users can toggle per-type notifications and toast alerts on or off from the Notifications page"
+      },
+      {
+        "type": "feature",
+        "description": "Admins can reassign pending approvers on any document after submission via a new assignments panel"
+      },
+      {
+        "type": "improvement",
+        "description": "Approval mode (any one / all required) is now configurable per project in Admin → Project Settings"
+      },
+      {
+        "type": "improvement",
+        "description": "Design doc approver IDs set at PRD submission are automatically propagated to new per-feature design docs as they are generated"
+      }
+    ]
+  },
+  {
     "version": "1.20.0",
     "date": "2026-05-30",
     "title": "Project Settings & Approvers",

@@ -490,6 +490,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
       undefined,   // defaultModel
+      undefined,   // approvalMode
     );
   });
 
@@ -547,6 +548,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
       undefined,   // defaultModel
+      undefined,   // approvalMode
     );
   });
 
@@ -584,6 +586,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
       undefined,   // defaultModel
+      undefined,   // approvalMode
     );
   });
 
@@ -619,6 +622,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designDocValidationModel
       undefined,               // quickSkillPills
       undefined,               // defaultModel
+      undefined,               // approvalMode
     );
   });
 
@@ -653,6 +657,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'claude-3-opus',                      // designDocValidationModel
       undefined,                            // quickSkillPills
       undefined,                            // defaultModel
+      undefined,                            // approvalMode
     );
   });
 
@@ -682,6 +687,41 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,
       undefined,
       'composer-2',
+      undefined,   // approvalMode
+    );
+  });
+
+  it('passes approvalMode through to upsertSkillConfig', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalMode: 'all_required',
+      });
+
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      'proj-alpha',
+      'org/repo',
+      'main',
+      undefined,         // updatedBy
+      undefined,         // interviewSkillPath
+      undefined,         // prdSkillPath
+      undefined,         // designDocSkillPath
+      undefined,         // interviewModel
+      undefined,         // prdModel
+      undefined,         // designDocModel
+      undefined,         // designDocQaSkillPath
+      undefined,         // designDocQaModel
+      undefined,         // designDocAssistantSkillPath
+      undefined,         // designDocAssistantModel
+      undefined,         // designDocValidationSkillPath
+      undefined,         // designDocValidationModel
+      undefined,         // quickSkillPills
+      undefined,         // defaultModel
+      'all_required',    // approvalMode
     );
   });
 

@@ -325,6 +325,59 @@ describe('upsertSkillConfig', () => {
       }),
     );
   });
+
+  it('persists approvalMode when provided', async () => {
+    const configWithMode = { ...configRow, approvalMode: 'all_required' };
+    const returningMock = jest.fn().mockResolvedValue([configWithMode]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'all_required',
+    );
+
+    expect(result).toMatchObject({ approvalMode: 'all_required' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalMode: 'all_required' }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ approvalMode: 'all_required' }),
+      }),
+    );
+  });
+
+  it('defaults approvalMode to any_one when not provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, approvalMode: 'any_one' }]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalMode: 'any_one' }),
+    );
+  });
 });
 
 // ── deleteSkillConfig ──────────────────────────────────────────────────────────

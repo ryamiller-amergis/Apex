@@ -52,6 +52,7 @@ import {
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync } from '../services/chatAgentService';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
+import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
@@ -147,7 +148,14 @@ router.put('/prds/:prdId/content', requirePermission('interviews:manage'), async
 router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    await submitForReview(req.params.prdId, userId);
+    const { prdApproverIds, designDocApproverIds } = req.body as {
+      prdApproverIds?: string[];
+      designDocApproverIds?: string[];
+    };
+    await submitForReview(req.params.prdId, userId, {
+      prdApproverIds: prdApproverIds ?? [],
+      designDocApproverIds: designDocApproverIds ?? [],
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -435,7 +443,10 @@ router.put('/design-docs/:id/content', requirePermission('interviews:manage'), a
 router.post('/design-docs/:id/submit', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    await submitDesignDocForReview(req.params.id, userId);
+    const { approverIds } = req.body as { approverIds?: string[] };
+    await submitDesignDocForReview(req.params.id, userId, {
+      approverIds: approverIds ?? undefined,
+    });
     // Auto-start validation in the background if a validation skill is configured.
     // This takes the doc directly from pending_review → validating without requiring
     // the user to manually click "Run Validation".
@@ -878,6 +889,72 @@ router.delete('/design-docs/:id', requirePermission('interviews:manage'), async 
     const userId = getUserId(req);
     await deleteDesignDoc(req.params.id, userId);
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Approver Assignments ──────────────────────────────────────────────────────
+
+router.get('/prds/:prdId/assignments', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const assignments = await getAssignments(req.params.prdId, 'prd');
+    res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/design-docs/:id/assignments', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const assignments = await getAssignments(req.params.id, 'design_doc');
+    res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/prds/:prdId/assignments', requirePermission('admin:roles'), async (req, res, next) => {
+  try {
+    const { approverUserIds } = req.body as { approverUserIds?: string[] };
+    if (!approverUserIds || !Array.isArray(approverUserIds)) {
+      res.status(400).json({ error: 'approverUserIds is required and must be an array' });
+      return;
+    }
+    const userId = getUserId(req);
+    const assignments = await reassignApprovers(req.params.prdId, 'prd', approverUserIds, userId);
+    res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/design-docs/:id/assignments', requirePermission('admin:roles'), async (req, res, next) => {
+  try {
+    const { approverUserIds } = req.body as { approverUserIds?: string[] };
+    if (!approverUserIds || !Array.isArray(approverUserIds)) {
+      res.status(400).json({ error: 'approverUserIds is required and must be an array' });
+      return;
+    }
+    const userId = getUserId(req);
+    const assignments = await reassignApprovers(req.params.id, 'design_doc', approverUserIds, userId);
+    res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/available-approvers/:project/:documentType', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const { project, documentType } = req.params;
+    if (documentType !== 'prd' && documentType !== 'design_doc') {
+      res.status(400).json({ error: 'documentType must be "prd" or "design_doc"' });
+      return;
+    }
+    const userId = getUserId(req);
+    const excludeSelf = req.query.excludeSelf === 'true';
+    const approvers = await getAvailableApprovers(project, documentType, excludeSelf ? userId : undefined);
+    res.json(approvers);
   } catch (err) {
     next(err);
   }

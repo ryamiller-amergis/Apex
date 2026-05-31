@@ -320,6 +320,13 @@
   color: white;
 }
 
+.user-menu-inline-panel {
+  padding: 0 4px;
+  border-top: 1px solid var(--border-color-light);
+  border-bottom: 1px solid var(--border-color-light);
+  margin: 4px 0;
+}
+
 .user-menu-divider {
   height: 1px;
   background: var(--border-color-light);
