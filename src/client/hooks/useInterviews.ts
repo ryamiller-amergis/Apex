@@ -36,10 +36,11 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ── Interview queries ──────────────────────────────────────────────────────────
 
-export function useInterviewList(filters?: { status?: InterviewStatus; project?: string }) {
+export function useInterviewList(filters?: { status?: InterviewStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<InterviewSummary[]>({
     queryKey: ['interviews', filters],
@@ -57,10 +58,11 @@ export function useInterview(id: string | null) {
   });
 }
 
-export function usePrdList(filters?: { status?: PrdStatus; project?: string }) {
+export function usePrdList(filters?: { status?: PrdStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<PrdSummary[]>({
     queryKey: ['prds', filters],
@@ -82,10 +84,11 @@ export function usePrd(id: string | null) {
 
 // ── Design Doc queries ────────────────────────────────────────────────────────
 
-export function useDesignDocList(filters?: { status?: DesignDocStatus; project?: string }) {
+export function useDesignDocList(filters?: { status?: DesignDocStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<DesignDocSummary[]>({
     queryKey: ['design-docs', filters],

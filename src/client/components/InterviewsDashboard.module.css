@@ -49,6 +49,36 @@
   border-bottom-color: var(--accent-color);
 }
 
+.ownerFilters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.ownerPill {
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ownerPill:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.ownerPill.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+}
+
 .filters {
   display: flex;
   align-items: center;

@@ -321,6 +321,8 @@ const DesignDocGroupCard: React.FC<DesignDocGroupCardProps> = ({ prdTitle, docs,
   );
 };
 
+type OwnerFilter = 'all' | 'mine';
+
 export const InterviewsDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -333,6 +335,7 @@ export const InterviewsDashboard: React.FC = () => {
     'interviews';
 
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
   const [interviewFilter, setInterviewFilter] = useState<InterviewStatus | undefined>(undefined);
   const [prdFilter, setPrdFilter] = useState<PrdStatus | undefined>(undefined);
   const [designDocFilter, setDesignDocFilter] = useState<DesignDocStatus | undefined>(undefined);
@@ -351,17 +354,22 @@ export const InterviewsDashboard: React.FC = () => {
   const deletePrd = useDeletePrd();
   const deleteDesignDoc = useDeleteDesignDoc();
 
+  const authorParam = ownerFilter === 'mine' ? 'me' as const : undefined;
+
   const { data: interviews = [], isLoading: ivLoading } = useInterviewList({
     ...(interviewFilter ? { status: interviewFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
+    ...(authorParam ? { author: authorParam } : {}),
   });
   const { data: prds = [], isLoading: prdLoading } = usePrdList({
     ...(prdFilter ? { status: prdFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
+    ...(authorParam ? { author: authorParam } : {}),
   });
   const { data: designDocs = [], isLoading: docLoading } = useDesignDocList({
     ...(designDocFilter ? { status: designDocFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
+    ...(authorParam ? { author: authorParam } : {}),
   });
 
   const canManage = can('interviews:manage');
@@ -429,6 +437,23 @@ export const InterviewsDashboard: React.FC = () => {
           type="button"
         >
           Design Docs ({designDocs.length})
+        </button>
+      </div>
+
+      <div className={styles.ownerFilters}>
+        <button
+          className={`${styles.ownerPill} ${ownerFilter === 'all' ? styles.active : ''}`}
+          onClick={() => setOwnerFilter('all')}
+          type="button"
+        >
+          All
+        </button>
+        <button
+          className={`${styles.ownerPill} ${ownerFilter === 'mine' ? styles.active : ''}`}
+          onClick={() => setOwnerFilter('mine')}
+          type="button"
+        >
+          Mine
         </button>
       </div>
 

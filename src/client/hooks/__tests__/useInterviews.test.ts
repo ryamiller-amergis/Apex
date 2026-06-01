@@ -133,6 +133,20 @@ describe('useInterviewList', () => {
     );
   });
 
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useInterviewList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
+      expect.any(Object),
+    );
+  });
+
   it('surfaces fetch errors', async () => {
     mockFetchError(500, { error: 'Server error' });
     const { wrapper } = createWrapper();
@@ -198,6 +212,20 @@ describe('usePrdList', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('status=approved'),
+      expect.any(Object),
+    );
+  });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => usePrdList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
       expect.any(Object),
     );
   });
@@ -613,6 +641,20 @@ describe('useDesignDocList', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('project=proj-alpha'),
+      expect.any(Object),
+    );
+  });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useDesignDocList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
       expect.any(Object),
     );
   });

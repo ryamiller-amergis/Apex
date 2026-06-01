@@ -37,10 +37,12 @@ export async function createInterview(opts: {
 }
 
 export async function listInterviews(
-  userId: string,
-  filters?: { status?: InterviewStatus; project?: string },
+  filters?: { status?: InterviewStatus; project?: string; authorId?: string },
 ): Promise<InterviewSummary[]> {
-  const conditions = [eq(interviews.authorId, userId)];
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (filters?.authorId) {
+    conditions.push(eq(interviews.authorId, filters.authorId));
+  }
   if (filters?.status) {
     conditions.push(eq(interviews.status, filters.status));
   }
@@ -61,7 +63,7 @@ export async function listInterviews(
       updatedAt: interviews.updatedAt,
     })
     .from(interviews)
-    .where(and(...conditions))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(interviews.updatedAt));
 
   const prdCounts = await db

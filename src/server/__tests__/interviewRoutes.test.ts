@@ -178,7 +178,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { status: 'complete' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: 'complete',
+      project: undefined,
+      authorId: undefined,
+    });
   });
 
   it('passes project filter to the service', async () => {
@@ -186,7 +190,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { project: 'proj-alpha' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
   });
 
   it('passes both project and status filters to the service', async () => {
@@ -194,9 +202,22 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha&status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', {
-      project: 'proj-alpha',
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
       status: 'complete',
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
+  });
+
+  it('passes author=me as authorId to the service', async () => {
+    mockInterviewService.listInterviews.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews?author=me');
+
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: undefined,
+      authorId: 'user-test',
     });
   });
 
@@ -401,6 +422,26 @@ describe('GET /api/interviews/prds', () => {
 
     expect(mockPrdService.listPrds).toHaveBeenCalledWith(
       expect.objectContaining({ project: 'proj-alpha', status: 'draft' }),
+    );
+  });
+
+  it('passes author=me as userId filter to listPrds', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds?author=me');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: undefined }),
     );
   });
 
@@ -888,6 +929,26 @@ describe('GET /api/interviews/design-docs', () => {
 
     expect(mockListDesignDocs).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'approved' }),
+    );
+  });
+
+  it('passes author=me as userId filter to listDesignDocs', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs?author=me');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.not.objectContaining({ userId: 'user-test' }),
     );
   });
 });

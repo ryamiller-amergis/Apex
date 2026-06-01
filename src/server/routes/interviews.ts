@@ -64,7 +64,8 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
     const userId = getUserId(req);
     const status = req.query.status as InterviewStatus | undefined;
     const project = req.query.project as string | undefined;
-    const list = await listInterviews(userId, { ...(status ? { status } : {}), ...(project ? { project } : {}) });
+    const authorFilter = req.query.author === 'me' ? userId : undefined;
+    const list = await listInterviews({ status, project, authorId: authorFilter });
     res.json(list);
   } catch (err) {
     next(err);
@@ -100,7 +101,8 @@ router.get('/prds', requirePermission('interviews:view'), async (req, res, next)
     const userId = getUserId(req);
     const status = req.query.status as PrdStatus | undefined;
     const project = req.query.project as string | undefined;
-    const list = await listPrds({ userId, status, ...(project ? { project } : {}) });
+    const authorFilter = req.query.author === 'me' ? userId : undefined;
+    const list = await listPrds({ userId: authorFilter, status, ...(project ? { project } : {}) });
     res.json(list);
   } catch (err) {
     next(err);
@@ -385,9 +387,10 @@ router.get('/design-docs', requirePermission('interviews:view'), async (req, res
     const status = req.query.status as DesignDocStatus | undefined;
     const project = req.query.project as string | undefined;
     const prdId = req.query.prdId as string | undefined;
-    // When filtering by prdId, skip the userId filter so any viewer can see the linked design doc
+    const authorFilter = req.query.author === 'me' ? userId : undefined;
     const list = await listDesignDocs({
-      ...(prdId ? { prdId } : { userId }),
+      ...(prdId ? { prdId } : {}),
+      ...(authorFilter ? { userId: authorFilter } : {}),
       status,
       ...(project ? { project } : {}),
     });
