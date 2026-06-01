@@ -72,6 +72,7 @@ Read and evaluate these project assets before writing any code or design doc:
 - `fullstack-node-bff` — load for any route, hook, or shared-type work
 - `postgresql-migrations` — load when a DB migration is needed
 - `rbac-management` — load when RBAC adds/removes/modifies permissions
+- `in-app-notifications` — load when the feature needs to send notifications to users
 
 > **Skill resolution note:** If the feature involves resolving which skill repo/branch to use for an AI agent session, use `useProjectSkillConfig` (from `src/client/hooks/useProjectSkillConfig.ts`) as the canonical source for repo + branch. Do not hardcode branch names or let users pick repos manually. The admin-managed `project_skill_settings` table (managed via `/admin/project-settings`) is the source of truth.
 

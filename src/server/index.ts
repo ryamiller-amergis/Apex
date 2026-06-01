@@ -1,3 +1,4 @@
+import './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -16,6 +17,7 @@ import wikiRoutes from './routes/wiki';
 import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
+import notificationRoutes from './routes/notifications';
 import designPrototypeRoutes from './routes/designPrototypes';
 import { mountAdoMcp } from './mcp/ado/express';
 import { ensureAuthenticated } from './middleware/auth';
@@ -71,6 +73,13 @@ app.use(passport.session());
 // Auth routes (no authentication required)
 app.use('/auth', authRoutes);
 
+// Telemetry config — unauthenticated so the frontend can init App Insights before login
+app.get('/api/telemetry-config', (_req, res) => {
+  res.json({
+    connectionString: process.env.APPLICATIONINSIGHTS_CONNECTION_STRING || null,
+  });
+});
+
 // Internal-only API routes: callable by the Cursor agent (running on the user's
 // machine, no browser session cookie) via two paths:
 //   1. Localhost dev shortcut — same-machine requests skip auth.
@@ -108,6 +117,7 @@ app.use('/api/skills', ensureAuthenticated, skillsRoutes);
 app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
+app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
 app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
 app.use('/api/workitems', ensureAuthenticated, workitemsFromPrdRoutes);
 app.use('/api/admin', adminRouter);
@@ -135,6 +145,19 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(__dirname, '../client/index.html'));
   });
 }
+
+// Global error-handling middleware — sends unhandled errors to App Insights
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const { telemetryClient } = require('./services/telemetry');
+  if (telemetryClient) {
+    telemetryClient.trackException({
+      exception: err instanceof Error ? err : new Error(String(err)),
+      properties: { path: req.path, method: req.method },
+    });
+  }
+  const status = err.status ?? 500;
+  res.status(status).json({ error: err.message ?? 'Internal server error' });
+});
 
 async function bootstrapAdmin(): Promise<void> {
   const bootstrapOid = process.env.BOOTSTRAP_ADMIN_OID;

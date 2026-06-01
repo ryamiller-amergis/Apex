@@ -39,3 +39,18 @@ export function useProjectTeams(project: string | null) {
     staleTime: 5 * 60 * 1000,
   });
 }
+
+async function fetchProjectAreaPaths(project: string): Promise<string[]> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(project)}/area-paths`, { credentials: 'include' });
+  if (!res.ok) throw new Error('Failed to fetch area paths');
+  return res.json();
+}
+
+export function useProjectAreaPaths(project: string | null) {
+  return useQuery<string[]>({
+    queryKey: ['ado-project-area-paths', project],
+    queryFn: () => fetchProjectAreaPaths(project!),
+    enabled: !!project,
+    staleTime: 5 * 60 * 1000,
+  });
+}

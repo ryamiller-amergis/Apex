@@ -314,3 +314,76 @@
   color: #16a34a;
 }
 
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .epic-progress-header {
+    padding: 10px 12px;
+    min-height: 44px;
+  }
+
+  .epic-progress-content {
+    padding: 12px;
+  }
+
+  .epic-summary {
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+
+  .epic-summary-label {
+    font-size: clamp(0.8em, 2.5vw, 1em);
+  }
+
+  .epic-summary-value {
+    font-size: clamp(1em, 3vw, 1.3em);
+  }
+
+  .epic-summary-bar {
+    height: 24px;
+    min-width: 0;
+  }
+
+  .epic-summary-legend {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .epic-stats {
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .epic-stat-label {
+    font-size: clamp(0.82em, 2.5vw, 0.95em);
+  }
+
+  .epic-stat-bar {
+    height: 20px;
+    min-width: 0;
+  }
+
+  .epic-children-list {
+    margin-top: 16px;
+    padding-top: 12px;
+  }
+
+  .epic-child-item {
+    padding: 10px;
+    min-height: 44px;
+  }
+
+  .epic-child-item:hover {
+    transform: none;
+  }
+
+  .epic-child-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .epic-child-title {
+    font-size: clamp(0.82em, 2.5vw, 0.95em);
+  }
+}
+

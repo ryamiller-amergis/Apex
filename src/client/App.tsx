@@ -13,6 +13,8 @@ import { PlanningTabs } from './components/PlanningTabs';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
 import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { NotificationProvider } from './contexts/NotificationContext';
+import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { DEFAULT_MODEL_ID } from './config/models';
@@ -37,6 +39,7 @@ const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototyp
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
+const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
 
@@ -55,7 +58,7 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
+  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -69,7 +72,9 @@ function App() {
               ? 'cloudcost'
               : location.pathname.startsWith('/backlog')
                 ? 'backlog'
-                : location.pathname.startsWith('/admin')
+                : location.pathname === '/notifications'
+                  ? 'notifications'
+                  : location.pathname.startsWith('/admin')
                   ? 'admin'
                   : 'calendar';
 
@@ -128,7 +133,8 @@ function App() {
     if (currentView === 'calendar'  && !can('calendar:view')) navigate('/home');
     if (currentView === 'planning'  && !can('planning:view')) navigate('/home');
     if (currentView === 'cloudcost' && !can('cost:view'))     navigate('/home');
-    if (currentView === 'backlog'   && !can('interviews:view'))  navigate('/home');
+    if (currentView === 'backlog'        && !can('interviews:view'))     navigate('/home');
+    if (currentView === 'notifications'  && !can('notifications:view'))  navigate('/home');
   }, [currentView, permissionsLoaded, can, navigate]);
 
   // Auto-show changelog once per session when the user lands on /home with an
@@ -188,6 +194,7 @@ function App() {
   return (
     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
       <DndProvider backend={HTML5Backend}>
+      <NotificationWrapper can={can}>
         <div className="app">
           {isLoading && currentView === 'calendar' && (
             <div className="loading-overlay">
@@ -304,6 +311,12 @@ function App() {
                     <InterviewsDashboard />
                   )}
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'notifications' && can('notifications:view') ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <NotificationsPage />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'admin' && can('admin:roles') ? (
@@ -426,9 +439,25 @@ function App() {
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}
         />
+      </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>
   );
 }
+
+interface NotificationWrapperProps {
+  can: (key: string) => boolean;
+  children: React.ReactNode;
+}
+
+const NotificationWrapper: React.FC<NotificationWrapperProps> = ({ can, children }) => {
+  if (!can('notifications:view')) return <>{children}</>;
+  return (
+    <NotificationProvider>
+      {children}
+      <ToastContainer />
+    </NotificationProvider>
+  );
+};
 
 export default App;

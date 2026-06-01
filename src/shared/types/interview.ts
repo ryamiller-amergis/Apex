@@ -202,3 +202,63 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
     case 'revision_requested': return 'revision-requested';
   }
 }
+
+// ── PRD → ADO Work Items types ───────────────────────────────────────────────
+
+export interface SelectedBacklogPBI {
+  id: string;
+  title: string;
+  description?: string;
+  priority?: string;
+  acceptanceCriteria?: Array<{ given?: string; when?: string; then?: string }>;
+  userStory?: { persona?: string; iWant?: string; soThat?: string };
+  businessRules?: string[];
+  nonFunctionalRequirements?: string[] | Record<string, string>;
+  definitionOfDone?: string[];
+  outOfScope?: string[];
+  dependsOn?: string[];
+}
+
+export interface SelectedBacklogFeature {
+  title: string;
+  description?: string;
+  priority?: string;
+  affectedPersonas?: string[];
+  outOfScope?: string[];
+  dependencies?: string[];
+  items?: SelectedBacklogPBI[];
+}
+
+export interface GlobalBusinessRule {
+  id: string;
+  rule: string;
+  appliesTo?: string;
+}
+
+export interface SelectedBacklogEpic {
+  title: string;
+  description?: string;
+  priority?: string;
+  successMetrics?: string[];
+  outOfScope?: string[];
+  assumptions?: string[];
+  dependencies?: string[];
+  features?: SelectedBacklogFeature[];
+}
+
+export interface CreatePrdAdoItemsRequest {
+  project: string;
+  areaPath: string;
+  globalBusinessRules?: GlobalBusinessRule[];
+  selectedItems: { epics: SelectedBacklogEpic[] };
+}
+
+export interface CreatePrdAdoItemsResponse {
+  success: boolean;
+  created: {
+    epics: Array<{ title: string; adoId: number; adoUrl: string }>;
+    features: Array<{ title: string; adoId: number; adoUrl: string }>;
+    pbis: Array<{ title: string; adoId: number; adoUrl: string }>;
+  };
+  totalCreated: number;
+}

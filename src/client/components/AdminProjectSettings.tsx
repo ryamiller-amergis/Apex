@@ -3,12 +3,15 @@ import {
   useAllProjectSkillConfigs,
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
-  useGlobalDefaultModel,
-  useSetGlobalDefaultModel,
   useAvailableModels,
+  useProjectApprovers,
+  useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
-import { useSkillProjects, useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
+import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
+import { useUsers } from '../hooks/useRbac';
 import type { ProjectSkillConfig, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ApprovalMode } from '../../shared/types/approvals';
+import type { UserWithRoles } from '../../shared/types/rbac';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -35,24 +38,20 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
     return branches.filter((b) => b.toLowerCase().includes(q));
   }, [query, branches]);
 
-  // Scroll active item into view on keyboard nav
   useEffect(() => {
     if (!open || !listRef.current) return;
     const el = listRef.current.querySelector<HTMLElement>('[data-active="true"]');
     el?.scrollIntoView({ block: 'nearest' });
   }, [activeIdx, open]);
 
-  // Focus search input when dropdown opens
   useEffect(() => {
     if (open) {
       setTimeout(() => searchRef.current?.focus(), 0);
-      // Scroll selected item into view
       const selectedIdx = branches.indexOf(value);
       if (selectedIdx >= 0) setActiveIdx(selectedIdx);
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -106,7 +105,6 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
 
   return (
     <div className={styles.branchComboWrap} ref={wrapRef}>
-      {/* Trigger button — clearly distinct from search */}
       <button
         type="button"
         className={`${styles.branchComboTrigger} ${open ? styles.branchComboTriggerOpen : ''} ${hasValue ? styles.branchComboTriggerHasValue : ''}`}
@@ -142,7 +140,6 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
 
       {open && (
         <div className={styles.branchComboDropdown} role="dialog" aria-label="Select branch">
-          {/* Search row inside the dropdown */}
           <div className={styles.branchComboSearchRow}>
             <svg className={styles.branchComboSearchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="6.5" cy="6.5" r="4" />
@@ -171,14 +168,12 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
             )}
           </div>
 
-          {/* Result count hint */}
           <div className={styles.branchComboMeta}>
             {query.trim()
               ? `${filtered.length} match${filtered.length !== 1 ? 'es' : ''} of ${branches.length}`
               : `${branches.length} branch${branches.length !== 1 ? 'es' : ''}`}
           </div>
 
-          {/* List */}
           <div className={styles.branchComboList} ref={listRef} role="listbox">
             {filtered.length === 0 ? (
               <div className={styles.branchComboEmpty}>
@@ -216,6 +211,148 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
   );
 };
 
+// ── UserPicker ─────────────────────────────────────────────────────────────────
+
+interface UserPickerProps {
+  users: UserWithRoles[];
+  selectedIds: string[];
+  onAdd: (userId: string) => void;
+  disabled?: boolean;
+}
+
+const UserPicker: React.FC<UserPickerProps> = ({ users, selectedIds, onAdd, disabled }) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const available = useMemo(() => {
+    const selected = new Set(selectedIds);
+    return users
+      .filter((u) => !selected.has(u.oid))
+      .filter((u) => {
+        if (!query.trim()) return true;
+        const q = query.toLowerCase();
+        return (
+          (u.displayName?.toLowerCase().includes(q)) ||
+          (u.email?.toLowerCase().includes(q))
+        );
+      });
+  }, [users, selectedIds, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className={styles.userPicker} ref={wrapRef}>
+      <input
+        ref={inputRef}
+        className={styles.userPickerInput}
+        placeholder="Search users to add…"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        disabled={disabled}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {open && (
+        <div className={styles.userPickerDropdown}>
+          {available.length === 0 ? (
+            <div className={styles.userPickerEmpty}>
+              {query.trim() ? 'No matching users' : 'No more users to add'}
+            </div>
+          ) : (
+            available.map((u) => (
+              <button
+                key={u.oid}
+                type="button"
+                className={styles.userPickerOption}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onAdd(u.oid);
+                  setQuery('');
+                  setOpen(false);
+                }}
+              >
+                <span>{u.displayName || u.email || u.oid}</span>
+                {u.email && u.displayName && (
+                  <span className={styles.userPickerOptionEmail}>{u.email}</span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── AccordionSection ───────────────────────────────────────────────────────────
+
+interface AccordionSectionProps {
+  title: string;
+  hint?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}
+
+const AccordionSection: React.FC<AccordionSectionProps> = ({ title, hint, expanded, onToggle, children }) => (
+  <div className={styles.accordionSection}>
+    <button type="button" className={styles.accordionHeader} onClick={onToggle} aria-expanded={expanded}>
+      <svg
+        className={`${styles.accordionChevron} ${expanded ? styles.accordionChevronOpen : ''}`}
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polyline points="4 2 8 6 4 10" />
+      </svg>
+      <span className={styles.accordionTitle}>{title}</span>
+      {hint && <span className={styles.accordionHint}>{hint}</span>}
+    </button>
+    <div className={`${styles.accordionBody} ${expanded ? styles.accordionBodyOpen : ''}`}>
+      {children}
+    </div>
+  </div>
+);
+
+// ── Skill field descriptions ───────────────────────────────────────────────────
+
+const SKILL_FIELDS = [
+  { key: 'interviewSkillPath' as const, label: 'Interview Skill', desc: 'Guides the stakeholder interview process', emptyLabel: 'None (use default)' },
+  { key: 'prdSkillPath' as const, label: 'PRD Skill', desc: 'Generates the product requirements document', emptyLabel: 'None (use default)' },
+  { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
+  { key: 'designDocQaSkillPath' as const, label: 'Design Doc Q&A Skill', desc: 'Runs the Q&A review phase on design docs', emptyLabel: 'None (skip Q&A phase)' },
+  { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
+  { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
+] as const;
+
+const MODEL_FIELDS = [
+  { key: 'interviewModel' as const, label: 'Interview Model' },
+  { key: 'prdModel' as const, label: 'PRD Model' },
+  { key: 'designDocModel' as const, label: 'Design Doc Model' },
+  { key: 'designDocQaModel' as const, label: 'Design Doc Q&A Model' },
+  { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
+  { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
+] as const;
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
 interface AdminProjectSettingsProps {
   selectedProject?: string;
   availableProjects?: string[];
@@ -237,47 +374,71 @@ interface EditState {
   designDocQaModel: string;
   designDocAssistantModel: string;
   designDocValidationModel: string;
+  defaultModel: string;
   quickSkillPills: QuickSkillPill[];
+  approvalMode: ApprovalMode;
   isNew: boolean;
 }
 
+const emptyEdit = (): EditState => ({
+  project: '', skillRepo: '', skillBranch: '',
+  interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
+  designDocQaSkillPath: '', designDocAssistantSkillPath: '', designDocValidationSkillPath: '',
+  interviewModel: '', prdModel: '', designDocModel: '',
+  designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '',
+  defaultModel: '',
+  quickSkillPills: [], approvalMode: 'any_one', isNew: true,
+});
+
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
-  availableProjects = [],
+  selectedProject = '',
 }) => {
+  // ── Data hooks ─────────────────────────────────────────────────────────
   const { data: configs = [], isLoading, isError } = useAllProjectSkillConfigs();
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
-  const { data: globalModelData } = useGlobalDefaultModel();
-  const setGlobalModel = useSetGlobalDefaultModel();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
-  const [globalModelInput, setGlobalModelInput] = useState('');
-  const [globalModelSaved, setGlobalModelSaved] = useState(false);
+  const { data: allUsers = [] } = useUsers();
 
-  useEffect(() => {
-    if (globalModelData?.value !== undefined) {
-      setGlobalModelInput(globalModelData.value);
-    }
-  }, [globalModelData?.value]);
+  // ── Derived: filter to current project ────────────────────────────────
+  const projectConfigs = configs.filter((c) => c.project === selectedProject);
+  const currentConfig = projectConfigs[0] ?? null;
 
+  // ── Local state ────────────────────────────────────────────────────────
   const [edit, setEdit] = useState<EditState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
 
-  const { data: skillProjects = [], isLoading: isLoadingProjects } = useSkillProjects();
+  // Accordion expanded state
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    repo: true,
+    skills: false,
+    models: false,
+    approvers: false,
+    pills: false,
+  });
 
+  // Approver local state
+  const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
+  const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
+
+  // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
   const { data: branches = [], isLoading: isLoadingBranches } = useSkillBranches(
     edit?.project || null,
     edit?.skillRepo || null,
   );
-
   const { data: skillList = [], isLoading: isLoadingSkills } = useSkillList(
     edit?.project || null,
     edit?.skillRepo || null,
     edit?.skillBranch || undefined,
   );
+  const { data: approvers = [] } = useProjectApprovers(edit?.project || null);
+  const setApprovers = useSetProjectApprovers();
 
-  // When repo selection changes, auto-populate defaultBranch
+  // ── Effects ────────────────────────────────────────────────────────────
+
+  // Auto-populate branch when repo changes
   useEffect(() => {
     if (!edit?.skillRepo || !repos.length) return;
     const repo = repos.find((r) => r.name === edit.skillRepo);
@@ -286,9 +447,35 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   }, [edit?.skillRepo, repos]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Sync approver local state when remote data arrives or edit mode changes
+  useEffect(() => {
+    if (!edit) return;
+    setDesignDocApproverIds(
+      approvers.filter((a) => a.documentType === 'design_doc').map((a) => a.userId),
+    );
+    setPrdApproverIds(
+      approvers.filter((a) => a.documentType === 'prd').map((a) => a.userId),
+    );
+  }, [approvers, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Computed ───────────────────────────────────────────────────────────
+
+  const userMap = useMemo(() => {
+    const map = new Map<string, UserWithRoles>();
+    for (const u of allUsers) map.set(u.oid, u);
+    return map;
+  }, [allUsers]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────
+
+  const toggleSection = (key: string) => {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const handleAddNew = () => {
-    setEdit({ project: '', skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', designDocQaSkillPath: '', designDocAssistantSkillPath: '', designDocValidationSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '', quickSkillPills: [], isNew: true });
+    setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
+    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
@@ -308,14 +495,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocQaModel: config.designDocQaModel ?? '',
       designDocAssistantModel: config.designDocAssistantModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
+      defaultModel: config.defaultModel ?? '',
       quickSkillPills: config.quickSkillPills ?? [],
+      approvalMode: config.approvalMode ?? 'any_one',
       isNew: false,
     });
     setFormError(null);
-  };
-
-  const handleProjectChange = (project: string) => {
-    setEdit((prev) => prev ? { ...prev, project, skillRepo: '', skillBranch: '', interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '', designDocQaSkillPath: '', designDocAssistantSkillPath: '', designDocValidationSkillPath: '', interviewModel: '', prdModel: '', designDocModel: '', designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '', quickSkillPills: [] } : prev);
+    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -354,9 +540,21 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocQaModel: edit.designDocQaModel || null,
           designDocAssistantModel: edit.designDocAssistantModel || null,
           designDocValidationModel: edit.designDocValidationModel || null,
+          defaultModel: edit.defaultModel || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
+          approvalMode: edit.approvalMode,
         },
       });
+
+      // Save approvers if any were configured
+      if (designDocApproverIds.length > 0 || prdApproverIds.length > 0 || approvers.length > 0) {
+        await setApprovers.mutateAsync({
+          project: edit.project.trim(),
+          designDocApprovers: designDocApproverIds,
+          prdApprovers: prdApproverIds,
+        });
+      }
+
       setEdit(null);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to save.');
@@ -373,94 +571,96 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   };
 
+  const getUserLabel = (userId: string) => {
+    const u = userMap.get(userId);
+    return u?.displayName || u?.email || userId;
+  };
+
+  // ── Render helpers ─────────────────────────────────────────────────────
+
+  const renderApproverBadge = (config: ProjectSkillConfig) => {
+    const ddCount = config.designDocApproverCount ?? 0;
+    const prdCount = config.prdApproverCount ?? 0;
+    if (ddCount === 0 && prdCount === 0) {
+      return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No approvers</span>;
+    }
+    const parts: string[] = [];
+    if (ddCount > 0) parts.push(`${ddCount} design doc`);
+    if (prdCount > 0) parts.push(`${prdCount} PRD`);
+    return <span className={styles.approverBadge}>{parts.join(' · ')}</span>;
+  };
+
+  const renderApproverSection = (
+    title: string,
+    ids: string[],
+    setIds: React.Dispatch<React.SetStateAction<string[]>>,
+  ) => (
+    <div className={styles.approverSubSection}>
+      <p className={styles.approverSubTitle}>{title}</p>
+      <div className={styles.userChipList}>
+        {ids.length === 0 && <span className={styles.noApprovers}>No approvers assigned</span>}
+        {ids.map((uid) => (
+          <span key={uid} className={styles.userChip}>
+            {getUserLabel(uid)}
+            <button
+              type="button"
+              className={styles.userChipRemove}
+              onClick={() => setIds((prev) => prev.filter((id) => id !== uid))}
+              aria-label={`Remove ${getUserLabel(uid)}`}
+              disabled={upsert.isPending}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+      </div>
+      <UserPicker
+        users={allUsers}
+        selectedIds={ids}
+        onAdd={(uid) => setIds((prev) => [...prev, uid])}
+        disabled={upsert.isPending}
+      />
+    </div>
+  );
+
+  // ── Early returns ──────────────────────────────────────────────────────
+
   if (isLoading) return <div className={styles.loading}>Loading project settings…</div>;
   if (isError) return <div className={styles.error}>Failed to load project settings.</div>;
-
-  // Prefer the full live ADO project list; fall back to the env-configured list, then the current edit value
-  const projectOptions = skillProjects.length > 0
-    ? skillProjects.map((p) => p.name)
-    : availableProjects.length > 0
-      ? availableProjects
-      : (edit ? [edit.project] : []);
-
-  const handleSaveGlobalModel = async () => {
-    if (!globalModelInput.trim()) return;
-    try {
-      await setGlobalModel.mutateAsync(globalModelInput.trim());
-      setGlobalModelSaved(true);
-      setTimeout(() => setGlobalModelSaved(false), 2000);
-    } catch {
-      // error is surfaced via setGlobalModel.isError
-    }
-  };
 
   return (
     <div className={styles.page}>
       <div className={styles.container}>
+        {/* ── Page header ─────────────────────────────────────────────── */}
         <div className={styles.pageHeader}>
           <div>
             <h1 className={styles.pageTitle}>Project Skill Settings</h1>
-            <p className={styles.pageSubtitle}>Configure per-project skill repository and branch for AI agent sessions.</p>
+            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document approvers for <strong>{selectedProject}</strong>.</p>
           </div>
-          {!edit && (
+          {!edit && !currentConfig && (
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
               + Add Config
             </button>
           )}
         </div>
 
-        <div className={styles.formCard}>
-          <p className={styles.formTitle}>Global Default Model</p>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-            Used when a project skill has no per-skill model set. Falls back to <code>composer-2</code> if left blank.
-          </p>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <select
-              className={styles.select}
-              style={{ maxWidth: '24rem' }}
-              value={globalModelInput}
-              onChange={(e) => setGlobalModelInput(e.target.value)}
-              disabled={setGlobalModel.isPending || isLoadingModels}
-            >
-              <option value="">{isLoadingModels ? 'Loading models…' : '— select a model —'}</option>
-              {availableModels.map((m) => (
-                <option key={m.id} value={m.id}>{m.displayName}</option>
-              ))}
-            </select>
-            <button
-              className={styles.btnPrimary}
-              type="button"
-              onClick={() => void handleSaveGlobalModel()}
-              disabled={setGlobalModel.isPending || !globalModelInput.trim()}
-            >
-              {setGlobalModel.isPending ? 'Saving…' : globalModelSaved ? 'Saved!' : 'Save'}
-            </button>
-          </div>
-          {setGlobalModel.isError && (
-            <p className={styles.formError}>Failed to save global default model.</p>
-          )}
-        </div>
-
+        {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (
           <div className={styles.formCard}>
             <p className={styles.formTitle}>{edit.isNew ? 'Add Project Skill Config' : `Edit: ${edit.project}`}</p>
-            <div className={styles.formGrid}>
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-project">Project</label>
-                {edit.isNew ? (
-                  <select
-                    id="ps-project"
-                    className={styles.select}
-                    value={edit.project}
-                    onChange={(e) => handleProjectChange(e.target.value)}
-                    disabled={upsert.isPending || isLoadingProjects}
-                  >
-                    <option value="">{isLoadingProjects ? 'Loading projects…' : '— select a project —'}</option>
-                    {projectOptions.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                ) : (
+
+            {/* Section 1: Repository & Branch */}
+            <AccordionSection
+              title="Repository & Branch"
+              expanded={expandedSections.repo}
+              onToggle={() => toggleSection('repo')}
+            >
+              <p className={styles.accordionHelp}>
+                Select the Azure DevOps repository and branch containing your agent skills.
+              </p>
+              <div className={styles.formGridThreeCol}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-project">Project</label>
                   <input
                     id="ps-project"
                     className={styles.input}
@@ -468,382 +668,329 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     disabled
                     readOnly
                   />
-                )}
+                </div>
+
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-repo">Skill Repo</label>
+                  <select
+                    id="ps-repo"
+                    className={styles.select}
+                    value={edit.skillRepo}
+                    onChange={(e) => handleRepoChange(e.target.value)}
+                    disabled={upsert.isPending || isLoadingRepos || !edit.project}
+                  >
+                    <option value="">{isLoadingRepos ? 'Loading repos…' : '— select a repo —'}</option>
+                    {repos.map((r) => (
+                      <option key={r.id} value={r.name}>{r.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-branch">Skill Branch</label>
+                  <BranchCombobox
+                    value={edit.skillBranch}
+                    branches={branches}
+                    isLoading={isLoadingBranches}
+                    disabled={upsert.isPending || !edit.skillRepo}
+                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)}
+                  />
+                </div>
               </div>
 
               <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-repo">Skill Repo</label>
+                <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
                 <select
-                  id="ps-repo"
+                  id="ps-defaultModel"
                   className={styles.select}
-                  value={edit.skillRepo}
-                  onChange={(e) => handleRepoChange(e.target.value)}
-                  disabled={upsert.isPending || isLoadingRepos || !edit.project}
+                  value={edit.defaultModel}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
+                  disabled={upsert.isPending || isLoadingModels}
                 >
-                  <option value="">{isLoadingRepos ? 'Loading repos…' : '— select a repo —'}</option>
-                  {repos.map((r) => (
-                    <option key={r.id} value={r.name}>{r.name}</option>
+                  <option value="">Use system default (composer-2)</option>
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.displayName}</option>
                   ))}
                 </select>
+                <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
               </div>
+            </AccordionSection>
 
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-branch">Skill Branch</label>
-                <BranchCombobox
-                  value={edit.skillBranch}
-                  branches={branches}
-                  isLoading={isLoadingBranches}
-                  disabled={upsert.isPending || !edit.skillRepo}
-                  onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)}
-                />
-              </div>
-            </div>
-
-            <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Process Skill Assignments</p>
-            <div className={styles.formGrid}>
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-interview-skill">Interview Skill</label>
-                <select
-                  id="ps-interview-skill"
-                  className={styles.select}
-                  value={edit.interviewSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (use default)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-prd-skill">PRD Skill</label>
-                <select
-                  id="ps-prd-skill"
-                  className={styles.select}
-                  value={edit.prdSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, prdSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (use default)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-skill">Design Doc Skill</label>
-                <select
-                  id="ps-design-doc-skill"
-                  className={styles.select}
-                  value={edit.designDocSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (use default)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-qa-skill">Design Doc Q&amp;A Skill</label>
-                <select
-                  id="ps-design-doc-qa-skill"
-                  className={styles.select}
-                  value={edit.designDocQaSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocQaSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (skip Q&amp;A phase)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-assistant-skill">Design Doc Assistant Skill</label>
-                <select
-                  id="ps-design-doc-assistant-skill"
-                  className={styles.select}
-                  value={edit.designDocAssistantSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocAssistantSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (use default model, no skill)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-validation-skill">Design Doc Validation Skill</label>
-                <select
-                  id="ps-design-doc-validation-skill"
-                  className={styles.select}
-                  value={edit.designDocValidationSkillPath}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocValidationSkillPath: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  <option value="">None (skip validation phase)</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Quick Skill Pills</p>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-              Clickable skill shortcuts shown on the home page. Users can select a pill before typing to automatically route their message through the chosen skill.
-            </p>
-
-            {edit.quickSkillPills.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                {edit.quickSkillPills.map((pill, idx) => (
-                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0.5rem', border: '1px solid var(--border-color-light)', borderRadius: '6px', background: 'var(--bg-secondary)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ minWidth: '10rem', fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 500 }}>
-                      {pill.label}
-                    </span>
-                    <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {pill.skillPath}
-                    </span>
+            {/* Section 2: Process Skills */}
+            <AccordionSection
+              title="Process Skills"
+              hint={edit.skillRepo ? `${skillList.length} available` : undefined}
+              expanded={expandedSections.skills}
+              onToggle={() => toggleSection('skills')}
+            >
+              <p className={styles.accordionHelp}>
+                Assign skills from the selected repo to each stage of the document pipeline.
+              </p>
+              <div className={styles.formGrid}>
+                {SKILL_FIELDS.map((sf) => (
+                  <div key={sf.key} className={styles.field}>
+                    <label className={styles.label} htmlFor={`ps-${sf.key}`}>{sf.label}</label>
                     <select
+                      id={`ps-${sf.key}`}
                       className={styles.select}
-                      style={{ flex: '0 0 10rem', height: '28px', padding: '4px 8px', fontSize: '12px' }}
-                      value={pill.model ?? ''}
-                      onChange={(e) => {
-                        const pills = [...edit.quickSkillPills];
-                        pills[idx] = { ...pills[idx], model: e.target.value || null };
-                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
-                      }}
+                      value={edit[sf.key]}
+                      onChange={(e) => setEdit((prev) => prev ? { ...prev, [sf.key]: e.target.value } : prev)}
+                      disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                    >
+                      <option value="">{sf.emptyLabel}</option>
+                      {skillList.map((s) => (
+                        <option key={s.id} value={s.path}>{s.name}</option>
+                      ))}
+                    </select>
+                    <span className={styles.skillDescription}>{sf.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </AccordionSection>
+
+            {/* Section 3: Model Overrides */}
+            <AccordionSection
+              title="Model Overrides"
+              expanded={expandedSections.models}
+              onToggle={() => toggleSection('models')}
+            >
+              <p className={styles.accordionHelp}>
+                Override the AI model for specific pipeline stages. Unset fields use the project default model.
+              </p>
+              <div className={styles.formGrid}>
+                {MODEL_FIELDS.map((mf) => (
+                  <div key={mf.key} className={styles.field}>
+                    <label className={styles.label} htmlFor={`ps-${mf.key}`}>{mf.label}</label>
+                    <select
+                      id={`ps-${mf.key}`}
+                      className={styles.select}
+                      value={edit[mf.key]}
+                      onChange={(e) => setEdit((prev) => prev ? { ...prev, [mf.key]: e.target.value } : prev)}
                       disabled={upsert.isPending || isLoadingModels}
                     >
-                      <option value="">Default model</option>
+                      <option value="">Use project default</option>
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>{m.displayName}</option>
                       ))}
                     </select>
-                    <button
-                      type="button"
-                      className={styles.btnAction}
-                      disabled={idx === 0}
-                      onClick={() => {
-                        const pills = [...edit.quickSkillPills];
-                        [pills[idx - 1], pills[idx]] = [pills[idx], pills[idx - 1]];
-                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
-                      }}
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.btnAction}
-                      disabled={idx === edit.quickSkillPills.length - 1}
-                      onClick={() => {
-                        const pills = [...edit.quickSkillPills];
-                        [pills[idx], pills[idx + 1]] = [pills[idx + 1], pills[idx]];
-                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
-                      }}
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.btnAction} ${styles.btnActionDanger}`}
-                      onClick={() => {
-                        const pills = edit.quickSkillPills.filter((_, i) => i !== idx);
-                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
-                      }}
-                      title="Remove pill"
-                    >
-                      Remove
-                    </button>
-                    </div>
-                    <input
-                      className={styles.input}
-                      style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-                      placeholder="User-facing description (e.g. Get help troubleshooting production issues)"
-                      value={pill.description ?? ''}
-                      onChange={(e) => {
-                        const pills = [...edit.quickSkillPills];
-                        pills[idx] = { ...pills[idx], description: e.target.value || null };
-                        setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
-                      }}
-                      disabled={upsert.isPending}
-                    />
+                    {!edit[mf.key] && (
+                      <span className={styles.modelDefault}>
+                        Using: {edit.defaultModel
+                          ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
+                          : 'system default (composer-2)'}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
-            )}
+            </AccordionSection>
 
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-              <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                <label className={styles.label} htmlFor="ps-pill-label">Label</label>
-                <input
-                  id="ps-pill-label"
-                  className={styles.input}
-                  placeholder="e.g. Production Support"
+            {/* Section 4: Approvers */}
+            <AccordionSection
+              title="Approvers"
+              hint={
+                (designDocApproverIds.length + prdApproverIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length} assigned`
+                  : undefined
+              }
+              expanded={expandedSections.approvers}
+              onToggle={() => toggleSection('approvers')}
+            >
+              <p className={styles.accordionHelp}>
+                Designate who can approve documents for this project. Users must also have the appropriate review permission.
+              </p>
+
+              <div className={styles.approvalModeSection}>
+                <p className={styles.approverSubTitle}>Approval Mode</p>
+                <div className={styles.approvalModeOptions}>
+                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
+                    <input
+                      type="radio"
+                      name="approvalMode"
+                      value="any_one"
+                      checked={edit.approvalMode === 'any_one'}
+                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
+                      disabled={upsert.isPending}
+                      className={styles.approvalModeRadio}
+                    />
+                    <div>
+                      <span className={styles.approvalModeLabel}>Any One</span>
+                      <span className={styles.approvalModeDesc}>Document is approved when any assigned approver approves</span>
+                    </div>
+                  </label>
+                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
+                    <input
+                      type="radio"
+                      name="approvalMode"
+                      value="all_required"
+                      checked={edit.approvalMode === 'all_required'}
+                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
+                      disabled={upsert.isPending}
+                      className={styles.approvalModeRadio}
+                    />
+                    <div>
+                      <span className={styles.approvalModeLabel}>All Required</span>
+                      <span className={styles.approvalModeDesc}>All assigned approvers must approve the document</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {renderApproverSection('Design Doc Approvers', designDocApproverIds, setDesignDocApproverIds)}
+              {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
+            </AccordionSection>
+
+            {/* Section 5: Quick Skill Pills */}
+            <AccordionSection
+              title="Quick Skill Pills"
+              hint={edit.quickSkillPills.length > 0 ? `${edit.quickSkillPills.length} configured` : undefined}
+              expanded={expandedSections.pills}
+              onToggle={() => toggleSection('pills')}
+            >
+              <p className={styles.accordionHelp}>
+                Shortcut pills displayed on the home page for quick skill access.
+              </p>
+
+              {edit.quickSkillPills.length > 0 && (
+                <div className={styles.pillList}>
+                  {edit.quickSkillPills.map((pill, idx) => (
+                    <div key={idx} className={styles.pillItem}>
+                      <div className={styles.pillItemRow}>
+                        <span className={styles.pillLabel}>{pill.label}</span>
+                        <span className={styles.pillPath}>{pill.skillPath}</span>
+                        <select
+                          className={styles.select}
+                          style={{ flex: '0 0 10rem', height: '28px', padding: '4px 8px', fontSize: '12px' }}
+                          value={pill.model ?? ''}
+                          onChange={(e) => {
+                            const pills = [...edit.quickSkillPills];
+                            pills[idx] = { ...pills[idx], model: e.target.value || null };
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending || isLoadingModels}
+                        >
+                          <option value="">Default model</option>
+                          {availableModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.displayName}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === 0}
+                          onClick={() => {
+                            const pills = [...edit.quickSkillPills];
+                            [pills[idx - 1], pills[idx]] = [pills[idx], pills[idx - 1]];
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          title="Move up"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === edit.quickSkillPills.length - 1}
+                          onClick={() => {
+                            const pills = [...edit.quickSkillPills];
+                            [pills[idx], pills[idx + 1]] = [pills[idx + 1], pills[idx]];
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          title="Move down"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                          onClick={() => {
+                            const pills = edit.quickSkillPills.filter((_, i) => i !== idx);
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          title="Remove pill"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <input
+                        className={styles.input}
+                        style={{ fontSize: '0.8rem', padding: '4px 8px' }}
+                        placeholder="User-facing description (e.g. Get help troubleshooting production issues)"
+                        value={pill.description ?? ''}
+                        onChange={(e) => {
+                          const pills = [...edit.quickSkillPills];
+                          pills[idx] = { ...pills[idx], description: e.target.value || null };
+                          setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                        }}
+                        disabled={upsert.isPending}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className={styles.pillAddRow}>
+                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+                  <label className={styles.label} htmlFor="ps-pill-label">Label</label>
+                  <input
+                    id="ps-pill-label"
+                    className={styles.input}
+                    placeholder="e.g. Production Support"
+                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                  />
+                </div>
+                <div className={styles.field} style={{ flex: 1 }}>
+                  <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
+                  <select
+                    id="ps-pill-skill"
+                    className={styles.select}
+                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                  >
+                    <option value="">— select a skill —</option>
+                    {skillList.map((s) => (
+                      <option key={s.id} value={s.path}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+                  <label className={styles.label} htmlFor="ps-pill-model">Model</label>
+                  <select
+                    id="ps-pill-model"
+                    className={styles.select}
+                    disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
+                  >
+                    <option value="">Use default</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  className={styles.btnAction}
                   disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                />
-              </div>
-              <div className={styles.field} style={{ flex: 1 }}>
-                <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
-                <select
-                  id="ps-pill-skill"
-                  className={styles.select}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                  onClick={() => {
+                    const labelEl = document.getElementById('ps-pill-label') as HTMLInputElement | null;
+                    const skillEl = document.getElementById('ps-pill-skill') as HTMLSelectElement | null;
+                    const modelEl = document.getElementById('ps-pill-model') as HTMLSelectElement | null;
+                    if (!labelEl || !skillEl) return;
+                    const label = labelEl.value.trim();
+                    const skillPath = skillEl.value;
+                    if (!label || !skillPath) return;
+                    const pillModel = modelEl?.value || null;
+                    setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, { label, skillPath, model: pillModel }] } : prev);
+                    labelEl.value = '';
+                    skillEl.value = '';
+                    if (modelEl) modelEl.value = '';
+                  }}
                 >
-                  <option value="">— select a skill —</option>
-                  {skillList.map((s) => (
-                    <option key={s.id} value={s.path}>{s.name}</option>
-                  ))}
-                </select>
+                  Add
+                </button>
               </div>
-              <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                <label className={styles.label} htmlFor="ps-pill-model">Model</label>
-                <select
-                  id="ps-pill-model"
-                  className={styles.select}
-                  disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
-                >
-                  <option value="">Use default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-              <button
-                type="button"
-                className={styles.btnAction}
-                disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                onClick={() => {
-                  const labelEl = document.getElementById('ps-pill-label') as HTMLInputElement | null;
-                  const skillEl = document.getElementById('ps-pill-skill') as HTMLSelectElement | null;
-                  const modelEl = document.getElementById('ps-pill-model') as HTMLSelectElement | null;
-                  if (!labelEl || !skillEl) return;
-                  const label = labelEl.value.trim();
-                  const skillPath = skillEl.value;
-                  if (!label || !skillPath) return;
-                  const pillModel = modelEl?.value || null;
-                  setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, { label, skillPath, model: pillModel }] } : prev);
-                  labelEl.value = '';
-                  skillEl.value = '';
-                  if (modelEl) modelEl.value = '';
-                }}
-              >
-                Add
-              </button>
-            </div>
+            </AccordionSection>
 
-            <p className={styles.formTitle} style={{ marginTop: '1.25rem' }}>Model Config</p>
-            <div className={styles.formGrid}>
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-interview-model">Interview Model</label>
-                <select
-                  id="ps-interview-model"
-                  className={styles.select}
-                  value={edit.interviewModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-prd-model">PRD Model</label>
-                <select
-                  id="ps-prd-model"
-                  className={styles.select}
-                  value={edit.prdModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, prdModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-model">Design Doc Model</label>
-                <select
-                  id="ps-design-doc-model"
-                  className={styles.select}
-                  value={edit.designDocModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-qa-model">Design Doc Q&amp;A Model</label>
-                <select
-                  id="ps-design-doc-qa-model"
-                  className={styles.select}
-                  value={edit.designDocQaModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocQaModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-assistant-model">Design Doc Assistant Model</label>
-                <select
-                  id="ps-design-doc-assistant-model"
-                  className={styles.select}
-                  value={edit.designDocAssistantModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocAssistantModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-design-doc-validation-model">Design Doc Validation Model</label>
-                <select
-                  id="ps-design-doc-validation-model"
-                  className={styles.select}
-                  value={edit.designDocValidationModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, designDocValidationModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                >
-                  <option value="">Use global default</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
             {formError && <p className={styles.formError}>{formError}</p>}
-            <div className={styles.formActions}>
+            <div className={styles.formActions} style={{ marginTop: '12px' }}>
               <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending}>
                 Cancel
               </button>
@@ -854,72 +1001,72 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           </div>
         )}
 
-        {configs.length === 0 && !edit ? (
+        {/* ── Project config list ─────────────────────────────────────── */}
+        {projectConfigs.length === 0 && !edit ? (
           <div className={styles.empty}>
-            <p>No project skill settings configured yet. Click <strong>+ Add Config</strong> to get started.</p>
+            <p>No skill settings configured for <strong>{selectedProject}</strong>. Click <strong>+ Add Config</strong> to get started.</p>
           </div>
         ) : (
-          <div className={styles.tableWrapper}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th className={styles.th}>Project</th>
-                  <th className={styles.th}>Skill Repo</th>
-                  <th className={styles.th}>Skill Branch</th>
-                  <th className={styles.th}>Interview Model</th>
-                  <th className={styles.th}>PRD Model</th>
-                  <th className={styles.th}>Design Doc Model</th>
-                  <th className={styles.th}>Last Updated By</th>
-                  <th className={styles.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {configs.map((config) => (
-                  <tr key={config.project} className={styles.tr}>
-                    <td className={styles.td}>{config.project}</td>
-                    <td className={styles.td}>
-                      <span className={styles.repoText}>{config.skillRepo}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <span className={styles.branchText}>{config.skillBranch}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <span className={styles.metaText}>{config.interviewModel ?? '—'}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <span className={styles.metaText}>{config.prdModel ?? '—'}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <span className={styles.metaText}>{config.designDocModel ?? '—'}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <span className={styles.metaText}>{config.updatedBy ?? '—'}</span>
-                    </td>
-                    <td className={styles.td}>
-                      <div className={styles.actions}>
-                        <button
-                          className={styles.btnAction}
-                          onClick={() => handleEditRow(config)}
-                          type="button"
-                          disabled={!!edit || remove.isPending}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
-                          onClick={() => void handleDelete(config.project)}
-                          type="button"
-                          disabled={deletingProject === config.project || remove.isPending}
-                        >
-                          {deletingProject === config.project ? 'Deleting…' : 'Delete'}
-                        </button>
-                      </div>
-                    </td>
+          !edit && (
+            <div className={styles.tableWrapper}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th className={styles.th}>Project</th>
+                    <th className={styles.th}>Skill Repo / Branch</th>
+                    <th className={styles.th}>Approvers</th>
+                    <th className={styles.th}>Last Updated</th>
+                    <th className={styles.th}>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {projectConfigs.map((config) => (
+                    <tr key={config.project} className={styles.tr}>
+                      <td className={styles.td}>
+                        <span className={styles.projectName}>{config.project}</span>
+                      </td>
+                      <td className={styles.td}>
+                        <span className={styles.repoText}>{config.skillRepo}</span>
+                        <span className={styles.approverBadgeSeparator}> / </span>
+                        <span className={styles.branchText}>{config.skillBranch}</span>
+                      </td>
+                      <td className={styles.td}>
+                        {renderApproverBadge(config)}
+                      </td>
+                      <td className={styles.td}>
+                        <span className={styles.metaText}>
+                          {config.updatedBy ?? '—'}
+                          {config.updatedAt && (
+                            <> · {new Date(config.updatedAt).toLocaleDateString()}</>
+                          )}
+                        </span>
+                      </td>
+                      <td className={styles.td}>
+                        <div className={styles.actions}>
+                          <button
+                            className={styles.btnAction}
+                            onClick={() => handleEditRow(config)}
+                            type="button"
+                            disabled={!!edit || remove.isPending}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                            onClick={() => void handleDelete(config.project)}
+                            type="button"
+                            disabled={deletingProject === config.project || remove.isPending}
+                          >
+                            {deletingProject === config.project ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </div>
     </div>

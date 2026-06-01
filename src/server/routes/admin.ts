@@ -3,49 +3,20 @@ import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
 import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
-import { Cursor } from '@cursor/sdk';
+import { fetchAvailableModels } from '../services/modelsService';
 import type {
   CreateRoleRequest,
   UpdateRoleRequest,
   UpdateRolePermissionsRequest,
   AssignRoleRequest,
 } from '../../shared/types/rbac';
-import type { UpsertProjectSkillConfigRequest } from '../../shared/types/projectSettings';
+import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
 
 const router = Router();
 
 // All admin routes require authentication (ensureAuthenticated is applied globally upstream)
 // and the admin:roles permission
 router.use(requirePermission('admin:roles'));
-
-// ── Available Models cache ────────────────────────────────────────────────────
-
-interface AvailableModel {
-  id: string;
-  displayName: string;
-}
-
-let modelsCache: AvailableModel[] | null = null;
-let modelsCacheExpiry = 0;
-const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
-
-async function fetchAvailableModels(): Promise<AvailableModel[]> {
-  const now = Date.now();
-  if (modelsCache && now < modelsCacheExpiry) return modelsCache;
-
-  try {
-    const result = await Cursor.models.list();
-    const models: AvailableModel[] = (result ?? []).map((m: { id: string; displayName?: string }) => ({
-      id: m.id,
-      displayName: m.displayName ?? m.id,
-    }));
-    modelsCache = models;
-    modelsCacheExpiry = now + MODELS_CACHE_TTL_MS;
-    return models;
-  } catch {
-    return modelsCache ?? [];
-  }
-}
 
 // ── Roles ──────────────────────────────────────────────────────────────────────
 
@@ -180,8 +151,19 @@ router.get('/available-models', async (_req: Request, res: Response): Promise<vo
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const configs = await projectSettingsService.listSkillConfigs();
-    res.json(configs);
+    const [configs, approversByProject] = await Promise.all([
+      projectSettingsService.listSkillConfigs(),
+      projectSettingsService.listApproversForAllProjects(),
+    ]);
+    const enriched = configs.map((cfg) => {
+      const approvers = approversByProject[cfg.project] ?? [];
+      return {
+        ...cfg,
+        designDocApproverCount: approvers.filter((a) => a.documentType === 'design_doc').length,
+        prdApproverCount: approvers.filter((a) => a.documentType === 'prd').length,
+      };
+    });
+    res.json(enriched);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -190,7 +172,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designDocValidationModel, quickSkillPills } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -214,6 +196,8 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       designDocValidationSkillPath,
       designDocValidationModel,
       quickSkillPills,
+      defaultModel,
+      approvalMode,
     );
     res.json(config);
   } catch {
@@ -226,6 +210,37 @@ router.delete('/project-settings/:project', async (req: Request, res: Response):
     const { project } = req.params;
     await projectSettingsService.deleteSkillConfig(project);
     res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Project Approvers ────────────────────────────────────────────────────────
+
+router.get('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { project } = req.params;
+    const approvers = await projectSettingsService.listApprovers(project);
+    res.json(approvers);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { project } = req.params;
+    const { designDocApprovers, prdApprovers } = req.body as SetApproversRequest;
+    if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers)) {
+      res.status(400).json({ error: 'designDocApprovers and prdApprovers must be arrays' });
+      return;
+    }
+    const assignedBy = (req.user as any)?.profile?.oid ?? undefined;
+    const [designDoc, prd] = await Promise.all([
+      projectSettingsService.setApprovers(project, 'design_doc', designDocApprovers, assignedBy),
+      projectSettingsService.setApprovers(project, 'prd', prdApprovers, assignedBy),
+    ]);
+    res.json({ designDoc, prd });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -22,6 +22,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
       lastError: thread.lastError ?? null,
       savedWikiUrl: thread.savedWikiUrl ?? null,
       title: deriveTitle(thread),
+      activeRunId: thread.activeRunId ?? null,
       createdAt: thread.createdAt,
       lastActivityAt: thread.lastActivityAt,
     })
@@ -35,6 +36,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
         lastError: thread.lastError ?? null,
         savedWikiUrl: thread.savedWikiUrl ?? null,
         title: deriveTitle(thread),
+        activeRunId: thread.activeRunId ?? null,
         lastActivityAt: thread.lastActivityAt,
       },
     });
@@ -164,6 +166,7 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     status: result.status as ChatThread['status'],
     kickoff: result.kickoff,
     cursorAgentId: result.cursorAgentId ?? undefined,
+    activeRunId: result.activeRunId ?? undefined,
     workspaceDir: result.workspaceDir ?? '',
     lastError: result.lastError ?? undefined,
     savedWikiUrl: result.savedWikiUrl ?? undefined,
@@ -193,6 +196,47 @@ export async function toggleFlag(
     .set({ flagged, flaggedAt })
     .where(eq(chatThreads.id, threadId));
   return { flagged, flaggedAt };
+}
+
+// ── recovery helpers ──────────────────────────────────────────────────────────
+
+export interface StuckInterviewThread {
+  threadId: string;
+  interviewId: string;
+  activeRunId: string | null;
+}
+
+/**
+ * Find chat_threads stuck in 'running' status that are linked to an interview.
+ * Used by startup recovery to detect interview agents that died mid-flight.
+ */
+export async function findRunningInterviewThreads(): Promise<StuckInterviewThread[]> {
+  const rows = await db
+    .select({
+      threadId: chatThreads.id,
+      interviewId: interviews.id,
+      activeRunId: chatThreads.activeRunId,
+    })
+    .from(chatThreads)
+    .innerJoin(interviews, eq(interviews.chatThreadId, chatThreads.id))
+    .where(eq(chatThreads.status, 'running'));
+
+  return rows.map((r) => ({
+    threadId: r.threadId,
+    interviewId: r.interviewId,
+    activeRunId: r.activeRunId,
+  }));
+}
+
+/**
+ * Reset a thread from 'running' to 'idle' and clear its active_run_id.
+ * Used by startup recovery after hydrating a thread that was stuck.
+ */
+export async function clearStaleRun(threadId: string): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle', activeRunId: null })
+    .where(eq(chatThreads.id, threadId));
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

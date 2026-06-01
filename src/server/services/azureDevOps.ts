@@ -82,6 +82,35 @@ export class AzureDevOpsService {
     }));
   }
 
+  /** Returns all area paths for a given ADO project as flat sorted strings. */
+  async getAreaPaths(project: string): Promise<string[]> {
+    if (!project) throw new Error('project is required');
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const pat = process.env.ADO_PAT || '';
+    const token = Buffer.from(`:${pat}`).toString('base64');
+    const url = `${orgUrl}/${encodeURIComponent(project)}/_apis/wit/classificationnodes/areas?$depth=10&api-version=7.1`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Basic ${token}`, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`ADO area paths returned ${res.status}`);
+    const data = await res.json() as { name?: string; children?: unknown[] };
+
+    const results: string[] = [];
+
+    function flattenNode(node: { name?: string; children?: unknown[] }, parentPath: string): void {
+      if (!node?.name) return;
+      const currentPath = parentPath ? `${parentPath}\\${node.name}` : node.name;
+      results.push(currentPath);
+      if (Array.isArray(node.children)) {
+        node.children.forEach(child => flattenNode(child as { name?: string; children?: unknown[] }, currentPath));
+      }
+    }
+
+    flattenNode(data, '');
+    return results.sort((a, b) => a.localeCompare(b));
+  }
+
   /**
    * Run an arbitrary WIQL query and return hydrated work item details.
    * Useful for MCP callers that need ad-hoc filtering and field selection.
@@ -5142,6 +5171,8 @@ export class AzureDevOpsService {
     type: string;
     title: string;
     description?: string;
+    acceptanceCriteriaHtml?: string;
+    priority?: string;
     parentId?: number;
     predecessorIds?: number[];
     prdUrl?: string;
@@ -5161,6 +5192,18 @@ export class AzureDevOpsService {
 
       if (spec.description) {
         patch.push({ op: 'add', path: '/fields/System.Description', value: spec.description });
+      }
+
+      if (spec.acceptanceCriteriaHtml) {
+        patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
+      }
+
+      if (spec.priority) {
+        const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4, 'Must Have': 1, 'Should Have': 2, 'Could Have': 3, "Won't Have": 4 };
+        const numericPriority = priorityMap[spec.priority];
+        if (numericPriority) {
+          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: numericPriority });
+        }
       }
 
       if (spec.tags && spec.tags.length > 0) {
@@ -5214,5 +5257,26 @@ export class AzureDevOpsService {
         url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
       };
     });
+  }
+
+  /**
+   * Check which of the provided ADO work item IDs still exist.
+   * Returns the subset that are confirmed deleted/missing in ADO.
+   */
+  async findDeletedWorkItemIds(ids: number[]): Promise<number[]> {
+    if (ids.length === 0) return [];
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const deleted: number[] = [];
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const item = await witApi.getWorkItem(id);
+          if (!item) deleted.push(id);
+        } catch {
+          deleted.push(id);
+        }
+      }),
+    );
+    return deleted;
   }
 }

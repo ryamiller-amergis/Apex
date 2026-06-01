@@ -148,3 +148,33 @@
   color: var(--error-color);
   font-size: 0.9rem;
 }
+
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .page {
+    padding: 24px 16px;
+  }
+
+  .header {
+    margin-bottom: 32px;
+  }
+
+  .logoMark {
+    font-size: 3rem;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 16px;
+    min-height: 44px;
+  }
+
+  .card:hover {
+    transform: none;
+  }
+}

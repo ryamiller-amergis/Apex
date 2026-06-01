@@ -141,3 +141,54 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Responsive — tablet / small desktop */
+@media (max-width: 768px) {
+  .overlay {
+    padding: 0;
+  }
+
+  .card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    margin: 0;
+    padding: 16px;
+  }
+
+  .textarea {
+    width: 100%;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* Responsive — phone */
+@media (max-width: 480px) {
+  .card {
+    padding: 12px;
+  }
+
+  .title {
+    font-size: 0.95rem;
+  }
+
+  .body {
+    font-size: 0.8rem;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .btnCancel,
+  .btnConfirm {
+    width: 100%;
+    text-align: center;
+  }
+}

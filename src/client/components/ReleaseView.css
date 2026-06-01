@@ -1863,5 +1863,120 @@
     align-items: flex-start;
     gap: 12px;
   }
+
+  .release-view {
+    padding: 12px;
+  }
+
+  .release-header-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .release-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .release-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+  }
+
+  .release-epics-grid {
+    padding: 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .epics-table {
+    min-width: 700px;
+  }
+
+  .work-items-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .work-items-table table {
+    min-width: 600px;
+  }
+
+  .progress-info-tooltip {
+    min-width: unset;
+    width: calc(100vw - 32px);
+    max-width: 450px;
+    left: -16px;
+  }
+
+  .modal-content {
+    padding: 20px;
+    width: 95%;
+    max-height: 90vh;
+  }
+
+  .modal-large {
+    max-width: 100%;
+  }
+
+  .search-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .expanded-stats {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .stat-badge {
+    padding: 6px 12px;
+  }
+
+  .deployment-environments {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-legend {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .release-view {
+    padding: 8px;
+  }
+
+  .release-header h2 {
+    font-size: 20px;
+  }
+
+  .metric-card {
+    padding: 12px;
+  }
+
+  .metric-value {
+    font-size: 24px;
+  }
+
+  .modal-content {
+    padding: 16px;
+    border-radius: 4px;
+  }
+
+  .tooltip-header {
+    padding: 12px 16px;
+  }
+
+  .calculation-breakdown {
+    gap: 8px;
+  }
+
+  .calc-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
 }
 

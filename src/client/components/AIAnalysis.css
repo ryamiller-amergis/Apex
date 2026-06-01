@@ -238,3 +238,68 @@
   flex: 1;
   font-weight: 500;
 }
+
+/* ── Responsive: Tablet / small desktop ──────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .ai-analysis-container {
+    padding: 16px;
+    padding-bottom: 60px;
+  }
+
+  .ai-analysis-container h2 {
+    font-size: 20px;
+  }
+
+  .ai-analysis-filters {
+    padding: 16px;
+  }
+
+  .ai-analysis-filter-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .ai-analysis-filter-group {
+    min-width: 0;
+  }
+
+  .ai-analysis-load-btn {
+    align-self: stretch;
+    text-align: center;
+  }
+
+  .ai-analysis-section-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ai-analysis-section-header h3 {
+    font-size: 18px;
+  }
+
+  .ai-placeholder-card {
+    padding: 24px 16px;
+  }
+}
+
+/* ── Responsive: Phone ───────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .ai-analysis-container {
+    padding: 12px;
+    padding-bottom: 60px;
+  }
+
+  .ai-analysis-container h2 {
+    font-size: 18px;
+  }
+
+  .ai-analysis-filters {
+    padding: 12px;
+  }
+
+  .ai-analysis-section-header h3 {
+    font-size: 16px;
+  }
+}

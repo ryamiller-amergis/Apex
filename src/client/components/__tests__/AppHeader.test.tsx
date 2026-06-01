@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { AppHeader } from '../AppHeader';
 
+jest.mock('../../hooks/useBreakpoint', () => ({
+  useBreakpoint: () => ({ isMobile: false, isTablet: false, isDesktop: true }),
+}));
+
 const baseProps = {
   currentView: 'home' as const,
   planningTab: 'dev-stats',

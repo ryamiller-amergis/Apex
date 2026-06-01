@@ -17,6 +17,7 @@ import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
 import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import { useContextEstimate } from '../hooks/useContextEstimate';
 import { BrandLogo } from './BrandLogo';
 import styles from './AgentHome.module.css';
 
@@ -79,15 +80,6 @@ async function copyTextToClipboard(text: string): Promise<void> {
   document.execCommand('copy');
   document.body.removeChild(textarea);
 }
-
-const DEFAULT_CONTEXT_TOKEN_LIMIT = 200_000;
-const MODEL_CONTEXT_TOKEN_LIMITS: Record<string, number> = {
-  'composer-2': 200_000,
-  'claude-opus-4-6': 200_000,
-  'claude-sonnet-4-6': 200_000,
-  'gpt-5.5': 200_000,
-  'gemini-3.1-pro': 1_000_000,
-};
 
 // ── ToolIcon ───────────────────────────────────────────────────────────────────
 
@@ -513,23 +505,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
 
   const hasPrd = prdReady;
 
-  const contextTokenLimit = MODEL_CONTEXT_TOKEN_LIMITS[model] ?? DEFAULT_CONTEXT_TOKEN_LIMIT;
-  const estimatedTokens = useMemo(() => {
-    const messageChars = visibleMessages.reduce((sum, message) => {
-      const attachmentChars = message.attachments?.reduce(
-        (attachmentSum, attachment) => attachmentSum + attachment.size,
-        0,
-      ) ?? 0;
-      return sum + message.text.length + attachmentChars;
-    }, 0);
-    const draftChars = input.length + attachments.reduce((sum, attachment) => sum + attachment.content.length, 0);
-    const streamChars = streamingText.length;
-    return Math.ceil((messageChars + draftChars + streamChars) / 4);
-  }, [visibleMessages, input, attachments, streamingText]);
-  const contextPercent = Math.min(100, Math.round((estimatedTokens / contextTokenLimit) * 100));
-  const contextLabel = estimatedTokens >= 1000
-    ? `${Math.round(estimatedTokens / 1000)}k`
-    : `${estimatedTokens}`;
+  const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
+  const {
+    estimatedTokens,
+    contextLimit: contextTokenLimit,
+    usagePercent: contextPercent,
+    label: contextLabel,
+  } = useContextEstimate(visibleMessages, input, streamingText, model, draftAttachmentChars);
 
   const slashQuery = useMemo(() => {
     const m = input.match(/^\/(.*)$/s);

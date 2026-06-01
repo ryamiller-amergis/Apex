@@ -311,3 +311,58 @@
 .state-checkbox-label span {
   flex: 1;
 }
+
+/* Responsive: narrow viewport adjustments */
+@media (max-width: 768px) {
+  .unscheduled-list {
+    width: 100% !important;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding: 8px;
+    overflow-y: auto;
+  }
+
+  .unscheduled-list.collapsed {
+    width: 100% !important;
+    max-height: 40px;
+    padding: 8px;
+  }
+
+  .collapse-toggle {
+    top: 4px;
+    right: 4px;
+    width: 28px;
+    height: 28px;
+  }
+
+  .unscheduled-list h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+  }
+
+  .search-input {
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .filter-row {
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .unscheduled-items {
+    gap: 4px;
+  }
+
+  .resize-handle {
+    display: none;
+  }
+
+  .state-filter-container {
+    margin-bottom: 8px;
+    padding: 4px;
+  }
+}

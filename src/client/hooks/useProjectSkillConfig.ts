@@ -3,6 +3,8 @@ import type {
   ProjectSkillConfig,
   UpsertProjectSkillConfigRequest,
   ProjectSkillConfigResponse,
+  ProjectApprover,
+  SetApproversRequest,
 } from '../../shared/types/projectSettings';
 import type { AppSetting } from '../../shared/types/appSettings';
 
@@ -126,13 +128,52 @@ export interface AvailableModel {
 
 export function useAvailableModels() {
   return useQuery<AvailableModel[]>({
-    queryKey: ['admin', 'available-models'],
+    queryKey: ['available-models'],
     queryFn: async () => {
-      const res = await fetch('/api/admin/available-models', { credentials: 'include' });
+      const res = await fetch('/api/available-models', { credentials: 'include' });
       if (!res.ok) throw new Error('Failed to fetch available models');
       const data = (await res.json()) as { models: AvailableModel[] };
       return data.models;
     },
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useProjectApprovers(project: string | null) {
+  return useQuery<ProjectApprover[]>({
+    queryKey: ['admin', 'project-approvers', project],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/admin/project-settings/${encodeURIComponent(project!)}/approvers`,
+        { credentials: 'include' },
+      );
+      if (!res.ok) throw new Error('Failed to fetch approvers');
+      return res.json() as Promise<ProjectApprover[]>;
+    },
+    enabled: !!project,
+    staleTime: 60_000,
+  });
+}
+
+export function useSetProjectApprovers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ project, designDocApprovers, prdApprovers }: SetApproversRequest) => {
+      const res = await fetch(
+        `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
+        {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ designDocApprovers, prdApprovers }),
+        },
+      );
+      if (!res.ok) throw new Error('Failed to save approvers');
+      return res.json();
+    },
+    onSuccess: (_, { project }) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-approvers', project] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
+    },
   });
 }

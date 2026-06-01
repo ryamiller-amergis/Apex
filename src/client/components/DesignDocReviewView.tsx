@@ -23,10 +23,13 @@ import {
   useFixValidation,
   useAcceptFixValidation,
   useRevertDesignDocSection,
+  useDocumentAssignments,
+  useReassignApprovers,
 } from '../hooks/useInterviews';
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
+import { ApproverSelectModal } from './ApproverSelectModal';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap } from '../../shared/types/interview';
@@ -35,7 +38,7 @@ import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
 import styles from './DesignDocReviewView.module.css';
 
-type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
+type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation' | 'qa-context';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -247,7 +250,6 @@ interface ContentPaneProps {
   canEdit: boolean;
   placeholder: string;
   markdownComponents: Components;
-  onEditToggle: () => void;
   onEditChange: (v: string) => void;
   onSave: () => void;
   onDiscard: () => void;
@@ -262,7 +264,6 @@ const ContentPane: React.FC<ContentPaneProps> = ({
   canEdit,
   placeholder,
   markdownComponents,
-  onEditToggle,
   onEditChange,
   onSave,
   onDiscard,
@@ -301,13 +302,6 @@ const ContentPane: React.FC<ContentPaneProps> = ({
 
   return (
     <div className={styles.previewWrapper}>
-      {canEdit && (
-        <div className={styles.previewToolbar}>
-          <button className={styles.btnEditInline} onClick={onEditToggle} type="button">
-            Edit
-          </button>
-        </div>
-      )}
       <div className={styles.preview}>
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{previewContent}</ReactMarkdown>
@@ -859,59 +853,33 @@ interface DesignDocQaTranscriptProps {
 }
 
 const DesignDocQaTranscript: React.FC<DesignDocQaTranscriptProps> = ({ qaChatThreadId }) => {
-  const [isOpen, setIsOpen] = useState(false);
   const { messages } = useChatStream(qaChatThreadId);
   const visibleMessages = messages.filter(
     (m) => !(m.role === 'user' && m.text === 'Begin.') && m.role !== 'tool' && m.role !== 'system',
   );
 
   return (
-    <div className={styles.qaTranscript}>
-      <button
-        className={styles.qaTranscriptToggle}
-        onClick={() => setIsOpen((v) => !v)}
-        type="button"
-        aria-expanded={isOpen}
-      >
-        <svg
-          className={`${styles.qaTranscriptChevron} ${isOpen ? styles.qaTranscriptChevronOpen : ''}`}
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M4 6l4 4 4-4" />
-        </svg>
-        <span className={styles.qaTranscriptLabel}>Q&amp;A Context</span>
-        <span className={styles.qaTranscriptCount}>({visibleMessages.length} messages)</span>
-      </button>
-      {isOpen && (
-        <div className={styles.qaTranscriptBody}>
-          <div className={styles.qaTranscriptMessages}>
-            {visibleMessages.length === 0 ? (
-              <div className={styles.qaTranscriptEmpty}>No Q&amp;A messages recorded.</div>
-            ) : (
-              visibleMessages.map((msg) => {
-                if (msg.role === 'user') {
-                  return (
-                    <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
-                      {msg.text}
-                    </div>
-                  );
-                }
-                return (
-                  <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+    <div className={styles.qaTranscriptBody}>
+      <div className={styles.qaTranscriptMessages}>
+        {visibleMessages.length === 0 ? (
+          <div className={styles.qaTranscriptEmpty}>No Q&amp;A messages recorded.</div>
+        ) : (
+          visibleMessages.map((msg) => {
+            if (msg.role === 'user') {
+              return (
+                <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
+                  {msg.text}
+                </div>
+              );
+            }
+            return (
+              <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 };
@@ -1218,10 +1186,19 @@ export const DesignDocReviewView: React.FC = () => {
   const [assumptionsEdit, setAssumptionsEdit] = useState('');
   const [dirtyTabs, setDirtyTabs] = useState<Set<TabId>>(new Set());
 
+  const reassignApprovers = useReassignApprovers();
+
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showApproverModal, setShowApproverModal] = useState(false);
+  const [showReassignModal, setShowReassignModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
+
+  const { data: assignments = [] } = useDocumentAssignments(
+    doc?.status === 'pending_review' ? id : null,
+    'design_doc',
+  );
 
   const isInterviewing = doc?.status === 'interviewing';
   const isGenerating = !isInterviewing && !!doc && (
@@ -1273,10 +1250,29 @@ export const DesignDocReviewView: React.FC = () => {
     setEditingTab(null);
   }, [doc]);
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(() => {
     if (!id) return;
-    await submitDoc.mutateAsync(id);
+    setShowApproverModal(true);
+  }, [id]);
+
+  const handleApproverConfirm = useCallback(async (selections: { approverIds?: string[] }) => {
+    if (!id) return;
+    await submitDoc.mutateAsync({
+      designDocId: id,
+      approverIds: selections.approverIds ?? [],
+    });
+    setShowApproverModal(false);
   }, [id, submitDoc]);
+
+  const handleReassignConfirm = useCallback(async (selections: { approverIds?: string[] }) => {
+    if (!id) return;
+    await reassignApprovers.mutateAsync({
+      documentId: id,
+      documentType: 'design_doc',
+      approverUserIds: selections.approverIds ?? [],
+    });
+    setShowReassignModal(false);
+  }, [id, reassignApprovers]);
 
   const handleWithdraw = useCallback(async () => {
     if (!id) return;
@@ -1470,7 +1466,9 @@ export const DesignDocReviewView: React.FC = () => {
   const validationBlocking = doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
+  const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
   const isReviewer = canReview && (!isAuthor || isAdmin);
+  const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
   const canUseAssistant = (isReviewer || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
@@ -1504,6 +1502,7 @@ export const DesignDocReviewView: React.FC = () => {
     'tech-spec': 'Tech Spec',
     assumptions: 'Assumptions',
     validation: 'Validation Report',
+    'qa-context': 'Q&A Context',
   };
 
   const tabContent: Record<TabId, string> = {
@@ -1511,6 +1510,7 @@ export const DesignDocReviewView: React.FC = () => {
     'tech-spec': editingTab === 'tech-spec' ? techSpecEdit : doc.techSpecContent,
     assumptions: editingTab === 'assumptions' ? assumptionsEdit : doc.assumptionsContent,
     validation: validationReport?.markdown ?? doc.validationReportMd ?? '',
+    'qa-context': '',
   };
 
   const tabPlaceholder: Record<TabId, string> = {
@@ -1518,6 +1518,7 @@ export const DesignDocReviewView: React.FC = () => {
     'tech-spec': 'Write the technical spec in Markdown…',
     assumptions: 'Write the shared assumptions in Markdown…',
     validation: '',
+    'qa-context': '',
   };
 
   return (
@@ -1525,7 +1526,7 @@ export const DesignDocReviewView: React.FC = () => {
       <div className={styles.header}>
         <div className={styles.headerLeft}>
           <button className={styles.backBtn} onClick={() => navigate('/backlog?tab=design-docs')} type="button">
-            ← Back
+            ←
           </button>
           <div className={styles.headerInfo}>
             <div className={styles.titleRow}>
@@ -1538,33 +1539,38 @@ export const DesignDocReviewView: React.FC = () => {
                   {doc.validationScore}% validated
                 </span>
               )}
-            </div>
-            {sourcePrd && (
-              <div className={styles.parentLinks}>
-                <button
-                  className={styles.parentLinkChip}
-                  onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
-                  type="button"
-                  title={`View PRD: ${sourcePrd.title}`}
-                >
-                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="2" y="1" width="10" height="12" rx="1.5" />
-                    <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
+              {doc.reviewerId && doc.reviewedAt && (
+                <span className={styles.reviewBadge}>
+                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10 3L4.5 8.5 2 6" />
                   </svg>
-                  {sourcePrd.title}
-                  <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 8, height: 8, opacity: 0.6 }}>
-                    <path d="M2 8L8 2M5 2h3v3" />
-                  </svg>
-                </button>
-              </div>
-            )}
-            {doc.reviewerId && doc.reviewedAt && (
-              <div className={styles.reviewInfo}>
-                <span className={styles.reviewInfoRow}>
-                  Reviewed by {doc.reviewerName ?? doc.reviewerId} on {formatDate(doc.reviewedAt)}
+                  {doc.reviewerName ?? doc.reviewerId} &middot; {formatDate(doc.reviewedAt)}
                 </span>
+              )}
+            </div>
+            {(sourcePrd || doc.reviewComment) && (
+              <div className={styles.parentLinks}>
+                {sourcePrd && (
+                  <button
+                    className={styles.parentLinkChip}
+                    onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
+                    type="button"
+                    title={`View PRD: ${sourcePrd.title}`}
+                  >
+                    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="1" width="10" height="12" rx="1.5" />
+                      <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
+                    </svg>
+                    {sourcePrd.title}
+                    <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 8, height: 8, opacity: 0.6 }}>
+                      <path d="M2 8L8 2M5 2h3v3" />
+                    </svg>
+                  </button>
+                )}
                 {doc.reviewComment && (
-                  <span className={styles.reviewInfoRow}>"{doc.reviewComment}"</span>
+                  <span className={styles.reviewCommentChip}>
+                    "{doc.reviewComment}"
+                  </span>
                 )}
               </div>
             )}
@@ -1572,6 +1578,10 @@ export const DesignDocReviewView: React.FC = () => {
         </div>
 
         <div className={styles.headerRight}>
+          {doc.status === 'approved' && (
+            <span className={styles.reviewOnlyBadge}>Read-only</span>
+          )}
+
           {canUseAssistant && (
             <button
               className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
@@ -1586,12 +1596,9 @@ export const DesignDocReviewView: React.FC = () => {
             </button>
           )}
 
-          {doc.status === 'approved' && (
-            <span className={styles.reviewOnlyBadge}>Read-only — approved</span>
-          )}
-
           {canManage && (isAuthor || isAdmin) && (
             <>
+              {canUseAssistant && <span className={styles.actionDivider} />}
               {hasAnyContent &&
                 (doc.status === 'draft' || doc.status === 'revision_requested') && (
                 <button
@@ -1618,7 +1625,7 @@ export const DesignDocReviewView: React.FC = () => {
               {(doc.status === 'draft' || doc.status === 'revision_requested') && (
                 <button
                   className={styles.actionBtnPrimary}
-                  onClick={() => void handleSubmit()}
+                  onClick={handleSubmit}
                   disabled={submitDoc.isPending || !hasAnyContent}
                   type="button"
                 >
@@ -1658,30 +1665,61 @@ export const DesignDocReviewView: React.FC = () => {
                   <path d="M6.5 7v4M9.5 7v4" />
                   <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
                 </svg>
-                Delete
               </button>
             </>
           )}
 
           {isReviewer && doc.status === 'pending_review' && (
-            <div className={styles.reviewControls}>
+            <>
+              <span className={styles.actionDivider} />
+              <div className={styles.reviewControls}>
+                <button
+                  className={styles.btnApprove}
+                  onClick={() => void handleApprove()}
+                  disabled={reviewDoc.isPending || validationBlocking || !canPerformReview}
+                  title={
+                    !canPerformReview
+                      ? 'You are not an assigned approver for this document'
+                      : validationBlocking
+                        ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
+                        : undefined
+                  }
+                  type="button"
+                >
+                  Approve
+                </button>
+                <button
+                  className={styles.btnRevision}
+                  onClick={() => setShowRevisionModal(true)}
+                  disabled={!canPerformReview}
+                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
+                  type="button"
+                >
+                  Request Revision
+                </button>
+              </div>
+            </>
+          )}
+
+          {doc.status === 'pending_review' && (
+            <>
+              <span className={styles.actionDivider} />
               <button
-                className={styles.btnApprove}
-                onClick={() => void handleApprove()}
-                disabled={reviewDoc.isPending || validationBlocking}
-                title={validationBlocking ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)` : undefined}
+                className={styles.actionBtn}
+                onClick={() => setShowReassignModal(true)}
                 type="button"
+                title={assignments.length > 0
+                  ? `Approvers: ${assignments.map(a => a.approverDisplayName ?? a.approverUserId).join(', ')}`
+                  : 'Assign approvers'}
               >
-                Approve
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="6" cy="5" r="2.5" />
+                  <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
+                  <path d="M12 5.5l2 2 2-2" />
+                </svg>
+                {assignments.length > 0 ? `${assignments.length} Approver${assignments.length > 1 ? 's' : ''}` : 'Approvers'}
               </button>
-              <button
-                className={styles.btnRevision}
-                onClick={() => setShowRevisionModal(true)}
-                type="button"
-              >
-                Request Revision
-              </button>
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -1833,9 +1871,6 @@ export const DesignDocReviewView: React.FC = () => {
           {/* ── Normal content (hidden during fix flow) ──────────────── */}
           {!showFixFlow && (
             <>
-              {doc.qaChatThreadId && (
-                <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
-              )}
               <div className={styles.tabs}>
                 {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
                   <button
@@ -1870,6 +1905,24 @@ export const DesignDocReviewView: React.FC = () => {
                         <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
                       </svg>
                     )}
+                  </button>
+                )}
+                {doc.qaChatThreadId && (
+                  <button
+                    className={`${styles.tab} ${activeTab === 'qa-context' ? styles.active : ''}`}
+                    onClick={() => setActiveTab('qa-context')}
+                    type="button"
+                  >
+                    {tabLabel['qa-context']}
+                  </button>
+                )}
+                {canEdit && activeTab !== 'validation' && activeTab !== 'qa-context' && (
+                  <button
+                    className={styles.tabEditBtn}
+                    onClick={() => handleEditToggle(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
+                    type="button"
+                  >
+                    {editingTab === activeTab ? 'Cancel Edit' : 'Edit'}
                   </button>
                 )}
               </div>
@@ -1909,6 +1962,13 @@ export const DesignDocReviewView: React.FC = () => {
                       </div>
                     );
                   })()
+                ) : activeTab === 'qa-context' ? (
+                  doc.qaChatThreadId
+                    ? <DesignDocQaTranscript qaChatThreadId={doc.qaChatThreadId} />
+                    : <div className={styles.validationReportEmpty}>
+                        <div className={styles.validatingBannerTitle}>No Q&amp;A context</div>
+                        <div className={styles.validationReportEmptySub}>No interview Q&amp;A has been recorded for this document.</div>
+                      </div>
                 ) : (
                   <>
                     {doc.status === 'validating' && (
@@ -1937,10 +1997,9 @@ export const DesignDocReviewView: React.FC = () => {
                       canEdit={canEdit}
                       placeholder={tabPlaceholder[activeTab]}
                       markdownComponents={markdownComponents}
-                      onEditToggle={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
-                      onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
-                      onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
-                      onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
+                      onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation' | 'qa-context'>, v)}
+                      onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
+                      onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
                     />
                   </>
                 )}
@@ -1980,6 +2039,31 @@ export const DesignDocReviewView: React.FC = () => {
           isPending={reviewDoc.isPending}
           onConfirm={(reason) => void handleRequestRevision(reason)}
           onCancel={() => setShowRevisionModal(false)}
+        />
+      )}
+
+      {showApproverModal && doc && (
+        <ApproverSelectModal
+          documentType="design_doc"
+          project={doc.project}
+          excludeSelf={!isAdmin}
+          onConfirm={(selections) => void handleApproverConfirm(selections)}
+          onCancel={() => setShowApproverModal(false)}
+          isSubmitting={submitDoc.isPending}
+        />
+      )}
+
+      {showReassignModal && doc && (
+        <ApproverSelectModal
+          documentType="design_doc"
+          project={doc.project}
+          initialApproverIds={assignments.filter((a) => a.status === 'pending').map((a) => a.approverUserId)}
+          confirmLabel="Update Approvers"
+          excludeSelf={false}
+          allowEmpty
+          onConfirm={(selections) => void handleReassignConfirm(selections)}
+          onCancel={() => setShowReassignModal(false)}
+          isSubmitting={reassignApprovers.isPending}
         />
       )}
     </div>

@@ -1,5 +1,109 @@
 [
   {
+    "version": "1.22.0",
+    "date": "2026-06-01",
+    "title": "Interview Context & Agent Reliability",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Interview chat shows a context usage bar and wrap-up banners as the conversation approaches the model limit — with one-click Generate PRD and a confirmation before sending when the window is nearly full"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agents automatically retry transient and rate-limited Cursor API errors with exponential backoff, and classify failures so auth issues prompt a refresh instead of endless retries"
+      },
+      {
+        "type": "improvement",
+        "description": "Interview chat sessions use a longer idle timeout (2 hours) and the server recovers threads left stuck in running after a restart"
+      },
+      {
+        "type": "improvement",
+        "description": "Failed sends and PRD generation in interviews now show a dismissible error banner instead of failing silently"
+      },
+      {
+        "type": "improvement",
+        "description": "Azure Application Insights telemetry for client and server when APPLICATIONINSIGHTS_CONNECTION_STRING is configured"
+      }
+    ]
+  },
+  {
+    "version": "1.21.0",
+    "date": "2026-05-31",
+    "title": "Document Approver Assignments & Notifications",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Approvers are now assigned per-document at submit time — a modal lets authors pick specific PRD and design doc approvers from the project pool before submitting for review"
+      },
+      {
+        "type": "feature",
+        "description": "In-app notification center — a bell icon in the header shows unread notifications; approvers receive a notification when assigned to review a document"
+      },
+      {
+        "type": "feature",
+        "description": "Real-time notification delivery via Server-Sent Events — new notifications appear instantly without page refresh, with optional toast popups"
+      },
+      {
+        "type": "feature",
+        "description": "Notification preferences — users can toggle per-type notifications and toast alerts on or off from the Notifications page"
+      },
+      {
+        "type": "feature",
+        "description": "Admins can reassign pending approvers on any document after submission via a new assignments panel"
+      },
+      {
+        "type": "improvement",
+        "description": "Approval mode (any one / all required) is now configurable per project in Admin → Project Settings"
+      },
+      {
+        "type": "improvement",
+        "description": "Design doc approver IDs set at PRD submission are automatically propagated to new per-feature design docs as they are generated"
+      }
+    ]
+  },
+  {
+    "version": "1.20.0",
+    "date": "2026-05-30",
+    "title": "Project Settings & Approvers",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Admins can assign designated design doc and PRD approvers per project — any listed approver with review permission can approve that document type"
+      },
+      {
+        "type": "feature",
+        "description": "Each project can override the global default AI model with its own per-project default"
+      },
+      {
+        "type": "improvement",
+        "description": "Project settings admin page is reorganized into accordion sections with contextual help, making skill paths, models, and pills easier to configure"
+      },
+      {
+        "type": "improvement",
+        "description": "Project list view shows approver counts at a glance instead of a wide table of truncated model IDs"
+      }
+    ]
+  },
+  {
+    "version": "1.19.2",
+    "date": "2026-05-28",
+    "title": "PRD & Interview Guardrails",
+    "changes": [
+      {
+        "type": "improvement",
+        "description": "Generate PRD button on completed interviews is now disabled when a PRD has already been generated, preventing accidental duplicates"
+      },
+      {
+        "type": "improvement",
+        "description": "Reopen button on completed interviews is disabled (and hidden from the locked notice) when a PRD already exists, keeping the interview locked once a PRD is in progress"
+      },
+      {
+        "type": "improvement",
+        "description": "Reopen for Review button on PRDs is disabled when the PRD status is approved, preventing approved PRDs from being sent back for re-review"
+      }
+    ]
+  },
+  {
     "version": "1.19.1",
     "date": "2026-05-26",
     "title": "Skill Pill Model Fix",

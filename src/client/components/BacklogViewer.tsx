@@ -50,6 +50,8 @@ interface BacklogItem {
   businessRules?: string[];
   outOfScope?: string[];
   acceptanceCriteria?: AcceptanceCriterion[];
+  adoWorkItemId?: number;
+  adoWorkItemUrl?: string;
 }
 
 interface Feature {
@@ -61,6 +63,8 @@ interface Feature {
   dependencies?: string[];
   featureFlag?: { name: string };
   items?: BacklogItem[];
+  adoWorkItemId?: number;
+  adoWorkItemUrl?: string;
 }
 
 interface Epic {
@@ -72,6 +76,8 @@ interface Epic {
   assumptions?: string[];
   dependencies?: string[];
   features?: Feature[];
+  adoWorkItemId?: number;
+  adoWorkItemUrl?: string;
 }
 
 interface BacklogData {
@@ -100,6 +106,19 @@ const PriorityBadge: React.FC<{ priority?: string }> = ({ priority }) => {
   const cls = PRIORITY_CLASS[priority] ?? styles.priorityDefault;
   return <span className={`${styles.priorityBadge} ${cls}`}>{priority}</span>;
 };
+
+const AdoMergedBadge: React.FC<{ adoWorkItemId?: number }> = ({ adoWorkItemId }) => {
+  if (!adoWorkItemId) return null;
+  return (
+    <span className={styles.adoMergedBadge} title={`ADO #${adoWorkItemId}`}>
+      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={styles.adoMergedIcon}>
+        <polyline points="2 6.5 4.5 9 10 3.5" />
+      </svg>
+      In ADO
+    </span>
+  );
+};
+
 
 /* ── Collapsible section ──────────────────────────────────────────────────── */
 
@@ -204,8 +223,22 @@ const ItemCard: React.FC<{ item: BacklogItem }> = ({ item }) => {
             {item.type}
           </span>
           <span className={styles.itemId}>{item.id}</span>
-          <span className={styles.itemTitle}>{item.title}</span>
+          {item.adoWorkItemUrl ? (
+            <a
+              href={item.adoWorkItemUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${styles.itemTitle} ${styles.adoLink}`}
+              onClick={(e) => e.stopPropagation()}
+              title={`View ADO #${item.adoWorkItemId}`}
+            >
+              {item.title}
+            </a>
+          ) : (
+            <span className={styles.itemTitle}>{item.title}</span>
+          )}
           <PriorityBadge priority={item.priority} />
+          <AdoMergedBadge adoWorkItemId={item.adoWorkItemId} />
           {item.dependsOn && item.dependsOn.length > 0 && (
             <span className={styles.dependsOn}>
               depends on: {item.dependsOn.join(', ')}
@@ -333,8 +366,22 @@ const FeatureCard: React.FC<{ feature: Feature; index: number }> = ({ feature, i
       header={
         <div className={styles.featureHeader}>
           <span className={styles.featureLabel}>Feature</span>
-          <span className={styles.featureTitle}>{feature.title}</span>
+          {feature.adoWorkItemUrl ? (
+            <a
+              href={feature.adoWorkItemUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${styles.featureTitle} ${styles.adoLink}`}
+              onClick={(e) => e.stopPropagation()}
+              title={`View ADO #${feature.adoWorkItemId}`}
+            >
+              {feature.title}
+            </a>
+          ) : (
+            <span className={styles.featureTitle}>{feature.title}</span>
+          )}
           <PriorityBadge priority={feature.priority} />
+          <AdoMergedBadge adoWorkItemId={feature.adoWorkItemId} />
           {feature.featureFlag && (
             <span className={styles.featureFlag}>{feature.featureFlag.name}</span>
           )}
@@ -391,8 +438,22 @@ const EpicCard: React.FC<{ epic: Epic; index: number }> = ({ epic, index }) => {
       header={
         <div className={styles.epicHeader}>
           <span className={styles.epicIndex}>Epic {index + 1}</span>
-          <span className={styles.epicTitle}>{epic.title}</span>
+          {epic.adoWorkItemUrl ? (
+            <a
+              href={epic.adoWorkItemUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${styles.epicTitle} ${styles.adoLink}`}
+              onClick={(e) => e.stopPropagation()}
+              title={`View ADO #${epic.adoWorkItemId}`}
+            >
+              {epic.title}
+            </a>
+          ) : (
+            <span className={styles.epicTitle}>{epic.title}</span>
+          )}
           <PriorityBadge priority={epic.priority} />
+          <AdoMergedBadge adoWorkItemId={epic.adoWorkItemId} />
           <span className={styles.epicCounts}>
             <span>{totalFeatures} feature{totalFeatures !== 1 ? 's' : ''}</span>
             {totalTbis > 0 && <span className={styles.countTbi}>{totalTbis} TBI{totalTbis !== 1 ? 's' : ''}</span>}

@@ -1386,3 +1386,136 @@
 [data-theme="dark"] .cost-table thead {
   background: var(--bg-primary);
 }
+
+/* ── Responsive: Tablet / small desktop ──────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .cloud-cost-header {
+    padding: 16px;
+  }
+
+  .cloud-cost-header h2 {
+    font-size: 22px;
+  }
+
+  .cloud-cost-header .header-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .cloud-cost-filters {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .filter-group.resource-group-filter {
+    min-width: 0;
+  }
+
+  .cloud-cost-content {
+    padding: 16px;
+  }
+
+  .cost-overview {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+
+  .cost-charts {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cost-table table {
+    min-width: 500px;
+  }
+
+  .rg-breakdown-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .trend-summary {
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+
+  .cost-value {
+    font-size: 24px;
+  }
+
+  .view-toggle .toggle-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+
+  .info-modal {
+    width: 95%;
+  }
+}
+
+/* ── Responsive: Phone ───────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .cloud-cost-header {
+    padding: 12px;
+  }
+
+  .cloud-cost-header h2 {
+    font-size: 20px;
+  }
+
+  .cloud-cost-content {
+    padding: 12px;
+  }
+
+  .cost-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .trend-summary {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .trend-value {
+    font-size: 16px;
+  }
+
+  .cost-card {
+    padding: 16px;
+  }
+
+  .chart-container {
+    padding: 12px;
+  }
+
+  .cost-chart {
+    height: 200px;
+  }
+
+  .dashboard-subscription-card {
+    padding: 16px;
+  }
+
+  .rg-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}

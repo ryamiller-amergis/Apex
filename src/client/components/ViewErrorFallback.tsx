@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { FallbackProps } from 'react-error-boundary';
+import { trackException } from '../services/telemetry';
 import styles from './ViewErrorFallback.module.css';
 
 export const ViewErrorFallback: React.FC<FallbackProps> = ({ error, resetErrorBoundary }) => {
+  useEffect(() => {
+    trackException(error instanceof Error ? error : new Error(String(error)), {
+      component: 'ViewErrorFallback',
+    });
+  }, [error]);
+
   return (
     <div className={styles['view-error-fallback']} role="alert">
       <div className={styles['view-error-content']}>

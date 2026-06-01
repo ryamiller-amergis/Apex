@@ -1334,3 +1334,131 @@
   cursor: not-allowed;
 }
 
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .page {
+    flex-direction: column;
+  }
+
+  .compose {
+    padding: 16px;
+  }
+
+  .compose > .historyToggleBtn {
+    position: static;
+    margin-bottom: 8px;
+    align-self: flex-start;
+    min-height: 44px;
+  }
+
+  .composeInner {
+    max-width: 100%;
+    gap: 16px;
+  }
+
+  .composeHeading {
+    font-size: 1.3rem;
+  }
+
+  .composeLogo {
+    font-size: 2.5rem;
+  }
+
+  .pillDescription {
+    max-width: 100%;
+  }
+
+  .inputBox {
+    border-radius: 10px;
+    padding: 10px;
+  }
+
+  .chat {
+    width: 100%;
+  }
+
+  .chatHeader {
+    padding: 10px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .chatHeaderActions {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .contextMeter {
+    display: none;
+  }
+
+  .historyToggleBtn {
+    min-height: 44px;
+  }
+
+  .newSessionBtn {
+    min-height: 44px;
+  }
+
+  .messages {
+    padding: 16px 12px;
+  }
+
+  .chatInputBar {
+    padding: 8px 12px 12px;
+  }
+
+  .userBubble {
+    max-width: 90%;
+  }
+
+  .agentBubble {
+    max-width: 95%;
+  }
+
+  .agentBubblePanel {
+    max-width: 95%;
+  }
+
+  .sendBtn,
+  .attachBtn,
+  .micBtn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .modelSelect {
+    height: 44px;
+  }
+
+  .prdBanner {
+    margin: 0 12px 8px;
+    flex-wrap: wrap;
+  }
+
+  .prdActions {
+    width: 100%;
+  }
+
+  .prdActions .btnSecondary,
+  .prdActions .btnSuccess {
+    flex: 1;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .choiceOption {
+    min-height: 44px;
+  }
+
+  .choiceSendBtn {
+    min-height: 44px;
+  }
+
+  .skillPickerItem {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+}
+

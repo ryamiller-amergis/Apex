@@ -133,6 +133,20 @@ describe('useInterviewList', () => {
     );
   });
 
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useInterviewList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
+      expect.any(Object),
+    );
+  });
+
   it('surfaces fetch errors', async () => {
     mockFetchError(500, { error: 'Server error' });
     const { wrapper } = createWrapper();
@@ -198,6 +212,20 @@ describe('usePrdList', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('status=approved'),
+      expect.any(Object),
+    );
+  });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => usePrdList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
       expect.any(Object),
     );
   });
@@ -424,7 +452,11 @@ describe('useSubmitPrd', () => {
     const { result } = renderHook(() => useSubmitPrd(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('prd-1');
+      result.current.mutate({
+        prdId: 'prd-1',
+        prdApproverIds: ['approver-1'],
+        designDocApproverIds: ['approver-2'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -612,6 +644,20 @@ describe('useDesignDocList', () => {
       expect.any(Object),
     );
   });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useDesignDocList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
+      expect.any(Object),
+    );
+  });
 });
 
 // ── useDesignDoc ──────────────────────────────────────────────────────────────
@@ -703,7 +749,10 @@ describe('useSubmitDesignDoc', () => {
     const { result } = renderHook(() => useSubmitDesignDoc(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('dd-1');
+      result.current.mutate({
+        designDocId: 'dd-1',
+        approverIds: ['approver-1'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

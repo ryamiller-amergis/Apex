@@ -12,8 +12,21 @@ import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionS
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
+import { fetchAvailableModels } from '../services/modelsService';
+import { getAgentHealthStats } from '../services/chatAgentService';
 
 const router = express.Router();
+
+// GET /api/available-models — accessible to all authenticated users so that
+// non-admin roles (e.g. interviews:manage) can populate model dropdowns.
+router.get('/available-models', async (_req: Request, res: Response) => {
+  try {
+    const models = await fetchAvailableModels();
+    res.json({ models });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // GET /api/projects - List ADO projects accessible to the configured PAT,
 // filtered to the allowlist in ADO_ALLOWED_PROJECTS (comma-separated).
@@ -51,6 +64,19 @@ router.get('/projects/:project/teams', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error fetching ADO teams:', error);
     res.status(500).json({ error: 'Failed to fetch teams' });
+  }
+});
+
+// GET /api/projects/:project/area-paths - List area paths for a given ADO project
+router.get('/projects/:project/area-paths', async (req: Request, res: Response) => {
+  try {
+    const { project } = req.params;
+    const adoService = new AzureDevOpsService();
+    const areaPaths = await adoService.getAreaPaths(project);
+    res.json(areaPaths);
+  } catch (error: any) {
+    console.error('Error fetching ADO area paths:', error);
+    res.status(500).json({ error: 'Failed to fetch area paths' });
   }
 });
 
@@ -175,6 +201,11 @@ router.get('/health/db', async (_req: Request, res: Response) => {
     console.error('[db] Health check failed:', error);
     res.status(503).json({ healthy: false, error: 'Database unavailable' });
   }
+});
+
+// GET /api/health/agents - Chat agent system health
+router.get('/health/agents', (_req: Request, res: Response) => {
+  res.json(getAgentHealthStats());
 });
 
 // GET /api/due-date-stats - Get due date change statistics by developer

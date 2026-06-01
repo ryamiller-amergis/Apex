@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateDesignDocResponse,
   CreateInterviewResponse,
+  CreatePrdAdoItemsRequest,
+  CreatePrdAdoItemsResponse,
   CreatePrdResponse,
   DesignDoc,
   DesignDocStatus,
@@ -16,6 +18,11 @@ import type {
   ReviewPrdRequest,
   ReviewPrdResponse,
 } from '../../shared/types/interview';
+import type {
+  DocumentApproverAssignment,
+  SubmitDesignDocForReviewRequest,
+  SubmitForReviewRequest,
+} from '../../shared/types/approvals';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -29,10 +36,11 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ── Interview queries ──────────────────────────────────────────────────────────
 
-export function useInterviewList(filters?: { status?: InterviewStatus; project?: string }) {
+export function useInterviewList(filters?: { status?: InterviewStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<InterviewSummary[]>({
     queryKey: ['interviews', filters],
@@ -50,10 +58,11 @@ export function useInterview(id: string | null) {
   });
 }
 
-export function usePrdList(filters?: { status?: PrdStatus; project?: string }) {
+export function usePrdList(filters?: { status?: PrdStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<PrdSummary[]>({
     queryKey: ['prds', filters],
@@ -75,10 +84,11 @@ export function usePrd(id: string | null) {
 
 // ── Design Doc queries ────────────────────────────────────────────────────────
 
-export function useDesignDocList(filters?: { status?: DesignDocStatus; project?: string }) {
+export function useDesignDocList(filters?: { status?: DesignDocStatus; project?: string; author?: 'me' }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project) params.set('project', filters.project);
+  if (filters?.author) params.set('author', filters.author);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery<DesignDocSummary[]>({
     queryKey: ['design-docs', filters],
@@ -113,6 +123,52 @@ export function useDesignDoc(id: string | null) {
 }
 
 // ── Interview mutations ────────────────────────────────────────────────────────
+
+// ── Approver queries ──────────────────────────────────────────────────────────
+
+export function useAvailableApprovers(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
+  const qs = excludeSelf ? '?excludeSelf=true' : '';
+  return useQuery<{ userId: string; displayName: string }[]>({
+    queryKey: ['available-approvers', project, documentType, excludeSelf],
+    queryFn: () => apiFetch(`/api/interviews/available-approvers/${encodeURIComponent(project)}/${documentType}${qs}`),
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+}
+
+export function useReassignApprovers() {
+  const qc = useQueryClient();
+  return useMutation<DocumentApproverAssignment[], Error, { documentId: string; documentType: 'prd' | 'design_doc'; approverUserIds: string[] }>({
+    mutationFn: ({ documentId, documentType, approverUserIds }) => {
+      const endpoint = documentType === 'prd'
+        ? `/api/interviews/prds/${documentId}/assignments`
+        : `/api/interviews/design-docs/${documentId}/assignments`;
+      return apiFetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approverUserIds }),
+      });
+    },
+    onSuccess: (_data, { documentId, documentType }) => {
+      qc.invalidateQueries({ queryKey: ['document-assignments', documentId, documentType] });
+    },
+  });
+}
+
+export function useDocumentAssignments(documentId: string | null, documentType: 'prd' | 'design_doc') {
+  const endpoint = documentType === 'prd'
+    ? `/api/interviews/prds/${documentId}/assignments`
+    : `/api/interviews/design-docs/${documentId}/assignments`;
+  return useQuery<DocumentApproverAssignment[]>({
+    queryKey: ['document-assignments', documentId, documentType],
+    queryFn: () => apiFetch(endpoint),
+    enabled: !!documentId,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+  });
+}
+
+// ── Interview mutations (continued) ──────────────────────────────────────────
 
 export function useCreateInterview() {
   const qc = useQueryClient();
@@ -211,12 +267,17 @@ export function useUpdatePrdContent() {
 
 export function useSubmitPrd() {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (prdId) =>
-      apiFetch(`/api/interviews/prds/${prdId}/submit`, { method: 'POST' }),
-    onSuccess: (_data, prdId) => {
+  return useMutation<void, Error, { prdId: string } & SubmitForReviewRequest>({
+    mutationFn: ({ prdId, ...body }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { prdId }) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
+      qc.invalidateQueries({ queryKey: ['document-assignments', prdId] });
     },
   });
 }
@@ -306,12 +367,17 @@ export function useUpdateDesignDocContent() {
 
 export function useSubmitDesignDoc() {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (designDocId) =>
-      apiFetch(`/api/interviews/design-docs/${designDocId}/submit`, { method: 'POST' }),
-    onSuccess: (_data, designDocId) => {
+  return useMutation<void, Error, { designDocId: string } & SubmitDesignDocForReviewRequest>({
+    mutationFn: ({ designDocId, ...body }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { designDocId }) => {
       qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
       qc.invalidateQueries({ queryKey: ['design-docs'] });
+      qc.invalidateQueries({ queryKey: ['document-assignments', designDocId] });
     },
   });
 }
@@ -498,6 +564,38 @@ export function useValidationReport(docId: string | null, validationThreadId: st
       if (query.state.data?.markdown) return false;
       if (docStatus === 'validating') return 10_000;
       return false;
+    },
+  });
+}
+
+// ── PRD → ADO Work Items ─────────────────────────────────────────────────────
+
+export function useCreatePrdAdoItems() {
+  const qc = useQueryClient();
+  return useMutation<CreatePrdAdoItemsResponse, Error, { prdId: string } & CreatePrdAdoItemsRequest>({
+    mutationFn: ({ prdId, ...body }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/ado-work-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useSyncPrdAdoStatus(prdId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<{ cleared: number }, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/sync-ado-status`, {
+        method: 'POST',
+      }),
+    onSuccess: (data) => {
+      if (data.cleared > 0 && prdId) {
+        qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      }
     },
   });
 }

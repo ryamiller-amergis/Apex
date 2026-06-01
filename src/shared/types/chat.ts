@@ -103,9 +103,12 @@ export interface SseStatusEvent {
   status: ChatThreadStatus;
 }
 
+export type SseErrorCode = 'transient' | 'rate_limit' | 'context_overflow' | 'auth' | 'fatal';
+
 export interface SseErrorEvent {
   type: 'error';
   error: string;
+  errorCode?: SseErrorCode;
 }
 
 export interface SseDoneEvent {

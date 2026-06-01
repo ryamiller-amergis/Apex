@@ -144,7 +144,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([{ interviewId: 'interview-1', cnt: '2' }]),
       }));
 
-    const result = await listInterviews('user-1');
+    const result = await listInterviews({ authorId: 'user-1' });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -168,7 +168,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1');
+    const result = await listInterviews({ authorId: 'user-1' });
 
     expect(result[0].prdCount).toBe(0);
   });
@@ -185,7 +185,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-nobody');
+    const result = await listInterviews({ authorId: 'user-nobody' });
 
     expect(result).toEqual([]);
   });
@@ -204,7 +204,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-alpha' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-alpha' });
 
     expect(result).toHaveLength(1);
     expect(result[0].project).toBe('proj-alpha');
@@ -223,7 +223,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-nonexistent' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-nonexistent' });
 
     expect(result).toEqual([]);
   });
@@ -242,7 +242,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-alpha', status: 'complete' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-alpha', status: 'complete' });
 
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe('complete');

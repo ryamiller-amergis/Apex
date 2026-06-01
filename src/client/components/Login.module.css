@@ -79,3 +79,31 @@
   margin: 0 auto 2rem;
   font-size: 4.2rem;
 }
+
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .login-card {
+    width: 100%;
+    padding: 2rem 1.5rem;
+    border-radius: 12px;
+    max-width: none;
+    margin: 0 8px;
+  }
+
+  .login-card p {
+    font-size: 0.9rem;
+    margin-bottom: 2rem;
+  }
+
+  .login-button {
+    min-height: 44px;
+    padding: 12px 24px;
+    font-size: 15px;
+  }
+
+  .login-logo {
+    font-size: 3.2rem;
+    margin-bottom: 1.5rem;
+  }
+}

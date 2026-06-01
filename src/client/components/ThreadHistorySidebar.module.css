@@ -294,3 +294,48 @@
 .row-time {
   flex-shrink: 0;
 }
+
+/* ── Mobile: full-screen overlay ─────────────────────────── */
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    z-index: 1000;
+    border-right: none;
+  }
+
+  .close-btn {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  .row-title {
+    max-width: none;
+  }
+
+  .row-select {
+    padding: 12px 10px 12px 14px;
+  }
+
+  .row-flag,
+  .row-delete {
+    opacity: 1;
+    width: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .header {
+    padding: 10px 12px;
+  }
+
+  .row-select {
+    padding: 10px 8px 10px 12px;
+  }
+}

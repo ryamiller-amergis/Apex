@@ -459,4 +459,104 @@
   .search-wrap {
     max-width: 100%;
   }
+
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table {
+    min-width: 500px;
+  }
+
+  .th {
+    padding: 8px 10px;
+    font-size: 0.68rem;
+  }
+
+  .td {
+    padding: 10px;
+  }
+
+  .action-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .role-select {
+    min-width: unset;
+    width: 100%;
+  }
+
+  .assign-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .result-count {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 12px 8px;
+    gap: 12px;
+  }
+
+  .title {
+    font-size: 1.25rem;
+  }
+
+  .subtitle {
+    font-size: 0.75rem;
+  }
+
+  .search-input {
+    font-size: 0.8rem;
+    padding: 7px 28px 7px 28px;
+  }
+
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 0.7rem;
+  }
+
+  .user-name {
+    font-size: 0.82rem;
+  }
+
+  .email {
+    font-size: 0.75rem;
+  }
+
+  .last-seen {
+    font-size: 0.75rem;
+  }
+
+  .badge {
+    font-size: 0.7rem;
+    padding: 2px 6px 2px 8px;
+  }
+
+  .assign-btn {
+    padding: 5px 10px;
+    font-size: 0.75rem;
+  }
+
+  .role-select {
+    font-size: 0.75rem;
+    padding: 5px 6px;
+  }
 }

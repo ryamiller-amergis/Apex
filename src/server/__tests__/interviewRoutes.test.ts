@@ -28,6 +28,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 
 jest.mock('../services/designDocService');
+jest.mock('../services/documentApprovalService');
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn().mockResolvedValue(null),
 }));
@@ -100,6 +101,16 @@ const {
   syncValidationResult: jest.Mock;
 };
 
+const {
+  getAssignments: mockGetAssignments,
+  getAvailableApprovers: mockGetAvailableApprovers,
+  reassignApprovers: mockReassignApprovers,
+} = jest.requireMock('../services/documentApprovalService') as {
+  getAssignments: jest.Mock;
+  getAvailableApprovers: jest.Mock;
+  reassignApprovers: jest.Mock;
+};
+
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
 mockAutoStartValidation.mockResolvedValue(undefined);
 
@@ -167,7 +178,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { status: 'complete' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: 'complete',
+      project: undefined,
+      authorId: undefined,
+    });
   });
 
   it('passes project filter to the service', async () => {
@@ -175,7 +190,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { project: 'proj-alpha' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
   });
 
   it('passes both project and status filters to the service', async () => {
@@ -183,9 +202,22 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha&status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', {
-      project: 'proj-alpha',
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
       status: 'complete',
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
+  });
+
+  it('passes author=me as authorId to the service', async () => {
+    mockInterviewService.listInterviews.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews?author=me');
+
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: undefined,
+      authorId: 'user-test',
     });
   });
 
@@ -393,6 +425,26 @@ describe('GET /api/interviews/prds', () => {
     );
   });
 
+  it('passes author=me as userId filter to listPrds', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds?author=me');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: undefined }),
+    );
+  });
+
   it('returns only PRDs for the requested project', async () => {
     const alphaPrd = { ...prdSummary, id: 'prd-alpha' };
     mockPrdService.listPrds.mockResolvedValue([alphaPrd]);
@@ -494,7 +546,7 @@ describe('POST /api/interviews/prds/:prdId/submit', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test');
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', { prdApproverIds: [], designDocApproverIds: [] });
   });
 
   it('propagates 409 conflict from service', async () => {
@@ -879,6 +931,26 @@ describe('GET /api/interviews/design-docs', () => {
       expect.objectContaining({ status: 'approved' }),
     );
   });
+
+  it('passes author=me as userId filter to listDesignDocs', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs?author=me');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.not.objectContaining({ userId: 'user-test' }),
+    );
+  });
 });
 
 // ── GET /api/interviews/design-docs/:id ───────────────────────────────────────
@@ -1109,3 +1181,178 @@ describe('GET /api/interviews/design-docs/:id/validation', () => {
   });
 });
 
+// ── GET /api/interviews/prds/:prdId/assignments ──────────────────────────────
+
+describe('GET /api/interviews/prds/:prdId/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with assignment array', async () => {
+    const assignments = [
+      { id: 'assign-1', documentId: 'prd-1', documentType: 'prd', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'pending' },
+    ];
+    mockGetAssignments.mockResolvedValue(assignments);
+
+    const res = await request(buildApp()).get('/api/interviews/prds/prd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 'assign-1', approverDisplayName: 'Alice' });
+    expect(mockGetAssignments).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('returns 200 with empty array when no assignments', async () => {
+    mockGetAssignments.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/prds/prd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+// ── GET /api/interviews/design-docs/:id/assignments ──────────────────────────
+
+describe('GET /api/interviews/design-docs/:id/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with assignment array', async () => {
+    const assignments = [
+      { id: 'assign-1', documentId: 'dd-1', documentType: 'design_doc', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'approved' },
+    ];
+    mockGetAssignments.mockResolvedValue(assignments);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockGetAssignments).toHaveBeenCalledWith('dd-1', 'design_doc');
+  });
+});
+
+// ── GET /api/interviews/available-approvers/:project/:documentType ────────────
+
+describe('GET /api/interviews/available-approvers/:project/:documentType', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with available approvers for prd type', async () => {
+    const approvers = [
+      { userId: 'u1', displayName: 'Alice' },
+      { userId: 'u2', displayName: 'Bob' },
+    ];
+    mockGetAvailableApprovers.mockResolvedValue(approvers);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/prd?excludeSelf=true');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'prd', 'user-test');
+  });
+
+  it('returns 200 with available approvers for design_doc type', async () => {
+    mockGetAvailableApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/design_doc?excludeSelf=true');
+
+    expect(res.status).toBe(200);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'design_doc', 'user-test');
+  });
+
+  it('passes undefined excludeUserId when excludeSelf is not set', async () => {
+    mockGetAvailableApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/prd');
+
+    expect(res.status).toBe(200);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'prd', undefined);
+  });
+
+  it('returns 400 for invalid documentType', async () => {
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'documentType must be "prd" or "design_doc"' });
+  });
+});
+
+// ── PUT /api/interviews/prds/:prdId/assignments ───────────────────────────────
+
+describe('PUT /api/interviews/prds/:prdId/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with updated assignments', async () => {
+    const assignments = [
+      { id: 'a1', documentId: 'prd-1', documentType: 'prd', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'pending' },
+    ];
+    mockReassignApprovers.mockResolvedValue(assignments);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: ['u1'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 'a1', approverDisplayName: 'Alice' });
+    expect(mockReassignApprovers).toHaveBeenCalledWith('prd-1', 'prd', ['u1'], 'user-test');
+  });
+
+  it('returns 200 with empty array to clear all pending approvers', async () => {
+    mockReassignApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: [] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('returns 400 when approverUserIds is missing', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when approverUserIds is not an array', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: 'u1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+  });
+});
+
+// ── PUT /api/interviews/design-docs/:id/assignments ───────────────────────────
+
+describe('PUT /api/interviews/design-docs/:id/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with updated assignments', async () => {
+    const assignments = [
+      { id: 'a1', documentId: 'dd-1', documentType: 'design_doc', approverUserId: 'u2', approverDisplayName: 'Bob', status: 'pending' },
+    ];
+    mockReassignApprovers.mockResolvedValue(assignments);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/assignments')
+      .send({ approverUserIds: ['u2'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockReassignApprovers).toHaveBeenCalledWith('dd-1', 'design_doc', ['u2'], 'user-test');
+  });
+
+  it('returns 400 when approverUserIds is missing', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/assignments')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+});

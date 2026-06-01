@@ -6,6 +6,7 @@ import { designDocs, appUsers, chatThreads, prds } from '../db/schema';
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
+import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers } from './documentApprovalService';
 import { getSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
@@ -148,7 +149,11 @@ export async function updateDesignDocContent(
   await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
 }
 
-export async function submitForReview(id: string, requestingUserId: string): Promise<void> {
+export async function submitForReview(
+  id: string,
+  requestingUserId: string,
+  opts?: { approverIds?: string[] },
+): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
@@ -171,6 +176,10 @@ export async function submitForReview(id: string, requestingUserId: string): Pro
       updatedAt: new Date().toISOString(),
     })
     .where(eq(designDocs.id, id));
+
+  if (opts?.approverIds && opts.approverIds.length > 0) {
+    await assignApprovers(id, 'design_doc', opts.approverIds, requestingUserId);
+  }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
@@ -222,6 +231,24 @@ export async function reviewDesignDoc(
         (err as any).status = 409;
         throw err;
       }
+    }
+  }
+
+  const admin = await isAdminUser(reviewerId);
+  const assigned = await isAssignedApprover(id, 'design_doc', reviewerId);
+  if (!assigned && !admin) {
+    throw forbidden('You are not an assigned approver for this design doc');
+  }
+
+  const responseStatus = opts.action === 'approve' ? 'approved' as const : 'revision_requested' as const;
+  if (assigned) {
+    await recordApproverResponse(id, 'design_doc', reviewerId, responseStatus, opts.comment ?? undefined);
+  }
+
+  if (opts.action === 'approve') {
+    const { complete } = await isApprovalComplete(id, 'design_doc', row.project);
+    if (!complete) {
+      return;
     }
   }
 
@@ -346,6 +373,9 @@ export async function syncPerFeatureDesignDocs(
     createdIds.push(row.id);
     existingTitles.add(title);
     console.log(`[designDoc] Created per-feature row "${title}" (id=${row.id}, status=${finalStatus})`);
+    propagateDesignDocApprovers(prdId, row.id, authorId).catch((err) => {
+      console.error(`[designDoc] propagateDesignDocApprovers failed (prdId=${prdId}, docId=${row.id})`, err);
+    });
   }
 
   // Null the seed row's chatThreadId — marks it as processed so the watcher skips creation
@@ -425,6 +455,9 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
             .returning({ id: designDocs.id });
           createdSlugs.add(feat.slug);
           console.log(`[designDocWatcher] Created feature row "${humanizeSlug(feat.slug)}" (id=${row.id})`);
+          propagateDesignDocApprovers(seedDoc.prdId, row.id, seedDoc.authorId).catch((err) => {
+            console.error(`[designDocWatcher] propagateDesignDocApprovers failed (prdId=${seedDoc.prdId}, docId=${row.id})`, err);
+          });
           if (finalStatus === 'validating') {
             autoStartValidation(row.id).catch((err) => {
               console.error(`[designDocWatcher] autoStartValidation failed (id=${row.id})`, err);

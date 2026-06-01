@@ -401,6 +401,34 @@
   color: var(--error-color);
 }
 
+.sendError {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.8rem;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--error-color) 20%, transparent);
+}
+
+.sendErrorDismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--error-color);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.sendErrorDismiss:hover {
+  opacity: 1;
+}
+
 .inputActions {
   display: flex;
   align-items: center;
@@ -1011,6 +1039,235 @@
   border-color: var(--accent-color);
 }
 
+/* ── Context usage bar (above input) ────────────────────────────────────────── */
+
+.contextBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.contextBarTrack {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.contextBarFill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-color);
+  transition: width 0.3s ease;
+}
+
+.contextBarFillWarn {
+  background: #f59e0b;
+}
+
+.contextBarFillCritical {
+  background: var(--error-color);
+}
+
+.contextBarLabel {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.contextBarLabelWarn {
+  color: var(--error-color);
+  font-weight: 600;
+}
+
+/* ── Context wrap-up banners ─────────────────────────────────────────────────── */
+
+.wrapUpBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  animation: bannerSlideIn 0.3s ease;
+}
+
+@keyframes bannerSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.wrapUpBannerWarn {
+  composes: wrapUpBanner;
+  background: color-mix(in srgb, #f59e0b 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, var(--border-color));
+  color: var(--text-primary);
+}
+
+.wrapUpBannerCritical {
+  composes: wrapUpBanner;
+  background: color-mix(in srgb, var(--error-color) 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-color));
+  color: var(--text-primary);
+}
+
+.wrapUpIcon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.wrapUpBannerWarn .wrapUpIcon {
+  color: #f59e0b;
+}
+
+.wrapUpBannerCritical .wrapUpIcon {
+  color: var(--error-color);
+}
+
+.wrapUpBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.wrapUpActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.wrapUpGenerateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.wrapUpBannerWarn .wrapUpGenerateBtn {
+  background: #f59e0b;
+  color: #fff;
+}
+
+.wrapUpBannerWarn .wrapUpGenerateBtn:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.wrapUpBannerCritical .wrapUpGenerateBtn {
+  background: var(--error-color);
+  color: #fff;
+}
+
+.wrapUpBannerCritical .wrapUpGenerateBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 85%, #000);
+}
+
+.wrapUpGenerateBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wrapUpGenerateBtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.wrapUpDismissBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.wrapUpDismissBtn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.sendBtnCritical {
+  position: relative;
+}
+
+.sendConfirmOverlay {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-color));
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: var(--shadow-md);
+  width: 260px;
+  z-index: 10;
+  animation: bannerSlideIn 0.2s ease;
+}
+
+.sendConfirmText {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.sendConfirmActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sendConfirmYes {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 5px;
+  background: var(--error-color);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.sendConfirmYes:hover {
+  opacity: 0.85;
+}
+
+.sendConfirmNo {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sendConfirmNo:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
 /* ── Locked notice (replaces input when interview is complete/archived) ──────── */
 
 .lockedNotice {
@@ -1065,4 +1322,134 @@
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 0.85em;
+}
+
+/* ── Responsive: tablet ────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .header {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+
+  .headerLeft {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .headerRight {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .titleInput {
+    min-width: 140px;
+  }
+
+  .messages {
+    padding: 12px 16px;
+  }
+
+  .messageBubble {
+    max-width: 88%;
+  }
+
+  .assistantBubble {
+    max-width: 88%;
+  }
+
+  .inputArea {
+    padding: 10px 16px 14px;
+  }
+
+  .lockedNotice {
+    padding: 10px 16px;
+    flex-wrap: wrap;
+  }
+
+  .composeInner {
+    max-width: 100%;
+  }
+
+  .composeHeading {
+    font-size: 1.4rem;
+  }
+}
+
+/* ── Responsive: narrow phones ─────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .headerRight {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .actionBtn {
+    padding: 5px 8px;
+    font-size: 0.78rem;
+  }
+
+  .title {
+    font-size: 0.88rem;
+  }
+
+  .messages {
+    padding: 10px 12px;
+  }
+
+  .messageBubble {
+    max-width: 92%;
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+
+  .assistantBubble {
+    max-width: 92%;
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+
+  .inputArea {
+    padding: 8px 12px 12px;
+  }
+
+  .inputBox {
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  .composeContainer {
+    padding: 16px;
+  }
+
+  .composeHeading {
+    font-size: 1.2rem;
+  }
+
+  .composeInner {
+    gap: 16px;
+  }
+
+  .lockedNotice {
+    padding: 10px 12px;
+    font-size: 0.78rem;
+  }
+
+  .choiceBlock {
+    margin-top: 8px;
+  }
+
+  .choiceOption {
+    padding: 8px 10px;
+  }
+
+  .choiceSendBtn {
+    width: calc(100% - 16px);
+    margin: 8px 8px 10px;
+  }
 }

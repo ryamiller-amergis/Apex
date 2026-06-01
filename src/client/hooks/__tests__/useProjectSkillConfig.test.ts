@@ -6,6 +6,11 @@ import {
   useAllProjectSkillConfigs,
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
+  useGlobalDefaultModel,
+  useSetGlobalDefaultModel,
+  useAvailableModels,
+  useProjectApprovers,
+  useSetProjectApprovers,
 } from '../useProjectSkillConfig';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -313,5 +318,140 @@ describe('useDeleteProjectSkillConfig', () => {
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+// ── useGlobalDefaultModel / useSetGlobalDefaultModel ───────────────────────────
+
+describe('useGlobalDefaultModel', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/admin/app-settings/defaultModel', async () => {
+    mockFetchOk({ value: 'composer-2' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGlobalDefaultModel(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual({ value: 'composer-2' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/app-settings/defaultModel',
+      expect.any(Object),
+    );
+  });
+});
+
+describe('useSetGlobalDefaultModel', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('PUTs the global default model value', async () => {
+    mockFetchOk({ value: 'gpt-4o' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useSetGlobalDefaultModel(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('gpt-4o');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ value: 'gpt-4o' });
+  });
+});
+
+// ── useAvailableModels ─────────────────────────────────────────────────────────
+
+describe('useAvailableModels', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/available-models and returns the models array', async () => {
+    mockFetchOk({
+      models: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'gpt-4o', displayName: 'GPT-4o' },
+      ],
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useAvailableModels(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toHaveLength(2);
+    expect(global.fetch).toHaveBeenCalledWith('/api/available-models', expect.any(Object));
+  });
+});
+
+// ── useProjectApprovers / useSetProjectApprovers ───────────────────────────────
+
+const approver = {
+  id: 'a1',
+  project: 'proj-alpha',
+  userId: 'user-1',
+  documentType: 'design_doc' as const,
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  assignedBy: 'admin',
+  assignedAt: '2026-01-01T00:00:00Z',
+};
+
+describe('useProjectApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches approvers for the project', async () => {
+    mockFetchOk([approver]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useProjectApprovers('proj-alpha'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toHaveLength(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/admin/project-settings/'),
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch when project is null', async () => {
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useProjectApprovers(null), { wrapper });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSetProjectApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('PUTs design doc and PRD approver lists', async () => {
+    mockFetchOk({ designDoc: [approver], prd: [] });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useSetProjectApprovers(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({
+        project: 'proj-alpha',
+        designDocApprovers: ['user-1'],
+        prdApprovers: [],
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      designDocApprovers: ['user-1'],
+      prdApprovers: [],
+    });
   });
 });

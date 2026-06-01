@@ -1,3 +1,5 @@
+import type { ApprovalMode } from './approvals';
+
 export interface QuickSkillPill {
   label: string;
   skillPath: string;
@@ -23,7 +25,11 @@ export interface ProjectSkillConfig {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
+  approvalMode?: ApprovalMode;
+  designDocApproverCount?: number;
+  prdApproverCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -43,7 +49,26 @@ export interface UpsertProjectSkillConfigRequest {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
+  approvalMode?: ApprovalMode;
+}
+
+export interface ProjectApprover {
+  id: string;
+  project: string;
+  userId: string;
+  documentType: 'design_doc' | 'prd';
+  displayName: string | null;
+  email: string | null;
+  assignedBy: string | null;
+  assignedAt: string;
+}
+
+export interface SetApproversRequest {
+  project: string;
+  designDocApprovers: string[];
+  prdApprovers: string[];
 }
 
 export interface ProjectSkillConfigResponse {
@@ -62,5 +87,6 @@ export interface ProjectSkillConfigResponse {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
 }

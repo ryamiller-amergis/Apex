@@ -1888,3 +1888,152 @@
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+/* ── Responsive: Tablet / small desktop ──────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .dev-stats-container {
+    padding: 16px;
+    padding-bottom: 60px;
+  }
+
+  .dev-stats-container h2 {
+    font-size: 20px;
+  }
+
+  .filter-controls {
+    padding: 16px;
+  }
+
+  .filter-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .filter-group {
+    min-width: 0;
+  }
+
+  .filter-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stats-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 0;
+  }
+
+  .stats-tab {
+    flex-shrink: 0;
+    padding: 12px 12px;
+    font-size: 14px;
+  }
+
+  .developer-stats-list {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .hit-rate-details,
+  .pr-time-details {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .pr-feedback-summary,
+  .pr-resolution-summary {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .work-item {
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+  }
+
+  .work-item-dates,
+  .work-item-status {
+    grid-column: 1 / -1;
+  }
+
+  .ladder-dev-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ladder-baseline-fields {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ladder-baseline-result-grid {
+    gap: 16px;
+  }
+
+  .ladder-gap-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .ladder-criterion-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .ai-adoption-section .ai-adoption-chart-container,
+  .pr-cycle-section .pr-cycle-chart-container,
+  .ai-code-tag-section .ai-code-tag-chart-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    min-height: 280px;
+  }
+}
+
+/* ── Responsive: Phone ───────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .dev-stats-container {
+    padding: 12px;
+    padding-bottom: 60px;
+  }
+
+  .dev-stats-container h2 {
+    font-size: 18px;
+  }
+
+  .filter-controls {
+    padding: 12px;
+  }
+
+  .developer-stat-card {
+    padding: 12px;
+  }
+
+  .developer-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .changes-bar-container {
+    height: 16px;
+  }
+
+  .ladder-bar-header {
+    padding: 8px 12px;
+  }
+
+  .ladder-bar-title {
+    font-size: 13px;
+  }
+
+  .ladder-baseline-input-narrow {
+    width: 100%;
+  }
+}

@@ -1032,3 +1032,82 @@
 .fixingRetryBtn:hover {
   background: var(--accent-hover);
 }
+
+/* ── Mobile: full-screen overlay ─────────────────────────── */
+
+@media (max-width: 768px) {
+  .panel {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    background: var(--bg-primary);
+    border-radius: 0;
+    border: none;
+  }
+
+  .panelHeader {
+    padding: 10px 12px;
+  }
+
+  .stepper {
+    padding: 0 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .stepperTab {
+    padding: 8px 10px;
+  }
+
+  .gapChecklistItem {
+    padding: 12px 12px;
+  }
+
+  .sectionDiffHeader {
+    padding: 10px 12px;
+  }
+
+  .gapChecklistHeader {
+    padding: 10px 12px;
+  }
+
+  .sectionActionBar {
+    padding: 10px 12px;
+  }
+
+  .footer {
+    padding: 10px 12px;
+  }
+
+  .summaryView {
+    padding: 16px 12px;
+  }
+
+  .verdictBtn {
+    min-height: 44px;
+    padding: 6px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .panelHeader {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .gapChecklistItem {
+    padding: 10px 8px;
+  }
+
+  .summaryView {
+    padding: 12px 8px;
+    gap: 16px;
+  }
+
+  .footer {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+}

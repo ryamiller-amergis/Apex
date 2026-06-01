@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
+import { markAsInterviewThread } from './chatAgentService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -33,14 +34,18 @@ export async function createInterview(opts: {
     })
     .returning({ id: interviews.id });
 
+  markAsInterviewThread(opts.chatThreadId);
+
   return { interviewId: row.id, threadId: opts.chatThreadId };
 }
 
 export async function listInterviews(
-  userId: string,
-  filters?: { status?: InterviewStatus; project?: string },
+  filters?: { status?: InterviewStatus; project?: string; authorId?: string },
 ): Promise<InterviewSummary[]> {
-  const conditions = [eq(interviews.authorId, userId)];
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (filters?.authorId) {
+    conditions.push(eq(interviews.authorId, filters.authorId));
+  }
   if (filters?.status) {
     conditions.push(eq(interviews.status, filters.status));
   }
@@ -61,7 +66,7 @@ export async function listInterviews(
       updatedAt: interviews.updatedAt,
     })
     .from(interviews)
-    .where(and(...conditions))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(interviews.updatedAt));
 
   const prdCounts = await db

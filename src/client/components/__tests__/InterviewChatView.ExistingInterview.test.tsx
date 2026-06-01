@@ -367,6 +367,55 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
       expect(mockUpdateStatus).toHaveBeenCalledWith({ id: 'iv-1', status: 'in_progress' });
     });
   });
+
+  it('hides the locked notice Reopen button when a PRD already exists', () => {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [makePrd()] }),
+      isLoading: false,
+      isError: false,
+    });
+    renderExistingInterview();
+    const notice = screen.getByTestId('locked-notice');
+    expect(within(notice).queryByRole('button', { name: 'Reopen' })).not.toBeInTheDocument();
+  });
+});
+
+// ── Header Reopen button — disabled when PRD exists ───────────────────────────
+
+describe('ExistingInterviewView — header Reopen button disabled when PRD exists', () => {
+  it('enables the header Reopen button when the interview has no PRDs', () => {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [] }),
+      isLoading: false,
+      isError: false,
+    });
+    renderExistingInterview();
+    const btn = screen.getByTitle('Reopen this interview');
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('disables the header Reopen button when a PRD already exists', () => {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [makePrd()] }),
+      isLoading: false,
+      isError: false,
+    });
+    renderExistingInterview();
+    const btn = screen.getByTitle('Cannot reopen — a PRD has already been generated');
+    expect(btn).toBeDisabled();
+  });
 });
 
 // ── Choice block submit hidden when interview is locked ────────────────────────
@@ -549,5 +598,69 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
     };
     // DEFAULT_MODEL_ID is the hard-coded fallback — it must be a non-empty string
     expect(calledWith.kickoff.model).toBeTruthy();
+  });
+});
+
+// ── Generate PRD button — disabled when PRD already exists ────────────────────
+
+describe('ExistingInterviewView — Generate PRD button disabled when PRD exists', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    HTMLElement.prototype.scrollIntoView = jest.fn();
+    mockUseChatStream.mockReturnValue(idleStream);
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+    }) as jest.Mock;
+  });
+
+  it('enables the Generate PRD button when the interview has no PRDs', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [] }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    const btn = screen.getByTitle('Generate a PRD from this interview');
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('disables the Generate PRD button when the interview already has a PRD', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [makePrd()] }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    const btn = screen.getByTitle('A PRD has already been generated for this interview');
+    expect(btn).toBeDisabled();
+  });
+
+  it('does not call createPrd when the button is disabled due to existing PRD', () => {
+    const mockCreatePrdMutate = jest.fn();
+    (useCreatePrd as jest.Mock).mockReturnValue({
+      mutateAsync: mockCreatePrdMutate,
+      isPending: false,
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete', prds: [makePrd()] }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    const btn = screen.getByTitle('A PRD has already been generated for this interview');
+    fireEvent.click(btn);
+
+    expect(mockCreatePrdMutate).not.toHaveBeenCalled();
   });
 });

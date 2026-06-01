@@ -532,3 +532,87 @@
   font-size: 15px;
   margin: 0;
 }
+
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .aggregateCard {
+    padding: 16px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .scoreRing {
+    width: 72px;
+    height: 72px;
+  }
+
+  .aggregateTitle {
+    font-size: 16px;
+  }
+
+  .aggregateKpis {
+    gap: 16px;
+  }
+
+  .aggregateKpiValue {
+    font-size: 16px;
+  }
+
+  .metricsGrid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+
+  .metricCard {
+    padding: 16px;
+  }
+
+  .metricPrimaryValue {
+    font-size: 22px;
+  }
+
+  .drillDownOverlay {
+    padding: 16px 8px;
+  }
+
+  .drillDownPanel {
+    border-radius: 8px;
+    max-width: 100%;
+  }
+
+  .drillDownHeader {
+    padding: 14px 16px;
+  }
+
+  .drillDownClose {
+    width: 44px;
+    height: 44px;
+  }
+
+  .drillDownBody {
+    padding: 16px;
+  }
+
+  .drillScoreGrid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+  }
+
+  .drillItemsTable {
+    font-size: 12px;
+  }
+
+  .drillItemsTable th,
+  .drillItemsTable td {
+    padding: 8px;
+  }
+
+  .drillItemTitle {
+    max-width: 140px;
+  }
+
+  .emptyState {
+    padding: 32px 16px;
+  }
+}
