@@ -1,4 +1,4 @@
-import appInsights from 'applicationinsights';
+import * as appInsights from 'applicationinsights';
 
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
 
