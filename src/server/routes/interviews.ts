@@ -53,6 +53,7 @@ import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputA
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
+import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
@@ -728,6 +729,14 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
         }
       }
       res.json({ threadId: doc.docAssistantThreadId });
+      return;
+    }
+
+    const mayCreate = await canCreateDesignDocAssistantThread(userId, req.params.id);
+    if (!mayCreate) {
+      res.status(403).json({
+        error: 'Only the document author or an admin can create the assistant thread',
+      });
       return;
     }
 

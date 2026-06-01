@@ -506,16 +506,27 @@ interface DesignDocAssistantPanelProps {
   designDocId: string;
   onClose: () => void;
   discussContext?: DiscussContext;
+  docAssistantThreadId?: string | null;
+  canCreateThread: boolean;
+  readOnly: boolean;
 }
 
 const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 800;
 const DEFAULT_PANEL_WIDTH = 380;
 
-const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ designDocId, onClose, discussContext }) => {
-  const [threadId, setThreadId] = useState<string | null>(() =>
-    discussContext ? null : localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId)),
-  );
+const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
+  designDocId,
+  onClose,
+  discussContext,
+  docAssistantThreadId,
+  canCreateThread,
+  readOnly,
+}) => {
+  const [threadId, setThreadId] = useState<string | null>(() => {
+    if (discussContext) return null;
+    return docAssistantThreadId ?? localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId));
+  });
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -574,6 +585,14 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
       skipAutoCreateRef.current = false;
       return;
     }
+    if (!canCreateThread && !docAssistantThreadId) {
+      setCreateError('No assistant conversation is available for this document.');
+      return;
+    }
+    if (!canCreateThread && docAssistantThreadId) {
+      setThreadId(docAssistantThreadId);
+      return;
+    }
     setIsCreating(true);
     setCreateError(null);
     fetch(`/api/interviews/design-docs/${designDocId}/assistant-thread`, {
@@ -591,7 +610,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
       })
       .catch(() => setCreateError('Failed to start assistant. Please try again.'))
       .finally(() => setIsCreating(false));
-  }, [designDocId, threadId, discussContext]);
+  }, [designDocId, threadId, discussContext, canCreateThread, docAssistantThreadId]);
 
   const discussContextSentRef = useRef(false);
   useEffect(() => {
@@ -652,7 +671,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId) return;
+    if (!text || isRunning || isSending || !threadId || readOnly) return;
     setInput('');
     setIsSending(true);
     try {
@@ -665,7 +684,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
     } finally {
       setIsSending(false);
     }
-  }, [input, isRunning, isSending, threadId]);
+  }, [input, isRunning, isSending, threadId, readOnly]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -745,6 +764,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
           <span className={styles.assistantPanelTitle}>Apex Assistant</span>
         </div>
         <div className={styles.assistantPanelHeaderActions}>
+          {!readOnly && canCreateThread && (
           <button
             className={styles.assistantPanelIconBtn}
             onClick={() => setShowNewConvConfirm(true)}
@@ -756,6 +776,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
               <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
             </svg>
           </button>
+          )}
           <button className={styles.assistantPanelClose} onClick={onClose} type="button" aria-label="Close assistant">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
               <path d="M1 1l12 12M13 1L1 13" />
@@ -812,35 +833,41 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
         </div>
       </div>
 
-      <div className={styles.qaInputArea}>
-        <div className={styles.qaInputBox}>
-          <textarea
-            ref={textareaRef}
-            className={styles.qaInputField}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              isCreating ? 'Starting assistant…' :
-              isRunning ? 'Agent is thinking…' :
-              'Ask about this design doc… (Enter to send)'
-            }
-            rows={1}
-            disabled={isRunning || isSending || isCreating || !threadId}
-          />
-          <button
-            className={styles.qaSendBtn}
-            onClick={() => void handleSend()}
-            disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
-            type="button"
-            aria-label="Send"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor">
-              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-            </svg>
-          </button>
+      {!readOnly ? (
+        <div className={styles.qaInputArea}>
+          <div className={styles.qaInputBox}>
+            <textarea
+              ref={textareaRef}
+              className={styles.qaInputField}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                isCreating ? 'Starting assistant…' :
+                isRunning ? 'Agent is thinking…' :
+                'Ask about this design doc… (Enter to send)'
+              }
+              rows={1}
+              disabled={isRunning || isSending || isCreating || !threadId}
+            />
+            <button
+              className={styles.qaSendBtn}
+              onClick={() => void handleSend()}
+              disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
+              type="button"
+              aria-label="Send"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+          Assistant is read-only — you can view the conversation but cannot send messages.
+        </div>
+      )}
     </div>
     </>
   );
@@ -889,9 +916,15 @@ interface DesignDocQaChatProps {
   designDocId: string;
   qaChatThreadId: string;
   canTriggerGenerate: boolean;
+  canSend: boolean;
 }
 
-const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatThreadId, canTriggerGenerate }) => {
+const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({
+  designDocId,
+  qaChatThreadId,
+  canTriggerGenerate,
+  canSend,
+}) => {
   const { messages, streamingText, status: threadStatus } = useChatStream(qaChatThreadId);
   const generateDoc = useGenerateDesignDoc();
   const [input, setInput] = useState('');
@@ -1032,6 +1065,7 @@ const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatTh
         </div>
       </div>
 
+      {canSend ? (
       <div className={styles.qaInputArea}>
         <div className={styles.qaInputBox}>
           <textarea
@@ -1057,6 +1091,11 @@ const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatTh
           </button>
         </div>
       </div>
+      ) : (
+        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+          Q&amp;A is read-only for this document.
+        </div>
+      )}
     </div>
   );
 };
@@ -1472,6 +1511,7 @@ export const DesignDocReviewView: React.FC = () => {
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
   const canUseAssistant = (isReviewer || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+  const canWriteAssistant = canEdit || canPerformReview;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
@@ -1730,6 +1770,7 @@ export const DesignDocReviewView: React.FC = () => {
           designDocId={doc.id}
           qaChatThreadId={doc.qaChatThreadId ?? ''}
           canTriggerGenerate={canManage && (isAuthor || isAdmin)}
+          canSend={canEdit}
         />
       ) : isGenerating ? (
         /* ── Generating skeleton ─────────────────────────────────────── */
@@ -2014,6 +2055,9 @@ export const DesignDocReviewView: React.FC = () => {
           designDocId={doc.id}
           onClose={handleAssistantClose}
           discussContext={discussContext ?? undefined}
+          docAssistantThreadId={doc.docAssistantThreadId}
+          canCreateThread={canEdit}
+          readOnly={!canWriteAssistant}
         />
       )}
 

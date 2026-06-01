@@ -523,7 +523,7 @@ const NewInterviewCompose: React.FC = () => {
 
 const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const navigate = useNavigate();
-  const { can } = useAppShell();
+  const { can, userId, isAdmin } = useAppShell();
 
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
@@ -577,6 +577,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const { messages, streamingText, status: threadStatus } = useChatStream(
     interview?.chatThreadId ?? null,
+    {
+      initialMessages: chatThread?.messages,
+      initialStatus: chatThread?.status,
+    },
   );
 
   const isRunning = threadStatus === 'running';
@@ -738,7 +742,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
   const canManage = can('interviews:manage');
-  const isLocked = interview.status !== 'in_progress';
+  const isAuthor = interview.authorId === userId;
+  const isReadOnlyViewer = !isAuthor && !isAdmin;
+  const isStatusLocked = interview.status !== 'in_progress';
+  const isChatLocked = isReadOnlyViewer || isStatusLocked;
 
   // Pre-compute cumulative question offset for each assistant message so Q-numbers
   // are globally sequential across the whole conversation rather than restarting at 1
@@ -949,7 +956,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 key={msg.id}
                 text={msg.text}
                 onSend={(text) => {
-                  if (isLocked) return;
+                  if (isChatLocked) return;
                   setInput('');
                   void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
                     method: 'POST',
@@ -960,7 +967,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 }}
                 isRunning={isRunning}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
-                interviewLocked={isLocked}
+                interviewLocked={isChatLocked}
               />
             );
           })}
@@ -983,16 +990,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {isLocked ? (
+      {isChatLocked ? (
         <div className={styles.lockedNotice} data-testid="locked-notice">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
             <path d="M5 7V5a3 3 0 0 1 6 0v2" />
           </svg>
           <span>
-            {interview.status === 'complete'
-              ? <>This interview is complete and the chat is closed.{interview.prds.length > 0 ? ' View the linked PRD above.' : ''}</>
-              : 'This interview is archived and the chat is read-only.'}
+            {isReadOnlyViewer && interview.status === 'in_progress'
+              ? "You are viewing another user's interview (read-only)."
+              : interview.status === 'complete'
+                ? <>This interview is complete and the chat is closed.{interview.prds.length > 0 ? ' View the linked PRD above.' : ''}</>
+                : 'This interview is archived and the chat is read-only.'}
           </span>
           {interview.status === 'complete' && canManage && interview.prds.length === 0 && (
             <button

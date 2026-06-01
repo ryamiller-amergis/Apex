@@ -16,6 +16,8 @@ jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(() => ({
     selectedProject: 'MaxView',
     can: jest.fn(() => true),
+    userId: 'user-1',
+    isAdmin: false,
   })),
 }));
 
@@ -164,6 +166,8 @@ beforeEach(() => {
   (useAppShell as jest.Mock).mockReturnValue({
     selectedProject: 'MaxView',
     can: jest.fn(() => true),
+    userId: 'user-1',
+    isAdmin: false,
   });
   global.fetch = jest.fn().mockResolvedValue({
     ok: true,
@@ -269,6 +273,27 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
   });
 });
 
+// ── Read-only viewer (non-author) ─────────────────────────────────────────────
+
+describe('ExistingInterviewView — read-only viewer', () => {
+  it('hides the compose area and shows a read-only notice for a non-author viewer', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+      userId: 'viewer-2',
+      isAdmin: false,
+    });
+    renderExistingInterview();
+    expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+});
+
 // ── Locked notice content ──────────────────────────────────────────────────────
 
 describe('ExistingInterviewView — locked notice copy', () => {
@@ -315,6 +340,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -330,6 +357,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => false),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -344,6 +373,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'archived' }),
@@ -391,6 +422,8 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -406,6 +439,8 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [makePrd()] }),
@@ -491,6 +526,8 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
 
     mockStartChatMutate.mockResolvedValue({ threadId: 'new-thread-1' });
@@ -611,6 +648,8 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
