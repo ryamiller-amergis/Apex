@@ -13,6 +13,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
+import { getAgentHealthStats } from '../services/chatAgentService';
 
 const router = express.Router();
 
@@ -200,6 +201,11 @@ router.get('/health/db', async (_req: Request, res: Response) => {
     console.error('[db] Health check failed:', error);
     res.status(503).json({ healthy: false, error: 'Database unavailable' });
   }
+});
+
+// GET /api/health/agents - Chat agent system health
+router.get('/health/agents', (_req: Request, res: Response) => {
+  res.json(getAgentHealthStats());
 });
 
 // GET /api/due-date-stats - Get due date change statistics by developer

@@ -19,6 +19,7 @@ export const chatThreads = pgTable('chat_threads', {
   title: text('title'),
   flagged: boolean('flagged').notNull().default(false),
   flaggedAt: timestamp('flagged_at', { withTimezone: true, mode: 'string' }),
+  activeRunId: text('active_run_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });

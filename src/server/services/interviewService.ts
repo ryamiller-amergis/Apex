@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
+import { markAsInterviewThread } from './chatAgentService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -32,6 +33,8 @@ export async function createInterview(opts: {
       status: 'in_progress',
     })
     .returning({ id: interviews.id });
+
+  markAsInterviewThread(opts.chatThreadId);
 
   return { interviewId: row.id, threadId: opts.chatThreadId };
 }

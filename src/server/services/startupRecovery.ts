@@ -5,6 +5,7 @@ import { prds, designDocs } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { startPrdWatcher } from './prdService';
 import { startDesignDocWatcher, startValidationWatcher, isValidationWatcherActive } from './designDocService';
+import { findRunningInterviewThreads, clearStaleRun } from './chatThreadRepository';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -88,8 +89,30 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   }
 
+  // ── Interview threads stuck in 'running' ──────────────────────────────────
+  const stuckInterviews = await findRunningInterviewThreads();
+  for (const row of stuckInterviews) {
+    console.log(
+      `[recovery] Interview thread stuck in running` +
+      ` (threadId=${row.threadId}, interviewId=${row.interviewId}` +
+      `, activeRunId=${row.activeRunId ?? 'none'})`,
+    );
+
+    const ok = await hydrateThread(row.threadId);
+    if (ok) {
+      await clearStaleRun(row.threadId);
+      recovered++;
+      console.log(`[recovery] Reset stuck interview thread to idle (threadId=${row.threadId})`);
+    } else {
+      console.warn(
+        `[recovery] Could not hydrate interview thread` +
+        ` (threadId=${row.threadId}, interviewId=${row.interviewId})`,
+      );
+    }
+  }
+
   if (recovered > 0) {
-    console.log(`[recovery] Recovered ${recovered} in-flight watcher(s)`);
+    console.log(`[recovery] Recovered ${recovered} in-flight item(s)`);
   }
 }
 

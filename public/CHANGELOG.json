@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.22.0",
+    "date": "2026-06-01",
+    "title": "Interview Context & Agent Reliability",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Interview chat shows a context usage bar and wrap-up banners as the conversation approaches the model limit — with one-click Generate PRD and a confirmation before sending when the window is nearly full"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agents automatically retry transient and rate-limited Cursor API errors with exponential backoff, and classify failures so auth issues prompt a refresh instead of endless retries"
+      },
+      {
+        "type": "improvement",
+        "description": "Interview chat sessions use a longer idle timeout (2 hours) and the server recovers threads left stuck in running after a restart"
+      },
+      {
+        "type": "improvement",
+        "description": "Failed sends and PRD generation in interviews now show a dismissible error banner instead of failing silently"
+      },
+      {
+        "type": "improvement",
+        "description": "Azure Application Insights telemetry for client and server when APPLICATIONINSIGHTS_CONNECTION_STRING is configured"
+      }
+    ]
+  },
+  {
     "version": "1.21.0",
     "date": "2026-05-31",
     "title": "Document Approver Assignments & Notifications",

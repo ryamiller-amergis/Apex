@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   ChatThreadKickoff,
   SseEvent,
+  SseErrorCode,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import {
@@ -27,6 +28,10 @@ import { syncPrdContent } from './prdService';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
+import { retryWithBackoff } from '../utils/retry';
+import { trackAgentError, trackEvent } from './telemetry';
+
+// ── Configuration ─────────────────────────────────────────────────────────────
 
 const DATA_ROOT = resolveDataRoot();
 const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
@@ -35,6 +40,7 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     ? path.join(DATA_ROOT, 'workspaces')
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -45,6 +51,8 @@ interface ThreadState {
   /** Live Cursor SDK agent — null between turns */
   agent: SDKAgent | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  /** Cached flag — true when the thread backs an interview row (gets longer idle timeout) */
+  isInterviewThread: boolean;
 }
 
 const threads = new Map<string, ThreadState>();
@@ -342,7 +350,16 @@ function broadcast(state: ThreadState, event: SseEvent) {
 
 function resetIdleTimer(state: ThreadState) {
   if (state.idleTimer) clearTimeout(state.idleTimer);
-  state.idleTimer = setTimeout(() => closeThread(state.thread.id), IDLE_TIMEOUT_MS);
+  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  state.idleTimer = setTimeout(() => closeThread(state.thread.id), timeout);
+}
+
+async function checkIsInterviewThread(threadId: string): Promise<boolean> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  return row !== undefined;
 }
 
 /**
@@ -359,13 +376,17 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
   // Reset it to 'idle' so the client input isn't permanently locked out.
   if (thread.status === 'running') {
     thread.status = 'idle';
+    thread.activeRunId = undefined;
   }
+
+  const isInterview = await checkIsInterviewThread(threadId);
 
   const state: ThreadState = {
     thread,
     subscribers: new Set(),
     agent: null,
     idleTimer: null,
+    isInterviewThread: isInterview,
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
@@ -392,6 +413,38 @@ export function isThreadIdle(threadId: string): boolean {
   return state.thread.status !== 'running';
 }
 
+// ── Health stats ──────────────────────────────────────────────────────────────
+
+export interface AgentHealthStats {
+  status: 'ok';
+  threads: {
+    total: number;
+    byStatus: Record<string, number>;
+    withActiveAgent: number;
+  };
+  uptime: number;
+}
+
+export function getAgentHealthStats(): AgentHealthStats {
+  let withActiveAgent = 0;
+  const byStatus: Record<string, number> = {};
+
+  for (const state of threads.values()) {
+    const s = state.thread.status;
+    byStatus[s] = (byStatus[s] ?? 0) + 1;
+    if (state.agent !== null) withActiveAgent++;
+  }
+
+  return {
+    status: 'ok',
+    threads: {
+      total: threads.size,
+      byStatus,
+      withActiveAgent,
+    },
+    uptime: Math.floor(process.uptime()),
+  };
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -430,6 +483,7 @@ export async function createThread(
     subscribers: new Set(),
     agent: null,
     idleTimer: null,
+    isInterviewThread: false,
   };
 
   threads.set(threadId, state);
@@ -441,23 +495,28 @@ export async function createThread(
   // the real first message next so the transcript shows the user request before the agent.
   if (!options?.skipAutoKickoff) {
     setImmediate(() => {
-      // #region agent log
-      try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-firing',message:'auto-kickoff setImmediate fired',data:{threadId,skillPath:kickoff.skillPath},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-      // #endregion
+      console.log('[chat] auto-kickoff firing', { threadId, skillPath: kickoff.skillPath });
       sendMessage(threadId, 'Begin.').then(() => {
-        // #region agent log
-        try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-success',message:'auto-kickoff sendMessage completed successfully',data:{threadId},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-        // #endregion
+        console.log('[chat] auto-kickoff completed', { threadId });
       }).catch((err: Error) => {
-        // #region agent log
-        try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:createThread:auto-kickoff-error',message:'auto-kickoff sendMessage FAILED',data:{threadId,error:err.message,name:err.name},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-        // #endregion
         console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
       });
     });
   }
 
   return thread;
+}
+
+/**
+ * Mark an in-memory thread as interview-backed, extending its idle timeout.
+ * Call this after linking a thread to an interviews row so the longer timeout
+ * takes effect immediately (without waiting for a server-restart hydration).
+ */
+export function markAsInterviewThread(threadId: string): void {
+  const state = threads.get(threadId);
+  if (!state || state.isInterviewThread) return;
+  state.isInterviewThread = true;
+  resetIdleTimer(state);
 }
 
 export async function getThread(threadId: string): Promise<ChatThread | null> {
@@ -505,6 +564,98 @@ function describeError(err: unknown): string {
   return 'Unknown error';
 }
 
+/**
+ * Classify a run-level error string as fatal (no point resuming the agent)
+ * vs recoverable (transient — keep cursorAgentId for Agent.resume next send).
+ */
+export function isFatalRunError(resultText: string): boolean {
+  const lower = resultText.toLowerCase();
+  return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(lower);
+}
+
+/** Detect transient SDK / network errors worth retrying. */
+export function isTransientSdkError(err: unknown): boolean {
+  if (err instanceof Error && err.message.includes('already has active run')) return false;
+
+  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  if (statusCode === 401 || statusCode === 403) return false;
+  if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
+  if (statusCode === 429 || (statusCode >= 500 && statusCode < 600)) return true;
+
+  if (err instanceof Error) {
+    const code = (err as any).code;
+    if (typeof code === 'string' && /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNREFUSED)$/.test(code)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/** Detect recoverable errors: stale run, agent disposed, concurrent run conflicts. */
+export function isRecoverableSdkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return /already has active run|stale.*run|agent.*disposed|run.*expired|agent.*not.*available/.test(msg);
+}
+
+/**
+ * Detect fatal SDK errors: auth failures, invalid config, agent not found.
+ * Unlike `isFatalRunError` which checks run result text, this checks thrown exceptions.
+ */
+export function isFatalSdkError(err: unknown): boolean {
+  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  if (statusCode === 401 || statusCode === 403) return true;
+
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(msg);
+  }
+  return false;
+}
+
+export type ErrorTier = 'transient' | 'recoverable' | 'fatal';
+
+export function classifyError(err: unknown): ErrorTier {
+  if (isFatalSdkError(err)) return 'fatal';
+  if (isRecoverableSdkError(err)) return 'recoverable';
+  if (isTransientSdkError(err)) return 'transient';
+  // After retries are exhausted, unclassified CursorAgentErrors default to fatal;
+  // unknown errors default to transient (user can retry).
+  if (err instanceof CursorAgentError) return 'fatal';
+  return 'transient';
+}
+
+export function isRateLimitError(err: unknown): boolean {
+  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  if (statusCode === 429) return true;
+  if (err instanceof Error) {
+    return /rate.?limit|too many requests/i.test(err.message);
+  }
+  return false;
+}
+
+export function mapErrorCode(tier: ErrorTier, err: unknown): SseErrorCode {
+  if (isRateLimitError(err)) return 'rate_limit';
+  switch (tier) {
+    case 'transient':
+      return 'transient';
+    case 'recoverable':
+      return 'transient';
+    case 'fatal':
+      return isFatalSdkError(err) && isAuthError(err) ? 'auth' : 'fatal';
+  }
+}
+
+export function isAuthError(err: unknown): boolean {
+  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  if (statusCode === 401 || statusCode === 403) return true;
+  if (err instanceof Error) {
+    return /\b(auth(entication|orization)?|unauthorized|forbidden)\b/i.test(err.message);
+  }
+  return false;
+}
+
 function logAgentError(threadId: string, err: unknown): void {
   if (err instanceof Error) {
     console.error(`[chat] Agent failed for thread ${threadId}:`, {
@@ -514,10 +665,12 @@ function logAgentError(threadId: string, err: unknown): void {
       cause: (err as any).cause,
       retryable: (err as any).isRetryable,
     });
+    trackAgentError(threadId, err);
     return;
   }
 
   console.error(`[chat] Agent failed for thread ${threadId}:`, err);
+  trackAgentError(threadId, err);
 }
 
 /**
@@ -682,9 +835,7 @@ export async function sendMessage(
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
-  // #region agent log
-  try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:sendMessage:start',message:'sendMessage called',data:{threadId,currentStatus:state.thread.status,textPrefix:text.slice(0,30)},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-  // #endregion
+  console.log('[chat] sendMessage', { threadId, status: state.thread.status });
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
   const apiKey = process.env.CURSOR_API_KEY;
@@ -735,31 +886,45 @@ export async function sendMessage(
     : promptText;
 
   try {
-    // Create or resume the agent
+    // Create or resume the agent (retry up to 3x on transient errors)
+    const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
+
     if (!state.agent) {
       if (state.thread.cursorAgentId) {
-        state.agent = await Agent.resume(state.thread.cursorAgentId, {
-          apiKey,
-          model: { id: resolvedModel },
-          local: { cwd: state.thread.workspaceDir },
-          mcpServers: {
-            'ado-skills': { url: mcpServerUrl },
-          },
-        });
+        state.agent = await retryWithBackoff(
+          () => Agent.resume(state.thread.cursorAgentId!, {
+            apiKey,
+            model: { id: resolvedModel },
+            local: { cwd: state.thread.workspaceDir },
+            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+          }),
+          sdkRetryOpts,
+        );
       } else {
-        state.agent = await Agent.create({
-          apiKey,
-          model: { id: resolvedModel },
-          local: { cwd: state.thread.workspaceDir },
-          mcpServers: {
-            'ado-skills': { url: mcpServerUrl },
-          },
-        });
+        state.agent = await retryWithBackoff(
+          () => Agent.create({
+            apiKey,
+            model: { id: resolvedModel },
+            local: { cwd: state.thread.workspaceDir },
+            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+          }),
+          sdkRetryOpts,
+        );
       }
     }
 
     const agent = state.agent;
-    const run = await agent.send(prompt);
+    // Send the prompt (retry up to 2x on transient errors)
+    const run = await retryWithBackoff(
+      () => agent.send(prompt),
+      { ...sdkRetryOpts, maxRetries: 2 },
+    );
+
+    trackEvent('agent.run.started', {
+      threadId,
+      model: resolvedModel,
+      isInterview: String(state.isInterviewThread),
+    });
 
     // Persist agent + run IDs immediately before streaming
     state.thread.cursorAgentId = agent.agentId ?? state.thread.cursorAgentId;
@@ -783,9 +948,6 @@ export async function sendMessage(
                 toolName: block.name,
                 input: block.input,
               });
-              // #region agent log
-              try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:tool_call',message:'agent tool call',data:{threadId,toolName:block.name,inputKeys:Object.keys(block.input||{})},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-              // #endregion
             }
           }
         }
@@ -797,18 +959,19 @@ export async function sendMessage(
     if (result.status === 'error') {
       const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
       console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
-      // #region agent log
-      try{const fs2=require('fs');fs2.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'chatAgentService.ts:run-error',message:'agent run returned error status',data:{threadId,model:state.thread.kickoff.model,result:result.result??null,skillPath:state.thread.kickoff.skillPath},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-      // #endregion
+      trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
       state.thread.lastError = reason;
       broadcast(state, { type: 'error', error: reason });
-      // Dispose the agent and clear the stored agent ID so the next send
-      // creates a fresh agent rather than resuming a broken one.
+      // Always dispose the in-memory agent object
       if (state.agent) {
         await state.agent[Symbol.asyncDispose]().catch(() => {});
         state.agent = null;
       }
-      state.thread.cursorAgentId = undefined;
+      if (isFatalRunError(reason)) {
+        // Fatal (auth, invalid config) — clear agent ID; next send creates a fresh agent
+        state.thread.cursorAgentId = undefined;
+      }
+      // Transient/recoverable — keep cursorAgentId so Agent.resume can reconnect
       state.thread.activeRunId = undefined;
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
@@ -830,6 +993,7 @@ export async function sendMessage(
 
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
+      trackEvent('agent.run.completed', { threadId, model: resolvedModel });
     }
 
     const prdContent = readOutputPrd(threadId);
@@ -849,34 +1013,51 @@ export async function sendMessage(
   } catch (err: any) {
     logAgentError(threadId, err);
 
-    // The SDK throws "Agent <id> already has active run" when the agent has a
-    // stale live run — typically after a server restart mid-turn. Dispose the
-    // agent and clear the stored agent ID so the next send creates a fresh one.
-    const isStaleRun =
-      err instanceof Error && err.message.includes('already has active run');
+    const tier = classifyError(err);
+    const rawMsg = describeError(err);
+    console.error(`[chat] Error tier=${tier} for thread ${threadId}:`, rawMsg);
+    trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
 
-    if (err instanceof CursorAgentError || isStaleRun) {
-      state.thread.lastError = isStaleRun
-        ? 'A previous run is still active on the agent. Please try again.'
-        : describeError(err);
-      if (state.agent) {
-        await state.agent[Symbol.asyncDispose]().catch(() => {});
-        state.agent = null;
-      }
-      if (isStaleRun) {
-        // Clear the agent ID so the next send starts a fresh agent rather than
-        // resuming the one that still owns the active run.
-        state.thread.cursorAgentId = undefined;
+    if (state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+
+    switch (tier) {
+      case 'transient': {
+        // Retries exhausted — let user retry manually. Keep cursorAgentId for Agent.resume.
+        state.thread.lastError = rawMsg;
         state.thread.activeRunId = undefined;
         state.thread.status = 'idle';
-      } else {
-        state.thread.status = 'error';
+        break;
       }
-    } else {
-      state.thread.status = 'error';
-      state.thread.lastError = describeError(err);
+      case 'recoverable': {
+        // Stale run / agent disposed / concurrent run — clear run state, keep cursorAgentId
+        // unless it's a stale-run conflict (agent still owns a run we can't cancel).
+        const isStaleRun = err instanceof Error && err.message.includes('already has active run');
+        state.thread.lastError = isStaleRun
+          ? 'A previous run is still active on the agent. Please try again.'
+          : rawMsg;
+        if (isStaleRun) {
+          state.thread.cursorAgentId = undefined;
+        }
+        state.thread.activeRunId = undefined;
+        state.thread.status = 'idle';
+        break;
+      }
+      case 'fatal': {
+        // Auth / config / agent-not-found — require user/admin action.
+        state.thread.lastError = rawMsg;
+        state.thread.cursorAgentId = undefined;
+        state.thread.activeRunId = undefined;
+        state.thread.status = 'error';
+        break;
+      }
     }
-    broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error' });
+
+    const errorCode = mapErrorCode(tier, err);
+    trackEvent('agent.run.errored', { threadId, errorTier: tier, errorCode, model: resolvedModel });
+    broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
     broadcast(state, { type: 'done' });
   } finally {
     state.thread.lastActivityAt = new Date().toISOString();
@@ -928,17 +1109,11 @@ export async function closeThread(threadId: string): Promise<void> {
   // Interview threads use ON DELETE CASCADE, so deleting the chat_thread row
   // would silently wipe the interview record. Leave the DB row intact; the
   // in-memory state and workspace have already been cleaned up above.
-  db.query.interviews
-    .findFirst({ where: eq(interviews.chatThreadId, threadId) })
-    .then((linked) => {
-      if (linked) return; // interview-backed thread — keep the DB row
-      pgDeleteThread(threadId).catch((err: Error) =>
-        console.error('[chat] pg deleteThread failed:', err.message),
-      );
-    })
-    .catch((err: Error) =>
-      console.error('[chat] interview lookup before deleteThread failed:', err.message),
-    );
+  if (state.isInterviewThread) return;
+
+  pgDeleteThread(threadId).catch((err: Error) =>
+    console.error('[chat] pg deleteThread failed:', err.message),
+  );
 }
 
 function resolveOutputDir(threadId: string): string | null {
