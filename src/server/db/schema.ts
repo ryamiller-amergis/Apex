@@ -366,3 +366,55 @@ export const appSettings = pgTable('app_settings', {
   updatedBy: text('updated_by'),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+// ── Review Comments (Inline Annotations) ──────────────────────────────────────
+
+export const reviewComments = pgTable('review_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  documentId: uuid('document_id').notNull(),
+  documentType: text('document_type').notNull(),
+  sectionKey: text('section_key').notNull(),
+  authorUserId: text('author_user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  selectorExact: text('selector_exact').notNull(),
+  selectorPrefix: text('selector_prefix').notNull().default(''),
+  selectorSuffix: text('selector_suffix').notNull().default(''),
+  selectorStart: integer('selector_start').notNull(),
+  selectorEnd: integer('selector_end').notNull(),
+  status: text('status').notNull().default('open'),
+  resolvedBy: text('resolved_by'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.documentId, t.documentType, t.sectionKey, t.selectorExact, t.selectorStart, t.authorUserId),
+}));
+
+export const reviewReplies = pgTable('review_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  commentId: uuid('comment_id').notNull().references(() => reviewComments.id, { onDelete: 'cascade' }),
+  authorUserId: text('author_user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+// ── Review Comments Relations ─────────────────────────────────────────────────
+
+export const reviewCommentsRelations = relations(reviewComments, ({ one, many }) => ({
+  author: one(appUsers, {
+    fields: [reviewComments.authorUserId],
+    references: [appUsers.oid],
+  }),
+  replies: many(reviewReplies),
+}));
+
+export const reviewRepliesRelations = relations(reviewReplies, ({ one }) => ({
+  comment: one(reviewComments, {
+    fields: [reviewReplies.commentId],
+    references: [reviewComments.id],
+  }),
+  author: one(appUsers, {
+    fields: [reviewReplies.authorUserId],
+    references: [appUsers.oid],
+  }),
+}));

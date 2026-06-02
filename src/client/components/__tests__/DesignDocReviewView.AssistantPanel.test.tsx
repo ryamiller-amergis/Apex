@@ -66,7 +66,16 @@ jest.mock('react-markdown', () => ({
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('mermaid', () => ({ initialize: jest.fn(), run: jest.fn() }));
 jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
-jest.mock('../ReviewReasonModal', () => ({ ReviewReasonModal: () => null }));
+jest.mock('../AnnotationLayer', () => ({ AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</> }));
+jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
+jest.mock('../../hooks/useReviewComments', () => ({
+  useReviewComments: () => ({ data: [] }),
+  useUnresolvedCommentCount: () => ({ data: { count: 0 } }),
+  useCreateComment: () => ({ mutateAsync: jest.fn() }),
+  useResolveComment: () => ({ mutate: jest.fn() }),
+  useReopenComment: () => ({ mutate: jest.fn() }),
+  useDeleteComment: () => ({ mutate: jest.fn() }),
+}));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

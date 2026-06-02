@@ -1,12 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import { and, desc, eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews } from '../db/schema';
+
+const authorUser = alias(appUsers, 'author_user');
+const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
+import { getUnresolvedCount } from './reviewCommentService';
 import { getSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
@@ -91,28 +96,50 @@ export async function listDesignDocs(
   if (filters?.project) conditions.push(eq(designDocs.project, filters.project));
 
   const rows = await db
-    .select({ designDoc: designDocs, reviewerDisplayName: appUsers.displayName, prdTitle: prds.title })
+    .select({
+      designDoc: designDocs,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdTitle: prds.title,
+      designDocOwnerId: interviews.designDocOwnerId,
+      designDocOwnerDisplayName: designDocOwnerUser.displayName,
+    })
     .from(designDocs)
     .leftJoin(appUsers, eq(designDocs.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(designDocs.authorId, authorUser.oid))
     .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(designDocOwnerUser, eq(interviews.designDocOwnerId, designDocOwnerUser.oid))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(designDocs.updatedAt));
 
-  return rows.map(({ designDoc, reviewerDisplayName, prdTitle }) => rowToSummary(designDoc, reviewerDisplayName, prdTitle));
+  return rows.map(({ designDoc, reviewerDisplayName, authorDisplayName, prdTitle, designDocOwnerId, designDocOwnerDisplayName }) =>
+    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+  );
 }
 
 export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
   const rows = await db
-    .select({ designDoc: designDocs, reviewerDisplayName: appUsers.displayName })
+    .select({
+      designDoc: designDocs,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      designDocOwnerId: interviews.designDocOwnerId,
+      designDocOwnerDisplayName: designDocOwnerUser.displayName,
+    })
     .from(designDocs)
     .leftJoin(appUsers, eq(designDocs.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(designDocs.authorId, authorUser.oid))
+    .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(designDocOwnerUser, eq(interviews.designDocOwnerId, designDocOwnerUser.oid))
     .where(eq(designDocs.id, id))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { designDoc: row, reviewerDisplayName } = rows[0];
+  const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
   return {
-    ...rowToSummary(row, reviewerDisplayName),
+    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -142,7 +169,6 @@ export async function updateDesignDocContent(
   if (row.status === 'revision_requested') {
     updates.status = 'draft';
     updates.reviewerId = null;
-    updates.reviewComment = null;
     updates.reviewedAt = null;
   }
 
@@ -171,7 +197,6 @@ export async function submitForReview(
     .set({
       status: 'pending_review',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -195,7 +220,6 @@ export async function withdrawFromReview(id: string, requestingUserId: string): 
     .set({
       status: 'draft',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -213,25 +237,26 @@ export async function reviewDesignDoc(
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own design doc');
   }
-  if (opts.action !== 'approve' && opts.action !== 'request_revision') {
+  if (opts.action !== 'approve') {
     const err = new Error(`Invalid review action: ${opts.action}`);
     (err as any).status = 400;
     throw err;
   }
-  if (opts.action === 'request_revision' && !opts.comment) {
-    const err = new Error('A comment is required when requesting revision');
+
+  const skillConfig = await getSkillConfig(row.project);
+  if (skillConfig?.designDocValidationSkillPath) {
+    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
+      const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+      (err as any).status = 409;
+      throw err;
+    }
+  }
+
+  const unresolvedCount = await getUnresolvedCount(id, 'design_doc');
+  if (unresolvedCount > 0) {
+    const err = new Error(`Cannot approve: ${unresolvedCount} unresolved review comment(s) remain`);
     (err as any).status = 400;
     throw err;
-  }
-  if (opts.action === 'approve') {
-    const skillConfig = await getSkillConfig(row.project);
-    if (skillConfig?.designDocValidationSkillPath) {
-      if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
-        const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
-        (err as any).status = 409;
-        throw err;
-      }
-    }
   }
 
   const admin = await isAdminUser(reviewerId);
@@ -240,29 +265,22 @@ export async function reviewDesignDoc(
     throw forbidden('You are not an assigned approver for this design doc');
   }
 
-  const responseStatus = opts.action === 'approve' ? 'approved' as const : 'revision_requested' as const;
   if (assigned) {
-    await recordApproverResponse(id, 'design_doc', reviewerId, responseStatus, opts.comment ?? undefined);
+    await recordApproverResponse(id, 'design_doc', reviewerId, 'approved');
   }
 
-  if (opts.action === 'approve' && !admin) {
+  if (!admin) {
     const { complete } = await isApprovalComplete(id, 'design_doc', row.project);
     if (!complete) {
       return;
     }
   }
 
-  const statusMap: Record<ReviewDesignDocRequest['action'], DesignDocStatus> = {
-    approve: 'approved',
-    request_revision: 'revision_requested',
-  };
-
   await db
     .update(designDocs)
     .set({
-      status: statusMap[opts.action],
+      status: 'approved',
       reviewerId,
-      reviewComment: opts.comment ?? null,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
@@ -516,7 +534,16 @@ export async function deleteDesignDoc(id: string, requestingUserId: string): Pro
   await db.delete(designDocs).where(eq(designDocs.id, id));
 }
 
-function rowToSummary(row: typeof designDocs.$inferSelect, reviewerName?: string | null, prdTitle?: string | null): DesignDocSummary {
+function rowToSummary(
+  row: typeof designDocs.$inferSelect,
+  reviewerName?: string | null,
+  prdTitle?: string | null,
+  authorName?: string | null,
+  designDocOwnerId?: string | null,
+  designDocOwnerName?: string | null,
+): DesignDocSummary {
+  const effectiveOwnerId = designDocOwnerId ?? row.authorId;
+  const effectiveOwnerName = designDocOwnerName ?? authorName ?? undefined;
   return {
     id: row.id,
     prdId: row.prdId,
@@ -532,6 +559,9 @@ function rowToSummary(row: typeof designDocs.$inferSelect, reviewerName?: string
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as ContentSnapshot | null) ?? null,
     authorId: row.authorId,
+    authorName: authorName ?? undefined,
+    ownerId: effectiveOwnerId,
+    ownerName: effectiveOwnerName,
     title: row.title,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,

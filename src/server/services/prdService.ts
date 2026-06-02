@@ -1,12 +1,17 @@
 import fs from 'fs';
 import { and, desc, eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { prds, appUsers, chatThreads } from '../db/schema';
+import { prds, appUsers, chatThreads, interviews } from '../db/schema';
+
+const authorUser = alias(appUsers, 'author_user');
+const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete } from './documentApprovalService';
+import { getUnresolvedCount } from './reviewCommentService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
@@ -85,27 +90,47 @@ export async function listPrds(
   if (filters?.project) conditions.push(eq(prds.project, filters.project));
 
   const rows = await db
-    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
+    .select({
+      prd: prds,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdOwnerId: interviews.prdOwnerId,
+      prdOwnerDisplayName: prdOwnerUser.displayName,
+    })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(prds.authorId, authorUser.oid))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(prdOwnerUser, eq(interviews.prdOwnerId, prdOwnerUser.oid))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(prds.updatedAt));
 
-  return rows.map(({ prd, reviewerDisplayName }) => rowToPrdSummary(prd, reviewerDisplayName));
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) =>
+    rowToPrdSummary(prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
+  );
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
   const rows = await db
-    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
+    .select({
+      prd: prds,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdOwnerId: interviews.prdOwnerId,
+      prdOwnerDisplayName: prdOwnerUser.displayName,
+    })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(prds.authorId, authorUser.oid))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(prdOwnerUser, eq(interviews.prdOwnerId, prdOwnerUser.oid))
     .where(eq(prds.id, id))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { prd: row, reviewerDisplayName } = rows[0];
+  const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName),
+    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
   };
@@ -131,7 +156,6 @@ export async function updatePrdContent(
   if (row.status === 'revision_requested') {
     updates.status = 'draft';
     updates.reviewerId = null;
-    updates.reviewComment = null;
     updates.reviewedAt = null;
   }
 
@@ -172,7 +196,6 @@ export async function submitForReview(
   const updates: Partial<typeof prds.$inferInsert> = {
     status: 'pending_review',
     reviewerId: null,
-    reviewComment: null,
     reviewedAt: null,
     updatedAt: new Date().toISOString(),
   };
@@ -201,7 +224,6 @@ export async function withdrawFromReview(id: string, requestingUserId: string): 
     .set({
       status: 'draft',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -217,7 +239,6 @@ export async function reopenForReview(id: string): Promise<void> {
     .set({
       status: 'pending_review',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -235,13 +256,15 @@ export async function reviewPrd(
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own PRD');
   }
-  if (opts.action !== 'approve' && opts.action !== 'request_revision') {
+  if (opts.action !== 'approve') {
     const err = new Error(`Invalid review action: ${opts.action}`);
     (err as any).status = 400;
     throw err;
   }
-  if (opts.action === 'request_revision' && !opts.comment) {
-    const err = new Error('A comment is required when requesting revision');
+
+  const unresolvedCount = await getUnresolvedCount(id, 'prd');
+  if (unresolvedCount > 0) {
+    const err = new Error(`Cannot approve: ${unresolvedCount} unresolved review comment(s) remain`);
     (err as any).status = 400;
     throw err;
   }
@@ -252,29 +275,22 @@ export async function reviewPrd(
     throw forbidden('You are not an assigned approver for this PRD');
   }
 
-  const responseStatus = opts.action === 'approve' ? 'approved' as const : 'revision_requested' as const;
   if (assigned) {
-    await recordApproverResponse(id, 'prd', reviewerId, responseStatus, opts.comment ?? undefined);
+    await recordApproverResponse(id, 'prd', reviewerId, 'approved');
   }
 
-  if (opts.action === 'approve' && !admin) {
+  if (!admin) {
     const { complete } = await isApprovalComplete(id, 'prd', row.project);
     if (!complete) {
       return;
     }
   }
 
-  const statusMap: Record<ReviewPrdRequest['action'], PrdStatus> = {
-    approve: 'approved',
-    request_revision: 'revision_requested',
-  };
-
   await db
     .update(prds)
     .set({
-      status: statusMap[opts.action],
+      status: 'approved',
       reviewerId,
-      reviewComment: opts.comment ?? null,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
@@ -354,12 +370,23 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   activePrdWatchers.set(prdId, interval);
 }
 
-function rowToPrdSummary(row: typeof prds.$inferSelect, reviewerName?: string | null): PrdSummary {
+function rowToPrdSummary(
+  row: typeof prds.$inferSelect,
+  reviewerName?: string | null,
+  authorName?: string | null,
+  prdOwnerId?: string | null,
+  prdOwnerName?: string | null,
+): PrdSummary {
+  const effectiveOwnerId = prdOwnerId ?? row.authorId;
+  const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
   return {
     id: row.id,
     interviewId: row.interviewId,
     chatThreadId: row.chatThreadId ?? '',
     authorId: row.authorId,
+    authorName: authorName ?? undefined,
+    ownerId: effectiveOwnerId,
+    ownerName: effectiveOwnerName,
     project: row.project,
     title: row.title,
     status: row.status as PrdStatus,

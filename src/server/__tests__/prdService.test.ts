@@ -57,6 +57,10 @@ jest.mock('../services/documentApprovalService', () => ({
   isApprovalComplete: jest.fn().mockResolvedValue({ complete: true, mode: 'any_one' }),
 }));
 
+jest.mock('../services/reviewCommentService', () => ({
+  getUnresolvedCount: jest.fn().mockResolvedValue(0),
+}));
+
 import {
   createPrd,
   listPrds,
@@ -97,6 +101,20 @@ const {
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
 };
+
+// ── Select chain helper ────────────────────────────────────────────────────────
+// Services now issue multiple .leftJoin() calls before .where()/.orderBy()/.limit().
+// This helper builds a self-referential mock chain that satisfies any number of joins.
+
+function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit') {
+  const resolved = jest.fn().mockResolvedValue(data);
+  const chain: Record<string, jest.Mock> = {};
+  chain.leftJoin = jest.fn().mockReturnValue(chain);
+  chain.where = jest.fn().mockReturnValue(chain);
+  chain.orderBy = terminal === 'orderBy' ? resolved : jest.fn().mockResolvedValue(data);
+  chain.limit = terminal === 'limit' ? resolved : jest.fn().mockResolvedValue(data);
+  return { from: jest.fn().mockReturnValue(chain) };
+}
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -170,11 +188,7 @@ describe('listPrds', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns all PRDs when no filters are given', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds();
 
@@ -183,11 +197,7 @@ describe('listPrds', () => {
   });
 
   it('returns an empty array when no PRDs match', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([], 'orderBy'));
 
     const result = await listPrds({ userId: 'user-nobody' });
 
@@ -195,11 +205,7 @@ describe('listPrds', () => {
   });
 
   it('returns only PRDs linked to the specified project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-alpha' });
 
@@ -211,11 +217,7 @@ describe('listPrds', () => {
   });
 
   it('returns empty array when no PRDs exist for the given project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-nonexistent' });
 
@@ -224,11 +226,7 @@ describe('listPrds', () => {
 
   it('does not return PRDs from other projects', async () => {
     // The DB filters by project directly; mock returns only proj-alpha PRDs
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-alpha' });
 
@@ -244,11 +242,7 @@ describe('getPrd', () => {
 
   it('returns a full PRD with content and backlogJson', async () => {
     const prdRow = makePrdRow({ content: 'Detailed content', backlogJson: { items: [] } });
-    const limitMock = jest.fn().mockResolvedValue([{ prd: prdRow, reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: prdRow, reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }]));
 
     const result = await getPrd('prd-1');
 
@@ -259,11 +253,7 @@ describe('getPrd', () => {
   });
 
   it('returns null when the PRD does not exist', async () => {
-    const limitMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([]));
 
     const result = await getPrd('prd-missing');
 
@@ -296,7 +286,7 @@ describe('updatePrdContent', () => {
     await updatePrdContent('prd-1', 'user-1', 'Revised content');
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft', reviewerId: null, reviewComment: null }),
+      expect.objectContaining({ status: 'draft', reviewerId: null }),
     );
   });
 
@@ -469,26 +459,14 @@ describe('reviewPrd', () => {
     );
   });
 
-  it('requests revision with a comment', async () => {
-    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision', comment: 'Revise section 2' });
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'revision_requested' }),
-    );
-  });
-
-  it('throws 400 when requesting revision without a comment', async () => {
+  it('throws 400 for invalid review action', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
 
     await expect(
-      reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision' }),
+      reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision' } as any),
     ).rejects.toMatchObject({
-      message: 'A comment is required when requesting revision',
+      message: expect.stringContaining('Invalid review action'),
+      status: 400,
     });
   });
 
@@ -607,7 +585,7 @@ describe('reviewPrd', () => {
     await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
 
     expect(mockRecordApproverResponse).toHaveBeenCalledWith(
-      'prd-1', 'prd', 'user-reviewer', 'approved', undefined,
+      'prd-1', 'prd', 'user-reviewer', 'approved',
     );
     expect(mockIsApprovalComplete).toHaveBeenCalledWith('prd-1', 'prd', 'proj-alpha');
     expect(setMock).toHaveBeenCalledWith(
@@ -756,7 +734,6 @@ describe('reopenForReview', () => {
       expect.objectContaining({
         status: 'pending_review',
         reviewerId: null,
-        reviewComment: null,
         reviewedAt: null,
       }),
     );

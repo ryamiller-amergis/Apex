@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.24.0",
+    "date": "2026-06-02",
+    "title": "Inline Review Comments",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Reviewers can now highlight text in PRDs and Design Docs to leave inline comments — a sidebar panel shows all threads with reply, resolve, reopen, and delete actions"
+      },
+      {
+        "type": "feature",
+        "description": "Approve button is blocked until all inline review comments are resolved, ensuring no document is approved with outstanding feedback"
+      },
+      {
+        "type": "improvement",
+        "description": "Owner and assigned reviewer names are now always visible in the document header, regardless of document status"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the Request Revision modal with the inline comment workflow — reviewers leave structured, text-anchored feedback instead of a single free-text reason"
+      }
+    ]
+  },
+  {
     "version": "1.23.0",
     "date": "2026-06-02",
     "title": "Section Owners & Chat Resilience",

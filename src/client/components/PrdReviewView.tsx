@@ -18,12 +18,22 @@ import {
   useDocumentAssignments,
   useReassignApprovers,
 } from '../hooks/useInterviews';
+import {
+  useReviewComments,
+  useUnresolvedCommentCount,
+  useCreateComment,
+  useResolveComment,
+  useReopenComment as useReopenReviewComment,
+  useDeleteComment,
+} from '../hooks/useReviewComments';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { ReviewReasonModal } from './ReviewReasonModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import { AnnotationLayer } from './AnnotationLayer';
+import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import type { PrdStatus } from '../../shared/types/interview';
+import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './PrdReviewView.module.css';
 
 type TabId = 'preview' | 'edit' | 'backlog';
@@ -77,17 +87,25 @@ export const PrdReviewView: React.FC = () => {
 
   const reassignApprovers = useReassignApprovers();
 
-  const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const { data: reviewComments = [] } = useReviewComments(id, 'prd');
+  const { data: unresolvedData } = useUnresolvedCommentCount(id, 'prd');
+  const unresolvedCount = unresolvedData?.count ?? 0;
+  const createComment = useCreateComment('prd', id);
+  const resolveComment = useResolveComment(userId ?? '');
+  const reopenReviewComment = useReopenReviewComment();
+  const deleteComment = useDeleteComment();
+
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [pendingSelector, setPendingSelector] = useState<{ sectionKey: ReviewSectionKey; selector: TextSelector } | null>(null);
+  const [newCommentBody, setNewCommentBody] = useState('');
+
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAdoModal, setShowAdoModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [showAllLinks, setShowAllLinks] = useState(false);
 
-  const { data: assignments = [] } = useDocumentAssignments(
-    prd?.status === 'pending_review' ? id : null,
-    'prd',
-  );
+  const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
 
   const isGenerating = !!prd && prd.status === 'generating' && prd.content === '';
   const generationFailed = !!prd && prd.status === 'draft' && prd.content === '';
@@ -143,11 +161,30 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, reviewPrd, navigate]);
 
-  const handleReviewConfirm = useCallback(async (reason: string) => {
-    if (!id) return;
-    await reviewPrd.mutateAsync({ prdId: id, action: 'request_revision', comment: reason });
-    setShowRevisionModal(false);
-  }, [id, reviewPrd]);
+  const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
+    setPendingSelector({ sectionKey, selector });
+    setNewCommentBody('');
+  }, []);
+
+  const handleSubmitComment = useCallback(async () => {
+    if (!pendingSelector || !newCommentBody.trim()) return;
+    await createComment.mutateAsync({
+      sectionKey: pendingSelector.sectionKey,
+      body: newCommentBody.trim(),
+      selector: pendingSelector.selector,
+    });
+    setPendingSelector(null);
+    setNewCommentBody('');
+  }, [pendingSelector, newCommentBody, createComment]);
+
+  const handleReply = useCallback(async (commentId: string, body: string) => {
+    await fetch(`/api/review-comments/${commentId}/replies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ body }),
+    });
+  }, []);
 
   const handleTabChange = useCallback((tab: TabId) => {
     if (tab === 'edit' && prd) {
@@ -156,6 +193,15 @@ export const PrdReviewView: React.FC = () => {
     }
     setActiveTab(tab);
   }, [prd]);
+
+  const handleCommentClick = useCallback((commentId: string) => {
+    const comment = reviewComments.find((c) => c.id === commentId);
+    if (comment) {
+      const targetTab: TabId = comment.sectionKey === 'backlog' ? 'backlog' : 'preview';
+      setActiveTab(targetTab);
+    }
+    setActiveCommentId(commentId);
+  }, [reviewComments]);
 
   // Auto-verify ADO IDs once when an approved PRD with backlog ADO items loads.
   // Silently clears any IDs that were deleted in ADO.
@@ -190,6 +236,13 @@ export const PrdReviewView: React.FC = () => {
     && can('workitems:write')
     && hasUnpushedItems;
 
+  const showCommentLayer =
+    (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
+    (canPerformReview || isAuthor || isAdmin);
+
+  const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
+  const backlogComments = reviewComments.filter((c) => c.sectionKey === 'backlog');
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
@@ -212,7 +265,21 @@ export const PrdReviewView: React.FC = () => {
                 </span>
               )}
             </div>
-            {(sourceInterview || (prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0) || prd.reviewComment) && (() => {
+            <div className={styles.metaRow}>
+              <span className={styles.metaItem}>
+                <span className={styles.metaLabel}>Owner:</span>
+                <span className={styles.metaValue}>{prd.ownerName ?? prd.ownerId ?? prd.authorName ?? prd.authorId}</span>
+              </span>
+              {assignments.length > 0 && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Reviewer(s):</span>
+                  <span className={styles.metaValue}>
+                    {assignments.map((a) => a.approverDisplayName ?? a.approverUserId).join(', ')}
+                  </span>
+                </span>
+              )}
+            </div>
+            {(sourceInterview || (prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0)) && (() => {
               const MAX_VISIBLE = 3;
               const docs = (prd.status === 'approved' && relatedDesignDocs) ? relatedDesignDocs : [];
               const totalChips = (sourceInterview ? 1 : 0) + docs.length;
@@ -276,11 +343,6 @@ export const PrdReviewView: React.FC = () => {
                     >
                       Show less
                     </button>
-                  )}
-                  {prd.reviewComment && (
-                    <span className={styles.reviewCommentChip}>
-                      "{prd.reviewComment}"
-                    </span>
                   )}
                 </div>
               );
@@ -351,20 +413,17 @@ export const PrdReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleApprove()}
-                  disabled={reviewPrd.isPending || !canPerformReview}
-                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
+                  disabled={reviewPrd.isPending || !canPerformReview || unresolvedCount > 0}
+                  title={
+                    !canPerformReview
+                      ? 'You are not an assigned approver for this document'
+                      : unresolvedCount > 0
+                        ? 'Resolve all comments before approving'
+                        : undefined
+                  }
                   type="button"
                 >
                   Approve
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => setShowRevisionModal(true)}
-                  disabled={!canPerformReview}
-                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>
@@ -525,13 +584,40 @@ export const PrdReviewView: React.FC = () => {
 
           <div className={styles.tabContent}>
             {activeTab === 'preview' && (
-              <div className={styles.preview}>
-                {prd.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
-                ) : (
-                  <div className={styles.emptyPreview}>
-                    No content yet.{canManage && (isAuthor || isAdmin) ? ' Use the Edit tab to write the PRD.' : ''}
-                  </div>
+              <div className={styles.previewWithSidebar}>
+                <div className={styles.preview}>
+                  {prd.content ? (
+                    showCommentLayer ? (
+                      <AnnotationLayer
+                        sectionKey="prd"
+                        comments={sectionComments}
+                        activeCommentId={activeCommentId}
+                        onAddComment={handleAddComment}
+                        onCommentClick={handleCommentClick}
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
+                      </AnnotationLayer>
+                    ) : (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
+                    )
+                  ) : (
+                    <div className={styles.emptyPreview}>
+                      No content yet.{canManage && (isAuthor || isAdmin) ? ' Use the Edit tab to write the PRD.' : ''}
+                    </div>
+                  )}
+                </div>
+                {showCommentLayer && (
+                  <ReviewCommentSidebar
+                    comments={reviewComments}
+                    activeCommentId={activeCommentId}
+                    currentUserId={userId ?? ''}
+                    documentAuthorUserId={prd.authorId}
+                    onCommentClick={handleCommentClick}
+                    onReply={(commentId, body) => void handleReply(commentId, body)}
+                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                    onDelete={(commentId) => deleteComment.mutate(commentId)}
+                  />
                 )}
               </div>
             )}
@@ -565,11 +651,38 @@ export const PrdReviewView: React.FC = () => {
             )}
 
             {activeTab === 'backlog' && (
-              <div className={styles.backlogView}>
-                {prd.backlogJson ? (
-                  <BacklogViewer data={prd.backlogJson} />
-                ) : (
-                  <div className={styles.emptyPreview}>No backlog data yet.</div>
+              <div className={styles.previewWithSidebar}>
+                <div className={styles.backlogView}>
+                  {prd.backlogJson ? (
+                    showCommentLayer ? (
+                      <AnnotationLayer
+                        sectionKey="backlog"
+                        comments={backlogComments}
+                        activeCommentId={activeCommentId}
+                        onAddComment={handleAddComment}
+                        onCommentClick={handleCommentClick}
+                      >
+                        <BacklogViewer data={prd.backlogJson} />
+                      </AnnotationLayer>
+                    ) : (
+                      <BacklogViewer data={prd.backlogJson} />
+                    )
+                  ) : (
+                    <div className={styles.emptyPreview}>No backlog data yet.</div>
+                  )}
+                </div>
+                {showCommentLayer && (
+                  <ReviewCommentSidebar
+                    comments={reviewComments}
+                    activeCommentId={activeCommentId}
+                    currentUserId={userId ?? ''}
+                    documentAuthorUserId={prd.authorId}
+                    onCommentClick={handleCommentClick}
+                    onReply={(commentId, body) => void handleReply(commentId, body)}
+                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                    onDelete={(commentId) => deleteComment.mutate(commentId)}
+                  />
                 )}
               </div>
             )}
@@ -592,14 +705,38 @@ export const PrdReviewView: React.FC = () => {
         />
       )}
 
-      {showRevisionModal && (
-        <ReviewReasonModal
-          itemName={prd.title}
-          docTypeName="PRD"
-          isPending={reviewPrd.isPending}
-          onConfirm={(reason) => void handleReviewConfirm(reason)}
-          onCancel={() => setShowRevisionModal(false)}
-        />
+      {pendingSelector && (
+        <div className={styles.commentModal} onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }} role="dialog" aria-modal="true">
+          <div className={styles.commentModalCard}>
+            <h3 className={styles.commentModalTitle}>Add Comment</h3>
+            <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
+            <textarea
+              className={styles.commentModalInput}
+              value={newCommentBody}
+              onChange={(e) => setNewCommentBody(e.target.value)}
+              placeholder="Write your comment…"
+              rows={3}
+              autoFocus
+            />
+            <div className={styles.commentModalActions}>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setPendingSelector(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => void handleSubmitComment()}
+                disabled={!newCommentBody.trim() || createComment.isPending}
+                type="button"
+              >
+                {createComment.isPending ? 'Posting…' : 'Post Comment'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showAdoModal && prd && (

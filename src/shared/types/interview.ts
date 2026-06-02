@@ -30,6 +30,8 @@ export interface PrdSummary {
   chatThreadId: string;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   project: string;
   title: string;
   status: PrdStatus;
@@ -70,8 +72,7 @@ export interface CreatePrdResponse {
 }
 
 export interface ReviewPrdRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export interface ReviewPrdResponse {
@@ -162,6 +163,8 @@ export interface DesignDocSummary {
   fixBaseline?: ContentSnapshot | null;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   title: string;
   status: DesignDocStatus;
   reviewerId?: string;
@@ -181,8 +184,7 @@ export interface DesignDoc extends DesignDocSummary {
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };
 
 export interface ReviewDesignDocRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export function designDocStatusLabel(status: DesignDocStatus): string {

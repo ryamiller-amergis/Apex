@@ -138,6 +138,10 @@
   border-top: 1px solid var(--border-color);
 }
 
+.collapsibleBodyHidden {
+  display: none;
+}
+
 /* ── ADO merged badge ─────────────────────────────────────────────────────── */
 
 .adoMergedBadge {

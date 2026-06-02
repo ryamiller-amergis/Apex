@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import styles from './BacklogViewer.module.css';
 
 /* ── Local shape types (mirrors /to-prd output) ───────────────────────────── */
@@ -131,6 +131,16 @@ interface CollapsibleProps {
 
 const Collapsible: React.FC<CollapsibleProps> = ({ header, defaultOpen = false, children, className }) => {
   const [open, setOpen] = useState(defaultOpen);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const handler = () => setOpen(true);
+    el.addEventListener('expand-for-comment', handler);
+    return () => el.removeEventListener('expand-for-comment', handler);
+  }, []);
+
   return (
     <div className={`${styles.collapsible} ${className ?? ''}`}>
       <button
@@ -153,7 +163,13 @@ const Collapsible: React.FC<CollapsibleProps> = ({ header, defaultOpen = false, 
         </svg>
         {header}
       </button>
-      {open && <div className={styles.collapsibleBody}>{children}</div>}
+      <div
+        ref={bodyRef}
+        data-collapsed={open ? undefined : 'true'}
+        className={`${styles.collapsibleBody} ${open ? '' : styles.collapsibleBodyHidden}`}
+      >
+        {children}
+      </div>
     </div>
   );
 };

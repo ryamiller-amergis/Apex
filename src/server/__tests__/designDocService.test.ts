@@ -77,6 +77,10 @@ jest.mock('../services/documentApprovalService', () => ({
   notifyApproversDocumentReady: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/reviewCommentService', () => ({
+  getUnresolvedCount: jest.fn().mockResolvedValue(0),
+}));
+
 import {
   createDesignDoc,
   listDesignDocs,
@@ -93,6 +97,17 @@ import {
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+
+// ── Select chain helper ────────────────────────────────────────────────────────
+function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit') {
+  const resolved = jest.fn().mockResolvedValue(data);
+  const chain: Record<string, jest.Mock> = {};
+  chain.leftJoin = jest.fn().mockReturnValue(chain);
+  chain.where = jest.fn().mockReturnValue(chain);
+  chain.orderBy = terminal === 'orderBy' ? resolved : jest.fn().mockResolvedValue(data);
+  chain.limit = terminal === 'limit' ? resolved : jest.fn().mockResolvedValue(data);
+  return { from: jest.fn().mockReturnValue(chain) };
+}
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock('../services/projectSettingsService') as { getSkillConfig: jest.Mock };
 
 const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
@@ -263,11 +278,7 @@ describe('getDesignDoc', () => {
 
   it('returns a full design doc with all three content fields', async () => {
     const docRow = makeDocRow({ designContent: 'Design', techSpecContent: 'Tech', assumptionsContent: 'Assumptions' });
-    const limitMock = jest.fn().mockResolvedValue([{ designDoc: docRow, reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ designDoc: docRow, reviewerDisplayName: null, authorDisplayName: null, designDocOwnerId: null, designDocOwnerDisplayName: null }]));
 
     const result = await getDesignDoc('doc-1');
 
@@ -279,11 +290,7 @@ describe('getDesignDoc', () => {
   });
 
   it('returns null when the design doc does not exist', async () => {
-    const limitMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([]));
 
     const result = await getDesignDoc('doc-missing');
 
@@ -292,11 +299,7 @@ describe('getDesignDoc', () => {
 
   it('includes reviewerName from the joined appUsers row', async () => {
     const docRow = makeDocRow({ reviewerId: 'reviewer-1' });
-    const limitMock = jest.fn().mockResolvedValue([{ designDoc: docRow, reviewerDisplayName: 'Bob' }]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ designDoc: docRow, reviewerDisplayName: 'Bob', authorDisplayName: null, designDocOwnerId: null, designDocOwnerDisplayName: null }]));
 
     const result = await getDesignDoc('doc-1');
 
@@ -344,7 +347,7 @@ describe('updateDesignDocContent', () => {
     await updateDesignDocContent('doc-1', 'user-1', { designContent: 'Revised design' });
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft', reviewerId: null, reviewComment: null }),
+      expect.objectContaining({ status: 'draft', reviewerId: null }),
     );
   });
 
@@ -519,26 +522,14 @@ describe('reviewDesignDoc', () => {
     );
   });
 
-  it('requests revision with a comment', async () => {
-    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'request_revision', comment: 'Revise section 2' });
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'revision_requested' }),
-    );
-  });
-
-  it('throws 400 when requesting revision without a comment', async () => {
+  it('throws 400 for invalid review action', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
 
     await expect(
-      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'request_revision' }),
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'request_revision' } as any),
     ).rejects.toMatchObject({
-      message: 'A comment is required when requesting revision',
+      message: expect.stringContaining('Invalid review action'),
+      status: 400,
     });
   });
 
