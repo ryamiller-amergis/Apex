@@ -198,10 +198,13 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
-  // Start the feature auto-complete background service
-  const featureAutoComplete = getFeatureAutoCompleteService();
-  featureAutoComplete.start();
-  console.log('Feature auto-complete service started');
+  // Start the feature auto-complete background service after a 2-minute delay
+  // to avoid bursting ADO calls at the same time as UAT auto-release on boot.
+  setTimeout(() => {
+    const featureAutoComplete = getFeatureAutoCompleteService();
+    featureAutoComplete.start();
+    console.log('Feature auto-complete service started');
+  }, 2 * 60 * 1000);
   
   // Start the UAT auto-release background service
   const uatAutoRelease = getUatAutoReleaseService();

@@ -8,7 +8,7 @@ const envSchema = z.object({
   /** Azure DevOps default project name */
   VITE_ADO_PROJECT: z.string().default('MaxView'),
   /** Work item poll interval in seconds */
-  VITE_POLL_INTERVAL: z.coerce.number().int().positive().default(30),
+  VITE_POLL_INTERVAL: z.coerce.number().int().positive().default(60),
 });
 
 function parseEnv() {

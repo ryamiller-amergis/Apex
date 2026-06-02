@@ -26,12 +26,13 @@ export function useReviewComments(documentId: string | null, documentType: 'prd'
 }
 
 export function useUnresolvedCommentCount(documentId: string | null, documentType: 'prd' | 'design_doc') {
-  return useQuery<{ count: number }>({
-    queryKey: ['review-comments', documentType, documentId, 'unresolved-count'],
-    queryFn: () => apiFetch(`/api/review-comments/${documentType}/${documentId}/unresolved-count`),
+  return useQuery<ReviewCommentWithReplies[], Error, { count: number }>({
+    queryKey: ['review-comments', documentType, documentId],
+    queryFn: () => apiFetch(`/api/review-comments/${documentType}/${documentId}`),
     enabled: !!documentId,
     staleTime: 5_000,
     refetchInterval: 10_000,
+    select: (comments) => ({ count: comments.filter(c => c.status === 'open').length }),
   });
 }
 

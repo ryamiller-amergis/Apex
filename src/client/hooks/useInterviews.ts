@@ -472,7 +472,7 @@ export function useDesignDocValidation(docId: string | null) {
     enabled: !!docId,
     refetchInterval: (query) => {
       const score = (query.state.data as any)?.validationScore;
-      return score === null || score === undefined ? 5000 : false;
+      return score === null || score === undefined ? 10_000 : false;
     },
   });
 }
