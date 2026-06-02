@@ -10,6 +10,10 @@ export interface InterviewSummary {
   repo: string;
   status: InterviewStatus;
   prdCount: number;
+  prdOwnerId?: string;
+  prdOwnerName?: string;
+  designDocOwnerId?: string;
+  designDocOwnerName?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +51,8 @@ export interface CreateInterviewRequest {
   repo: string;
   title?: string;
   model?: string;
+  prdOwnerId?: string;
+  designDocOwnerId?: string;
 }
 
 export interface CreateInterviewResponse {
@@ -261,4 +267,12 @@ export interface CreatePrdAdoItemsResponse {
     pbis: Array<{ title: string; adoId: number; adoUrl: string }>;
   };
   totalCreated: number;
+}
+
+// ── Active User (for owner assignment dropdowns) ─────────────────────────────
+
+export interface ActiveUser {
+  oid: string;
+  displayName: string | null;
+  email: string | null;
 }

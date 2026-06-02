@@ -143,6 +143,8 @@ export const interviews = pgTable('interviews', {
   title: text('title').notNull().default('Untitled Interview'),
   project: text('project').notNull(),
   repo: text('repo').notNull(),
+  prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -198,6 +200,16 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   chatThread: one(chatThreads, {
     fields: [interviews.chatThreadId],
     references: [chatThreads.id],
+  }),
+  prdOwner: one(appUsers, {
+    fields: [interviews.prdOwnerId],
+    references: [appUsers.oid],
+    relationName: 'interviewPrdOwner',
+  }),
+  designDocOwner: one(appUsers, {
+    fields: [interviews.designDocOwnerId],
+    references: [appUsers.oid],
+    relationName: 'interviewDesignDocOwner',
   }),
   prds: many(prds),
 }));

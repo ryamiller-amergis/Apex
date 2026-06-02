@@ -275,4 +275,133 @@ describe('useChatStream', () => {
     rerender({ id: null });
     expect(result.current.prdReady).toBe(false);
   });
+
+  // ── Retry state ────────────────────────────────────────────────────────────
+
+  it('starts with isRetrying=false and retryReason=null', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
+
+  it('sets isRetrying=true and retryReason when a retrying event arrives', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'retrying', attempt: 1, maxAttempts: 3 });
+    });
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Retrying… (attempt 1 of 3)');
+  });
+
+  it('clears isRetrying when a token event arrives after retrying', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'retrying', attempt: 1, maxAttempts: 3 });
+    });
+    expect(result.current.isRetrying).toBe(true);
+
+    act(() => {
+      lastES!.emit('message', { type: 'token', text: 'Hello' });
+    });
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
+
+  it('clears isRetrying when a committed message event arrives after retrying', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'retrying', attempt: 2, maxAttempts: 3 });
+    });
+    expect(result.current.isRetrying).toBe(true);
+
+    const msg = { id: 'msg-r', role: 'agent', text: 'Recovered', ts: '2026-01-01T00:00:00Z' };
+    act(() => {
+      lastES!.emit('message', { type: 'message', message: msg });
+    });
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
+
+  it('clears isRetrying when a done event arrives after retrying', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'retrying', attempt: 1, maxAttempts: 3 });
+    });
+    expect(result.current.isRetrying).toBe(true);
+
+    act(() => {
+      lastES!.emit('message', { type: 'done' });
+    });
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
+
+  it('sets isRetrying=true with "Retrying…" reason for a transient error', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'error', error: 'Connection timeout', errorCode: 'transient' });
+    });
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Retrying…');
+    expect(result.current.status).not.toBe('error');
+  });
+
+  it('sets isRetrying=true with rate-limit reason for a rate_limit error', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'error', error: 'Too many requests', errorCode: 'rate_limit' });
+    });
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Rate limited, retrying…');
+    expect(result.current.status).not.toBe('error');
+  });
+
+  it('adds a session-expired message and sets status=error for an auth error', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'error', error: 'Unauthorized', errorCode: 'auth' });
+    });
+    expect(result.current.status).toBe('error');
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].role).toBe('system');
+    expect(result.current.messages[0].text).toContain('Session expired');
+    expect(result.current.isRetrying).toBe(false);
+  });
+
+  it('adds a fallback error message and clears isRetrying after the retry timeout', () => {
+    jest.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useChatStream('t1'));
+      act(() => {
+        lastES!.emit('message', { type: 'error', error: 'Upstream timeout', errorCode: 'transient' });
+      });
+      expect(result.current.isRetrying).toBe(true);
+
+      act(() => {
+        jest.advanceTimersByTime(5001);
+      });
+
+      expect(result.current.isRetrying).toBe(false);
+      expect(result.current.retryReason).toBeNull();
+      expect(result.current.messages).toHaveLength(1);
+      expect(result.current.messages[0].text).toContain('Upstream timeout');
+      expect(result.current.status).toBe('error');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('resets isRetrying when threadId changes', () => {
+    const { result, rerender } = renderHook(({ id }) => useChatStream(id), {
+      initialProps: { id: 'thread-a' as string | null },
+    });
+    act(() => {
+      lastES!.emit('message', { type: 'retrying', attempt: 1, maxAttempts: 3 });
+    });
+    expect(result.current.isRetrying).toBe(true);
+
+    rerender({ id: 'thread-b' });
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
 });

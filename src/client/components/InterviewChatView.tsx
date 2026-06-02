@@ -19,6 +19,7 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { SectionOwnerModal } from './SectionOwnerModal';
 import type { InterviewStatus } from '../../shared/types/interview';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
@@ -224,6 +225,7 @@ const NewInterviewCompose: React.FC = () => {
   const [titleTouched, setTitleTouched] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -280,7 +282,7 @@ const NewInterviewCompose: React.FC = () => {
     setModel((current) => current === prevDefault ? newDefault : current);
   }, [skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if ((!text && attachments.length === 0) || isSending || !resolvedRepoName) return;
@@ -291,6 +293,13 @@ const NewInterviewCompose: React.FC = () => {
     }
     if (speech.isListening) speech.stop();
     setSendError(null);
+    setShowOwnerModal(true);
+  }, [input, title, attachments, isSending, resolvedRepoName, speech]);
+
+  const handleCreateInterview = useCallback(async (owners: { prdOwnerId?: string; designDocOwnerId?: string }) => {
+    const text = input.trim();
+    const trimmedTitle = title.trim();
+    if (!resolvedRepoName || !trimmedTitle) return;
     setIsSending(true);
     try {
       const threadResult = await startChat.mutateAsync({
@@ -308,6 +317,8 @@ const NewInterviewCompose: React.FC = () => {
         repo: resolvedRepoName,
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
+        prdOwnerId: owners.prdOwnerId,
+        designDocOwnerId: owners.designDocOwnerId,
       });
       trackEvent('interview.started', {
         interviewId: result.interviewId,
@@ -330,7 +341,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, isSending, resolvedRepoName, resolvedBranch, selectedProject, grillSkill, startChat, createInterview, navigate, clearAttachments, speech, model]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, grillSkill, startChat, createInterview, navigate, clearAttachments, model]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -515,6 +526,21 @@ const NewInterviewCompose: React.FC = () => {
           Enter to send · Shift+Enter for new line · The <strong>{grillSkill?.name ?? 'grill-with-docs'}</strong> skill will guide this structured interview
         </p>
       </div>
+
+      {showOwnerModal && (
+        <SectionOwnerModal
+          project={selectedProject}
+          onConfirm={(owners) => {
+            setShowOwnerModal(false);
+            void handleCreateInterview(owners);
+          }}
+          onSkip={() => {
+            setShowOwnerModal(false);
+            void handleCreateInterview({});
+          }}
+          isSubmitting={isSending}
+        />
+      )}
     </div>
   );
 };
@@ -575,7 +601,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const { data: chatThread } = useChatThread(interview?.chatThreadId ?? null);
 
-  const { messages, streamingText, status: threadStatus } = useChatStream(
+  const { messages, streamingText, status: threadStatus, isRetrying, retryReason } = useChatStream(
     interview?.chatThreadId ?? null,
     {
       initialMessages: chatThread?.messages,
@@ -661,6 +687,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       void handleSend();
     }
   }, [handleSend]);
+
+  const handleRetryLast = useCallback(() => {
+    if (!interview?.chatThreadId || isRunning) return;
+    const lastUserMsg = [...visibleMessagesForContext].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+    void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: lastUserMsg.text, model }),
+    });
+  }, [interview?.chatThreadId, isRunning, visibleMessagesForContext, model]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -800,6 +838,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
             </div>
+            {(interview.prdOwnerName || interview.designDocOwnerName) && (
+              <div className={styles.ownerChips}>
+                {interview.prdOwnerName && (
+                  <span className={styles.ownerChip}>
+                    PRD: {interview.prdOwnerName}
+                  </span>
+                )}
+                {interview.designDocOwnerName && (
+                  <span className={styles.ownerChip}>
+                    Design Doc: {interview.designDocOwnerName}
+                  </span>
+                )}
+              </div>
+            )}
             {interview.prds.length > 0 && (
               <div className={styles.titlePrdLinks}>
                 {interview.prds.map((prd) => (
@@ -942,6 +994,22 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               );
             }
             if (msg.role === 'system') {
+              const isError = msg.text.startsWith('Error:');
+              if (isError && !isChatLocked) {
+                return (
+                  <div key={msg.id} className={styles.systemErrorMsg}>
+                    <span className={styles.systemErrorText}>{msg.text}</span>
+                    <button
+                      className={styles.retryBtn}
+                      onClick={() => handleRetryLast()}
+                      disabled={isRunning}
+                      type="button"
+                    >
+                      ↺ Try again
+                    </button>
+                  </div>
+                );
+              }
               return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
             }
             if (msg.role === 'user') {
@@ -972,7 +1040,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             );
           })}
 
-          {isRunning && !streamingText && (
+          {isRetrying && (
+            <div className={styles.retryingIndicator}>
+              <span className={styles.retryingSpinner} />
+              {retryReason || 'Retrying…'}
+            </div>
+          )}
+
+          {isRunning && !streamingText && !isRetrying && (
             <div className={styles.typingIndicator}>
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />

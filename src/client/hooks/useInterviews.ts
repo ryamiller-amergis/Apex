@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ActiveUser,
   CreateDesignDocResponse,
   CreateInterviewResponse,
   CreatePrdAdoItemsRequest,
@@ -126,6 +127,16 @@ export function useDesignDoc(id: string | null) {
   });
 }
 
+// ── Active users query ─────────────────────────────────────────────────────────
+
+export function useActiveUsers() {
+  return useQuery<ActiveUser[]>({
+    queryKey: ['active-users'],
+    queryFn: () => apiFetch('/api/interviews/active-users'),
+    staleTime: 60_000,
+  });
+}
+
 // ── Interview mutations ────────────────────────────────────────────────────────
 
 // ── Approver queries ──────────────────────────────────────────────────────────
@@ -176,7 +187,7 @@ export function useDocumentAssignments(documentId: string | null, documentType: 
 
 export function useCreateInterview() {
   const qc = useQueryClient();
-  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string }>({
+  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string }>({
     mutationFn: (body) =>
       apiFetch('/api/interviews', {
         method: 'POST',

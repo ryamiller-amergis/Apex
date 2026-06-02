@@ -48,6 +48,11 @@ jest.mock('../../hooks/useInterviews', () => ({
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
+}));
+
+jest.mock('../SectionOwnerModal', () => ({
+  SectionOwnerModal: jest.fn(),
 }));
 
 jest.mock('../../hooks/useChatStream', () => ({
@@ -88,8 +93,12 @@ jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+import { useEffect } from 'react';
 import { useCreateInterview } from '../../hooks/useInterviews';
 import { useStartChat } from '../../hooks/useChatThreads';
+import { SectionOwnerModal } from '../SectionOwnerModal';
+
+const MockSectionOwnerModal = SectionOwnerModal as jest.Mock;
 
 function renderCompose() {
   return render(
@@ -124,6 +133,12 @@ describe('NewInterviewCompose — title required', () => {
       ok: true,
       json: () => Promise.resolve({ ok: true }),
     }) as jest.Mock;
+
+    // Default: the owner modal auto-skips so existing tests work without change
+    MockSectionOwnerModal.mockImplementation(({ onSkip }: { onSkip: () => void }) => {
+      useEffect(() => { onSkip(); }, [onSkip]);
+      return null;
+    });
   });
 
   it('renders a required title field and message textarea', () => {
@@ -278,5 +293,105 @@ describe('NewInterviewCompose — title required', () => {
       String(c[0]).includes('/api/chat/threads/thread-abc/messages'),
     );
     expect(JSON.parse(messageCall![1].body).model).toBe('claude-opus-4-6');
+  });
+});
+
+// ── NewInterviewCompose — section owner modal ─────────────────────────────────
+
+describe('NewInterviewCompose — section owner modal', () => {
+  let startChatMutateAsync: jest.Mock;
+  let createInterviewMutateAsync: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    startChatMutateAsync = jest.fn().mockResolvedValue({ threadId: 'thread-abc' });
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: startChatMutateAsync,
+      isPending: false,
+    });
+
+    createInterviewMutateAsync = jest.fn().mockResolvedValue({ interviewId: 'iv-1' });
+    (useCreateInterview as jest.Mock).mockReturnValue({
+      mutateAsync: createInterviewMutateAsync,
+      isPending: false,
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+    }) as jest.Mock;
+  });
+
+  it('shows the SectionOwnerModal after Send is clicked with a valid title and message', async () => {
+    MockSectionOwnerModal.mockImplementation(() => (
+      <div data-testid="owner-modal">Owner Modal</div>
+    ));
+
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'My Interview' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Some feature request text' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('owner-modal')).toBeInTheDocument();
+    });
+    expect(createInterviewMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('passes selected owner IDs to createInterview when the modal is confirmed', async () => {
+    MockSectionOwnerModal.mockImplementation(
+      ({ onConfirm }: { onConfirm: (o: { prdOwnerId?: string; designDocOwnerId?: string }) => void }) => (
+        <div data-testid="owner-modal">
+          <button
+            onClick={() => onConfirm({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' })}
+          >
+            Confirm
+          </button>
+        </div>
+      ),
+    );
+
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Owners Interview' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Please assign owners' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(screen.getByTestId('owner-modal')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Confirm'));
+
+    await waitFor(() => expect(createInterviewMutateAsync).toHaveBeenCalled());
+    expect(createInterviewMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' }),
+    );
+  });
+
+  it('creates the interview without owner IDs when the modal is skipped', async () => {
+    MockSectionOwnerModal.mockImplementation(
+      ({ onSkip }: { onSkip: () => void }) => (
+        <div data-testid="owner-modal">
+          <button onClick={onSkip}>Skip</button>
+        </div>
+      ),
+    );
+
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Skip Owners Interview' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'No owners needed' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(screen.getByTestId('owner-modal')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Skip'));
+
+    await waitFor(() => expect(createInterviewMutateAsync).toHaveBeenCalled());
+    expect(createInterviewMutateAsync).toHaveBeenCalledWith(
+      expect.not.objectContaining({ prdOwnerId: expect.anything() }),
+    );
   });
 });

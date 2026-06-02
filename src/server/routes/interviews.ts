@@ -14,6 +14,7 @@ import {
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
+import { getActiveUsers } from '../services/rbacService';
 import {
   createPrd,
   createPrdAdoWorkItems,
@@ -76,11 +77,13 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId } = req.body as {
+    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId } = req.body as {
       project: string;
       repo: string;
       title?: string;
       chatThreadId: string;
+      prdOwnerId?: string;
+      designDocOwnerId?: string;
     };
 
     if (!project || !repo || !chatThreadId) {
@@ -88,8 +91,17 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId });
     res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/active-users', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const users = await getActiveUsers();
+    res.json(users);
   } catch (err) {
     next(err);
   }

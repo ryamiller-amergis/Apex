@@ -80,6 +80,7 @@ export type SseEventType =
   | 'tool_call'   // agent invoked a tool
   | 'status'      // thread status changed
   | 'error'       // run-level error
+  | 'retrying'    // server is transparently retrying a transient failure
   | 'done';       // turn completed
 
 export interface SseTokenEvent {
@@ -111,6 +112,12 @@ export interface SseErrorEvent {
   errorCode?: SseErrorCode;
 }
 
+export interface SseRetryingEvent {
+  type: 'retrying';
+  attempt: number;
+  maxAttempts: number;
+}
+
 export interface SseDoneEvent {
   type: 'done';
   runId?: string;
@@ -124,6 +131,7 @@ export type SseEvent =
   | SseToolCallEvent
   | SseStatusEvent
   | SseErrorEvent
+  | SseRetryingEvent
   | SseDoneEvent;
 
 // ── Thread summary (lightweight, no messages) ─────────────────────────────────

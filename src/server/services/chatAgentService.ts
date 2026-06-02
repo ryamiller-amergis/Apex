@@ -989,52 +989,108 @@ export async function sendMessage(
     state.thread.activeRunId = (run as any).id;
     persistThread(state.thread);
 
-    // Stream tokens and tool calls
+    const MAX_RUN_RETRIES = 2;
+    let currentRun = run;
     let agentTextBuffer = '';
 
-    if (run.supports('stream')) {
-      for await (const event of run.stream()) {
-        if (event.type === 'assistant') {
-          for (const block of event.message.content) {
-            if (block.type === 'text') {
-              agentTextBuffer += block.text;
-              broadcast(state, { type: 'token', text: block.text });
-            }
-            if (block.type === 'tool_use') {
-              broadcast(state, {
-                type: 'tool_call',
-                toolName: block.name,
-                input: block.input,
-              });
+    for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
+      agentTextBuffer = '';
+
+      // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
+      if (currentRun.supports('stream')) {
+        try {
+          for await (const event of currentRun.stream()) {
+            if (event.type === 'assistant') {
+              for (const block of event.message.content) {
+                if (block.type === 'text') {
+                  agentTextBuffer += block.text;
+                  broadcast(state, { type: 'token', text: block.text });
+                }
+                if (block.type === 'tool_use') {
+                  broadcast(state, {
+                    type: 'tool_call',
+                    toolName: block.name,
+                    input: block.input,
+                  });
+                }
+              }
             }
           }
+        } catch (streamErr) {
+          if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
+            console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
+            broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+
+            if (state.agent) {
+              await state.agent[Symbol.asyncDispose]().catch(() => {});
+              state.agent = null;
+            }
+            if (state.thread.cursorAgentId) {
+              state.agent = await retryWithBackoff(
+                () => Agent.resume(state.thread.cursorAgentId!, {
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: { cwd: state.thread.workspaceDir },
+                  mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                }),
+                sdkRetryOpts,
+              );
+              currentRun = await state.agent.send(prompt);
+              state.thread.activeRunId = (currentRun as any).id;
+              continue;
+            }
+          }
+          throw streamErr;
         }
       }
-    }
 
-    const result = await run.wait();
+      const result = await currentRun.wait();
 
-    if (result.status === 'error') {
-      const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
-      console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
-      trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
-      state.thread.lastError = reason;
-      broadcast(state, { type: 'error', error: reason });
-      // Always dispose the in-memory agent object
-      if (state.agent) {
-        await state.agent[Symbol.asyncDispose]().catch(() => {});
-        state.agent = null;
+      if (result.status === 'error') {
+        const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
+
+        if (attempt < MAX_RUN_RETRIES && !isFatalRunError(reason)) {
+          console.warn(`[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, reason);
+          broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+
+          if (state.agent) {
+            await state.agent[Symbol.asyncDispose]().catch(() => {});
+            state.agent = null;
+          }
+          if (state.thread.cursorAgentId) {
+            state.agent = await retryWithBackoff(
+              () => Agent.resume(state.thread.cursorAgentId!, {
+                apiKey,
+                model: { id: resolvedModel },
+                local: { cwd: state.thread.workspaceDir },
+                mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+              }),
+              sdkRetryOpts,
+            );
+            currentRun = await state.agent.send(prompt);
+            state.thread.activeRunId = (currentRun as any).id;
+            continue;
+          }
+        }
+
+        console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
+        trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
+        state.thread.lastError = reason;
+        broadcast(state, { type: 'error', error: reason });
+        if (state.agent) {
+          await state.agent[Symbol.asyncDispose]().catch(() => {});
+          state.agent = null;
+        }
+        if (isFatalRunError(reason)) {
+          state.thread.cursorAgentId = undefined;
+        }
+        state.thread.activeRunId = undefined;
+        state.thread.status = 'idle';
+        broadcast(state, { type: 'status', status: 'idle' });
+        break;
       }
-      if (isFatalRunError(reason)) {
-        // Fatal (auth, invalid config) — clear agent ID; next send creates a fresh agent
-        state.thread.cursorAgentId = undefined;
-      }
-      // Transient/recoverable — keep cursorAgentId so Agent.resume can reconnect
-      state.thread.activeRunId = undefined;
-      state.thread.status = 'idle';
-      broadcast(state, { type: 'status', status: 'idle' });
-    } else {
-      // Commit the accumulated agent message
+
+      // Run succeeded
       if (agentTextBuffer) {
         const agentMsg: ChatMessage = {
           id: uuidv4(),
@@ -1052,6 +1108,7 @@ export async function sendMessage(
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
+      break;
     }
 
     const prdContent = readOutputPrd(threadId);

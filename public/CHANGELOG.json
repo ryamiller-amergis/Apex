@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.23.0",
+    "date": "2026-06-02",
+    "title": "Section Owners & Chat Resilience",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Assign PRD and Design Doc owners when starting an interview — a modal lets you select section owners from active users, and each owner receives an in-app notification on assignment"
+      },
+      {
+        "type": "feature",
+        "description": "PRD and Design Doc owner names are now displayed as chips in the interview header"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agent retries transient run failures automatically and shows a live 'Retrying…' indicator in the conversation instead of immediately surfacing an error"
+      },
+      {
+        "type": "improvement",
+        "description": "Error messages in interview chat now include a '↺ Try again' button to re-send the last user message without leaving the chat"
+      }
+    ]
+  },
+  {
     "version": "1.22.0",
     "date": "2026-06-01",
     "title": "Interview Context & Agent Reliability",
