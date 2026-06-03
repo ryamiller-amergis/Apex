@@ -9,7 +9,7 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
-import type { ProjectSkillConfig, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import type { UserWithRoles } from '../../shared/types/rbac';
 import styles from './AdminProjectSettings.module.css';
@@ -351,6 +351,147 @@ const MODEL_FIELDS = [
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
 ] as const;
 
+// ── McpPillAddForm ─────────────────────────────────────────────────────────────
+
+interface McpPillAddFormProps {
+  availableModels: { id: string; displayName: string }[];
+  isLoadingModels: boolean;
+  isPending: boolean;
+  onAdd: (pill: QuickMcpPill) => void;
+}
+
+const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoadingModels, isPending, onAdd }) => {
+  const [transport, setTransport] = useState<'http' | 'stdio'>('stdio');
+  const [label, setLabel] = useState('');
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [url, setUrl] = useState('');
+  const [command, setCommand] = useState('npx');
+  const [args, setArgs] = useState('-y sendgrid-mcp');
+  const [envStr, setEnvStr] = useState('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
+  const [model, setModel] = useState('');
+  const [systemPromptHint, setSystemPromptHint] = useState('');
+  const [description, setDescription] = useState('');
+
+  const handleAdd = () => {
+    const trimmedLabel = label.trim();
+    const trimmedName = mcpServerName.trim();
+    if (!trimmedLabel || !trimmedName) return;
+
+    const base = {
+      label: trimmedLabel,
+      mcpServerName: trimmedName,
+      model: model || null,
+      systemPromptHint: systemPromptHint.trim() || null,
+      description: description.trim() || null,
+    };
+
+    if (transport === 'http') {
+      if (!url.trim()) return;
+      const pill: QuickMcpPillHttp = { ...base, transport: 'http', url: url.trim() };
+      onAdd(pill);
+    } else {
+      if (!command.trim()) return;
+      const parsedArgs = args.trim() ? args.trim().split(/\s+/) : [];
+      const parsedEnv: Record<string, string> = {};
+      for (const pair of envStr.split(',')) {
+        const eq = pair.indexOf('=');
+        if (eq > 0) parsedEnv[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+      }
+      const pill: QuickMcpPillStdio = {
+        ...base,
+        transport: 'stdio',
+        command: command.trim(),
+        args: parsedArgs.length ? parsedArgs : null,
+        env: Object.keys(parsedEnv).length ? parsedEnv : null,
+      };
+      onAdd(pill);
+    }
+
+    setLabel('');
+    setMcpServerName('');
+    setUrl('');
+    setCommand('npx');
+    setArgs('-y sendgrid-mcp');
+    setEnvStr('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
+    setModel('');
+    setSystemPromptHint('');
+    setDescription('');
+  };
+
+  return (
+    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {/* Transport toggle */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Transport:</span>
+        {(['stdio', 'http'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`${styles.btnAction} ${transport === t ? styles.transportActive : ''}`}
+            style={{ padding: '2px 10px', fontSize: '0.78rem' }}
+            onClick={() => setTransport(t)}
+            disabled={isPending}
+          >
+            {t === 'stdio' ? 'stdio (npx / command)' : 'HTTP (hosted URL)'}
+          </button>
+        ))}
+      </div>
+
+      {/* Common fields */}
+      <div className={styles.pillAddRow}>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Label</label>
+          <input className={styles.input} placeholder="e.g. SendGrid" value={label} onChange={(e) => setLabel(e.target.value)} disabled={isPending} />
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Server Name</label>
+          <input className={styles.input} placeholder="e.g. sendgrid" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} />
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Model override</label>
+          <select className={styles.select} value={model} onChange={(e) => setModel(e.target.value)} disabled={isPending || isLoadingModels}>
+            <option value="">Default model</option>
+            {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Transport-specific fields */}
+      {transport === 'http' ? (
+        <input className={styles.input} placeholder="HTTP URL (e.g. https://mcp.twilio.com/docs)" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} />
+      ) : (
+        <>
+          <div className={styles.pillAddRow}>
+            <div className={styles.field} style={{ flex: '0 0 8rem' }}>
+              <label className={styles.label}>Command</label>
+              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} />
+            </div>
+            <div className={styles.field} style={{ flex: 1 }}>
+              <label className={styles.label}>Args (space-separated)</label>
+              <input className={styles.input} placeholder="-y sendgrid-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} />
+            </div>
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
+            <input className={styles.input} placeholder="SENDGRID_API_KEY=${SENDGRID_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} />
+            <span className={styles.skillDescription}>Values like {'${SENDGRID_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
+          </div>
+        </>
+      )}
+
+      {/* Optional metadata */}
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools for querying email activity, bounces, and stats)" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} />
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Description shown to users when pill is selected" value={description} onChange={(e) => setDescription(e.target.value)} disabled={isPending} />
+
+      <div>
+        <button type="button" className={styles.btnAction} onClick={handleAdd} disabled={isPending}>
+          Add MCP Pill
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface AdminProjectSettingsProps {
@@ -376,6 +517,7 @@ interface EditState {
   designDocValidationModel: string;
   defaultModel: string;
   quickSkillPills: QuickSkillPill[];
+  quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
   isNew: boolean;
 }
@@ -387,7 +529,7 @@ const emptyEdit = (): EditState => ({
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '',
   defaultModel: '',
-  quickSkillPills: [], approvalMode: 'any_one', isNew: true,
+  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -416,6 +558,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     models: false,
     approvers: false,
     pills: false,
+    mcpPills: false,
   });
 
   // Approver local state
@@ -475,7 +618,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const handleAddNew = () => {
     setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
+    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false, mcpPills: false });
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
@@ -497,11 +640,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationModel: config.designDocValidationModel ?? '',
       defaultModel: config.defaultModel ?? '',
       quickSkillPills: config.quickSkillPills ?? [],
+      quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
       isNew: false,
     });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
+    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false, mcpPills: false });
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -542,6 +686,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocValidationModel: edit.designDocValidationModel || null,
           defaultModel: edit.defaultModel || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
+          quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
         },
       });
@@ -987,6 +1132,171 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   Add
                 </button>
               </div>
+            </AccordionSection>
+
+            {/* Section 6: Quick MCP Pills */}
+            <AccordionSection
+              title="Quick MCP Pills"
+              hint={edit.quickMcpPills.length > 0 ? `${edit.quickMcpPills.length} configured` : undefined}
+              expanded={expandedSections.mcpPills}
+              onToggle={() => toggleSection('mcpPills')}
+            >
+              <p className={styles.accordionHelp}>
+                Shortcut pills that wire an external MCP server into the chat agent alongside the built-in ADO skills.
+                Choose <strong>HTTP</strong> for hosted endpoints (e.g. mcp.twilio.com) or <strong>stdio</strong> for
+                locally-installed CLI packages (e.g. <code>npx sendgrid-mcp</code>).
+              </p>
+
+              {edit.quickMcpPills.length > 0 && (
+                <div className={styles.pillList}>
+                  {edit.quickMcpPills.map((pill, idx) => (
+                    <div key={idx} className={styles.pillItem}>
+                      <div className={styles.pillItemRow}>
+                        <span className={styles.pillLabel}>{pill.label}</span>
+                        <span className={styles.pillPath}>{pill.mcpServerName} · {pill.transport}</span>
+                        <select
+                          className={styles.select}
+                          style={{ flex: '0 0 10rem', height: '28px', padding: '4px 8px', fontSize: '12px' }}
+                          value={pill.model ?? ''}
+                          onChange={(e) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], model: e.target.value || null };
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending || isLoadingModels}
+                        >
+                          <option value="">Default model</option>
+                          {availableModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.displayName}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === 0}
+                          onClick={() => {
+                            const pills = [...edit.quickMcpPills];
+                            [pills[idx - 1], pills[idx]] = [pills[idx], pills[idx - 1]];
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Move up"
+                        >↑</button>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === edit.quickMcpPills.length - 1}
+                          onClick={() => {
+                            const pills = [...edit.quickMcpPills];
+                            [pills[idx], pills[idx + 1]] = [pills[idx + 1], pills[idx]];
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Move down"
+                        >↓</button>
+                        <button
+                          type="button"
+                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                          onClick={() => {
+                            const pills = edit.quickMcpPills.filter((_, i) => i !== idx);
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Remove pill"
+                        >Remove</button>
+                      </div>
+                      {pill.transport === 'http' ? (
+                        <input
+                          className={styles.input}
+                          style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                          placeholder="URL (e.g. https://mcp.twilio.com/docs)"
+                          value={pill.url}
+                          onChange={(e) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], url: e.target.value } as typeof pill;
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                        />
+                      ) : (
+                        <>
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Command (e.g. npx)"
+                            value={pill.command}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              pills[idx] = { ...pills[idx], command: e.target.value } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Args (space-separated, e.g. -y sendgrid-mcp)"
+                            value={(pill.args ?? []).join(' ')}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              const args = e.target.value.trim() ? e.target.value.trim().split(/\s+/) : [];
+                              pills[idx] = { ...pills[idx], args } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Env vars (KEY=${ENV_VAR}, comma-separated, e.g. SENDGRID_API_KEY=${SENDGRID_API_KEY})"
+                            value={Object.entries(pill.env ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              const env: Record<string, string> = {};
+                              for (const pair of e.target.value.split(',')) {
+                                const eq = pair.indexOf('=');
+                                if (eq > 0) env[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+                              }
+                              pills[idx] = { ...pills[idx], env: Object.keys(env).length ? env : null } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                        </>
+                      )}
+                      <input
+                        className={styles.input}
+                        style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                        placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools)"
+                        value={pill.systemPromptHint ?? ''}
+                        onChange={(e) => {
+                          const pills = [...edit.quickMcpPills];
+                          pills[idx] = { ...pills[idx], systemPromptHint: e.target.value || null };
+                          setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                        }}
+                        disabled={upsert.isPending}
+                      />
+                      <input
+                        className={styles.input}
+                        style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                        placeholder="Description shown to users when selected"
+                        value={pill.description ?? ''}
+                        onChange={(e) => {
+                          const pills = [...edit.quickMcpPills];
+                          pills[idx] = { ...pills[idx], description: e.target.value || null };
+                          setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                        }}
+                        disabled={upsert.isPending}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add new MCP pill form */}
+              <McpPillAddForm
+                availableModels={availableModels}
+                isLoadingModels={isLoadingModels}
+                isPending={upsert.isPending}
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)}
+              />
             </AccordionSection>
 
             {formError && <p className={styles.formError}>{formError}</p>}

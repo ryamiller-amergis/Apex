@@ -491,6 +491,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
     );
   });
 
@@ -549,6 +550,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
     );
   });
 
@@ -587,6 +589,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
     );
   });
 
@@ -623,6 +626,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // quickSkillPills
       undefined,               // defaultModel
       undefined,               // approvalMode
+      undefined,               // quickMcpPills
     );
   });
 
@@ -658,6 +662,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // quickSkillPills
       undefined,                            // defaultModel
       undefined,                            // approvalMode
+      undefined,                            // quickMcpPills
     );
   });
 
@@ -688,6 +693,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,
       'composer-2',
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
     );
   });
 
@@ -722,6 +728,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // quickSkillPills
       undefined,         // defaultModel
       'all_required',    // approvalMode
+      undefined,         // quickMcpPills
     );
   });
 

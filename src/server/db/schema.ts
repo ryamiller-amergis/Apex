@@ -2,7 +2,7 @@ import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, 
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
-import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
@@ -270,6 +270,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocValidationModel: text('design_doc_validation_model'),
   defaultModel: text('default_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
+  quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

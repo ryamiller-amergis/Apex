@@ -16,7 +16,7 @@ import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
-import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { BrandLogo } from './BrandLogo';
 import styles from './AgentHome.module.css';
@@ -452,6 +452,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [selectedSkillPath, setSelectedSkillPath] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
+  const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
 
   // PRD state
   const [showPrdPreview, setShowPrdPreview] = useState(false);
@@ -487,6 +488,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const resolvedRepoName = skillConfig?.skillRepo ?? defaultRepo?.name ?? null;
 
   const quickSkillPills = skillConfig?.quickSkillPills ?? [];
+  const quickMcpPills = skillConfig?.quickMcpPills ?? [];
 
   const { data: skills = [] } = useSkillList(
     selectedProject || null,
@@ -775,12 +777,14 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             skillPath: effectiveSkillPath,
             freeformContext,
             model,
+            ...(selectedMcpPill ? { mcpPill: selectedMcpPill } : {}),
           },
           skipAutoKickoff: !skillSlugOnlyKickoff,
         });
         activeThreadId = result.threadId;
         setThreadId(activeThreadId);
         setSelectedQuickSkill(null);
+        setSelectedMcpPill(null);
       }
 
       // For new threads the skill is baked into the kickoff system prompt, so a bare
@@ -840,7 +844,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, model, clearAttachments, isListening]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -893,6 +897,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     setSelectedSkillPath(null);
     setSelectedSkillName(null);
     setSelectedQuickSkill(null);
+    setSelectedMcpPill(null);
     clearAttachments();
     setShowPrdPreview(false);
     setInitialPrdReady(false);
@@ -915,7 +920,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   }, []);
 
   const isCompose = !threadId;
-  const needsSkillSelection = isCompose && quickSkillPills.length > 0 && !selectedQuickSkill;
+  const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
+  const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName);
 
   // ── Shared input area ────────────────────────────────────────────────────────
@@ -1123,6 +1129,28 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
                   onClick={() => {
                     const isDeselect = selectedQuickSkill?.skillPath === pill.skillPath;
                     setSelectedQuickSkill(isDeselect ? null : pill);
+                    setSelectedMcpPill(null);
+                    setModel(
+                      isDeselect
+                        ? (globalDefaultModel?.value ?? DEFAULT_MODEL_ID)
+                        : (pill.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID),
+                    );
+                  }}
+                >
+                  {pill.label}
+                </button>
+              ))}
+              {quickMcpPills.map((pill) => (
+                <button
+                  key={pill.mcpServerName}
+                  type="button"
+                  className={`${styles.pill} ${styles.pillClickable} ${styles.pillMcp} ${
+                    selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.pillSelected : ''
+                  }`}
+                  onClick={() => {
+                    const isDeselect = selectedMcpPill?.mcpServerName === pill.mcpServerName;
+                    setSelectedMcpPill(isDeselect ? null : pill);
+                    setSelectedQuickSkill(null);
                     setModel(
                       isDeselect
                         ? (globalDefaultModel?.value ?? DEFAULT_MODEL_ID)
@@ -1140,6 +1168,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
                 {selectedQuickSkill.description
                   || skills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
                   || `Skill: ${selectedQuickSkill.label}`}
+              </div>
+            )}
+            {selectedMcpPill && (
+              <div className={styles.pillDescription}>
+                {selectedMcpPill.description || `MCP: ${selectedMcpPill.label}`}
               </div>
             )}
 

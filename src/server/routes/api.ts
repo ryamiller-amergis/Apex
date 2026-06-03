@@ -3743,6 +3743,7 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prdModel: config.prdModel ?? null,
       designDocModel: config.designDocModel ?? null,
       quickSkillPills: config.quickSkillPills ?? null,
+      quickMcpPills: config.quickMcpPills ?? null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });

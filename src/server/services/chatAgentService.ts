@@ -1,5 +1,6 @@
 import { Agent, CursorAgentError } from '@cursor/sdk';
 import type { SDKAgent } from '@cursor/sdk/dist/cjs/agent.js';
+import type { McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -226,6 +227,49 @@ function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMet
   ].join('\n');
 }
 
+/**
+ * Resolve a key/value map where values may reference environment variables.
+ * Values matching "${VAR_NAME}" are replaced with process.env.VAR_NAME at runtime.
+ */
+function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    const match = value.match(/^\$\{([^}]+)\}$/);
+    resolved[key] = match ? (process.env[match[1]] ?? '') : value;
+  }
+  return resolved;
+}
+
+/**
+ * Build the mcpServers map for the Cursor SDK agent.
+ * Always includes ado-skills; conditionally adds any MCP pill selected for this thread.
+ * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
+ */
+function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Record<string, McpServerConfig> {
+  const servers: Record<string, McpServerConfig> = {
+    'ado-skills': { url: adoSkillsUrl },
+  };
+
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
+    if (pill.transport === 'stdio') {
+      servers[pill.mcpServerName] = {
+        type: 'stdio',
+        command: pill.command,
+        ...(pill.args ? { args: pill.args } : {}),
+        ...(pill.env ? { env: resolveEnvRefs(pill.env) } : {}),
+      };
+    } else {
+      servers[pill.mcpServerName] = {
+        url: pill.url,
+        ...(pill.headers ? { headers: resolveEnvRefs(pill.headers) } : {}),
+      };
+    }
+  }
+
+  return servers;
+}
+
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.branch ?? 'main';
   const parts: string[] = [
@@ -251,6 +295,15 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
     ``,
     `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
   ];
+
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
+    parts.push(
+      ``,
+      `# Additional MCP server: \`${pill.mcpServerName}\``,
+      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools to help the user.`,
+    );
+  }
 
   if (kickoff.freeformContext) {
     parts.push(
@@ -332,6 +385,15 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
       ``,
       `# Additional context`,
       `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
+    );
+  }
+
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
+    parts.push(
+      ``,
+      `# Additional MCP server: \`${pill.mcpServerName}\``,
+      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools when helpful.`,
     );
   }
 
@@ -911,6 +973,7 @@ export async function sendMessage(
   }
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
 
   const turnId = uuidv4();
   const attachmentMeta = writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
@@ -954,7 +1017,7 @@ export async function sendMessage(
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
-            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+            mcpServers,
           }),
           sdkRetryOpts,
         );
@@ -964,7 +1027,7 @@ export async function sendMessage(
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
-            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+            mcpServers,
           }),
           sdkRetryOpts,
         );

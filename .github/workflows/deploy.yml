@@ -135,7 +135,8 @@ jobs:
               AWS_REGION="${{ secrets.AWS_REGION }}" \
               BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
+              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
 
           # Bypass npm start/package.json resolution issues by setting an explicit startup command.
           # Using an absolute path ensures it works even if the current working directory isn't wwwroot.

@@ -1,7 +1,7 @@
 import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, appUsers } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
 function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
@@ -42,6 +42,7 @@ export async function upsertSkillConfig(
   quickSkillPills?: QuickSkillPill[] | null | undefined,
   defaultModel?: string | null,
   approvalMode?: ApprovalMode,
+  quickMcpPills?: QuickMcpPill[] | null | undefined,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = approvalMode ?? 'any_one';
@@ -65,6 +66,7 @@ export async function upsertSkillConfig(
       designDocAssistantModel: designDocAssistantModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
       quickSkillPills: quickSkillPills ?? null,
+      quickMcpPills: quickMcpPills ?? null,
       defaultModel: defaultModel ?? null,
       approvalMode: approvalModeValue,
       updatedAt: now,
@@ -88,6 +90,7 @@ export async function upsertSkillConfig(
         designDocAssistantModel: designDocAssistantModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
         quickSkillPills: quickSkillPills ?? null,
+        quickMcpPills: quickMcpPills ?? null,
         defaultModel: defaultModel ?? null,
         approvalMode: approvalModeValue,
         updatedAt: now,

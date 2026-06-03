@@ -41,6 +41,8 @@ export interface ChatThreadKickoff {
   transcript?: string;
   /** Additional freeform context */
   freeformContext?: string;
+  /** MCP pill selected on the home page — wires an external MCP server into this thread */
+  mcpPill?: import('./projectSettings').QuickMcpPill;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';

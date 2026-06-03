@@ -378,6 +378,64 @@ describe('upsertSkillConfig', () => {
       expect.objectContaining({ approvalMode: 'any_one' }),
     );
   });
+
+  it('persists quickMcpPills when provided', async () => {
+    const mcpPills = [
+      { label: 'SendGrid', mcpServerName: 'sendgrid', transport: 'stdio' as const, command: 'npx', args: ['-y', 'mcp-sendgrid-server'], env: { SENDGRID_API_KEY: '${SENDGRID_API_KEY}' } },
+      { label: 'Twilio Docs', mcpServerName: 'twilio-docs', transport: 'http' as const, url: 'https://mcp.twilio.com/docs' },
+    ];
+    const configWithMcpPills = { ...configRow, quickMcpPills: mcpPills };
+    const returningMock = jest.fn().mockResolvedValue([configWithMcpPills]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocQaSkillPath
+      undefined, // designDocQaModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      undefined, // approvalMode
+      mcpPills,  // quickMcpPills
+    );
+
+    expect(result).toMatchObject({ quickMcpPills: mcpPills });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ quickMcpPills: mcpPills }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ quickMcpPills: mcpPills }),
+      }),
+    );
+  });
+
+  it('stores null for quickMcpPills when not provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, quickMcpPills: null }]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ quickMcpPills: null }),
+    );
+  });
 });
 
 // ── deleteSkillConfig ──────────────────────────────────────────────────────────

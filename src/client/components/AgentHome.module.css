@@ -124,6 +124,10 @@
   font-weight: 600;
 }
 
+.pillMcp {
+  border-style: dashed;
+}
+
 .pillDescription {
   text-align: center;
   font-size: 0.82rem;

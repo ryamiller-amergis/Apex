@@ -141,6 +141,14 @@ variable "cursor_team_api_key" {
   sensitive   = true
 }
 
+# SendGrid
+variable "sendgrid_api_key" {
+  description = "SendGrid API key for the MCP email analytics pill"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 # Application
 variable "ado_area_path" {
   description = "Azure DevOps area path"
