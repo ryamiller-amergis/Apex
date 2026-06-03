@@ -302,7 +302,7 @@ describe('updatePrdContent', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(updatePrdContent('prd-1', 'user-other', 'x')).rejects.toMatchObject({
-      message: 'Only the author can edit PRD content',
+      message: 'Only the author or owner can edit PRD content',
     });
   });
 
@@ -369,7 +369,7 @@ describe('submitForReview', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ content: 'x' }));
 
     await expect(submitForReview('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can submit for review',
+      message: 'Only the author or owner can submit for review',
     });
   });
 
@@ -434,7 +434,7 @@ describe('withdrawFromReview', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'pending_review' }));
 
     await expect(withdrawFromReview('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can withdraw from review',
+      message: 'Only the author or owner can withdraw from review',
     });
   });
 });
@@ -622,7 +622,7 @@ describe('deletePrd', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(deletePrd('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can delete this PRD',
+      message: 'Only the author or owner can delete this PRD',
     });
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
@@ -702,7 +702,7 @@ describe('updatePrdBacklog', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(updatePrdBacklog('prd-1', 'user-other', {})).rejects.toMatchObject({
-      message: 'Only the author can update backlog',
+      message: 'Only the author or owner can update backlog',
     });
   });
 

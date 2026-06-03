@@ -529,10 +529,22 @@ describe('propagateDesignDocApprovers', () => {
 // ── reassignApprovers ─────────────────────────────────────────────────────────
 
 describe('reassignApprovers', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.select.mockReset();
+  });
 
   it('does not send notifications when all approvers have already responded', async () => {
+    // Call order in reassignApprovers:
+    // 1. previousPending  → select → from → where
+    // 2. getProjectForDocument → select → from → where → limit
+    // 3. existingResponded → select → from → where
+    // 4. getAssignments   → select → from → innerJoin → where
     mockDb.select
+      .mockReturnValueOnce(makeWhereSelectChain([
+        { approverUserId: 'responded-1' },
+        { approverUserId: 'responded-2' },
+      ]))
       .mockReturnValueOnce(makeLimitSelectChain([{ project: 'proj-alpha' }]))
       .mockReturnValueOnce(makeWhereSelectChain([
         { approverUserId: 'responded-1' },
@@ -555,7 +567,15 @@ describe('reassignApprovers', () => {
   });
 
   it('sends a notification to each newly assigned approver on reassignment', async () => {
+    // Call order (notifyAssignedApprovers is fire-and-forget but enters getDocumentTitle
+    // synchronously, consuming db.select BEFORE getAssignments runs):
+    // 1. previousPending  → select → from → where
+    // 2. getProjectForDocument → select → from → where → limit
+    // 3. existingResponded → select → from → where
+    // 4. notifyAssignedApprovers → getDocumentTitle → select → from → where → limit
+    // 5. getAssignments   → select → from → innerJoin → where
     mockDb.select
+      .mockReturnValueOnce(makeWhereSelectChain([{ approverUserId: 'responded-1' }]))
       .mockReturnValueOnce(makeLimitSelectChain([{ project: 'proj-alpha' }]))
       .mockReturnValueOnce(makeWhereSelectChain([{ approverUserId: 'responded-1' }]))
       .mockReturnValueOnce(makeLimitSelectChain([{ title: 'My Design Doc' }]))
@@ -588,7 +608,10 @@ describe('reassignApprovers', () => {
 // ── notifyApproversDocumentReady ──────────────────────────────────────────────
 
 describe('notifyApproversDocumentReady', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.select.mockReset();
+  });
 
   it('sends a notification to each pending approver when document is ready', async () => {
     mockDb.select
