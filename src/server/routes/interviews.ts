@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable } from '../db/schema';
@@ -938,7 +939,7 @@ router.get('/design-docs/:id/assignments', requirePermission('interviews:view'),
   }
 });
 
-router.put('/prds/:prdId/assignments', requirePermission('admin:roles'), async (req, res, next) => {
+router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const { approverUserIds } = req.body as { approverUserIds?: string[] };
     if (!approverUserIds || !Array.isArray(approverUserIds)) {
@@ -946,6 +947,16 @@ router.put('/prds/:prdId/assignments', requirePermission('admin:roles'), async (
       return;
     }
     const userId = getUserId(req);
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    const isOwnerOrAuthor = prd.authorId === userId || prd.ownerId === userId;
+    if (!isOwnerOrAuthor && !(await isAdminUser(userId))) {
+      res.status(403).json({ error: 'Only the document owner, author, or admin can reassign approvers' });
+      return;
+    }
     const assignments = await reassignApprovers(req.params.prdId, 'prd', approverUserIds, userId);
     res.json(assignments);
   } catch (err) {

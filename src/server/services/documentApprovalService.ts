@@ -223,6 +223,18 @@ export async function reassignApprovers(
   approverUserIds: string[],
   reassignedBy: string,
 ): Promise<DocumentApproverAssignment[]> {
+  const previousPending = await db
+    .select({ approverUserId: documentApproverAssignments.approverUserId })
+    .from(documentApproverAssignments)
+    .where(
+      and(
+        eq(documentApproverAssignments.documentId, documentId),
+        eq(documentApproverAssignments.documentType, documentType),
+        eq(documentApproverAssignments.status, 'pending'),
+      ),
+    );
+  const previousPendingIds = new Set(previousPending.map((r) => r.approverUserId));
+
   await db
     .delete(documentApproverAssignments)
     .where(
@@ -273,7 +285,8 @@ export async function reassignApprovers(
       .onConflictDoNothing();
   }
 
-  notifyAssignedApprovers(documentId, documentType, newApproverIds).catch((err) =>
+  const trulyNewIds = newApproverIds.filter((id) => !previousPendingIds.has(id));
+  notifyAssignedApprovers(documentId, documentType, trulyNewIds).catch((err) =>
     console.error('Failed to send approver reassignment notifications', err),
   );
 

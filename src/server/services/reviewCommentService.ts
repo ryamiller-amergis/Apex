@@ -6,9 +6,11 @@ import {
   appUsers,
   prds,
   designDocs,
+  interviews,
   documentApproverAssignments,
 } from '../db/schema';
 import { createNotification } from './notificationService';
+import { isAssignedApprover } from './documentApprovalService';
 import type {
   TextSelector,
   ReviewComment,
@@ -57,6 +59,25 @@ async function getDocumentAuthorId(
     .limit(1);
   if (!rows[0]) throw notFound('Design doc not found');
   return rows[0].authorId;
+}
+
+async function getDocumentOwnerIds(
+  documentId: string,
+  documentType: 'prd' | 'design_doc',
+): Promise<string[]> {
+  const authorId = await getDocumentAuthorId(documentId, documentType);
+  if (documentType !== 'prd') return [authorId];
+
+  const rows = await db
+    .select({ prdOwnerId: interviews.prdOwnerId })
+    .from(prds)
+    .innerJoin(interviews, eq(prds.interviewId, interviews.id))
+    .where(eq(prds.id, documentId))
+    .limit(1);
+
+  const ownerId = rows[0]?.prdOwnerId;
+  if (ownerId && ownerId !== authorId) return [authorId, ownerId];
+  return [authorId];
 }
 
 async function getDocumentTitle(
@@ -176,15 +197,21 @@ export async function createComment(
 
   await autoTransitionToRevisionRequested(documentId, documentType);
 
-  const docAuthorId = await getDocumentAuthorId(documentId, documentType);
-  if (docAuthorId !== authorUserId) {
+  const ownerIds = await getDocumentOwnerIds(documentId, documentType);
+  const recipientIds = ownerIds.filter((id) => id !== authorUserId);
+  if (recipientIds.length > 0) {
     const docTitle = await getDocumentTitle(documentId, documentType);
-    createNotification(docAuthorId, {
-      type: 'user-action',
-      title: 'New review comment on your document',
-      body: `A reviewer left a comment on "${docTitle}"`,
-      link: documentLink(documentId, documentType),
-    }).catch((err) => console.error('[reviewComments] notification error:', err));
+    const link = documentLink(documentId, documentType);
+    Promise.allSettled(
+      recipientIds.map((id) =>
+        createNotification(id, {
+          type: 'user-action',
+          title: 'New review comment on your document',
+          body: `A reviewer left a comment on "${docTitle}"`,
+          link,
+        }),
+      ),
+    ).catch((err) => console.error('[reviewComments] notification error:', err));
   }
 
   const authorRow = await db
@@ -208,48 +235,41 @@ export async function addReply(
   });
   if (!comment) throw notFound('Comment not found');
 
+  // Fetch existing replies BEFORE inserting so we can collect prior participants
+  const priorReplies = await db
+    .select({ authorUserId: reviewReplies.authorUserId })
+    .from(reviewReplies)
+    .where(eq(reviewReplies.commentId, commentId));
+
   const [row] = await db
     .insert(reviewReplies)
     .values({ commentId, authorUserId, body })
     .returning();
 
-  const docAuthorId = await getDocumentAuthorId(comment.documentId, comment.documentType as 'prd' | 'design_doc');
-  const docTitle = await getDocumentTitle(comment.documentId, comment.documentType as 'prd' | 'design_doc');
-  const link = documentLink(comment.documentId, comment.documentType as 'prd' | 'design_doc');
+  const docType = comment.documentType as 'prd' | 'design_doc';
+  const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
+  const docTitle = await getDocumentTitle(comment.documentId, docType);
+  const link = documentLink(comment.documentId, docType);
 
-  if (authorUserId === docAuthorId) {
-    const approverRows = await db
-      .select({ approverUserId: documentApproverAssignments.approverUserId })
-      .from(documentApproverAssignments)
-      .where(
-        and(
-          eq(documentApproverAssignments.documentId, comment.documentId),
-          eq(documentApproverAssignments.documentType, comment.documentType),
-        ),
-      );
-    const uniqueApprovers = [...new Set(approverRows.map((r) => r.approverUserId))];
-    await Promise.allSettled(
-      uniqueApprovers
-        .filter((id) => id !== authorUserId)
-        .map((userId) =>
-          createNotification(userId, {
-            type: 'user-action',
-            title: 'New reply on a review comment',
-            body: `The document author replied on "${docTitle}"`,
-            link,
-          }),
-        ),
-    );
-  } else {
-    if (docAuthorId !== authorUserId) {
-      createNotification(docAuthorId, {
+  // Build the full set of thread participants: document owners + original commenter + all prior repliers
+  const participantSet = new Set<string>([
+    ...ownerIds,
+    comment.authorUserId,
+    ...priorReplies.map((r) => r.authorUserId),
+  ]);
+  // Never notify the person who just replied
+  participantSet.delete(authorUserId);
+
+  await Promise.allSettled(
+    [...participantSet].map((recipientId) =>
+      createNotification(recipientId, {
         type: 'user-action',
         title: 'New reply on a review comment',
-        body: `A reviewer replied on "${docTitle}"`,
+        body: `Someone replied on a comment in "${docTitle}"`,
         link,
-      }).catch((err) => console.error('[reviewComments] reply notification error:', err));
-    }
-  }
+      }),
+    ),
+  );
 
   const authorRow = await db
     .select({ displayName: appUsers.displayName })
@@ -269,12 +289,13 @@ export async function resolveComment(
   });
   if (!comment) throw notFound('Comment not found');
 
-  const docAuthorId = await getDocumentAuthorId(
-    comment.documentId,
-    comment.documentType as 'prd' | 'design_doc',
-  );
-  if (docAuthorId !== userId) {
-    throw forbidden('Only the document author can resolve comments');
+  const docType = comment.documentType as 'prd' | 'design_doc';
+  const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
+  if (!ownerIds.includes(userId)) {
+    const approver = await isAssignedApprover(comment.documentId, docType, userId);
+    if (!approver) {
+      throw forbidden('Only the document author, owner, or assigned approver can resolve comments');
+    }
   }
 
   await db
@@ -297,12 +318,13 @@ export async function reopenComment(
   });
   if (!comment) throw notFound('Comment not found');
 
-  const docAuthorId = await getDocumentAuthorId(
-    comment.documentId,
-    comment.documentType as 'prd' | 'design_doc',
-  );
-  if (docAuthorId !== userId) {
-    throw forbidden('Only the document author can reopen comments');
+  const docType = comment.documentType as 'prd' | 'design_doc';
+  const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
+  if (!ownerIds.includes(userId)) {
+    const approver = await isAssignedApprover(comment.documentId, docType, userId);
+    if (!approver) {
+      throw forbidden('Only the document author, owner, or assigned approver can reopen comments');
+    }
   }
 
   await db
@@ -388,8 +410,16 @@ export async function deleteComment(
     where: eq(reviewComments.id, commentId),
   });
   if (!comment) throw notFound('Comment not found');
+
   if (comment.authorUserId !== userId) {
-    throw forbidden('Only the comment author can delete a comment');
+    const docType = comment.documentType as 'prd' | 'design_doc';
+    const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
+    if (!ownerIds.includes(userId)) {
+      const approver = await isAssignedApprover(comment.documentId, docType, userId);
+      if (!approver) {
+        throw forbidden('Only the comment author, document owner, or assigned approver can delete a comment');
+      }
+    }
   }
 
   await db.delete(reviewComments).where(eq(reviewComments.id, commentId));

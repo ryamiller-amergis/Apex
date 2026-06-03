@@ -20,6 +20,20 @@ function permissionForDocType(docType: string): string {
   return docType === 'design_doc' ? 'design-docs:review' : 'prds:review';
 }
 
+router.post('/:commentId/replies', async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { body } = req.body as CreateReviewReplyRequest;
+    if (!body) {
+      return res.status(400).json({ error: 'body is required' });
+    }
+    const reply = await addReply(req.params.commentId, userId, body);
+    res.status(201).json(reply);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get(
   '/:documentType/:documentId',
   requireAnyPermission('prds:review', 'design-docs:review'),
@@ -65,20 +79,6 @@ router.post(
     }
   },
 );
-
-router.post('/:commentId/replies', async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const { body } = req.body as CreateReviewReplyRequest;
-    if (!body) {
-      return res.status(400).json({ error: 'body is required' });
-    }
-    const reply = await addReply(req.params.commentId, userId, body);
-    res.status(201).json(reply);
-  } catch (err) {
-    next(err);
-  }
-});
 
 router.patch('/:commentId/resolve', async (req, res, next) => {
   try {

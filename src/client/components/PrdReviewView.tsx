@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -68,6 +69,7 @@ export const PrdReviewView: React.FC = () => {
   const navigate = useNavigate();
   const { can, userId, isAdmin } = useAppShell();
 
+  const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
@@ -184,7 +186,8 @@ export const PrdReviewView: React.FC = () => {
       credentials: 'include',
       body: JSON.stringify({ body }),
     });
-  }, []);
+    void queryClient.invalidateQueries({ queryKey: ['review-comments', 'prd', id] });
+  }, [queryClient, id]);
 
   const handleTabChange = useCallback((tab: TabId) => {
     if (tab === 'edit' && prd) {
@@ -224,6 +227,7 @@ export const PrdReviewView: React.FC = () => {
   if (isError || !prd) return <div className={styles.errorState}>PRD not found.</div>;
 
   const isAuthor = prd.authorId === userId;
+  const isOwner = prd.ownerId === userId;
   const canManage = can('interviews:manage');
   const canReview = can('prds:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
@@ -238,7 +242,7 @@ export const PrdReviewView: React.FC = () => {
 
   const showCommentLayer =
     (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
-    (canPerformReview || isAuthor || isAdmin);
+    (canPerformReview || isAuthor || isOwner || isAdmin);
 
   const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
   const backlogComments = reviewComments.filter((c) => c.sectionKey === 'backlog');
@@ -355,7 +359,7 @@ export const PrdReviewView: React.FC = () => {
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
 
-          {canManage && (isAuthor || isAdmin) && (
+          {canManage && (isAuthor || isOwner || isAdmin) && (
             <>
               {(prd.status === 'draft' || prd.status === 'revision_requested') && (
                 <button
@@ -441,7 +445,7 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
-          {prd.status === 'pending_review' && (
+          {prd.status === 'pending_review' && canManage && (isAuthor || isOwner || isAdmin) && (
             <>
               <span className={styles.actionDivider} />
               <button
@@ -564,7 +568,7 @@ export const PrdReviewView: React.FC = () => {
             >
               Preview
             </button>
-            {canManage && (isAuthor || isAdmin) && prd.status !== 'approved' && (
+            {canManage && (isAuthor || isOwner || isAdmin) && prd.status !== 'approved' && (
               <button
                 className={`${styles.tab} ${activeTab === 'edit' ? styles.active : ''}`}
                 onClick={() => handleTabChange('edit')}
@@ -602,7 +606,7 @@ export const PrdReviewView: React.FC = () => {
                     )
                   ) : (
                     <div className={styles.emptyPreview}>
-                      No content yet.{canManage && (isAuthor || isAdmin) ? ' Use the Edit tab to write the PRD.' : ''}
+                      No content yet.{canManage && (isAuthor || isOwner || isAdmin) ? ' Use the Edit tab to write the PRD.' : ''}
                     </div>
                   )}
                 </div>
@@ -612,6 +616,8 @@ export const PrdReviewView: React.FC = () => {
                     activeCommentId={activeCommentId}
                     currentUserId={userId ?? ''}
                     documentAuthorUserId={prd.authorId}
+                    documentOwnerUserId={prd.ownerId}
+                    isAssignedApprover={isAssignedApprover}
                     onCommentClick={handleCommentClick}
                     onReply={(commentId, body) => void handleReply(commentId, body)}
                     onResolve={(commentId) => resolveComment.mutate(commentId)}
@@ -677,6 +683,8 @@ export const PrdReviewView: React.FC = () => {
                     activeCommentId={activeCommentId}
                     currentUserId={userId ?? ''}
                     documentAuthorUserId={prd.authorId}
+                    documentOwnerUserId={prd.ownerId}
+                    isAssignedApprover={isAssignedApprover}
                     onCommentClick={handleCommentClick}
                     onReply={(commentId, body) => void handleReply(commentId, body)}
                     onResolve={(commentId) => resolveComment.mutate(commentId)}

@@ -57,6 +57,16 @@ function notFound(msg: string): Error {
   return err;
 }
 
+async function getPrdOwnerId(interviewId: string | null): Promise<string | null> {
+  if (!interviewId) return null;
+  const rows = await db
+    .select({ prdOwnerId: interviews.prdOwnerId })
+    .from(interviews)
+    .where(eq(interviews.id, interviewId))
+    .limit(1);
+  return rows[0]?.prdOwnerId ?? null;
+}
+
 export async function createPrd(opts: {
   interviewId: string;
   project: string;
@@ -143,8 +153,9 @@ export async function updatePrdContent(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can edit PRD content');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can edit PRD content');
   }
   if (row.status === 'approved') throw conflict('Approved PRDs cannot be edited');
 
@@ -169,7 +180,10 @@ export async function updatePrdBacklog(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId) throw forbidden('Only the author can update backlog');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId) {
+    throw forbidden('Only the author or owner can update backlog');
+  }
   if (row.status === 'approved') throw conflict('Approved PRDs cannot be edited');
 
   await db
@@ -185,8 +199,9 @@ export async function submitForReview(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can submit for review');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can submit for review');
   }
   if (row.status !== 'draft' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
@@ -214,8 +229,9 @@ export async function submitForReview(
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can withdraw from review');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can withdraw from review');
   }
   if (row.status !== 'pending_review') throw conflict(`Cannot withdraw PRD from status '${row.status}'`);
 
@@ -675,8 +691,9 @@ export async function syncPrdAdoStatus(prdId: string): Promise<{ cleared: number
 export async function deletePrd(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can delete this PRD');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can delete this PRD');
   }
   stopPrdWatcher(id);
   await db.delete(prds).where(eq(prds.id, id));

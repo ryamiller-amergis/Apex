@@ -7,6 +7,8 @@ interface ReviewCommentSidebarProps {
   activeCommentId: string | null;
   currentUserId: string;
   documentAuthorUserId: string;
+  documentOwnerUserId?: string;
+  isAssignedApprover?: boolean;
   onCommentClick: (commentId: string) => void;
   onReply: (commentId: string, body: string) => void;
   onResolve: (commentId: string) => void;
@@ -31,6 +33,8 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
   activeCommentId,
   currentUserId,
   documentAuthorUserId,
+  documentOwnerUserId,
+  isAssignedApprover: isApprover = false,
   onCommentClick,
   onReply,
   onResolve,
@@ -71,7 +75,8 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
               comment={comment}
               isActive={comment.id === activeCommentId}
               currentUserId={currentUserId}
-              isDocumentAuthor={currentUserId === documentAuthorUserId}
+              isDocumentAuthor={currentUserId === documentAuthorUserId || currentUserId === documentOwnerUserId}
+              isAssignedApprover={isApprover}
               onCommentClick={onCommentClick}
               onReply={onReply}
               onResolve={onResolve}
@@ -90,6 +95,7 @@ interface ThreadCardProps {
   isActive: boolean;
   currentUserId: string;
   isDocumentAuthor: boolean;
+  isAssignedApprover: boolean;
   onCommentClick: (commentId: string) => void;
   onReply: (commentId: string, body: string) => void;
   onResolve: (commentId: string) => void;
@@ -102,6 +108,7 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
   isActive,
   currentUserId,
   isDocumentAuthor,
+  isAssignedApprover,
   onCommentClick,
   onReply,
   onResolve,
@@ -135,8 +142,8 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
   );
 
   const isResolved = comment.status === 'resolved';
-  const canResolveOrReopen = isDocumentAuthor;
-  const canDelete = currentUserId === comment.authorUserId;
+  const canResolveOrReopen = isDocumentAuthor || isAssignedApprover;
+  const canDelete = currentUserId === comment.authorUserId || isDocumentAuthor || isAssignedApprover;
 
   const cardClassName = [
     styles.threadCard,
