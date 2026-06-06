@@ -16,6 +16,7 @@ import { ChatAgentPanel } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
+import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { DEFAULT_MODEL_ID } from './config/models';
 import './App.css';
@@ -39,6 +40,7 @@ const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ def
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
+const AdminMenuSettings = lazy(() => import('./components/AdminMenuSettings').then(m => ({ default: m.AdminMenuSettings })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
@@ -95,6 +97,7 @@ function App() {
     isAuthenticated,
     authenticatedUser,
     can,
+    isSuperAdmin,
     permissionsLoaded,
     workItems,
     error,
@@ -125,17 +128,19 @@ function App() {
     handleFieldUpdate,
   } = useAppShell();
 
+  const { enabledViews } = useProjectMenuConfig(selectedProject);
+
   // Guard all gated routes: redirect to /home if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
   useEffect(() => {
     if (!permissionsLoaded) return;
-    if (currentView === 'admin'     && !can('admin:roles'))   navigate('/home');
-    if (currentView === 'calendar'  && !can('calendar:view')) navigate('/home');
-    if (currentView === 'planning'  && !can('planning:view')) navigate('/home');
-    if (currentView === 'cloudcost' && !can('cost:view'))     navigate('/home');
-    if (currentView === 'backlog'        && !can('interviews:view'))     navigate('/home');
-    if (currentView === 'notifications'  && !can('notifications:view'))  navigate('/home');
-  }, [currentView, permissionsLoaded, can, navigate]);
+    if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
+    if (currentView === 'calendar'      && !isSuperAdmin && !enabledViews.includes('calendar'))  navigate('/home');
+    if (currentView === 'planning'      && !isSuperAdmin && !enabledViews.includes('planning'))  navigate('/home');
+    if (currentView === 'cloudcost'     && !isSuperAdmin && !enabledViews.includes('cloudcost')) navigate('/home');
+    if (currentView === 'backlog'       && !isSuperAdmin && !enabledViews.includes('backlog'))   navigate('/home');
+    if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
+  }, [currentView, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
 
   // Auto-show changelog once per session when the user lands on /home with an
   // unread version, unless they've opted out via showChangelogOnLogin.
@@ -219,6 +224,8 @@ function App() {
             user={authenticatedUser}
             hasUnreadChangelog={hasUnreadChangelog}
             can={can}
+            menuEnabledViews={enabledViews}
+            isSuperAdmin={isSuperAdmin}
             onNavigateHome={() => navigate('/home')}
             onNavigateProjects={() => navigate('/')}
             onNavigateCalendar={() => navigate('/calendar')}
@@ -350,6 +357,15 @@ function App() {
                     >
                       Project Settings
                     </button>
+                    {isSuperAdmin && (
+                      <button
+                        className={`admin-tab${location.pathname === '/admin/menu-settings' ? ' admin-tab-active' : ''}`}
+                        onClick={() => navigate('/admin/menu-settings')}
+                        type="button"
+                      >
+                        Menu Visibility
+                      </button>
+                    )}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
@@ -357,6 +373,8 @@ function App() {
                     <AdminGroups />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
+                  ) : location.pathname === '/admin/menu-settings' && isSuperAdmin ? (
+                    <AdminMenuSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : (
                     <AdminRoles />
                   )}

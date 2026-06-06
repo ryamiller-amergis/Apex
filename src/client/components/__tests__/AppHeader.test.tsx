@@ -26,74 +26,87 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
-// ── Viewer-like permissions (planning:view only) ───────────────────────────────
+// ── No menu config, not super admin (default) ─────────────────────────────────
 
-describe('AppHeader — viewer permissions (planning:view only)', () => {
-  const can = (key: string) => key === 'planning:view';
+describe('AppHeader — no menuEnabledViews, not super admin', () => {
+  const can = (_key: string) => false;
 
   it('renders the Home button (always visible)', () => {
     render(<AppHeader {...baseProps} can={can} />);
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
   });
 
-  it('does NOT render the Calendar button', () => {
+  it('does NOT render Calendar (not in enabledViews)', () => {
     render(<AppHeader {...baseProps} can={can} />);
     expect(screen.queryByRole('button', { name: 'Calendar' })).not.toBeInTheDocument();
   });
 
-  it('DOES render the Planning button', () => {
+  it('does NOT render Planning (not in enabledViews)', () => {
     render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Planning' })).not.toBeInTheDocument();
   });
 
-  it('does NOT render the Cloud Cost button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.queryByRole('button', { name: 'Cloud Cost' })).not.toBeInTheDocument();
-  });
-
-  it('does NOT render the Interviews button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.queryByRole('button', { name: 'Interview' })).not.toBeInTheDocument();
-  });
-
-  it('does NOT render the Admin button', () => {
+  it('does NOT render Admin (no admin:roles permission)', () => {
     render(<AppHeader {...baseProps} can={can} />);
     expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
   });
 });
 
-// ── Full permissions (all keys return true) ───────────────────────────────────
+// ── With menuEnabledViews containing specific views ───────────────────────────
 
-describe('AppHeader — full permissions (all keys)', () => {
-  const can = (_key: string) => true;
+describe('AppHeader — menuEnabledViews=[planning]', () => {
+  const can = (_key: string) => false;
 
-  it('renders the Home button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
-  });
-
-  it('renders the Calendar button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
-  });
-
-  it('renders the Planning button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
+  it('renders Planning when in enabledViews', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={['planning']} />);
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
   });
 
-  it('renders the Cloud Cost button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
+  it('does NOT render Calendar (not in enabledViews)', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={['planning']} />);
+    expect(screen.queryByRole('button', { name: 'Calendar' })).not.toBeInTheDocument();
+  });
+});
+
+// ── Super admin sees all feature views ─────────────────────────────────────────
+
+describe('AppHeader — isSuperAdmin=true', () => {
+  const can = (key: string) => key === 'admin:roles';
+
+  it('renders all feature views for super admin', () => {
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin menuEnabledViews={[]} />);
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cloud Cost' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Interview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Admin' })).toBeInTheDocument();
+  });
+});
+
+// ── All views enabled via menuEnabledViews + admin permission ─────────────────
+
+describe('AppHeader — all views enabled', () => {
+  const can = (key: string) => key === 'admin:roles';
+  const allViews = ['calendar', 'planning', 'cloudcost', 'backlog'];
+
+  it('renders Calendar', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={allViews} />);
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
+  });
+
+  it('renders Cloud Cost', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={allViews} />);
     expect(screen.getByRole('button', { name: 'Cloud Cost' })).toBeInTheDocument();
   });
 
-  it('renders the Interviews button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
+  it('renders Interview', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={allViews} />);
     expect(screen.getByRole('button', { name: 'Interview' })).toBeInTheDocument();
   });
 
-  it('renders the Admin button', () => {
-    render(<AppHeader {...baseProps} can={can} />);
+  it('renders Admin', () => {
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={allViews} />);
     expect(screen.getByRole('button', { name: 'Admin' })).toBeInTheDocument();
   });
 });

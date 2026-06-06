@@ -4,6 +4,7 @@ import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
+import type { MenuItemKey } from '../../shared/types/menuSettings';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -483,3 +484,14 @@ export const reviewRepliesRelations = relations(reviewReplies, ({ one }) => ({
     references: [appUsers.oid],
   }),
 }));
+
+// ── Project Menu Settings ─────────────────────────────────────────────────────
+
+export const projectMenuSettings = pgTable('project_menu_settings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').unique().notNull(),
+  enabledViews: jsonb('enabled_views').$type<MenuItemKey[]>().notNull().default([]),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});

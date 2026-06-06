@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { getUserPermissions } from '../services/rbacService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 
 declare global {
   namespace Express {
@@ -24,6 +25,10 @@ export function requirePermission(...keys: string[]): RequestHandler {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
+    if (isSuperAdminRequest(req)) {
+      next();
+      return;
+    }
     const perms = await loadPermissions(req);
     const missing = keys.filter((k) => !perms.has(k));
     if (missing.length > 0) {
@@ -40,6 +45,10 @@ export function requireAnyPermission(...keys: string[]): RequestHandler {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
+    if (isSuperAdminRequest(req)) {
+      next();
+      return;
+    }
     const perms = await loadPermissions(req);
     const hasAny = keys.some((k) => perms.has(k));
     if (!hasAny) {
@@ -49,6 +58,22 @@ export function requireAnyPermission(...keys: string[]): RequestHandler {
     next();
   };
 }
+
+export const requireSuperAdmin: RequestHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!isSuperAdminRequest(req)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  next();
+};
 
 export const attachPermissions: RequestHandler = async (
   req: Request,

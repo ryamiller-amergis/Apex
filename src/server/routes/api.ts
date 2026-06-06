@@ -3654,7 +3654,9 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 import fs from 'fs';
 import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getMenuConfig } from '../services/menuSettingsService';
 
 function readCurrentChangelogVersion(): string {
   try {
@@ -3677,15 +3679,20 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
+    const superAdmin = isSuperAdminRequest(req);
     const [permSet, roles, changelogPrefs] = await Promise.all([
       getUserPermissions(userId),
       getUserRoleNames(userId),
       getChangelogPrefs(userId),
     ]);
+    if (superAdmin && !roles.includes('admin')) {
+      roles.push('admin');
+    }
     res.json({
       permissions: [...permSet],
       roles,
       userId,
+      isSuperAdmin: superAdmin,
       changelogUnread: changelogPrefs.lastSeenVersion !== CURRENT_CHANGELOG_VERSION,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
     });
@@ -3745,6 +3752,21 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/menu-config?project=<name> — resolve per-project menu visibility
+router.get('/menu-config', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = req.query.project as string | undefined;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    const config = await getMenuConfig(project);
+    res.json({ enabledViews: config?.enabledViews ?? [] });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

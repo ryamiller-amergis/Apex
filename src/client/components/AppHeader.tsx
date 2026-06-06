@@ -23,6 +23,8 @@ interface AppHeaderProps {
   } | null;
   hasUnreadChangelog: boolean;
   can: (key: string) => boolean;
+  menuEnabledViews?: string[];
+  isSuperAdmin?: boolean;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
   onNavigateCalendar: () => void;
@@ -42,6 +44,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
   hasUnreadChangelog,
   can,
+  menuEnabledViews = [],
+  isSuperAdmin = false,
   onNavigateHome,
   onNavigateProjects,
   onNavigateCalendar,
@@ -81,9 +85,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
-  const visibleNavItems = navItems.filter(
-    (item) => item.permission === null || can(item.permission),
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.view === 'home') return true;
+    if (item.view === 'admin') return can('admin:roles');
+    return isSuperAdmin || menuEnabledViews.includes(item.view);
+  });
 
   const handleMobileNavClick = (onNavigate: () => void) => {
     onNavigate();

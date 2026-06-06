@@ -69,6 +69,7 @@ export interface MyPermissionsResponse {
   permissions: string[];
   roles: string[];
   userId: string;
+  isSuperAdmin: boolean;
   changelogUnread: boolean;
   showChangelogOnLogin: boolean;
 }

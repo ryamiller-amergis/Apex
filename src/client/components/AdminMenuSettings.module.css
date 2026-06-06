@@ -1,0 +1,181 @@
+.page {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  padding: 32px 24px;
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* ── Page header ─────────────────────────────────────────────────────────── */
+
+.pageHeader {
+  margin-bottom: 28px;
+}
+
+.pageTitle {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+  letter-spacing: -0.3px;
+}
+
+.pageSubtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Loading / error states ──────────────────────────────────────────────── */
+
+.loading {
+  padding: 48px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.error {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 30%, transparent);
+  border-radius: 6px;
+  color: var(--error-color);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* ── Form card ───────────────────────────────────────────────────────────── */
+
+.formCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+}
+
+.formTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+
+.formHint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0 0 16px;
+}
+
+/* ── Checkbox list ───────────────────────────────────────────────────────── */
+
+.checkboxList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.checkboxRow:hover {
+  border-color: var(--accent-color);
+}
+
+.checkboxRowChecked {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-primary));
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkboxLabel {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ── Actions ─────────────────────────────────────────────────────────────── */
+
+.formActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btnPrimary {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Configured projects summary ─────────────────────────────────────────── */
+
+.summarySection {
+  margin-top: 24px;
+}
+
+.summaryTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+}
+
+.summaryList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summaryItem {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.summaryProject {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summaryViews {
+  margin-left: 8px;
+}
