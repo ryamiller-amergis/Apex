@@ -46,6 +46,9 @@ export interface PrdSummary {
 export interface Prd extends PrdSummary {
   content: string;
   backlogJson?: unknown;
+  prdAssistantThreadId?: string | null;
+  proposedContent?: string | null;
+  proposedBacklogJson?: unknown;
 }
 
 export interface CreateInterviewRequest {

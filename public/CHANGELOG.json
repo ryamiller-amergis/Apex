@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.25.0",
+    "date": "2026-06-05",
+    "title": "PRD Apex Assistant & Inline Editing",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added Apex Assistant button to PRD view (when not yet approved) — opens a resizable slide-out chat panel pre-loaded with the full PRD, backlog, and all reviewer comments so the AI can bulk-address feedback and propose content changes"
+      },
+      {
+        "type": "feature",
+        "description": "AI-proposed PRD or backlog changes are staged for review — a GitHub-style diff banner appears with Accept and Reject buttons so authors control exactly what gets applied"
+      },
+      {
+        "type": "feature",
+        "description": "New resolve_prd_comment MCP tool lets the Apex Assistant automatically mark reviewer comments as resolved after addressing them in the content, closing the feedback loop without manual intervention"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the full-document Edit tab with a header Edit button (opens a focused modal) and per-section pencil icons in the Preview tab — hover a section heading to edit just that section without touching the rest of the document"
+      },
+      {
+        "type": "improvement",
+        "description": "Backlog tab is now editable — each epic, feature, and item card has an edit icon that opens a pre-filled form, letting authors update titles, descriptions, and priorities without leaving the PRD view"
+      }
+    ]
+  },
+  {
     "version": "1.24.0",
     "date": "2026-06-02",
     "title": "Inline Review Comments",

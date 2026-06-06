@@ -1,0 +1,532 @@
+/* ── Proposed Changes Review Banner ─────────────────────────────────────────── */
+
+.banner {
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, #f59e0b 40%, var(--border-color));
+  flex-shrink: 0;
+}
+
+.bannerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 24px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bannerLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #d97706;
+}
+
+.bannerTitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #92400e;
+}
+
+[data-theme='dark'] .bannerTitle {
+  color: #fbbf24;
+}
+
+.bannerHint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.bannerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Shared button base ────────────────────────────────────────────────────── */
+
+.reviewBtn,
+.acceptBtn,
+.rejectBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.reviewBtn:disabled,
+.acceptBtn:disabled,
+.rejectBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Review button — neutral outlined */
+.reviewBtn {
+  background: transparent;
+  border-color: #d97706;
+  color: #d97706;
+}
+
+.reviewBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+}
+
+/* Accept button — green */
+.acceptBtn {
+  background: var(--success-color);
+  border-color: var(--success-color);
+  color: #fff;
+  font-weight: 600;
+}
+
+.acceptBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--success-color) 85%, #000);
+  border-color: color-mix(in srgb, var(--success-color) 85%, #000);
+}
+
+/* Reject button — neutral / muted */
+.rejectBtn {
+  background: transparent;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.rejectBtn:hover:not(:disabled) {
+  border-color: var(--error-color);
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 6%, transparent);
+}
+
+/* ── Expanded diff section ───────────────────────────────────────────────── */
+
+.diffSection {
+  border-top: 1px solid color-mix(in srgb, #f59e0b 30%, var(--border-color));
+  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.diffBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diffBlockLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Backlog diff summary ────────────────────────────────────────────────── */
+
+.backlogDiff {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.noBacklogChanges {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.backlogGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.backlogGroupLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.addedDot,
+.removedDot,
+.modifiedDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.addedDot    { background: var(--success-color); }
+.removedDot  { background: var(--error-color); }
+.modifiedDot { background: #f59e0b; }
+
+.backlogList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.backlogItemAdded,
+.backlogItemRemoved,
+.backlogItemModified {
+  font-size: 0.82rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.backlogItemAdded {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 8%, transparent);
+}
+
+.backlogItemRemoved {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  text-decoration: line-through;
+}
+
+.backlogItemModified {
+  color: #d97706;
+  background: color-mix(in srgb, #f59e0b 10%, transparent);
+}
+
+/* ── Change card (per-item expandable) ───────────────────────────────────── */
+
+.changeCard {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.changeCardAdded  { border-left: 3px solid var(--success-color); }
+.changeCardRemoved { border-left: 3px solid var(--error-color); }
+.changeCardModified { border-left: 3px solid #f59e0b; }
+
+.changeCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-secondary);
+  transition: background 0.15s ease;
+}
+
+.changeCardHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.changeCardChevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.changeCardChevronOpen {
+  transform: rotate(90deg);
+}
+
+.changeKindBadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.kindAdded {
+  background: color-mix(in srgb, var(--success-color) 14%, transparent);
+  color: var(--success-color);
+}
+
+.kindRemoved {
+  background: color-mix(in srgb, var(--error-color) 14%, transparent);
+  color: var(--error-color);
+}
+
+.kindModified {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  color: #d97706;
+}
+
+[data-theme='dark'] .kindModified {
+  color: #fbbf24;
+}
+
+.changeCardType {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.changeCardTitle {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 0 12px 0 34px;
+  margin-top: -2px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.changeCardBody {
+  padding: 0 12px 10px;
+}
+
+.changeCardBodyHidden {
+  display: none;
+}
+
+/* ── Detail list (added / removed item properties) ──────────────────────── */
+
+.detailList {
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-size: 0.8rem;
+}
+
+.detailListRemoved {
+  opacity: 0.75;
+}
+
+.detailRow {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.detailRow:last-child { border-bottom: none; }
+
+.detailLabel {
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 120px;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  padding-top: 1px;
+}
+
+.detailValue {
+  color: var(--text-primary);
+  line-height: 1.5;
+  margin: 0;
+  word-break: break-word;
+}
+
+.detailBullets {
+  margin: 0;
+  padding: 0 0 0 16px;
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detailBullets li {
+  line-height: 1.45;
+}
+
+/* ── Field change rows (modified items) ──────────────────────────────────── */
+
+.fieldChangesWrap {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.fieldChangeRow {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.fieldChangeRow:last-child { border-bottom: none; }
+
+.fieldChangeLabel {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.fieldChangeValues {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.8rem;
+}
+
+.fieldOldWrap,
+.fieldNewWrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.fieldArrowLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.fieldOldWrap .fieldArrowLabel {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+  color: var(--error-color);
+}
+
+.fieldNewWrap .fieldArrowLabel {
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+  color: var(--success-color);
+}
+
+.fieldOld {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+  word-break: break-word;
+}
+
+.fieldNew {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* ── Array deltas (items added/removed within a list field) ──────────────── */
+
+.arrayDelta {
+  margin-top: 4px;
+  padding-left: 2px;
+}
+
+.arrayDeltaLabel {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.arrayDeltaList {
+  margin: 2px 0 0;
+  padding: 0 0 0 16px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.arrayDeltaAdded {
+  font-size: 0.8rem;
+  color: var(--success-color);
+  line-height: 1.45;
+}
+
+.arrayDeltaAdded::before {
+  content: '+ ';
+  font-weight: 700;
+}
+
+.arrayDeltaRemoved {
+  font-size: 0.8rem;
+  color: var(--error-color);
+  text-decoration: line-through;
+  line-height: 1.45;
+}
+
+.arrayDeltaRemoved::before {
+  content: '− ';
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* ── Summary stat bar ────────────────────────────────────────────────────── */
+
+.changeSummary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  padding: 2px 0 8px;
+}
+
+.changeSumStat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .bannerTop {
+    padding: 10px 16px;
+    gap: 8px;
+  }
+
+  .diffSection {
+    padding: 12px 16px;
+  }
+
+  .bannerActions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}

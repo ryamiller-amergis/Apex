@@ -117,9 +117,10 @@ interface InterviewAgentMessageProps {
   isRunning: boolean;
   questionOffset?: number;
   interviewLocked?: boolean;
+  alreadyAnswered?: boolean;
 }
 
-const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false }) => {
+const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false }) => {
   const parts = parseAgentMessage(text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -128,7 +129,16 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
     for (const b of choiceBlocks) init[b.id] = { selected: null, freeform: '' };
     return init;
   });
-  const [sent, setSent] = useState(false);
+  // Initialize from `alreadyAnswered` so a previously-submitted question stays
+  // locked after a page reload (the submission state is otherwise only kept in
+  // ephemeral component state).
+  const [sent, setSent] = useState(alreadyAnswered);
+
+  // Lock the block if the thread later shows it was answered (e.g. when message
+  // history loads asynchronously after this component first mounts).
+  useEffect(() => {
+    if (alreadyAnswered) setSent(true);
+  }, [alreadyAnswered]);
 
   const allAnswered = choiceBlocks.every((b) => {
     const s = selections[b.id];
@@ -798,6 +808,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }
 
+  // An agent message's choice block has already been answered if any user
+  // message follows it in the thread (submitting answers creates a user
+  // message). Used to persist the "Answers sent" lock across reloads.
+  let lastUserMsgIndex = -1;
+  visibleMessages.forEach((m, i) => {
+    if (m.role === 'user') lastUserMsgIndex = i;
+  });
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
@@ -987,7 +1005,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
       <div className={styles.messages}>
         <div className={styles.messageList}>
-          {visibleMessages.map((msg) => {
+          {visibleMessages.map((msg, msgIndex) => {
             if (msg.role === 'tool') {
               return (
                 <div key={msg.id} className={styles.messageBubbleTool}>→ {msg.text}</div>
@@ -1036,6 +1054,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 isRunning={isRunning}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
+                alreadyAnswered={msgIndex < lastUserMsgIndex}
               />
             );
           })}

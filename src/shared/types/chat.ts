@@ -9,6 +9,8 @@ export interface ChatMessage {
   toolName?: string;
   /** User-uploaded context files attached to this message */
   attachments?: ChatAttachmentMeta[];
+  /** When true, this message is an internal prompt and should not be shown in the UI */
+  hidden?: boolean;
 }
 
 export interface ChatAttachment {
@@ -43,6 +45,8 @@ export interface ChatThreadKickoff {
   freeformContext?: string;
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Identifies the type of assistant thread — controls system prompt behavior */
+  assistantType?: 'design-doc' | 'prd';
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';

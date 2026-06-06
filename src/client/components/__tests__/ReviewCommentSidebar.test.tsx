@@ -347,6 +347,7 @@ describe('Resolve and Reopen buttons', () => {
 
 // ── 7. Delete button ───────────────────────────────────────────────────────────
 
+
 describe('Delete button', () => {
   it('shows Delete button to the comment author', () => {
     renderSidebar({
@@ -399,5 +400,75 @@ describe('Delete button', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
 
     expect(onDelete).toHaveBeenCalledWith('comment-1');
+  });
+});
+
+// ── 8. Fix with Apex button ────────────────────────────────────────────────────
+
+function renderWithFixAi(opts: {
+  comments?: ReviewCommentWithReplies[];
+  onFixWithAi?: jest.Mock;
+  isFixingWithAi?: boolean;
+}) {
+  const {
+    comments = [makeComment()],
+    onFixWithAi,
+    isFixingWithAi = false,
+  } = opts;
+
+  render(
+    <ReviewCommentSidebar
+      comments={comments}
+      activeCommentId={null}
+      currentUserId="viewer-1"
+      documentAuthorUserId="doc-author-1"
+      onCommentClick={jest.fn()}
+      onReply={jest.fn()}
+      onResolve={jest.fn()}
+      onReopen={jest.fn()}
+      onDelete={jest.fn()}
+      onFixWithAi={onFixWithAi}
+      isFixingWithAi={isFixingWithAi}
+    />,
+  );
+}
+
+describe('Fix with Apex button', () => {
+  it('is shown when onFixWithAi is provided and there are open comments', () => {
+    renderWithFixAi({ onFixWithAi: jest.fn() });
+
+    expect(screen.getByRole('button', { name: /fix with apex/i })).toBeInTheDocument();
+  });
+
+  it('is hidden when onFixWithAi is not provided', () => {
+    renderWithFixAi({ onFixWithAi: undefined });
+
+    expect(screen.queryByRole('button', { name: /fix with apex/i })).not.toBeInTheDocument();
+  });
+
+  it('is hidden when all comments are resolved (zero open)', () => {
+    renderWithFixAi({
+      comments: [makeComment({ status: 'resolved' })],
+      onFixWithAi: jest.fn(),
+    });
+
+    expect(screen.queryByRole('button', { name: /fix with apex/i })).not.toBeInTheDocument();
+  });
+
+  it('calls onFixWithAi when clicked', () => {
+    const onFixWithAi = jest.fn();
+    renderWithFixAi({ onFixWithAi });
+
+    fireEvent.click(screen.getByRole('button', { name: /fix with apex/i }));
+
+    expect(onFixWithAi).toHaveBeenCalledTimes(1);
+  });
+
+  it('is disabled and shows "Fixing…" when isFixingWithAi is true', () => {
+    renderWithFixAi({ onFixWithAi: jest.fn(), isFixingWithAi: true });
+
+    const btn = screen.getByText(/Fixing/);
+    expect(btn.closest('button')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /fix with apex/i })).not.toBeInTheDocument();
   });
 });

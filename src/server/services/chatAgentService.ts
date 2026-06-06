@@ -306,19 +306,81 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    parts.push(
-      ``,
-      `# Design doc context`,
-      `The design doc content for this session has been written to \`.ai-pilot/kickoff-context.md\`.`,
-      `Read this file IMMEDIATELY before responding to any user message — it contains the full design doc (Design, Tech Spec, and Assumptions sections) that you are assisting with.`,
-      `The file also contains the \`doc_id\` and \`thread_id\` values you must pass when calling \`update_design_doc\`.`,
-      ``,
-      `# Applying edits`,
-      `You have an \`update_design_doc\` MCP tool available. Use it when the user asks you to apply, save, or write changes to the document.`,
-      `- Call it once per section that needs updating.`,
-      `- Pass the \`doc_id\` and \`thread_id\` from \`.ai-pilot/kickoff-context.md\`.`,
-      `- After a successful save, confirm to the user that the changes have been applied.`,
-    );
+    if (kickoff.assistantType === 'prd') {
+      // Extract prd_id and thread_id from the freeform context so the agent
+      // has them directly in the system prompt — no file-read required.
+      const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
+      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const prdId = prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# PRD session identifiers`,
+        `Use these exact values when calling MCP tools — do not guess or substitute them:`,
+        `  prd_id:    ${prdId}`,
+        `  thread_id: ${threadId}`,
+        ``,
+        `# PRD context`,
+        `The full PRD content, backlog, and review comments have been written to \`.ai-pilot/kickoff-context.md\`.`,
+        `Read this file when you need the current PRD text or backlog to answer a question or produce an edit.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the PRD or backlog:`,
+        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+        `2. Produce the full updated text for the changed section.`,
+        `3. Call \`update_prd\` with the prd_id and thread_id above. Do NOT describe the change without calling the tool.`,
+        `   - \`section="content"\` for the PRD narrative (full markdown)`,
+        `   - \`section="backlog"\` for the backlog (full JSON string)`,
+        `4. After the tool succeeds, confirm briefly what was changed.`,
+        ``,
+        `# User stories live in the backlog (single ownership)`,
+        `User stories are OWNED by the backlog (the \`userStory\` object on each PBI). The PRD does NOT contain an authored "User Stories" section — the PRD view renders stories as a READ-ONLY projection of the backlog PBIs.`,
+        `Therefore, to add, change, reword, or remove a user story you MUST call \`update_prd\` with \`section="backlog"\` (NOT \`section="content"\`) and edit the relevant PBI's \`userStory\` (\`persona\`/\`iWant\`/\`soThat\`).`,
+        `Never write user stories into the PRD markdown via \`section="content"\` — they would not render and would duplicate the backlog.`,
+        `Assumptions are the mirror case: the PRD's \`## Assumptions Made\` section OWNS assumptions; the backlog's \`assumptionsMade\` is just a copy of it.`,
+        ``,
+        `# Keep PRD content and backlog consistent`,
+        `The PRD content (markdown) and the backlog (JSON with epics/features/PBIs) describe the SAME feature, but each field has a single owner — do not duplicate an owned field into the other artifact.`,
+        `When a change crosses the ownership line, update the owning artifact:`,
+        `- Adding/removing/rewording a user story → edit the backlog PBI's \`userStory\` (section="backlog"). Do NOT touch the PRD markdown for this.`,
+        `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
+        `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
+        `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
+        `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
+        ``,
+        `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,
+        `  Pass the \`comment_id\` from the Review Comments section in \`.ai-pilot/kickoff-context.md\`.`,
+        ``,
+        `# Addressing review comments`,
+        `When the user asks you to address comments: read the Review Comments section, revise the relevant content,`,
+        `call \`update_prd\`, then call \`resolve_prd_comment\` for each comment addressed.`,
+        `Confirm what was changed and which comments were resolved.`,
+      );
+    } else {
+      const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
+      const docThreadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const docId = docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const docThreadId = docThreadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# Design doc session identifiers`,
+        `Use these exact values when calling MCP tools:`,
+        `  doc_id:    ${docId}`,
+        `  thread_id: ${docThreadId}`,
+        ``,
+        `# Design doc context`,
+        `The full design doc content has been written to \`.ai-pilot/kickoff-context.md\`.`,
+        `Read this file when you need the current document text to answer a question or produce an edit.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the document:`,
+        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+        `2. Produce the full updated text for the changed section.`,
+        `3. Call \`update_design_doc\` with the doc_id and thread_id above. Do NOT describe the change without calling the tool.`,
+        `   - Call it once per section that needs updating.`,
+        `4. After the tool succeeds, confirm briefly what was changed.`,
+      );
+    }
   }
 
   if (kickoff.transcript) {
@@ -469,6 +531,24 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     thread.activeRunId = undefined;
   }
 
+  // Recreate the sandbox workspace if it was wiped (e.g. OS temp cleanup on
+  // reboot, or the stale-workspace cleanup pass). Without this, Agent.resume /
+  // Agent.create would fail because its cwd no longer exists, and a resumed
+  // interview would silently produce no agent output.
+  if (thread.workspaceDir && !fs.existsSync(thread.workspaceDir)) {
+    try {
+      fs.mkdirSync(thread.workspaceDir, { recursive: true });
+      injectKickoffFiles(thread.workspaceDir, thread.kickoff, thread.id);
+    } catch (err) {
+      console.error(
+        '[chat] failed to recreate workspace for thread',
+        threadId,
+        ':',
+        (err as Error).message,
+      );
+    }
+  }
+
   const isInterview = await checkIsInterviewThread(threadId);
 
   const state: ThreadState = {
@@ -541,7 +621,7 @@ export function getAgentHealthStats(): AgentHealthStats {
 export async function createThread(
   userId: string,
   kickoff: ChatThreadKickoff,
-  options?: { skipAutoKickoff?: boolean },
+  options?: { skipAutoKickoff?: boolean; kickoffMessage?: string },
 ): Promise<ChatThread> {
   ensureDirs();
 
@@ -584,9 +664,10 @@ export async function createThread(
   // (e.g. skill slug only, or modal/panel open). If skipAutoKickoff is set, the client POSTs
   // the real first message next so the transcript shows the user request before the agent.
   if (!options?.skipAutoKickoff) {
+    const msg = options?.kickoffMessage ?? 'Begin.';
     setImmediate(() => {
       console.log('[chat] auto-kickoff firing', { threadId, skillPath: kickoff.skillPath });
-      sendMessage(threadId, 'Begin.').then(() => {
+      sendMessage(threadId, msg, undefined, [], { hidden: true }).then(() => {
         console.log('[chat] auto-kickoff completed', { threadId });
       }).catch((err: Error) => {
         console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
@@ -595,6 +676,20 @@ export async function createThread(
   }
 
   return thread;
+}
+
+/**
+ * Replace the freeformContext stored in a thread's kickoff with an updated
+ * version. Used by the PRD / design-doc assistant routes to swap out the
+ * `__THREAD_ID__` placeholder that was passed to createThread (before the real
+ * ID was known) with the actual thread UUID, so the system prompt contains the
+ * correct thread_id when the agent first runs.
+ */
+export function updateThreadKickoffContext(threadId: string, freeformContext: string): void {
+  const state = threads.get(threadId);
+  if (!state) return;
+  state.thread.kickoff = { ...state.thread.kickoff, freeformContext };
+  persistThread(state.thread);
 }
 
 /**
@@ -952,6 +1047,7 @@ export async function sendMessage(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
+  options?: { hidden?: boolean },
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
@@ -986,6 +1082,7 @@ export async function sendMessage(
     text: text.trim() || 'Uploaded files for context.',
     ts: new Date().toISOString(),
     attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+    ...(options?.hidden ? { hidden: true } : {}),
   };
   state.thread.messages.push(userMsg);
   state.thread.lastActivityAt = userMsg.ts;

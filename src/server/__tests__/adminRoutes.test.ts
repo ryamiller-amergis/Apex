@@ -492,6 +492,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // defaultModel
       undefined,   // approvalMode
       undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
     );
   });
 
@@ -551,6 +553,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // defaultModel
       undefined,   // approvalMode
       undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
     );
   });
 
@@ -590,6 +594,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // defaultModel
       undefined,   // approvalMode
       undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
     );
   });
 
@@ -627,6 +633,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // defaultModel
       undefined,               // approvalMode
       undefined,               // quickMcpPills
+      undefined,               // prdAssistantSkillPath
+      undefined,               // prdAssistantModel
     );
   });
 
@@ -663,6 +671,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // defaultModel
       undefined,                            // approvalMode
       undefined,                            // quickMcpPills
+      undefined,                            // prdAssistantSkillPath
+      undefined,                            // prdAssistantModel
     );
   });
 
@@ -694,6 +704,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       'composer-2',
       undefined,   // approvalMode
       undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
     );
   });
 
@@ -729,6 +741,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // defaultModel
       'all_required',    // approvalMode
       undefined,         // quickMcpPills
+      undefined,         // prdAssistantSkillPath
+      undefined,         // prdAssistantModel
     );
   });
 

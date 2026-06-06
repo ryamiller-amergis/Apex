@@ -14,6 +14,9 @@ interface ReviewCommentSidebarProps {
   onResolve: (commentId: string) => void;
   onReopen: (commentId: string) => void;
   onDelete: (commentId: string) => void;
+  /** When provided, a "Fix with AI" button is shown in the header. */
+  onFixWithAi?: () => void;
+  isFixingWithAi?: boolean;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -40,6 +43,8 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
   onResolve,
   onReopen,
   onDelete,
+  onFixWithAi,
+  isFixingWithAi = false,
 }) => {
   const sorted = [...comments].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
@@ -58,6 +63,32 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
             </span>
           )}
         </span>
+        {onFixWithAi && openCount > 0 && (
+          <button
+            className={styles.fixAiBtn}
+            onClick={onFixWithAi}
+            disabled={isFixingWithAi}
+            type="button"
+            title="Ask AI to fix all open comments and show a diff for approval"
+          >
+            {isFixingWithAi ? (
+              <>
+                <svg className={styles.fixAiSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                Fixing…
+              </>
+            ) : (
+              <>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5Z" />
+                  <path d="M19 15l.75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75Z" />
+                </svg>
+                Fix with Apex
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       <div className={styles.threadList}>

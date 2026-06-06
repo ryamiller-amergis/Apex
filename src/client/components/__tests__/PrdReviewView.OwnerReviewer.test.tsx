@@ -37,6 +37,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useInterview: jest.fn(() => ({ data: null })),
   useDesignDocsByPrd: jest.fn(() => ({ data: [] })),
   useUpdatePrdContent: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useUpdatePrdBacklog: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useSubmitPrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useWithdrawPrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReopenPrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
@@ -45,6 +46,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useCreatePrdAdoItems: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useSyncPrdAdoStatus: jest.fn(() => ({ data: null })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useFixPrdWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDocumentAssignments: (...args: unknown[]) => mockUseDocumentAssignments(...args),
   useDesignDocsByPrdId: jest.fn(() => ({ data: [] })),
 }));

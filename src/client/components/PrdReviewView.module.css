@@ -274,6 +274,12 @@
   cursor: not-allowed;
 }
 
+.actionBtnActive {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
 .actionDivider {
   width: 1px;
   height: 18px;
@@ -417,6 +423,61 @@
   color: var(--text-muted);
   padding: 48px;
   font-size: 0.9rem;
+}
+
+/* ── User Stories (read-only projection from the backlog) ─────────────────── */
+
+.userStoriesProjection {
+  margin-top: 1.5em;
+  padding: 16px 18px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-color) 4%, var(--bg-secondary));
+}
+
+.userStoriesHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.userStoriesHeading h2 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.derivedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.derivedBadge svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.userStoryList {
+  margin: 0.8em 0 0;
+  padding-left: 1.5em;
+}
+
+.userStoryItem {
+  margin: 0.4em 0;
+  color: var(--text-primary);
 }
 
 .editArea {
@@ -934,6 +995,82 @@
   gap: 8px;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+/* ── Full-document & section edit modal ─────────────────────────────────────── */
+
+.editModal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.editModalCard {
+  background: var(--bg-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 24px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.editModalTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* ── Section-level inline editing ────────────────────────────────────────────── */
+
+.sectionWrapper {
+  position: relative;
+}
+
+.sectionWrapper:hover .sectionEditBtn {
+  opacity: 1;
+}
+
+.sectionEditBtn {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  padding: 0;
+}
+
+.sectionEditBtn svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.sectionEditBtn:hover {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
 }
 
 /* ── Responsive: tablet ────────────────────────────────────────────────────── */

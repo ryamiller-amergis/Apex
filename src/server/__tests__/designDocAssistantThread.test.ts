@@ -30,6 +30,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   createThread: jest.fn(),
   getThreadAsync: jest.fn().mockResolvedValue(null),
+  updateThreadKickoffContext: jest.fn(),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({

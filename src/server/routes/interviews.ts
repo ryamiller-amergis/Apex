@@ -5,8 +5,10 @@ import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
-import { eq } from 'drizzle-orm';
-import { designDocs as designDocsTable, chatThreads as chatThreadsTable } from '../db/schema';
+import { eq, and, sql } from 'drizzle-orm';
+import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable } from '../db/schema';
+import { getComments } from '../services/reviewCommentService';
+import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock } from '../services/bedrockService';
 import {
   createInterview,
   deleteInterview,
@@ -28,6 +30,7 @@ import {
   startPrdWatcher,
   submitForReview,
   syncPrdContent,
+  updatePrdBacklog,
   updatePrdContent,
   withdrawFromReview,
 } from '../services/prdService';
@@ -51,7 +54,7 @@ import {
   syncValidationResult,
   syncPerFeatureDesignDocs,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
@@ -155,6 +158,22 @@ router.put('/prds/:prdId/content', requirePermission('interviews:manage'), async
       return;
     }
     await updatePrdContent(req.params.prdId, userId, content);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /prds/:prdId/backlog — directly update the backlog JSON (author/owner only)
+router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { backlogData } = req.body as { backlogData: unknown };
+    if (backlogData === undefined || backlogData === null) {
+      res.status(400).json({ error: 'backlogData is required' });
+      return;
+    }
+    await updatePrdBacklog(req.params.prdId, userId, backlogData);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -388,6 +407,244 @@ router.post('/prds/:prdId/sync-ado-status', requirePermission('workitems:write')
   try {
     const result = await syncPrdAdoStatus(req.params.prdId);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD Assistant thread (lazy-create, one per PRD) ──────────────────────────
+
+router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+
+    const skillConfig = await getSkillConfig(prd.project);
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.prdAssistantModel ?? globalModel;
+
+    const comments = await getComments(req.params.prdId, 'prd');
+
+    const buildPrdContext = (threadId: string) => {
+      const parts: string[] = [
+        '# PRD Assistant Context',
+        `prd_id: ${req.params.prdId}`,
+        `thread_id: ${threadId}`,
+        '',
+        '## IMPORTANT: How to Apply Changes',
+        '',
+        'When the user asks you to edit, add, update, refine, or change ANYTHING in the PRD content or backlog,',
+        'you MUST call the `update_prd` MCP tool to save your changes. Do NOT just describe changes in chat.',
+        '',
+        '- To update PRD content: call `update_prd` with section="content" and the full revised markdown.',
+        '- To update the backlog: call `update_prd` with section="backlog" and the full revised JSON string.',
+        '- Always pass `threadId: "' + threadId + '"` and `prdId: "' + req.params.prdId + '"` when calling the tool.',
+        '',
+        'After you call `update_prd`, the changes will appear as a proposed diff that the PRD owner can review and accept or reject.',
+        'This is the expected workflow — propose changes via the tool, then the owner reviews them.',
+        '',
+        '## PRD Content',
+        prd.content || '(empty)',
+        '',
+        '## Backlog',
+        JSON.stringify(prd.backlogJson, null, 2),
+      ];
+
+      if (comments.length > 0) {
+        parts.push('', '## Review Comments');
+        for (const comment of comments) {
+          parts.push(
+            '',
+            `Author: ${comment.authorDisplayName ?? comment.authorUserId} | Section: ${comment.sectionKey ?? 'general'} | Status: ${comment.status}`,
+            comment.selector?.exact ? `> ${comment.selector.exact}` : '',
+            comment.body,
+          );
+          for (const reply of comment.replies ?? []) {
+            parts.push(`  Reply (${reply.authorDisplayName ?? reply.authorUserId}): ${reply.body}`);
+          }
+        }
+      }
+
+      return parts.filter(line => line !== undefined).join('\n');
+    };
+
+    // Reuse existing thread — refresh context file with latest content
+    const forceNew = req.body?.forceNew === true;
+    if (prd.prdAssistantThreadId && !forceNew) {
+      const [threadRow] = await db
+        .select({ workspaceDir: chatThreadsTable.workspaceDir })
+        .from(chatThreadsTable)
+        .where(eq(chatThreadsTable.id, prd.prdAssistantThreadId))
+        .limit(1);
+      if (threadRow?.workspaceDir) {
+        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
+        try {
+          fs.writeFileSync(contextPath, buildPrdContext(prd.prdAssistantThreadId), 'utf-8');
+        } catch {
+          // Non-fatal: workspace may have been cleaned up
+        }
+      }
+      res.json({ threadId: prd.prdAssistantThreadId });
+      return;
+    }
+
+    const thread = await createThread(userId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
+      freeformContext: buildPrdContext('__THREAD_ID__'),
+      model,
+      assistantType: 'prd',
+    }, {
+      kickoffMessage:
+        'Introduce yourself as Apex, the PRD assistant. ' +
+        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
+        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
+        'resolving review comments, and refining the backlog. ' +
+        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
+        'Keep it concise and friendly — this is the first thing the user sees.',
+    });
+
+    // Rewrite context now that we have the real thread ID.
+    // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
+    // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
+    const realContext = buildPrdContext(thread.id);
+    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
+    fs.writeFileSync(contextPath, realContext, 'utf-8');
+    updateThreadKickoffContext(thread.id, realContext);
+
+    await db
+      .update(prdsTable)
+      .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(prdsTable.id, req.params.prdId));
+
+    res.json({ threadId: thread.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/apply-proposed — atomically promote proposed content to live
+// content and auto-resolve open comments that the fix addressed.
+router.post('/prds/:prdId/apply-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prdId = req.params.prdId;
+
+    // Atomic update: copy proposed → live, clear proposed columns in one statement
+    // This avoids race conditions between read and write.
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+
+    // Auto-resolve all open comments — the accepted fix addressed them
+    const now = new Date().toISOString();
+    await db
+      .update(reviewCommentsTable)
+      .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(reviewCommentsTable.documentId, prdId),
+          eq(reviewCommentsTable.documentType, 'prd'),
+          eq(reviewCommentsTable.status, 'open'),
+        ),
+      );
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/reject-proposed — discard proposed content
+router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+
+    await db
+      .update(prdsTable)
+      .set({ proposedContent: null, proposedBacklogJson: null, updatedAt: new Date().toISOString() } as any)
+      .where(eq(prdsTable.id, req.params.prdId));
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-with-ai — ask Bedrock to apply all open review comments
+// and stage the result as proposedContent/proposedBacklogJson for the owner to accept/reject.
+router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+
+    const allComments = await getComments(req.params.prdId, 'prd');
+    const openComments = allComments.filter((c) => c.status === 'open');
+
+    if (openComments.length === 0) {
+      res.status(400).json({ error: 'No open comments to fix' });
+      return;
+    }
+
+    const mapComment = (c: typeof openComments[number]) => ({
+      sectionKey: c.sectionKey,
+      exact: c.selector?.exact ?? null,
+      body: c.body,
+      authorName: c.authorDisplayName ?? undefined,
+      replies: c.replies.map((r) => ({
+        authorName: r.authorDisplayName ?? undefined,
+        body: r.body,
+      })),
+    });
+
+    const prdComments = openComments.filter((c) => c.sectionKey === 'prd');
+    const backlogComments = openComments.filter((c) => c.sectionKey === 'backlog');
+
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (prdComments.length > 0) {
+      const fixedContent = await fixPrdContentWithBedrock(
+        prd.content ?? '',
+        prdComments.map(mapComment),
+      );
+      updates['proposedContent'] = fixedContent;
+    }
+
+    if (backlogComments.length > 0 && prd.backlogJson) {
+      const fixedBacklog = await fixPrdBacklogWithBedrock(
+        prd.backlogJson,
+        backlogComments.map(mapComment),
+      );
+      if (fixedBacklog != null) {
+        updates['proposedBacklogJson'] = fixedBacklog;
+      }
+    }
+
+    await db
+      .update(prdsTable)
+      .set(updates as any)
+      .where(eq(prdsTable.id, req.params.prdId));
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -762,9 +1019,13 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       model,
     }, { skipAutoKickoff: true });
 
-    // Rewrite the context file now that we have the real thread ID
+    // Rewrite the context file now that we have the real thread ID.
+    // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
+    // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
+    const realDocContext = buildDocContext(thread.id);
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, buildDocContext(thread.id), 'utf-8');
+    fs.writeFileSync(contextPath, realDocContext, 'utf-8');
+    updateThreadKickoffContext(thread.id, realDocContext);
 
     await db
       .update(designDocsTable)

@@ -143,6 +143,9 @@ export async function getPrd(id: string): Promise<Prd | null> {
     ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
+    prdAssistantThreadId: row.prdAssistantThreadId ?? null,
+    proposedContent: row.proposedContent ?? null,
+    proposedBacklogJson: row.proposedBacklogJson ?? undefined,
   };
 }
 

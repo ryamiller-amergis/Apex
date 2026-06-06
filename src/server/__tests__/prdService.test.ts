@@ -313,6 +313,20 @@ describe('updatePrdContent', () => {
       message: 'Approved PRDs cannot be edited',
     });
   });
+
+  it('allows the document owner (interview.prdOwnerId) to edit content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updatePrdContent('prd-1', 'owner-user', 'Owner updated content');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'Owner updated content' }),
+    );
+  });
 });
 
 // ── submitForReview ────────────────────────────────────────────────────────────
@@ -371,6 +385,20 @@ describe('submitForReview', () => {
     await expect(submitForReview('prd-1', 'user-other')).rejects.toMatchObject({
       message: 'Only the author or owner can submit for review',
     });
+  });
+
+  it('allows the document owner to submit for review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'owner-user');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
   });
 
   it('calls assignApprovers when prdApproverIds provided', async () => {
@@ -436,6 +464,18 @@ describe('withdrawFromReview', () => {
     await expect(withdrawFromReview('prd-1', 'user-other')).rejects.toMatchObject({
       message: 'Only the author or owner can withdraw from review',
     });
+  });
+
+  it('allows the document owner to withdraw from review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'pending_review' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await withdrawFromReview('prd-1', 'owner-user');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 });
 
@@ -626,6 +666,18 @@ describe('deletePrd', () => {
     });
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
+
+  it('allows the document owner to delete the PRD', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: whereMock });
+
+    await deletePrd('prd-1', 'owner-user');
+
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(whereMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── syncPrdContent ─────────────────────────────────────────────────────────────
@@ -712,6 +764,19 @@ describe('updatePrdBacklog', () => {
     await expect(updatePrdBacklog('prd-1', 'user-1', {})).rejects.toMatchObject({
       message: 'Approved PRDs cannot be edited',
     });
+  });
+
+  it('allows the document owner to update the backlog', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const backlog = { items: [{ id: 2, title: 'Owner task' }] };
+    await updatePrdBacklog('prd-1', 'owner-user', backlog);
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ backlogJson: backlog }));
   });
 });
 

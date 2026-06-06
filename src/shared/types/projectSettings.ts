@@ -73,6 +73,8 @@ export interface ProjectSkillConfig {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  prdAssistantSkillPath?: string | null;
+  prdAssistantModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
@@ -98,6 +100,8 @@ export interface UpsertProjectSkillConfigRequest {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  prdAssistantSkillPath?: string | null;
+  prdAssistantModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
@@ -137,6 +141,8 @@ export interface ProjectSkillConfigResponse {
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designDocValidationModel?: string | null;
+  prdAssistantSkillPath?: string | null;
+  prdAssistantModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;

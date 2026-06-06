@@ -280,6 +280,19 @@ export function useUpdatePrdContent() {
   });
 }
 
+export function useUpdatePrdBacklog() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { prdId: string; backlogData: unknown }>({
+    mutationFn: ({ prdId, backlogData }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/backlog`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backlogData }),
+      }),
+    onSuccess: (_data, { prdId }) => qc.invalidateQueries({ queryKey: ['prd', prdId] }),
+  });
+}
+
 export function useSubmitPrd() {
   const qc = useQueryClient();
   return useMutation<void, Error, { prdId: string } & SubmitForReviewRequest>({
@@ -579,6 +592,41 @@ export function useValidationReport(docId: string | null, validationThreadId: st
       if (query.state.data?.markdown) return false;
       if (docStatus === 'validating') return 10_000;
       return false;
+    },
+  });
+}
+
+export function useApplyProposedPrd(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/apply-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['unresolved-comment-count', 'prd', prdId] });
+    },
+  });
+}
+
+export function useRejectProposedPrd(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/reject-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useFixPrdWithAi(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-with-ai`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
     },
   });
 }

@@ -284,6 +284,45 @@
   height: 13px;
 }
 
+/* ── Fix with AI button ───────────────────────────────────────────────────── */
+
+.fixAiBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent-color);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  color: var(--accent-color);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fixAiBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-color) 15%, transparent);
+}
+
+.fixAiBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.fixAiSpinner {
+  width: 11px;
+  height: 11px;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Empty state ──────────────────────────────────────────────────────────── */
 
 .emptyState {

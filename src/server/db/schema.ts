@@ -164,6 +164,9 @@ export const prds = pgTable('prds', {
   reviewComment: text('review_comment'),
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
+  prdAssistantThreadId: uuid('prd_assistant_thread_id'),
+  proposedContent: text('proposed_content'),
+  proposedBacklogJson: jsonb('proposed_backlog_json'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -268,6 +271,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocAssistantModel: text('design_doc_assistant_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
+  prdAssistantSkillPath: text('prd_assistant_skill_path'),
+  prdAssistantModel: text('prd_assistant_model'),
   defaultModel: text('default_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),

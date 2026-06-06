@@ -9,6 +9,7 @@ import {
   readOutputPrd,
   readOutputBacklog,
   isPrdReady,
+  getThread,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq } from 'drizzle-orm';
@@ -171,7 +172,7 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
  * GET /api/chat/threads/:id/stream
  * Server-Sent Events stream for real-time agent output.
  */
-router.get('/threads/:id/stream', requireThreadRead, (req: Request, res: Response) => {
+router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as any).thread as ChatThread;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -184,6 +185,14 @@ router.get('/threads/:id/stream', requireThreadRead, (req: Request, res: Respons
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  // Hydrate the thread into memory BEFORE subscribing. subscribeToThread only
+  // attaches to the in-memory threads Map; if the thread was evicted (idle
+  // timeout) or lost (server restart), subscribing without hydration is a
+  // silent no-op and the client would receive no agent output when it later
+  // sends a message (e.g. resuming an interview the next day). Hydration also
+  // normalizes a stale 'running' status back to 'idle'.
+  const hydrated = await getThread(req.params.id).catch(() => null);
+
   // Replay all existing messages so late-joining subscribers (including
   // the very first connect right after thread creation) never miss events.
   for (const msg of thread.messages) {
@@ -191,8 +200,9 @@ router.get('/threads/:id/stream', requireThreadRead, (req: Request, res: Respons
   }
 
   // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator.
-  sendEvent({ type: 'status', status: thread.status });
+  // the full history before seeing the running/idle indicator. Prefer the
+  // hydrated status since it reflects the normalized in-memory state.
+  sendEvent({ type: 'status', status: hydrated?.status ?? thread.status });
 
   const unsubscribe = subscribeToThread(req.params.id, sendEvent);
 
