@@ -6,10 +6,12 @@ import { SectionOwnerModal } from '../SectionOwnerModal';
 
 jest.mock('../../hooks/useInterviews', () => ({
   useActiveUsers: jest.fn(),
+  useAvailableApproverPool: jest.fn(),
 }));
 
-import { useActiveUsers } from '../../hooks/useInterviews';
+import { useActiveUsers, useAvailableApproverPool } from '../../hooks/useInterviews';
 const mockUseActiveUsers = useActiveUsers as jest.Mock;
+const mockUseApproverPool = useAvailableApproverPool as jest.Mock;
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -22,23 +24,23 @@ const activeUsers = [
 
 interface RenderResult {
   onConfirm: jest.Mock;
-  onSkip: jest.Mock;
+  onCancel: jest.Mock;
 }
 
 function renderModal(
   overrides: Partial<React.ComponentProps<typeof SectionOwnerModal>> = {},
 ): RenderResult {
   const onConfirm = jest.fn();
-  const onSkip = jest.fn();
+  const onCancel = jest.fn();
   render(
     <SectionOwnerModal
       project="proj-alpha"
       onConfirm={onConfirm}
-      onSkip={onSkip}
+      onCancel={onCancel}
       {...overrides}
     />,
   );
-  return { onConfirm, onSkip };
+  return { onConfirm, onCancel };
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -46,21 +48,22 @@ function renderModal(
 describe('SectionOwnerModal', () => {
   beforeEach(() => {
     mockUseActiveUsers.mockReturnValue({ data: activeUsers, isLoading: false });
+    mockUseApproverPool.mockReturnValue({ data: { individuals: [], groups: [] }, isLoading: false });
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('renders the "Assign Section Owners" heading', () => {
+  it('renders the heading', () => {
     renderModal();
-    expect(screen.getByText('Assign Section Owners')).toBeInTheDocument();
+    expect(screen.getByText(/Assign Owners/)).toBeInTheDocument();
   });
 
-  it('renders PRD owner and Design Doc owner field labels', () => {
+  it('renders required field labels', () => {
     renderModal();
-    expect(screen.getByText('PRD Owner (BA)')).toBeInTheDocument();
-    expect(screen.getByText('Design Doc Owner (Developer)')).toBeInTheDocument();
+    expect(screen.getByText(/PRD Owner.*\*/)).toBeInTheDocument();
+    expect(screen.getByText(/Design Doc Owner.*\*/)).toBeInTheDocument();
   });
 
   it('shows loading text for both fields while users are being fetched', () => {
@@ -72,49 +75,43 @@ describe('SectionOwnerModal', () => {
 
   it('renders combobox inputs when users have loaded', () => {
     renderModal();
-    // Both comboboxes should be visible (one for each owner type)
     const comboboxes = screen.getAllByRole('combobox');
     expect(comboboxes).toHaveLength(2);
   });
 
-  it('clicking Skip calls onSkip', () => {
-    const { onSkip } = renderModal();
-    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
-    expect(onSkip).toHaveBeenCalledTimes(1);
-  });
-
-  it('clicking the close (✕) button calls onSkip', () => {
-    const { onSkip } = renderModal();
+  it('clicking the close button calls onCancel', () => {
+    const { onCancel } = renderModal();
     fireEvent.click(screen.getByLabelText('Close'));
-    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('clicking the overlay backdrop calls onSkip', () => {
-    const { onSkip } = renderModal();
+  it('clicking the overlay backdrop calls onCancel', () => {
+    const { onCancel } = renderModal();
     const overlay = screen.getByRole('dialog');
     fireEvent.click(overlay);
-    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('pressing Escape calls onSkip', () => {
-    const { onSkip } = renderModal();
+  it('pressing Escape calls onCancel', () => {
+    const { onCancel } = renderModal();
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('clicking Confirm with no owners selected calls onConfirm with undefined owner IDs', () => {
-    const { onConfirm } = renderModal();
-    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
-    expect(onConfirm).toHaveBeenCalledWith({
-      prdOwnerId: undefined,
-      designDocOwnerId: undefined,
-    });
+  it('confirm button is disabled when no owners are selected', () => {
+    renderModal();
+    expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled();
   });
 
-  it('Skip and Confirm buttons are disabled when isSubmitting=true', () => {
+  it('clicking Cancel calls onCancel', () => {
+    const { onCancel } = renderModal();
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel button is disabled when isSubmitting=true', () => {
     renderModal({ isSubmitting: true });
-    expect(screen.getByRole('button', { name: /skip/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /confirm|creating/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeDisabled();
   });
 
   it('shows "Creating…" label on the confirm button when isSubmitting=true', () => {
@@ -122,11 +119,10 @@ describe('SectionOwnerModal', () => {
     expect(screen.getByText('Creating…')).toBeInTheDocument();
   });
 
-  it('clicking inside the modal card does not call onSkip', () => {
-    const { onSkip } = renderModal();
-    // Click the card itself (not the overlay)
-    const card = screen.getByText('Assign Section Owners').closest('div')!;
+  it('clicking inside the modal card does not call onCancel', () => {
+    const { onCancel } = renderModal();
+    const card = screen.getByText(/Assign Owners/).closest('div')!;
     fireEvent.click(card);
-    expect(onSkip).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

@@ -9,9 +9,10 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
+import { useGroupsWithMembers } from '../hooks/useGroups';
+import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
 import type { ProjectSkillConfig, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
-import type { UserWithRoles } from '../../shared/types/rbac';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -211,91 +212,6 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
   );
 };
 
-// ── UserPicker ─────────────────────────────────────────────────────────────────
-
-interface UserPickerProps {
-  users: UserWithRoles[];
-  selectedIds: string[];
-  onAdd: (userId: string) => void;
-  disabled?: boolean;
-}
-
-const UserPicker: React.FC<UserPickerProps> = ({ users, selectedIds, onAdd, disabled }) => {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const available = useMemo(() => {
-    const selected = new Set(selectedIds);
-    return users
-      .filter((u) => !selected.has(u.oid))
-      .filter((u) => {
-        if (!query.trim()) return true;
-        const q = query.toLowerCase();
-        return (
-          (u.displayName?.toLowerCase().includes(q)) ||
-          (u.email?.toLowerCase().includes(q))
-        );
-      });
-  }, [users, selectedIds, query]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  return (
-    <div className={styles.userPicker} ref={wrapRef}>
-      <input
-        ref={inputRef}
-        className={styles.userPickerInput}
-        placeholder="Search users to add…"
-        value={query}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        disabled={disabled}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      {open && (
-        <div className={styles.userPickerDropdown}>
-          {available.length === 0 ? (
-            <div className={styles.userPickerEmpty}>
-              {query.trim() ? 'No matching users' : 'No more users to add'}
-            </div>
-          ) : (
-            available.map((u) => (
-              <button
-                key={u.oid}
-                type="button"
-                className={styles.userPickerOption}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onAdd(u.oid);
-                  setQuery('');
-                  setOpen(false);
-                }}
-              >
-                <span>{u.displayName || u.email || u.oid}</span>
-                {u.email && u.displayName && (
-                  <span className={styles.userPickerOptionEmail}>{u.email}</span>
-                )}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
 
 // ── AccordionSection ───────────────────────────────────────────────────────────
 
@@ -564,6 +480,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   // Approver local state
   const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
+  const [designDocApproverGroupIds, setDesignDocApproverGroupIds] = useState<string[]>([]);
+  const [prdApproverGroupIds, setPrdApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
@@ -576,8 +494,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillRepo || null,
     edit?.skillBranch || undefined,
   );
-  const { data: approvers = [] } = useProjectApprovers(edit?.project || null);
+  const { data: approversData } = useProjectApprovers(edit?.project || null);
   const setApprovers = useSetProjectApprovers();
+  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers();
 
   // ── Effects ────────────────────────────────────────────────────────────
 
@@ -592,22 +511,25 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   // Sync approver local state when remote data arrives or edit mode changes
   useEffect(() => {
-    if (!edit) return;
+    if (!edit || !approversData) return;
+    const { approvers, approverGroups } = approversData;
     setDesignDocApproverIds(
       approvers.filter((a) => a.documentType === 'design_doc').map((a) => a.userId),
     );
     setPrdApproverIds(
       approvers.filter((a) => a.documentType === 'prd').map((a) => a.userId),
     );
-  }, [approvers, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
+    setDesignDocApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'design_doc').map((g) => g.groupId),
+    );
+    setPrdApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'prd').map((g) => g.groupId),
+    );
+  }, [approversData, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ───────────────────────────────────────────────────────────
 
-  const userMap = useMemo(() => {
-    const map = new Map<string, UserWithRoles>();
-    for (const u of allUsers) map.set(u.oid, u);
-    return map;
-  }, [allUsers]);
+  const groupsWithMembers = allGroupsWithMembers;
 
   // ── Handlers ───────────────────────────────────────────────────────────
 
@@ -692,11 +614,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       });
 
       // Save approvers if any were configured
-      if (designDocApproverIds.length > 0 || prdApproverIds.length > 0 || approvers.length > 0) {
+      const hasApprovers =
+        designDocApproverIds.length > 0 ||
+        prdApproverIds.length > 0 ||
+        designDocApproverGroupIds.length > 0 ||
+        prdApproverGroupIds.length > 0 ||
+        (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
+      if (hasApprovers) {
         await setApprovers.mutateAsync({
           project: edit.project.trim(),
           designDocApprovers: designDocApproverIds,
           prdApprovers: prdApproverIds,
+          designDocApproverGroups: designDocApproverGroupIds,
+          prdApproverGroups: prdApproverGroupIds,
         });
       }
 
@@ -716,18 +646,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   };
 
-  const getUserLabel = (userId: string) => {
-    const u = userMap.get(userId);
-    return u?.displayName || u?.email || userId;
-  };
-
   // ── Render helpers ─────────────────────────────────────────────────────
 
   const renderApproverBadge = (config: ProjectSkillConfig) => {
     const ddCount = config.designDocApproverCount ?? 0;
     const prdCount = config.prdApproverCount ?? 0;
     if (ddCount === 0 && prdCount === 0) {
-      return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No approvers</span>;
+      return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No reviewers</span>;
     }
     const parts: string[] = [];
     if (ddCount > 0) parts.push(`${ddCount} design doc`);
@@ -737,33 +662,22 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   const renderApproverSection = (
     title: string,
-    ids: string[],
-    setIds: React.Dispatch<React.SetStateAction<string[]>>,
+    userIds: string[],
+    setUserIds: React.Dispatch<React.SetStateAction<string[]>>,
+    groupIds: string[],
+    setGroupIds: React.Dispatch<React.SetStateAction<string[]>>,
   ) => (
     <div className={styles.approverSubSection}>
       <p className={styles.approverSubTitle}>{title}</p>
-      <div className={styles.userChipList}>
-        {ids.length === 0 && <span className={styles.noApprovers}>No approvers assigned</span>}
-        {ids.map((uid) => (
-          <span key={uid} className={styles.userChip}>
-            {getUserLabel(uid)}
-            <button
-              type="button"
-              className={styles.userChipRemove}
-              onClick={() => setIds((prev) => prev.filter((id) => id !== uid))}
-              aria-label={`Remove ${getUserLabel(uid)}`}
-              disabled={upsert.isPending}
-            >
-              ✕
-            </button>
-          </span>
-        ))}
-      </div>
-      <UserPicker
-        users={allUsers}
-        selectedIds={ids}
-        onAdd={(uid) => setIds((prev) => [...prev, uid])}
+      <GroupAwarePeoplePicker
+        groups={groupsWithMembers}
+        availableUsers={allUsers}
+        selectedUserIds={userIds}
+        selectedGroupIds={groupIds}
+        onUserIdsChange={setUserIds}
+        onGroupIdsChange={setGroupIds}
         disabled={upsert.isPending}
+        placeholder="Search groups or people to add…"
       />
     </div>
   );
@@ -780,7 +694,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         <div className={styles.pageHeader}>
           <div>
             <h1 className={styles.pageTitle}>Project Skill Settings</h1>
-            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document approvers for <strong>{selectedProject}</strong>.</p>
+            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document reviewers for <strong>{selectedProject}</strong>.</p>
           </div>
           {!edit && !currentConfig && (
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
@@ -930,19 +844,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 4: Approvers */}
+            {/* Section 4: Reviewers */}
             <AccordionSection
-              title="Approvers"
+              title="Reviewers"
               hint={
-                (designDocApproverIds.length + prdApproverIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length} assigned`
+                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
               onToggle={() => toggleSection('approvers')}
             >
               <p className={styles.accordionHelp}>
-                Designate who can approve documents for this project. Users must also have the appropriate review permission.
+                Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
               <div className={styles.approvalModeSection}>
@@ -960,7 +874,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>Any One</span>
-                      <span className={styles.approvalModeDesc}>Document is approved when any assigned approver approves</span>
+                      <span className={styles.approvalModeDesc}>Document is approved when any assigned reviewer approves</span>
                     </div>
                   </label>
                   <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
@@ -975,14 +889,14 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>All Required</span>
-                      <span className={styles.approvalModeDesc}>All assigned approvers must approve the document</span>
+                      <span className={styles.approvalModeDesc}>All assigned reviewers must approve the document</span>
                     </div>
                   </label>
                 </div>
               </div>
 
-              {renderApproverSection('Design Doc Approvers', designDocApproverIds, setDesignDocApproverIds)}
-              {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
+              {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
+              {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
             </AccordionSection>
 
             {/* Section 5: Quick Skill Pills */}
@@ -1324,7 +1238,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   <tr>
                     <th className={styles.th}>Project</th>
                     <th className={styles.th}>Skill Repo / Branch</th>
-                    <th className={styles.th}>Approvers</th>
+                    <th className={styles.th}>Reviewers</th>
                     <th className={styles.th}>Last Updated</th>
                     <th className={styles.th}>Actions</th>
                   </tr>

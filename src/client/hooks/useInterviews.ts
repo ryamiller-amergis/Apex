@@ -24,6 +24,7 @@ import type {
   SubmitDesignDocForReviewRequest,
   SubmitForReviewRequest,
 } from '../../shared/types/approvals';
+import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -141,6 +142,16 @@ export function useActiveUsers() {
 
 // ── Approver queries ──────────────────────────────────────────────────────────
 
+export function useAvailableApproverPool(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
+  const qs = excludeSelf ? '?excludeSelf=true' : '';
+  return useQuery<ApproverPoolResponse>({
+    queryKey: ['available-approver-pool', project, documentType, excludeSelf],
+    queryFn: () => apiFetch(`/api/admin/project-settings/${encodeURIComponent(project)}/approver-pool/${documentType}${qs}`),
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+}
+
 export function useAvailableApprovers(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
   const qs = excludeSelf ? '?excludeSelf=true' : '';
   return useQuery<{ userId: string; displayName: string }[]>({
@@ -187,7 +198,7 @@ export function useDocumentAssignments(documentId: string | null, documentType: 
 
 export function useCreateInterview() {
   const qc = useQueryClient();
-  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string }>({
+  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[] }>({
     mutationFn: (body) =>
       apiFetch('/api/interviews', {
         method: 'POST',

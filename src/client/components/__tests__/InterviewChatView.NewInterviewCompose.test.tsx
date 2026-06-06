@@ -134,9 +134,8 @@ describe('NewInterviewCompose — title required', () => {
       json: () => Promise.resolve({ ok: true }),
     }) as jest.Mock;
 
-    // Default: the owner modal auto-skips so existing tests work without change
-    MockSectionOwnerModal.mockImplementation(({ onSkip }: { onSkip: () => void }) => {
-      useEffect(() => { onSkip(); }, [onSkip]);
+    MockSectionOwnerModal.mockImplementation(({ onConfirm }: { onConfirm: (s: Record<string, unknown>) => void }) => {
+      useEffect(() => { onConfirm({}); }, [onConfirm]);
       return null;
     });
   });
@@ -370,28 +369,26 @@ describe('NewInterviewCompose — section owner modal', () => {
     );
   });
 
-  it('creates the interview without owner IDs when the modal is skipped', async () => {
+  it('does NOT create the interview when the modal is cancelled', async () => {
     MockSectionOwnerModal.mockImplementation(
-      ({ onSkip }: { onSkip: () => void }) => (
+      ({ onCancel }: { onCancel: () => void }) => (
         <div data-testid="owner-modal">
-          <button onClick={onSkip}>Skip</button>
+          <button onClick={onCancel}>Cancel</button>
         </div>
       ),
     );
 
     renderCompose();
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Skip Owners Interview' } });
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Cancel Owners Interview' } });
     fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
-      target: { value: 'No owners needed' },
+      target: { value: 'Cancel and go back' },
     });
     fireEvent.click(screen.getByLabelText('Start interview'));
 
     await waitFor(() => expect(screen.getByTestId('owner-modal')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Skip'));
+    fireEvent.click(screen.getByText('Cancel'));
 
-    await waitFor(() => expect(createInterviewMutateAsync).toHaveBeenCalled());
-    expect(createInterviewMutateAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ prdOwnerId: expect.anything() }),
-    );
+    expect(createInterviewMutateAsync).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('owner-modal')).not.toBeInTheDocument();
   });
 });

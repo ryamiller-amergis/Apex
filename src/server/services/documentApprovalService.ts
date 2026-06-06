@@ -7,7 +7,7 @@ import {
   appUsers,
 } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { getApproversForDocument } from './projectSettingsService';
+import { getApproverUserIds, getApproverPool, getApproversForDocument } from './projectSettingsService';
 import { createNotification } from './notificationService';
 import type {
   DocumentApproverAssignment,
@@ -15,7 +15,7 @@ import type {
   ApprovalCompletionResult,
   ApproverResponseStatus,
 } from '../../shared/types/approvals';
-import type { ProjectApprover } from '../../shared/types/projectSettings';
+import type { ProjectApprover, ApproverPoolResponse } from '../../shared/types/projectSettings';
 
 async function getProjectForDocument(
   documentId: string,
@@ -82,8 +82,7 @@ export async function assignApprovers(
   if (approverUserIds.length === 0) return getAssignments(documentId, documentType);
 
   const project = await getProjectForDocument(documentId, documentType);
-  const pool = await getApproversForDocument(project, documentType);
-  const poolUserIds = new Set(pool.map((a) => a.userId));
+  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -250,8 +249,7 @@ export async function reassignApprovers(
   }
 
   const project = await getProjectForDocument(documentId, documentType);
-  const pool = await getApproversForDocument(project, documentType);
-  const poolUserIds = new Set(pool.map((a) => a.userId));
+  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -303,6 +301,24 @@ export async function getAvailableApprovers(
     return approvers.filter((a) => a.userId !== excludeUserId);
   }
   return approvers;
+}
+
+export async function getAvailableApproverPool(
+  project: string,
+  documentType: 'prd' | 'design_doc',
+  excludeUserId?: string,
+): Promise<ApproverPoolResponse> {
+  const pool = await getApproverPool(project, documentType);
+  if (excludeUserId) {
+    return {
+      individuals: pool.individuals.filter((a) => a.userId !== excludeUserId),
+      groups: pool.groups.map((g) => ({
+        ...g,
+        members: g.members.filter((m) => m.userId !== excludeUserId),
+      })),
+    };
+  }
+  return pool;
 }
 
 export async function propagateDesignDocApprovers(

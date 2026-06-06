@@ -38,6 +38,7 @@ const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
+const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
 type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
@@ -336,6 +337,13 @@ function App() {
                       Users
                     </button>
                     <button
+                      className={`admin-tab${location.pathname === '/admin/groups' ? ' admin-tab-active' : ''}`}
+                      onClick={() => navigate('/admin/groups')}
+                      type="button"
+                    >
+                      Groups
+                    </button>
+                    <button
                       className={`admin-tab${location.pathname === '/admin/project-settings' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/project-settings')}
                       type="button"
@@ -345,6 +353,8 @@ function App() {
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
+                  ) : location.pathname === '/admin/groups' ? (
+                    <AdminGroups />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : (

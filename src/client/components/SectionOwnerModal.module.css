@@ -272,6 +272,14 @@
   background: var(--bg-tertiary);
 }
 
+.validationHint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  margin: 0;
+}
+
 .footer {
   display: flex;
   gap: 10px;
@@ -321,6 +329,83 @@
 
 .loadingText {
   font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Approver chips ──────────────────────────────────────────────── */
+
+.approverSection {
+  margin-top: 4px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+.groupLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.selectAllBtn {
+  font-size: 0.72rem;
+  color: var(--accent-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.selectAllBtn:hover {
+  text-decoration: underline;
+}
+
+.chipGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.chip:hover {
+  border-color: var(--accent-color);
+}
+
+.chipSelected {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+.chipCheck {
+  width: 14px;
+  height: 14px;
+}
+
+.noApprovers {
+  font-size: 0.8rem;
   color: var(--text-muted);
   font-style: italic;
 }

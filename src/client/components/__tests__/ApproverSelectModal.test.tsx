@@ -3,31 +3,34 @@ import { ApproverSelectModal } from '../ApproverSelectModal';
 
 jest.mock('../../hooks/useInterviews', () => ({
   ...jest.requireActual('../../hooks/useInterviews'),
-  useAvailableApprovers: jest.fn(),
+  useAvailableApproverPool: jest.fn(),
 }));
 
-import { useAvailableApprovers } from '../../hooks/useInterviews';
+import { useAvailableApproverPool } from '../../hooks/useInterviews';
 
-const mockApprovers = [
-  { userId: 'u1', displayName: 'Alice' },
-  { userId: 'u2', displayName: 'Bob' },
-  { userId: 'u3', displayName: 'Charlie' },
-];
+const mockPool = {
+  individuals: [
+    { userId: 'u1', displayName: 'Alice', email: 'alice@test.com', documentType: 'prd' as const },
+    { userId: 'u2', displayName: 'Bob', email: 'bob@test.com', documentType: 'prd' as const },
+    { userId: 'u3', displayName: 'Charlie', email: 'charlie@test.com', documentType: 'prd' as const },
+  ],
+  groups: [],
+};
 
 function setupDefaultMocks(overrides?: {
-  prd?: { data?: typeof mockApprovers; isLoading?: boolean };
-  dd?: { data?: typeof mockApprovers; isLoading?: boolean };
+  prd?: { data?: typeof mockPool; isLoading?: boolean };
+  dd?: { data?: typeof mockPool; isLoading?: boolean };
 }) {
-  (useAvailableApprovers as jest.Mock).mockImplementation(
+  (useAvailableApproverPool as jest.Mock).mockImplementation(
     (_project: string, docType: 'prd' | 'design_doc') => {
       if (docType === 'prd') {
         return {
-          data: overrides?.prd?.data ?? mockApprovers,
+          data: overrides?.prd?.data ?? mockPool,
           isLoading: overrides?.prd?.isLoading ?? false,
         };
       }
       return {
-        data: overrides?.dd?.data ?? mockApprovers,
+        data: overrides?.dd?.data ?? mockPool,
         isLoading: overrides?.dd?.isLoading ?? false,
       };
     },
@@ -72,7 +75,8 @@ describe('ApproverSelectModal — rendering', () => {
   });
 
   it('shows empty message when no approvers configured', () => {
-    setupDefaultMocks({ prd: { data: [] }, dd: { data: [] } });
+    const emptyPool = { individuals: [], groups: [] };
+    setupDefaultMocks({ prd: { data: emptyPool }, dd: { data: emptyPool } });
 
     render(<ApproverSelectModal {...baseProps} documentType="prd" />);
 
@@ -111,13 +115,14 @@ describe('ApproverSelectModal — selection behavior', () => {
   it('enables confirm button when requirements met', () => {
     render(<ApproverSelectModal {...baseProps} documentType="prd" />);
 
-    const prdSection = screen.getByText('PRD Approvers').closest('div')!;
+    const sections = screen.getAllByText('Individuals');
+    const prdSection = sections[0].closest('div')!.parentElement!;
     const prdChip = Array.from(prdSection.querySelectorAll('button')).find(
       (b) => b.textContent?.includes('Alice'),
     )!;
     fireEvent.click(prdChip);
 
-    const ddSection = screen.getByText('Design Doc Approvers').closest('div')!;
+    const ddSection = sections[1].closest('div')!.parentElement!;
     const ddChip = Array.from(ddSection.querySelectorAll('button')).find(
       (b) => b.textContent?.includes('Bob'),
     )!;
@@ -142,13 +147,14 @@ describe('ApproverSelectModal — callbacks', () => {
       <ApproverSelectModal {...baseProps} documentType="prd" onConfirm={onConfirm} />,
     );
 
-    const prdSection = screen.getByText('PRD Approvers').closest('div')!;
+    const sections = screen.getAllByText('Individuals');
+    const prdSection = sections[0].closest('div')!.parentElement!;
     const prdChip = Array.from(prdSection.querySelectorAll('button')).find(
       (b) => b.textContent?.includes('Alice'),
     )!;
     fireEvent.click(prdChip);
 
-    const ddSection = screen.getByText('Design Doc Approvers').closest('div')!;
+    const ddSection = sections[1].closest('div')!.parentElement!;
     const ddChip = Array.from(ddSection.querySelectorAll('button')).find(
       (b) => b.textContent?.includes('Bob'),
     )!;

@@ -1,4 +1,5 @@
 import type { ApprovalMode } from './approvals';
+import type { GroupWithMembers } from './groups';
 
 /**
  * Configuration for a Quick MCP Pill — a home-page shortcut that wires an
@@ -121,8 +122,17 @@ export interface ProjectApprover {
 
 export interface SetApproversRequest {
   project: string;
+  /** Individual approver user OIDs. */
   designDocApprovers: string[];
   prdApprovers: string[];
+  /** Live group references (group IDs); expanded to members at read time. */
+  designDocApproverGroups?: string[];
+  prdApproverGroups?: string[];
+}
+
+export interface ApproverPoolResponse {
+  individuals: ProjectApprover[];
+  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }>;
 }
 
 export interface ProjectSkillConfigResponse {

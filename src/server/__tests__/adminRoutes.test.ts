@@ -15,6 +15,7 @@ import * as projectSettingsService from '../services/projectSettingsService';
 
 jest.mock('../services/rbacService');
 jest.mock('../services/projectSettingsService');
+jest.mock('../services/groupService');
 
 jest.mock('@cursor/sdk', () => ({
   Cursor: {
@@ -783,7 +784,10 @@ describe('DELETE /api/admin/project-settings/:project', () => {
 // ── GET/PUT /api/admin/project-settings/:project/approvers ────────────────────
 
 describe('GET /api/admin/project-settings/:project/approvers', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockProjectSettings.listApproverGroupsForProject.mockResolvedValue([]);
+  });
 
   const approvers = [
     {
@@ -804,7 +808,8 @@ describe('GET /api/admin/project-settings/:project/approvers', () => {
     const res = await request(buildApp()).get('/api/admin/project-settings/proj-alpha/approvers');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(approvers);
+    expect(res.body.approvers).toEqual(approvers);
+    expect(res.body.approverGroups).toEqual([]);
     expect(mockProjectSettings.listApprovers).toHaveBeenCalledWith('proj-alpha');
   });
 

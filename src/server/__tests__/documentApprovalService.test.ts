@@ -38,9 +38,16 @@ jest.mock('../db/drizzle', () => {
   };
 });
 
-jest.mock('../services/projectSettingsService', () => ({
-  getApproversForDocument: jest.fn().mockResolvedValue([]),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const mockGetApproversForDocument = jest.fn().mockResolvedValue([]);
+  return {
+    getApproversForDocument: mockGetApproversForDocument,
+    getApproverUserIds: jest.fn(async (project: string, _docType: string) => {
+      const pool = await mockGetApproversForDocument(project, _docType);
+      return pool.map((a: any) => a.userId);
+    }),
+  };
+});
 
 jest.mock('../services/notificationService', () => ({
   createNotification: jest.fn().mockResolvedValue({}),

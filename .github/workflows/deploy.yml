@@ -50,7 +50,7 @@ jobs:
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
           cd deploy
-          npm ci --omit=dev
+          npm ci --omit=dev --ignore-scripts
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
 

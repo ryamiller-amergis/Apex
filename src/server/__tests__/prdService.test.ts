@@ -32,6 +32,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         prds: { findFirst: jest.fn() },
+        interviews: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),

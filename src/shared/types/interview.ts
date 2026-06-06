@@ -14,6 +14,9 @@ export interface InterviewSummary {
   prdOwnerName?: string;
   designDocOwnerId?: string;
   designDocOwnerName?: string;
+  /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -58,6 +61,9 @@ export interface CreateInterviewRequest {
   model?: string;
   prdOwnerId?: string;
   designDocOwnerId?: string;
+  /** Kick-off approver selections (user OIDs); persisted and inherited at submit. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
 }
 
 export interface CreateInterviewResponse {

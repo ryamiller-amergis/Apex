@@ -211,6 +211,22 @@ export async function submitForReview(
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
 
+  let effectivePrdApproverIds = opts?.prdApproverIds;
+  let effectiveDdApproverIds = opts?.designDocApproverIds;
+
+  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { prdApproverIds: true, designDocApproverIds: true },
+    });
+    if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
+      effectivePrdApproverIds = interview.prdApproverIds;
+    }
+    if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
+      effectiveDdApproverIds = interview?.designDocApproverIds ?? undefined;
+    }
+  }
+
   const updates: Partial<typeof prds.$inferInsert> = {
     status: 'pending_review',
     reviewerId: null,
@@ -218,14 +234,14 @@ export async function submitForReview(
     updatedAt: new Date().toISOString(),
   };
 
-  if (opts?.designDocApproverIds && opts.designDocApproverIds.length > 0) {
-    updates.designDocApproverIds = opts.designDocApproverIds;
+  if (effectiveDdApproverIds && effectiveDdApproverIds.length > 0) {
+    updates.designDocApproverIds = effectiveDdApproverIds;
   }
 
   await db.update(prds).set(updates).where(eq(prds.id, id));
 
-  if (opts?.prdApproverIds && opts.prdApproverIds.length > 0) {
-    await assignApprovers(id, 'prd', opts.prdApproverIds, requestingUserId);
+  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
+    await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
   }
 }
 

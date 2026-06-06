@@ -192,6 +192,23 @@ export async function submitForReview(
     throw conflict('Design doc content must be non-empty before submitting for review');
   }
 
+  let effectiveApproverIds = opts?.approverIds;
+  if ((!effectiveApproverIds || effectiveApproverIds.length === 0) && row.prdId) {
+    const prd = await db.query.prds.findFirst({
+      where: eq(prds.id, row.prdId),
+      columns: { interviewId: true },
+    });
+    if (prd?.interviewId) {
+      const interview = await db.query.interviews.findFirst({
+        where: eq(interviews.id, prd.interviewId),
+        columns: { designDocApproverIds: true },
+      });
+      if (interview?.designDocApproverIds && interview.designDocApproverIds.length > 0) {
+        effectiveApproverIds = interview.designDocApproverIds;
+      }
+    }
+  }
+
   await db
     .update(designDocs)
     .set({
@@ -202,8 +219,8 @@ export async function submitForReview(
     })
     .where(eq(designDocs.id, id));
 
-  if (opts?.approverIds && opts.approverIds.length > 0) {
-    await assignApprovers(id, 'design_doc', opts.approverIds, requestingUserId);
+  if (effectiveApproverIds && effectiveApproverIds.length > 0) {
+    await assignApprovers(id, 'design_doc', effectiveApproverIds, requestingUserId);
   }
 }
 

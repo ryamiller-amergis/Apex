@@ -164,6 +164,45 @@
   cursor: not-allowed;
 }
 
+.groupSection {
+  margin-bottom: 12px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.groupName {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.selectAllBtn {
+  font-size: 0.75rem;
+  color: var(--accent-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.selectAllBtn:hover {
+  background: var(--bg-secondary);
+}
+
+.selectAllBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .validationHint {
   font-size: 0.78rem;
   color: var(--text-muted);

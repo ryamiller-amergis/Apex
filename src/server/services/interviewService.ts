@@ -24,6 +24,8 @@ export async function createInterview(opts: {
   chatThreadId: string;
   prdOwnerId?: string;
   designDocOwnerId?: string;
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
 }): Promise<{ interviewId: string; threadId: string }> {
   const [row] = await db
     .insert(interviews)
@@ -36,6 +38,8 @@ export async function createInterview(opts: {
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
       designDocOwnerId: opts.designDocOwnerId ?? null,
+      prdApproverIds: opts.prdApproverIds ?? null,
+      designDocApproverIds: opts.designDocApproverIds ?? null,
     })
     .returning({ id: interviews.id });
 
@@ -109,6 +113,8 @@ export async function listInterviews(
       status: interviews.status,
       prdOwnerId: interviews.prdOwnerId,
       designDocOwnerId: interviews.designDocOwnerId,
+      prdApproverIds: interviews.prdApproverIds,
+      designDocApproverIds: interviews.designDocApproverIds,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
@@ -134,6 +140,8 @@ export async function listInterviews(
     prdCount: prdCountMap.get(row.id) ?? 0,
     prdOwnerId: row.prdOwnerId ?? undefined,
     designDocOwnerId: row.designDocOwnerId ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -175,6 +183,8 @@ export async function getInterview(id: string): Promise<Interview | null> {
     prdOwnerName: row.prdOwner?.displayName ?? undefined,
     designDocOwnerId: row.designDocOwnerId ?? undefined,
     designDocOwnerName: row.designDocOwner?.displayName ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,

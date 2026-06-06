@@ -81,13 +81,15 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId } = req.body as {
+    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, prdApproverIds, designDocApproverIds } = req.body as {
       project: string;
       repo: string;
       title?: string;
       chatThreadId: string;
       prdOwnerId?: string;
       designDocOwnerId?: string;
+      prdApproverIds?: string[];
+      designDocApproverIds?: string[];
     };
 
     if (!project || !repo || !chatThreadId) {
@@ -95,7 +97,7 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, prdApproverIds, designDocApproverIds });
     res.status(201).json(result);
   } catch (err) {
     next(err);

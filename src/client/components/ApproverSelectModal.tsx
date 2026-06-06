@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAvailableApprovers } from '../hooks/useInterviews';
+import { useAvailableApproverPool } from '../hooks/useInterviews';
+import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import styles from './ApproverSelectModal.module.css';
 
 interface ApproverSelectModalProps {
@@ -16,6 +17,12 @@ interface ApproverSelectModalProps {
   allowEmpty?: boolean;
 }
 
+const CheckIcon: React.FC = () => (
+  <svg className={styles.chipCheck} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="2 7 5.5 10.5 12 4" />
+  </svg>
+);
+
 export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
   documentType,
   project,
@@ -29,8 +36,8 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
   excludeSelf = true,
   allowEmpty = false,
 }) => {
-  const { data: prdApprovers, isLoading: prdLoading } = useAvailableApprovers(project, 'prd', excludeSelf);
-  const { data: ddApprovers, isLoading: ddLoading } = useAvailableApprovers(project, 'design_doc', excludeSelf);
+  const { data: prdPool, isLoading: prdLoading } = useAvailableApproverPool(project, 'prd', excludeSelf);
+  const { data: ddPool, isLoading: ddLoading } = useAvailableApproverPool(project, 'design_doc', excludeSelf);
 
   const [selectedPrdApprovers, setSelectedPrdApprovers] = useState<Set<string>>(
     () => new Set(initialPrdApproverIds ?? []),
@@ -86,37 +93,86 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
         ? selectedPrdApprovers.size > 0 && selectedDdApprovers.size > 0
         : selectedDdApprovers.size > 0)) && !isSubmitting;
 
-  const renderChips = (
-    approvers: { userId: string; displayName: string }[] | undefined,
+  const renderGroupedChips = (
+    pool: ApproverPoolResponse | undefined,
     isLoading: boolean,
     selected: Set<string>,
     onToggle: (id: string) => void,
   ) => {
     if (isLoading) return <span className={styles.loadingText}>Loading approvers…</span>;
-    if (!approvers || approvers.length === 0) {
+    if (!pool || (pool.individuals.length === 0 && pool.groups.length === 0)) {
       return <span className={styles.emptyText}>No approvers configured for this project</span>;
     }
+
     return (
-      <div className={styles.chipGrid}>
-        {approvers.map((a) => {
-          const isSelected = selected.has(a.userId);
+      <div>
+        {pool.groups.map((group) => {
+          const allSelected = group.members.length > 0 && group.members.every((m) => selected.has(m.userId));
           return (
-            <button
-              key={a.userId}
-              type="button"
-              className={`${styles.chip} ${isSelected ? styles.chipSelected : ''}`}
-              onClick={() => onToggle(a.userId)}
-              disabled={isSubmitting}
-            >
-              {isSelected && (
-                <svg className={styles.chipCheck} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="2 7 5.5 10.5 12 4" />
-                </svg>
-              )}
-              {a.displayName}
-            </button>
+            <div key={group.id} className={styles.groupSection}>
+              <div className={styles.groupHeader}>
+                <span className={styles.groupName}>{group.name}</span>
+                <button
+                  type="button"
+                  className={styles.selectAllBtn}
+                  onClick={() => {
+                    group.members.forEach((m) => {
+                      if (allSelected) {
+                        onToggle(m.userId);
+                      } else if (!selected.has(m.userId)) {
+                        onToggle(m.userId);
+                      }
+                    });
+                  }}
+                  disabled={isSubmitting}
+                >
+                  {allSelected ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div className={styles.chipGrid}>
+                {group.members.map((m) => {
+                  const isSelected = selected.has(m.userId);
+                  return (
+                    <button
+                      key={m.userId}
+                      type="button"
+                      className={`${styles.chip} ${isSelected ? styles.chipSelected : ''}`}
+                      onClick={() => onToggle(m.userId)}
+                      disabled={isSubmitting}
+                    >
+                      {isSelected && <CheckIcon />}
+                      {m.displayName || m.email || m.userId}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
+        {pool.individuals.length > 0 && (
+          <div className={styles.groupSection}>
+            <div className={styles.groupHeader}>
+              <span className={styles.groupName}>Individuals</span>
+            </div>
+            <div className={styles.chipGrid}>
+              {pool.individuals.map((a) => {
+                const isSelected = selected.has(a.userId);
+                return (
+                  <button
+                    key={a.userId}
+                    type="button"
+                    className={`${styles.chip} ${isSelected ? styles.chipSelected : ''}`}
+                    onClick={() => onToggle(a.userId)}
+                    disabled={isSubmitting}
+                  >
+                    {isSelected && <CheckIcon />}
+                    {a.displayName || a.email || a.userId}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -142,13 +198,13 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
         {isPrdSection && (
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>PRD Approvers</h3>
-            {renderChips(prdApprovers, prdLoading, selectedPrdApprovers, togglePrd)}
+            {renderGroupedChips(prdPool, prdLoading, selectedPrdApprovers, togglePrd)}
           </div>
         )}
 
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Design Doc Approvers</h3>
-          {renderChips(ddApprovers, ddLoading, selectedDdApprovers, toggleDd)}
+          {renderGroupedChips(ddPool, ddLoading, selectedDdApprovers, toggleDd)}
         </div>
 
         {!canConfirm && !isSubmitting && (

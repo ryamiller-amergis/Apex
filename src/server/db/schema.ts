@@ -113,6 +113,7 @@ export const appUserRoles = pgTable('app_user_roles', {
 
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
+  groupMemberships: many(appGroupMembers),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -134,6 +135,39 @@ export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
 }));
 
+// ── Groups Tables ─────────────────────────────────────────────────────────────
+// Reusable, organizational user groups (e.g. Developers, Product, UI/UX).
+// Fully separate from RBAC app_roles, which are permission-based.
+
+export const appGroups = pgTable('app_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').unique().notNull(),
+  description: text('description'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const appGroupMembers = pgTable('app_group_members', {
+  groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  addedBy: text('added_by'),
+  addedAt: timestamp('added_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.groupId, t.userId] }),
+}));
+
+// ── Groups Relations ──────────────────────────────────────────────────────────
+
+export const appGroupsRelations = relations(appGroups, ({ many }) => ({
+  members: many(appGroupMembers),
+  projectApproverGroups: many(projectApproverGroups),
+}));
+
+export const appGroupMembersRelations = relations(appGroupMembers, ({ one }) => ({
+  group: one(appGroups, { fields: [appGroupMembers.groupId], references: [appGroups.id] }),
+  user: one(appUsers, { fields: [appGroupMembers.userId], references: [appUsers.oid] }),
+}));
+
 // ── Interview Tables ───────────────────────────────────────────────────────────
 
 export const interviews = pgTable('interviews', {
@@ -145,6 +179,8 @@ export const interviews = pgTable('interviews', {
   repo: text('repo').notNull(),
   prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  prdApproverIds: jsonb('prd_approver_ids').$type<string[]>(),
+  designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -300,6 +336,29 @@ export const projectApproversRelations = relations(projectApprovers, ({ one }) =
   user: one(appUsers, {
     fields: [projectApprovers.userId],
     references: [appUsers.oid],
+  }),
+}));
+
+// Live group references in a project's approver pool, expanded to members at read time.
+export const projectApproverGroups = pgTable('project_approver_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
+  documentType: text('document_type').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.project, t.groupId, t.documentType),
+}));
+
+export const projectApproverGroupsRelations = relations(projectApproverGroups, ({ one }) => ({
+  projectSkillSetting: one(projectSkillSettings, {
+    fields: [projectApproverGroups.project],
+    references: [projectSkillSettings.project],
+  }),
+  group: one(appGroups, {
+    fields: [projectApproverGroups.groupId],
+    references: [appGroups.id],
   }),
 }));
 

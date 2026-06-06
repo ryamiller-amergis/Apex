@@ -306,7 +306,7 @@ const NewInterviewCompose: React.FC = () => {
     setShowOwnerModal(true);
   }, [input, title, attachments, isSending, resolvedRepoName, speech]);
 
-  const handleCreateInterview = useCallback(async (owners: { prdOwnerId?: string; designDocOwnerId?: string }) => {
+  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
@@ -327,8 +327,10 @@ const NewInterviewCompose: React.FC = () => {
         repo: resolvedRepoName,
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
-        prdOwnerId: owners.prdOwnerId,
-        designDocOwnerId: owners.designDocOwnerId,
+        prdOwnerId: selections.prdOwnerId,
+        designDocOwnerId: selections.designDocOwnerId,
+        prdApproverIds: selections.prdApproverIds,
+        designDocApproverIds: selections.designDocApproverIds,
       });
       trackEvent('interview.started', {
         interviewId: result.interviewId,
@@ -540,13 +542,12 @@ const NewInterviewCompose: React.FC = () => {
       {showOwnerModal && (
         <SectionOwnerModal
           project={selectedProject}
-          onConfirm={(owners) => {
+          onConfirm={(selections) => {
             setShowOwnerModal(false);
-            void handleCreateInterview(owners);
+            void handleCreateInterview(selections);
           }}
-          onSkip={() => {
+          onCancel={() => {
             setShowOwnerModal(false);
-            void handleCreateInterview({});
           }}
           isSubmitting={isSending}
         />
