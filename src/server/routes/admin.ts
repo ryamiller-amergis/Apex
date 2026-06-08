@@ -1,9 +1,12 @@
 import { Router, type Request, type Response } from 'express';
-import { requirePermission } from '../middleware/rbac';
+import { requirePermission, requireSuperAdmin } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
+import * as groupService from '../services/groupService';
+import * as menuSettingsService from '../services/menuSettingsService';
 import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
+import { AVAILABLE_BEDROCK_MODELS } from '../services/bedrockService';
 import type {
   CreateRoleRequest,
   UpdateRoleRequest,
@@ -11,6 +14,8 @@ import type {
   AssignRoleRequest,
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
+import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
+import type { UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 
 const router = Router();
 
@@ -147,6 +152,94 @@ router.get('/available-models', async (_req: Request, res: Response): Promise<vo
   }
 });
 
+router.get('/available-bedrock-models', (_req: Request, res: Response): void => {
+  res.json({ models: AVAILABLE_BEDROCK_MODELS });
+});
+
+// ── Groups ──────────────────────────────────────────────────────────────────
+
+router.get('/groups', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const withMembers = req.query.withMembers === 'true';
+    const groups = withMembers
+      ? await groupService.listGroupsWithMembers()
+      : await groupService.listGroups();
+    res.json(groups);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/groups', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name, description } = req.body as CreateGroupRequest;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const createdBy = (req.user as any)?.profile?.oid ?? undefined;
+    const group = await groupService.createGroup(name, description, createdBy);
+    res.status(201).json(group);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/groups/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const group = await groupService.getGroupWithMembers(id);
+    if (!group) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+    res.json(group);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/groups/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const updates = req.body as UpdateGroupRequest;
+    const group = await groupService.updateGroup(id, updates);
+    res.json(group);
+  } catch (err: any) {
+    if (err instanceof Error && err.message.includes('not found')) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/groups/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    await groupService.deleteGroup(id);
+    res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/groups/:id/members', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { userIds } = req.body as SetGroupMembersRequest;
+    if (!Array.isArray(userIds)) {
+      res.status(400).json({ error: 'userIds must be an array' });
+      return;
+    }
+    const addedBy = (req.user as any)?.profile?.oid ?? undefined;
+    const members = await groupService.setGroupMembers(id, userIds, addedBy);
+    res.json(members);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── Project Skill Settings ────────────────────────────────────────────────────
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
@@ -173,7 +266,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -201,6 +294,11 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       quickSkillPills,
       defaultModel,
       approvalMode,
+      quickMcpPills,
+      prdAssistantSkillPath,
+      prdAssistantModel,
+      prdReviewBedrockModelId,
+      prdReviewBedrockMaxTokens,
     );
     res.json(config);
   } catch {
@@ -223,8 +321,11 @@ router.delete('/project-settings/:project', async (req: Request, res: Response):
 router.get('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const approvers = await projectSettingsService.listApprovers(project);
-    res.json(approvers);
+    const [approvers, approverGroups] = await Promise.all([
+      projectSettingsService.listApprovers(project),
+      projectSettingsService.listApproverGroupsForProject(project),
+    ]);
+    res.json({ approvers, approverGroups });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -233,7 +334,7 @@ router.get('/project-settings/:project/approvers', async (req: Request, res: Res
 router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { designDocApprovers, prdApprovers, designPrototypeApprovers } = req.body as SetApproversRequest;
+    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers } = req.body as SetApproversRequest;
     if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
       res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
       return;
@@ -244,7 +345,37 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
       projectSettingsService.setApprovers(project, 'prd', prdApprovers, assignedBy),
       projectSettingsService.setApprovers(project, 'design_prototype', designPrototypeApprovers, assignedBy),
     ]);
+
+    await Promise.all([
+      projectSettingsService.setApproverGroups(project, 'design_doc', designDocApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(project, 'prd', prdApproverGroups ?? [], assignedBy),
+    ]);
+
     res.json({ designDoc, prd, designPrototype });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Available Approver Pool (grouped) ─────────────────────────────────────
+router.get('/project-settings/:project/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { project, documentType } = req.params;
+    if (documentType !== 'prd' && documentType !== 'design_doc') {
+      res.status(400).json({ error: 'documentType must be prd or design_doc' });
+      return;
+    }
+    const excludeSelf = req.query.excludeSelf === 'true';
+    const userId = excludeSelf ? (req.user as any)?.profile?.oid : undefined;
+    const pool = await projectSettingsService.getApproverPool(project, documentType);
+    if (userId) {
+      pool.individuals = pool.individuals.filter((a) => a.userId !== userId);
+      pool.groups = pool.groups.map((g) => ({
+        ...g,
+        members: g.members.filter((m) => m.userId !== userId),
+      }));
+    }
+    res.json(pool);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -271,6 +402,46 @@ router.put('/app-settings/defaultModel', async (req: Request, res: Response): Pr
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
     await setAppSetting('defaultModel', value, updatedBy);
     res.json({ value });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Project Menu Settings (super-admin only) ─────────────────────────────────
+
+router.get('/project-menu-settings', requireSuperAdmin, async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const configs = await menuSettingsService.listMenuConfigs();
+    res.json(configs);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/project-menu-settings/:project', requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const config = await menuSettingsService.getMenuConfig(req.params.project);
+    if (!config) {
+      res.status(404).json({ error: 'No menu config found for this project' });
+      return;
+    }
+    res.json(config);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-menu-settings/:project', requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { project } = req.params;
+    const { enabledViews } = req.body as UpsertProjectMenuConfigRequest;
+    if (!Array.isArray(enabledViews)) {
+      res.status(400).json({ error: 'enabledViews must be an array' });
+      return;
+    }
+    const userId = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? 'unknown';
+    const config = await menuSettingsService.upsertMenuConfig(project, enabledViews, userId);
+    res.json(config);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

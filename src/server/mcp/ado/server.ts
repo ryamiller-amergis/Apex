@@ -18,6 +18,69 @@ import {
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
 import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
+import { resolveComment } from '../../services/reviewCommentService';
+import { db } from '../../db/drizzle';
+import { eq } from 'drizzle-orm';
+import { prds } from '../../db/schema';
+
+// ── Exported handlers (testable units) ────────────────────────────────────────
+
+export async function handleUpdatePrd(params: {
+  threadId: string;
+  prdId: string;
+  section: 'content' | 'backlog';
+  content: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  try {
+    const now = new Date().toISOString();
+    if (params.section === 'content') {
+      await db
+        .update(prds)
+        .set({ proposedContent: params.content, updatedAt: now })
+        .where(eq(prds.id, params.prdId));
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(params.content);
+      } catch {
+        parsed = params.content;
+      }
+      await db
+        .update(prds)
+        .set({ proposedBacklogJson: parsed as any, updatedAt: now })
+        .where(eq(prds.id, params.prdId));
+    }
+    console.log(`[MCP] update_prd: saved ${params.section} for prd ${params.prdId}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
+export async function handleResolvePrdComment(params: {
+  threadId: string;
+  commentId: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  try {
+    await resolveComment(params.commentId, thread.userId);
+    console.log(`[MCP] resolve_prd_comment: resolved comment ${params.commentId}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, commentId: params.commentId }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] resolve_prd_comment: FAILED ${params.commentId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
 
 export function createAdoMcpServer(): McpServer {
   const server = new McpServer({
@@ -202,6 +265,32 @@ export function createAdoMcpServer(): McpServer {
         return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
       }
     },
+  );
+
+  // ── PRD write-back ──────────────────────────────────────────────────────────
+
+  server.tool(
+    'update_prd',
+    'Update the proposed content or backlog of the current PRD and save it to the database as a draft proposal. ' +
+    'Call this when the user asks you to apply, save, or write changes to the PRD or its backlog. ' +
+    'Pass section="content" to update the PRD narrative; pass section="backlog" to update the backlog JSON.',
+    {
+      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
+      prdId: z.string().describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
+      section: z.enum(['content', 'backlog']).describe('Which part to update: "content" for the PRD narrative, "backlog" for the JSON backlog'),
+      content: z.string().describe('The full new content for the section (markdown for content; JSON string for backlog)'),
+    },
+    async (params) => handleUpdatePrd(params),
+  );
+
+  server.tool(
+    'resolve_prd_comment',
+    'Mark a review comment on the current PRD as resolved. Call this after you have addressed a comment by updating the PRD or backlog.',
+    {
+      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
+      commentId: z.string().describe('The ID of the comment to resolve (from the Review Comments section in kickoff-context.md)'),
+    },
+    async (params) => handleResolvePrdComment(params),
   );
 
   // ── Wiki namespace ──────────────────────────────────────────────────────────

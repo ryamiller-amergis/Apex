@@ -4,14 +4,16 @@ import {
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
   useAvailableModels,
+  useAvailableBedrockModels,
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
-import type { ProjectSkillConfig, QuickSkillPill } from '../../shared/types/projectSettings';
+import { useGroupsWithMembers } from '../hooks/useGroups';
+import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
+import type { ProjectSkillConfig, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
-import type { UserWithRoles } from '../../shared/types/rbac';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -211,91 +213,6 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
   );
 };
 
-// ── UserPicker ─────────────────────────────────────────────────────────────────
-
-interface UserPickerProps {
-  users: UserWithRoles[];
-  selectedIds: string[];
-  onAdd: (userId: string) => void;
-  disabled?: boolean;
-}
-
-const UserPicker: React.FC<UserPickerProps> = ({ users, selectedIds, onAdd, disabled }) => {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const available = useMemo(() => {
-    const selected = new Set(selectedIds);
-    return users
-      .filter((u) => !selected.has(u.oid))
-      .filter((u) => {
-        if (!query.trim()) return true;
-        const q = query.toLowerCase();
-        return (
-          (u.displayName?.toLowerCase().includes(q)) ||
-          (u.email?.toLowerCase().includes(q))
-        );
-      });
-  }, [users, selectedIds, query]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  return (
-    <div className={styles.userPicker} ref={wrapRef}>
-      <input
-        ref={inputRef}
-        className={styles.userPickerInput}
-        placeholder="Search users to add…"
-        value={query}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        disabled={disabled}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      {open && (
-        <div className={styles.userPickerDropdown}>
-          {available.length === 0 ? (
-            <div className={styles.userPickerEmpty}>
-              {query.trim() ? 'No matching users' : 'No more users to add'}
-            </div>
-          ) : (
-            available.map((u) => (
-              <button
-                key={u.oid}
-                type="button"
-                className={styles.userPickerOption}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onAdd(u.oid);
-                  setQuery('');
-                  setOpen(false);
-                }}
-              >
-                <span>{u.displayName || u.email || u.oid}</span>
-                {u.email && u.displayName && (
-                  <span className={styles.userPickerOptionEmail}>{u.email}</span>
-                )}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
 
 // ── AccordionSection ───────────────────────────────────────────────────────────
 
@@ -353,6 +270,147 @@ const MODEL_FIELDS = [
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
 ] as const;
 
+// ── McpPillAddForm ─────────────────────────────────────────────────────────────
+
+interface McpPillAddFormProps {
+  availableModels: { id: string; displayName: string }[];
+  isLoadingModels: boolean;
+  isPending: boolean;
+  onAdd: (pill: QuickMcpPill) => void;
+}
+
+const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoadingModels, isPending, onAdd }) => {
+  const [transport, setTransport] = useState<'http' | 'stdio'>('stdio');
+  const [label, setLabel] = useState('');
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [url, setUrl] = useState('');
+  const [command, setCommand] = useState('npx');
+  const [args, setArgs] = useState('-y sendgrid-mcp');
+  const [envStr, setEnvStr] = useState('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
+  const [model, setModel] = useState('');
+  const [systemPromptHint, setSystemPromptHint] = useState('');
+  const [description, setDescription] = useState('');
+
+  const handleAdd = () => {
+    const trimmedLabel = label.trim();
+    const trimmedName = mcpServerName.trim();
+    if (!trimmedLabel || !trimmedName) return;
+
+    const base = {
+      label: trimmedLabel,
+      mcpServerName: trimmedName,
+      model: model || null,
+      systemPromptHint: systemPromptHint.trim() || null,
+      description: description.trim() || null,
+    };
+
+    if (transport === 'http') {
+      if (!url.trim()) return;
+      const pill: QuickMcpPillHttp = { ...base, transport: 'http', url: url.trim() };
+      onAdd(pill);
+    } else {
+      if (!command.trim()) return;
+      const parsedArgs = args.trim() ? args.trim().split(/\s+/) : [];
+      const parsedEnv: Record<string, string> = {};
+      for (const pair of envStr.split(',')) {
+        const eq = pair.indexOf('=');
+        if (eq > 0) parsedEnv[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+      }
+      const pill: QuickMcpPillStdio = {
+        ...base,
+        transport: 'stdio',
+        command: command.trim(),
+        args: parsedArgs.length ? parsedArgs : null,
+        env: Object.keys(parsedEnv).length ? parsedEnv : null,
+      };
+      onAdd(pill);
+    }
+
+    setLabel('');
+    setMcpServerName('');
+    setUrl('');
+    setCommand('npx');
+    setArgs('-y sendgrid-mcp');
+    setEnvStr('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
+    setModel('');
+    setSystemPromptHint('');
+    setDescription('');
+  };
+
+  return (
+    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {/* Transport toggle */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Transport:</span>
+        {(['stdio', 'http'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`${styles.btnAction} ${transport === t ? styles.transportActive : ''}`}
+            style={{ padding: '2px 10px', fontSize: '0.78rem' }}
+            onClick={() => setTransport(t)}
+            disabled={isPending}
+          >
+            {t === 'stdio' ? 'stdio (npx / command)' : 'HTTP (hosted URL)'}
+          </button>
+        ))}
+      </div>
+
+      {/* Common fields */}
+      <div className={styles.pillAddRow}>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Label</label>
+          <input className={styles.input} placeholder="e.g. SendGrid" value={label} onChange={(e) => setLabel(e.target.value)} disabled={isPending} />
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Server Name</label>
+          <input className={styles.input} placeholder="e.g. sendgrid" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} />
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Model override</label>
+          <select className={styles.select} value={model} onChange={(e) => setModel(e.target.value)} disabled={isPending || isLoadingModels}>
+            <option value="">Default model</option>
+            {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Transport-specific fields */}
+      {transport === 'http' ? (
+        <input className={styles.input} placeholder="HTTP URL (e.g. https://mcp.twilio.com/docs)" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} />
+      ) : (
+        <>
+          <div className={styles.pillAddRow}>
+            <div className={styles.field} style={{ flex: '0 0 8rem' }}>
+              <label className={styles.label}>Command</label>
+              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} />
+            </div>
+            <div className={styles.field} style={{ flex: 1 }}>
+              <label className={styles.label}>Args (space-separated)</label>
+              <input className={styles.input} placeholder="-y sendgrid-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} />
+            </div>
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
+            <input className={styles.input} placeholder="SENDGRID_API_KEY=${SENDGRID_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} />
+            <span className={styles.skillDescription}>Values like {'${SENDGRID_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
+          </div>
+        </>
+      )}
+
+      {/* Optional metadata */}
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools for querying email activity, bounces, and stats)" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} />
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Description shown to users when pill is selected" value={description} onChange={(e) => setDescription(e.target.value)} disabled={isPending} />
+
+      <div>
+        <button type="button" className={styles.btnAction} onClick={handleAdd} disabled={isPending}>
+          Add MCP Pill
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface AdminProjectSettingsProps {
@@ -379,7 +437,10 @@ interface EditState {
   designPrototypeModel: string;
   designDocValidationModel: string;
   defaultModel: string;
+  prdReviewBedrockModelId: string;
+  prdReviewBedrockMaxTokens: number;
   quickSkillPills: QuickSkillPill[];
+  quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
   isNew: boolean;
 }
@@ -391,7 +452,9 @@ const emptyEdit = (): EditState => ({
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocQaModel: '', designDocAssistantModel: '', designPrototypeModel: '', designDocValidationModel: '',
   defaultModel: '',
-  quickSkillPills: [], approvalMode: 'any_one', isNew: true,
+  prdReviewBedrockModelId: '',
+  prdReviewBedrockMaxTokens: 16000,
+  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -402,6 +465,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
+  const { data: bedrockModels = [] } = useAvailableBedrockModels();
   const { data: allUsers = [] } = useUsers();
 
   // ── Derived: filter to current project ────────────────────────────────
@@ -418,14 +482,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     repo: true,
     skills: false,
     models: false,
+    bedrockReview: false,
     approvers: false,
     pills: false,
+    mcpPills: false,
   });
 
   // Approver local state
   const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
-  const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
+  const [designDocApproverGroupIds, setDesignDocApproverGroupIds] = useState<string[]>([]);
+  const [prdApproverGroupIds, setPrdApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
@@ -438,8 +505,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillRepo || null,
     edit?.skillBranch || undefined,
   );
-  const { data: approvers = [] } = useProjectApprovers(edit?.project || null);
+  const { data: approversData } = useProjectApprovers(edit?.project || null);
   const setApprovers = useSetProjectApprovers();
+  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers();
 
   // ── Effects ────────────────────────────────────────────────────────────
 
@@ -454,25 +522,28 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   // Sync approver local state when remote data arrives or edit mode changes
   useEffect(() => {
-    if (!edit) return;
+    if (!edit || !approversData) return;
+    const { approvers, approverGroups } = approversData;
     setDesignDocApproverIds(
       approvers.filter((a) => a.documentType === 'design_doc').map((a) => a.userId),
     );
     setPrdApproverIds(
       approvers.filter((a) => a.documentType === 'prd').map((a) => a.userId),
     );
+    setDesignDocApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'design_doc').map((g) => g.groupId),
+    );
+    setPrdApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'prd').map((g) => g.groupId),
+    );
     setDesignPrototypeApproverIds(
       approvers.filter((a) => a.documentType === 'design_prototype').map((a) => a.userId),
     );
-  }, [approvers, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [approversData, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ───────────────────────────────────────────────────────────
 
-  const userMap = useMemo(() => {
-    const map = new Map<string, UserWithRoles>();
-    for (const u of allUsers) map.set(u.oid, u);
-    return map;
-  }, [allUsers]);
+  const groupsWithMembers = allGroupsWithMembers;
 
   // ── Handlers ───────────────────────────────────────────────────────────
 
@@ -483,7 +554,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const handleAddNew = () => {
     setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
+    setExpandedSections({ repo: true, skills: false, models: false, bedrockReview: false, approvers: false, pills: false, mcpPills: false });
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
@@ -506,12 +577,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designPrototypeModel: config.designPrototypeModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
       defaultModel: config.defaultModel ?? '',
+      prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
+      prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       quickSkillPills: config.quickSkillPills ?? [],
+      quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
       isNew: false,
     });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false });
+    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false, mcpPills: false });
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -553,17 +627,28 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designPrototypeModel: edit.designPrototypeModel || null,
           designDocValidationModel: edit.designDocValidationModel || null,
           defaultModel: edit.defaultModel || null,
+          prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
+          prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
+          quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
         },
       });
 
       // Save approvers if any were configured
-      if (designDocApproverIds.length > 0 || prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 || approvers.length > 0) {
+      const hasApprovers =
+        designDocApproverIds.length > 0 ||
+        prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
+        designDocApproverGroupIds.length > 0 ||
+        prdApproverGroupIds.length > 0 ||
+        (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
+      if (hasApprovers) {
         await setApprovers.mutateAsync({
           project: edit.project.trim(),
           designDocApprovers: designDocApproverIds,
           prdApprovers: prdApproverIds,
+          designDocApproverGroups: designDocApproverGroupIds,
+          prdApproverGroups: prdApproverGroupIds,
           designPrototypeApprovers: designPrototypeApproverIds,
         });
       }
@@ -584,11 +669,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   };
 
-  const getUserLabel = (userId: string) => {
-    const u = userMap.get(userId);
-    return u?.displayName || u?.email || userId;
-  };
-
   // ── Render helpers ─────────────────────────────────────────────────────
 
   const renderApproverBadge = (config: ProjectSkillConfig) => {
@@ -596,7 +676,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     const prdCount = config.prdApproverCount ?? 0;
     const dpCount = config.designPrototypeApproverCount ?? 0;
     if (ddCount === 0 && prdCount === 0 && dpCount === 0) {
-      return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No approvers</span>;
+      return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No reviewers</span>;
     }
     const parts: string[] = [];
     if (ddCount > 0) parts.push(`${ddCount} design doc`);
@@ -607,33 +687,22 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   const renderApproverSection = (
     title: string,
-    ids: string[],
-    setIds: React.Dispatch<React.SetStateAction<string[]>>,
+    userIds: string[],
+    setUserIds: React.Dispatch<React.SetStateAction<string[]>>,
+    groupIds: string[],
+    setGroupIds: React.Dispatch<React.SetStateAction<string[]>>,
   ) => (
     <div className={styles.approverSubSection}>
       <p className={styles.approverSubTitle}>{title}</p>
-      <div className={styles.userChipList}>
-        {ids.length === 0 && <span className={styles.noApprovers}>No approvers assigned</span>}
-        {ids.map((uid) => (
-          <span key={uid} className={styles.userChip}>
-            {getUserLabel(uid)}
-            <button
-              type="button"
-              className={styles.userChipRemove}
-              onClick={() => setIds((prev) => prev.filter((id) => id !== uid))}
-              aria-label={`Remove ${getUserLabel(uid)}`}
-              disabled={upsert.isPending}
-            >
-              ✕
-            </button>
-          </span>
-        ))}
-      </div>
-      <UserPicker
-        users={allUsers}
-        selectedIds={ids}
-        onAdd={(uid) => setIds((prev) => [...prev, uid])}
+      <GroupAwarePeoplePicker
+        groups={groupsWithMembers}
+        availableUsers={allUsers}
+        selectedUserIds={userIds}
+        selectedGroupIds={groupIds}
+        onUserIdsChange={setUserIds}
+        onGroupIdsChange={setGroupIds}
         disabled={upsert.isPending}
+        placeholder="Search groups or people to add…"
       />
     </div>
   );
@@ -650,7 +719,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         <div className={styles.pageHeader}>
           <div>
             <h1 className={styles.pageTitle}>Project Skill Settings</h1>
-            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document approvers for <strong>{selectedProject}</strong>.</p>
+            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document reviewers for <strong>{selectedProject}</strong>.</p>
           </div>
           {!edit && !currentConfig && (
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
@@ -809,19 +878,66 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 4: Approvers */}
+            {/* Section 4: PRD Apex Review (Bedrock) */}
             <AccordionSection
-              title="Approvers"
+              title="PRD Apex Review"
+              hint={edit.prdReviewBedrockModelId
+                ? bedrockModels.find((m) => m.id === edit.prdReviewBedrockModelId)?.label ?? edit.prdReviewBedrockModelId
+                : undefined}
+              expanded={expandedSections.bedrockReview}
+              onToggle={() => toggleSection('bedrockReview')}
+            >
+              <p className={styles.accordionHelp}>
+                Configure the AWS Bedrock model used when "Fix with Apex" applies open review comments to a PRD.
+                Defaults to the service-level model ({process.env.NODE_ENV === 'production' ? 'configured via BEDROCK_MODEL_ID env var' : 'Claude Haiku 4.5'}) with a 16 000-token output limit.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-bedrock-model"
+                    className={styles.select}
+                    value={edit.prdReviewBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Use service default</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.prdReviewBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000 (small PRDs)</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000 (large PRDs)</option>
+                    <option value="64000">64 000 (very large PRDs)</option>
+                  </select>
+                </div>
+              </div>
+            </AccordionSection>
+
+            {/* Section 5: Reviewers */}
+            <AccordionSection
+              title="Reviewers"
               hint={
-                (designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length} assigned`
+                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
               onToggle={() => toggleSection('approvers')}
             >
               <p className={styles.accordionHelp}>
-                Designate who can approve documents for this project. Users must also have the appropriate review permission.
+                Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
               <div className={styles.approvalModeSection}>
@@ -839,7 +955,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>Any One</span>
-                      <span className={styles.approvalModeDesc}>Document is approved when any assigned approver approves</span>
+                      <span className={styles.approvalModeDesc}>Document is approved when any assigned reviewer approves</span>
                     </div>
                   </label>
                   <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
@@ -854,18 +970,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>All Required</span>
-                      <span className={styles.approvalModeDesc}>All assigned approvers must approve the document</span>
+                      <span className={styles.approvalModeDesc}>All assigned reviewers must approve the document</span>
                     </div>
                   </label>
                 </div>
               </div>
 
-              {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
+              {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
+              {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
+               {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
               {renderApproverSection('Design Prototype Approvers', designPrototypeApproverIds, setDesignPrototypeApproverIds)}
-              {renderApproverSection('Design Doc Approvers', designDocApproverIds, setDesignDocApproverIds)}
             </AccordionSection>
 
-            {/* Section 5: Quick Skill Pills */}
+            {/* Section 6: Quick Skill Pills */}
             <AccordionSection
               title="Quick Skill Pills"
               hint={edit.quickSkillPills.length > 0 ? `${edit.quickSkillPills.length} configured` : undefined}
@@ -1014,6 +1131,171 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
+            {/* Section 7: Quick MCP Pills */}
+            <AccordionSection
+              title="Quick MCP Pills"
+              hint={edit.quickMcpPills.length > 0 ? `${edit.quickMcpPills.length} configured` : undefined}
+              expanded={expandedSections.mcpPills}
+              onToggle={() => toggleSection('mcpPills')}
+            >
+              <p className={styles.accordionHelp}>
+                Shortcut pills that wire an external MCP server into the chat agent alongside the built-in ADO skills.
+                Choose <strong>HTTP</strong> for hosted endpoints (e.g. mcp.twilio.com) or <strong>stdio</strong> for
+                locally-installed CLI packages (e.g. <code>npx sendgrid-mcp</code>).
+              </p>
+
+              {edit.quickMcpPills.length > 0 && (
+                <div className={styles.pillList}>
+                  {edit.quickMcpPills.map((pill, idx) => (
+                    <div key={idx} className={styles.pillItem}>
+                      <div className={styles.pillItemRow}>
+                        <span className={styles.pillLabel}>{pill.label}</span>
+                        <span className={styles.pillPath}>{pill.mcpServerName} · {pill.transport}</span>
+                        <select
+                          className={styles.select}
+                          style={{ flex: '0 0 10rem', height: '28px', padding: '4px 8px', fontSize: '12px' }}
+                          value={pill.model ?? ''}
+                          onChange={(e) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], model: e.target.value || null };
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending || isLoadingModels}
+                        >
+                          <option value="">Default model</option>
+                          {availableModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.displayName}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === 0}
+                          onClick={() => {
+                            const pills = [...edit.quickMcpPills];
+                            [pills[idx - 1], pills[idx]] = [pills[idx], pills[idx - 1]];
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Move up"
+                        >↑</button>
+                        <button
+                          type="button"
+                          className={styles.btnAction}
+                          disabled={idx === edit.quickMcpPills.length - 1}
+                          onClick={() => {
+                            const pills = [...edit.quickMcpPills];
+                            [pills[idx], pills[idx + 1]] = [pills[idx + 1], pills[idx]];
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Move down"
+                        >↓</button>
+                        <button
+                          type="button"
+                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                          onClick={() => {
+                            const pills = edit.quickMcpPills.filter((_, i) => i !== idx);
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          title="Remove pill"
+                        >Remove</button>
+                      </div>
+                      {pill.transport === 'http' ? (
+                        <input
+                          className={styles.input}
+                          style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                          placeholder="URL (e.g. https://mcp.twilio.com/docs)"
+                          value={pill.url}
+                          onChange={(e) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], url: e.target.value } as typeof pill;
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                        />
+                      ) : (
+                        <>
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Command (e.g. npx)"
+                            value={pill.command}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              pills[idx] = { ...pills[idx], command: e.target.value } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Args (space-separated, e.g. -y sendgrid-mcp)"
+                            value={(pill.args ?? []).join(' ')}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              const args = e.target.value.trim() ? e.target.value.trim().split(/\s+/) : [];
+                              pills[idx] = { ...pills[idx], args } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                          <input
+                            className={styles.input}
+                            style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                            placeholder="Env vars (KEY=${ENV_VAR}, comma-separated, e.g. SENDGRID_API_KEY=${SENDGRID_API_KEY})"
+                            value={Object.entries(pill.env ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')}
+                            onChange={(e) => {
+                              const pills = [...edit.quickMcpPills];
+                              const env: Record<string, string> = {};
+                              for (const pair of e.target.value.split(',')) {
+                                const eq = pair.indexOf('=');
+                                if (eq > 0) env[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+                              }
+                              pills[idx] = { ...pills[idx], env: Object.keys(env).length ? env : null } as typeof pill;
+                              setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                            }}
+                            disabled={upsert.isPending}
+                          />
+                        </>
+                      )}
+                      <input
+                        className={styles.input}
+                        style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                        placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools)"
+                        value={pill.systemPromptHint ?? ''}
+                        onChange={(e) => {
+                          const pills = [...edit.quickMcpPills];
+                          pills[idx] = { ...pills[idx], systemPromptHint: e.target.value || null };
+                          setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                        }}
+                        disabled={upsert.isPending}
+                      />
+                      <input
+                        className={styles.input}
+                        style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
+                        placeholder="Description shown to users when selected"
+                        value={pill.description ?? ''}
+                        onChange={(e) => {
+                          const pills = [...edit.quickMcpPills];
+                          pills[idx] = { ...pills[idx], description: e.target.value || null };
+                          setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                        }}
+                        disabled={upsert.isPending}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add new MCP pill form */}
+              <McpPillAddForm
+                availableModels={availableModels}
+                isLoadingModels={isLoadingModels}
+                isPending={upsert.isPending}
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)}
+              />
+            </AccordionSection>
+
             {formError && <p className={styles.formError}>{formError}</p>}
             <div className={styles.formActions} style={{ marginTop: '12px' }}>
               <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending}>
@@ -1039,7 +1321,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   <tr>
                     <th className={styles.th}>Project</th>
                     <th className={styles.th}>Skill Repo / Branch</th>
-                    <th className={styles.th}>Approvers</th>
+                    <th className={styles.th}>Reviewers</th>
                     <th className={styles.th}>Last Updated</th>
                     <th className={styles.th}>Actions</th>
                   </tr>

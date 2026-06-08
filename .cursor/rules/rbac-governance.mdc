@@ -41,6 +41,11 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `deployments:manage` | deployments | admin |
 | `design-docs:review` | design-docs | admin, member |
 | `planning:view` | planning | admin, member, viewer |
+| `planning:devstats` | planning | admin, member |
+| `planning:qa` | planning | admin, member |
+| `planning:ai-analysis` | planning | admin, member |
+| `planning:roadmap` | planning | admin, member |
+| `planning:releases` | planning | admin, member |
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |

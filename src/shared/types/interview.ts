@@ -10,6 +10,13 @@ export interface InterviewSummary {
   repo: string;
   status: InterviewStatus;
   prdCount: number;
+  prdOwnerId?: string;
+  prdOwnerName?: string;
+  designDocOwnerId?: string;
+  designDocOwnerName?: string;
+  /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +33,8 @@ export interface PrdSummary {
   chatThreadId: string;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   project: string;
   title: string;
   status: PrdStatus;
@@ -40,6 +49,9 @@ export interface PrdSummary {
 export interface Prd extends PrdSummary {
   content: string;
   backlogJson?: unknown;
+  prdAssistantThreadId?: string | null;
+  proposedContent?: string | null;
+  proposedBacklogJson?: unknown;
 }
 
 export interface CreateInterviewRequest {
@@ -47,6 +59,11 @@ export interface CreateInterviewRequest {
   repo: string;
   title?: string;
   model?: string;
+  prdOwnerId?: string;
+  designDocOwnerId?: string;
+  /** Kick-off approver selections (user OIDs); persisted and inherited at submit. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
 }
 
 export interface CreateInterviewResponse {
@@ -64,8 +81,7 @@ export interface CreatePrdResponse {
 }
 
 export interface ReviewPrdRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export interface ReviewPrdResponse {
@@ -158,6 +174,8 @@ export interface DesignDocSummary {
   fixBaseline?: ContentSnapshot | null;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   title: string;
   status: DesignDocStatus;
   reviewerId?: string;
@@ -177,8 +195,7 @@ export interface DesignDoc extends DesignDocSummary {
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };
 
 export interface ReviewDesignDocRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export function designDocStatusLabel(status: DesignDocStatus): string {
@@ -263,4 +280,12 @@ export interface CreatePrdAdoItemsResponse {
     pbis: Array<{ title: string; adoId: number; adoUrl: string }>;
   };
   totalCreated: number;
+}
+
+// ── Active User (for owner assignment dropdowns) ─────────────────────────────
+
+export interface ActiveUser {
+  oid: string;
+  displayName: string | null;
+  email: string | null;
 }

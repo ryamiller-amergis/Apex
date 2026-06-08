@@ -1,12 +1,17 @@
 import fs from 'fs';
 import { and, desc, eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { prds, appUsers, chatThreads } from '../db/schema';
+import { prds, appUsers, chatThreads, interviews } from '../db/schema';
+
+const authorUser = alias(appUsers, 'author_user');
+const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete } from './documentApprovalService';
+import { getUnresolvedCount } from './reviewCommentService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
@@ -52,6 +57,16 @@ function notFound(msg: string): Error {
   return err;
 }
 
+async function getPrdOwnerId(interviewId: string | null): Promise<string | null> {
+  if (!interviewId) return null;
+  const rows = await db
+    .select({ prdOwnerId: interviews.prdOwnerId })
+    .from(interviews)
+    .where(eq(interviews.id, interviewId))
+    .limit(1);
+  return rows[0]?.prdOwnerId ?? null;
+}
+
 export async function createPrd(opts: {
   interviewId: string;
   project: string;
@@ -85,29 +100,52 @@ export async function listPrds(
   if (filters?.project) conditions.push(eq(prds.project, filters.project));
 
   const rows = await db
-    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
+    .select({
+      prd: prds,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdOwnerId: interviews.prdOwnerId,
+      prdOwnerDisplayName: prdOwnerUser.displayName,
+    })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(prds.authorId, authorUser.oid))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(prdOwnerUser, eq(interviews.prdOwnerId, prdOwnerUser.oid))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(prds.updatedAt));
 
-  return rows.map(({ prd, reviewerDisplayName }) => rowToPrdSummary(prd, reviewerDisplayName));
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) =>
+    rowToPrdSummary(prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
+  );
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
   const rows = await db
-    .select({ prd: prds, reviewerDisplayName: appUsers.displayName })
+    .select({
+      prd: prds,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdOwnerId: interviews.prdOwnerId,
+      prdOwnerDisplayName: prdOwnerUser.displayName,
+    })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(prds.authorId, authorUser.oid))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(prdOwnerUser, eq(interviews.prdOwnerId, prdOwnerUser.oid))
     .where(eq(prds.id, id))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { prd: row, reviewerDisplayName } = rows[0];
+  const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName),
+    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
+    prdAssistantThreadId: row.prdAssistantThreadId ?? null,
+    proposedContent: row.proposedContent ?? null,
+    proposedBacklogJson: row.proposedBacklogJson ?? undefined,
   };
 }
 
@@ -118,8 +156,9 @@ export async function updatePrdContent(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can edit PRD content');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can edit PRD content');
   }
   if (row.status === 'approved') throw conflict('Approved PRDs cannot be edited');
 
@@ -131,7 +170,6 @@ export async function updatePrdContent(
   if (row.status === 'revision_requested') {
     updates.status = 'draft';
     updates.reviewerId = null;
-    updates.reviewComment = null;
     updates.reviewedAt = null;
   }
 
@@ -145,7 +183,10 @@ export async function updatePrdBacklog(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId) throw forbidden('Only the author can update backlog');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId) {
+    throw forbidden('Only the author or owner can update backlog');
+  }
   if (row.status === 'approved') throw conflict('Approved PRDs cannot be edited');
 
   await db
@@ -161,38 +202,55 @@ export async function submitForReview(
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can submit for review');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can submit for review');
   }
   if (row.status !== 'draft' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
 
+  let effectivePrdApproverIds = opts?.prdApproverIds;
+  let effectiveDdApproverIds = opts?.designDocApproverIds;
+
+  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { prdApproverIds: true, designDocApproverIds: true },
+    });
+    if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
+      effectivePrdApproverIds = interview.prdApproverIds;
+    }
+    if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
+      effectiveDdApproverIds = interview?.designDocApproverIds ?? undefined;
+    }
+  }
+
   const updates: Partial<typeof prds.$inferInsert> = {
     status: 'pending_review',
     reviewerId: null,
-    reviewComment: null,
     reviewedAt: null,
     updatedAt: new Date().toISOString(),
   };
 
-  if (opts?.designDocApproverIds && opts.designDocApproverIds.length > 0) {
-    updates.designDocApproverIds = opts.designDocApproverIds;
+  if (effectiveDdApproverIds && effectiveDdApproverIds.length > 0) {
+    updates.designDocApproverIds = effectiveDdApproverIds;
   }
 
   await db.update(prds).set(updates).where(eq(prds.id, id));
 
-  if (opts?.prdApproverIds && opts.prdApproverIds.length > 0) {
-    await assignApprovers(id, 'prd', opts.prdApproverIds, requestingUserId);
+  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
+    await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
   }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can withdraw from review');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can withdraw from review');
   }
   if (row.status !== 'pending_review') throw conflict(`Cannot withdraw PRD from status '${row.status}'`);
 
@@ -201,7 +259,6 @@ export async function withdrawFromReview(id: string, requestingUserId: string): 
     .set({
       status: 'draft',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -217,7 +274,6 @@ export async function reopenForReview(id: string): Promise<void> {
     .set({
       status: 'pending_review',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -235,13 +291,15 @@ export async function reviewPrd(
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own PRD');
   }
-  if (opts.action !== 'approve' && opts.action !== 'request_revision') {
+  if (opts.action !== 'approve') {
     const err = new Error(`Invalid review action: ${opts.action}`);
     (err as any).status = 400;
     throw err;
   }
-  if (opts.action === 'request_revision' && !opts.comment) {
-    const err = new Error('A comment is required when requesting revision');
+
+  const unresolvedCount = await getUnresolvedCount(id, 'prd');
+  if (unresolvedCount > 0) {
+    const err = new Error(`Cannot approve: ${unresolvedCount} unresolved review comment(s) remain`);
     (err as any).status = 400;
     throw err;
   }
@@ -252,13 +310,11 @@ export async function reviewPrd(
     throw forbidden('You are not an assigned approver for this PRD');
   }
 
-  const responseStatus = opts.action === 'approve' ? 'approved' as const : 'revision_requested' as const;
   if (assigned) {
-    await recordApproverResponse(id, 'prd', reviewerId, responseStatus, opts.comment ?? undefined);
+    await recordApproverResponse(id, 'prd', reviewerId, 'approved');
   }
 
-  if (opts.action === 'approve') {
-    if (!admin) {
+  if (!admin)  {
       const { complete } = await isApprovalComplete(id, 'prd', row.project);
       if (!complete) {
         return { approved: false };
@@ -266,17 +322,11 @@ export async function reviewPrd(
     }
   }
 
-  const statusMap: Record<ReviewPrdRequest['action'], PrdStatus> = {
-    approve: 'approved',
-    request_revision: 'revision_requested',
-  };
-
   await db
     .update(prds)
     .set({
-      status: statusMap[opts.action],
+      status: 'approved',
       reviewerId,
-      reviewComment: opts.comment ?? null,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
@@ -327,7 +377,10 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activePrdWatchers.delete(prdId);
-      console.warn(`[prdWatcher] Timed out waiting for PRD output (prdId=${prdId}, threadId=${chatThreadId})`);
+      console.warn(`[prdWatcher] Timed out waiting for PRD output — resetting to draft (prdId=${prdId}, threadId=${chatThreadId})`);
+      await db.update(prds)
+        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prdId), eq(prds.status, 'generating')));
       return;
     }
 
@@ -355,12 +408,23 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   activePrdWatchers.set(prdId, interval);
 }
 
-function rowToPrdSummary(row: typeof prds.$inferSelect, reviewerName?: string | null): PrdSummary {
+function rowToPrdSummary(
+  row: typeof prds.$inferSelect,
+  reviewerName?: string | null,
+  authorName?: string | null,
+  prdOwnerId?: string | null,
+  prdOwnerName?: string | null,
+): PrdSummary {
+  const effectiveOwnerId = prdOwnerId ?? row.authorId;
+  const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
   return {
     id: row.id,
     interviewId: row.interviewId,
     chatThreadId: row.chatThreadId ?? '',
     authorId: row.authorId,
+    authorName: authorName ?? undefined,
+    ownerId: effectiveOwnerId,
+    ownerName: effectiveOwnerName,
     project: row.project,
     title: row.title,
     status: row.status as PrdStatus,
@@ -649,8 +713,9 @@ export async function syncPrdAdoStatus(prdId: string): Promise<{ cleared: number
 export async function deletePrd(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can delete this PRD');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can delete this PRD');
   }
   stopPrdWatcher(id);
   await db.delete(prds).where(eq(prds.id, id));

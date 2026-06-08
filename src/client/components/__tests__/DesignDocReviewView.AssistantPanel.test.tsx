@@ -51,7 +51,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
-  useDocumentAssignments: jest.fn(() => ({ data: [] })),
+  useDocumentAssignments: jest.fn(() => ({ data: [{ approverUserId: 'user-reviewer', status: 'pending' }] })),
 }));
 
 const mockUseChatStream = jest.fn();
@@ -66,7 +66,16 @@ jest.mock('react-markdown', () => ({
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('mermaid', () => ({ initialize: jest.fn(), run: jest.fn() }));
 jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
-jest.mock('../ReviewReasonModal', () => ({ ReviewReasonModal: () => null }));
+jest.mock('../AnnotationLayer', () => ({ AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</> }));
+jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
+jest.mock('../../hooks/useReviewComments', () => ({
+  useReviewComments: () => ({ data: [] }),
+  useUnresolvedCommentCount: () => ({ data: { count: 0 } }),
+  useCreateComment: () => ({ mutateAsync: jest.fn() }),
+  useResolveComment: () => ({ mutate: jest.fn() }),
+  useReopenComment: () => ({ mutate: jest.fn() }),
+  useDeleteComment: () => ({ mutate: jest.fn() }),
+}));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -77,7 +86,7 @@ const mockDoc = {
   prdId: 'prd-1',
   project: 'proj-alpha',
   status: 'draft',
-  authorId: 'user-author',  // different from userId → isReviewer = true
+  authorId: 'user-author',
   chatThreadId: 'thread-gen',
   qaChatThreadId: null,
   docAssistantThreadId: null,

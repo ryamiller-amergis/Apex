@@ -7,7 +7,7 @@ import {
   appUsers,
 } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { getApproversForDocument } from './projectSettingsService';
+import { getApproverUserIds, getApproverPool, getApproversForDocument } from './projectSettingsService';
 import { createNotification } from './notificationService';
 import type {
   DocumentApproverAssignment,
@@ -15,7 +15,7 @@ import type {
   ApprovalCompletionResult,
   ApproverResponseStatus,
 } from '../../shared/types/approvals';
-import type { ProjectApprover } from '../../shared/types/projectSettings';
+import type { ProjectApprover, ApproverPoolResponse } from '../../shared/types/projectSettings';
 
 /**
  * Document kinds that support approver assignment.
@@ -106,8 +106,7 @@ export async function assignApprovers(
   if (approverUserIds.length === 0) return getAssignments(documentId, documentType);
 
   const project = await getProjectForDocument(documentId, documentType);
-  const pool = await getApproversForDocument(project, documentType);
-  const poolUserIds = new Set(pool.map((a) => a.userId));
+  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -212,7 +211,7 @@ export async function isApprovalComplete(
   const mode: ApprovalMode = settings[0]?.approvalMode ?? 'any_one';
 
   const assignments = await getAssignments(documentId, documentType);
-  if (assignments.length === 0) return { complete: false, mode };
+  if (assignments.length === 0) return { complete: true, mode };
 
   if (mode === 'any_one') {
     return { complete: assignments.some((a) => a.status === 'approved'), mode };
@@ -247,6 +246,18 @@ export async function reassignApprovers(
   approverUserIds: string[],
   reassignedBy: string,
 ): Promise<DocumentApproverAssignment[]> {
+  const previousPending = await db
+    .select({ approverUserId: documentApproverAssignments.approverUserId })
+    .from(documentApproverAssignments)
+    .where(
+      and(
+        eq(documentApproverAssignments.documentId, documentId),
+        eq(documentApproverAssignments.documentType, documentType),
+        eq(documentApproverAssignments.status, 'pending'),
+      ),
+    );
+  const previousPendingIds = new Set(previousPending.map((r) => r.approverUserId));
+
   await db
     .delete(documentApproverAssignments)
     .where(
@@ -262,8 +273,7 @@ export async function reassignApprovers(
   }
 
   const project = await getProjectForDocument(documentId, documentType);
-  const pool = await getApproversForDocument(project, documentType);
-  const poolUserIds = new Set(pool.map((a) => a.userId));
+  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -297,7 +307,8 @@ export async function reassignApprovers(
       .onConflictDoNothing();
   }
 
-  notifyAssignedApprovers(documentId, documentType, newApproverIds).catch((err) =>
+  const trulyNewIds = newApproverIds.filter((id) => !previousPendingIds.has(id));
+  notifyAssignedApprovers(documentId, documentType, trulyNewIds).catch((err) =>
     console.error('Failed to send approver reassignment notifications', err),
   );
 
@@ -316,6 +327,24 @@ export async function getAvailableApprovers(
   return approvers;
 }
 
+export async function getAvailableApproverPool(
+  project: string,
+  documentType: 'prd' | 'design_doc',
+  excludeUserId?: string,
+): Promise<ApproverPoolResponse> {
+  const pool = await getApproverPool(project, documentType);
+  if (excludeUserId) {
+    return {
+      individuals: pool.individuals.filter((a) => a.userId !== excludeUserId),
+      groups: pool.groups.map((g) => ({
+        ...g,
+        members: g.members.filter((m) => m.userId !== excludeUserId),
+      })),
+    };
+  }
+  return pool;
+}
+
 export async function propagateDesignDocApprovers(
   prdId: string,
   designDocId: string,
@@ -331,4 +360,32 @@ export async function propagateDesignDocApprovers(
   if (approverIds && approverIds.length > 0) {
     await assignApprovers(designDocId, 'design_doc', approverIds, assignedBy);
   }
+}
+
+export async function notifyApproversDocumentReady(
+  documentId: string,
+  documentType: 'prd' | 'design_doc',
+): Promise<void> {
+  const assignments = await getAssignments(documentId, documentType);
+  const pendingApprovers = assignments
+    .filter((a) => a.status === 'pending')
+    .map((a) => a.approverUserId);
+
+  if (pendingApprovers.length === 0) return;
+
+  const docTitle = await getDocumentTitle(documentId, documentType);
+  await Promise.allSettled(
+    pendingApprovers.map((userId) =>
+      createNotification(userId, {
+        type: 'user-action',
+        title: documentType === 'prd'
+          ? 'A PRD is ready for your review'
+          : 'A design doc is ready for your review',
+        body: `"${docTitle}" is now pending review`,
+        link: documentType === 'prd'
+          ? `/backlog/prd/${documentId}`
+          : `/backlog/design-doc/${documentId}`,
+      }),
+    ),
+  );
 }

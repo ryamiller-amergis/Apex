@@ -38,6 +38,10 @@ jest.mock('../services/appSettingsService', () => ({
   setAppSetting: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/rbacService', () => ({
+  getActiveUsers: jest.fn(),
+}));
+
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
@@ -70,6 +74,10 @@ const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
 const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
   '../services/appSettingsService',
 ) as { getDefaultModel: jest.Mock };
+
+const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+  getActiveUsers: jest.Mock;
+};
 
 const {
   createDesignDoc: mockCreateDesignDoc,
@@ -1354,5 +1362,85 @@ describe('PUT /api/interviews/design-docs/:id/assignments', () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
     expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+});
+
+// ── POST /api/interviews — owner field forwarding ─────────────────────────────
+
+describe('POST /api/interviews — owner field forwarding', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('forwards prdOwnerId and designDocOwnerId to the interview service', async () => {
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-new',
+      threadId: 'thread-new',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews')
+      .send({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        prdOwnerId: 'user-prd',
+        designDocOwnerId: 'user-dd',
+      });
+
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' }),
+    );
+  });
+
+  it('creates interview without owner IDs when they are omitted', async () => {
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-new',
+      threadId: 'thread-new',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews')
+      .send({ project: 'proj', repo: 'org/repo', chatThreadId: 'thread-x' });
+
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test', project: 'proj' }),
+    );
+  });
+});
+
+// ── GET /api/interviews/active-users ─────────────────────────────────────────
+
+describe('GET /api/interviews/active-users', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with the list of active users', async () => {
+    const activeUsers = [
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+      { oid: 'bob', displayName: 'Bob Jones', email: 'bob@example.com' },
+    ];
+    mockGetActiveUsers.mockResolvedValue(activeUsers);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
+    expect(mockGetActiveUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an empty array when there are no active users', async () => {
+    mockGetActiveUsers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('returns 500 when the service throws', async () => {
+    mockGetActiveUsers.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(500);
   });
 });

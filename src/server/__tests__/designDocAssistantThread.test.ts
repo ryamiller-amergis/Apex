@@ -30,6 +30,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   createThread: jest.fn(),
   getThreadAsync: jest.fn().mockResolvedValue(null),
+  updateThreadKickoffContext: jest.fn(),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -52,6 +53,10 @@ jest.mock('../middleware/rbac', () => ({
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-test'),
+}));
+
+jest.mock('../services/threadAccessService', () => ({
+  canCreateDesignDocAssistantThread: jest.fn(),
 }));
 
 // Direct DB call in the route — mock the Drizzle instance.
@@ -86,6 +91,11 @@ const { getPrd: mockGetPrd } = jest.requireMock('../services/prdService') as {
 const { createThread: mockCreateThread } = jest.requireMock('../services/chatAgentService') as {
   createThread: jest.Mock;
 };
+
+const { canCreateDesignDocAssistantThread: mockCanCreateAssistant } =
+  jest.requireMock('../services/threadAccessService') as {
+    canCreateDesignDocAssistantThread: jest.Mock;
+  };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 
@@ -126,6 +136,7 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — existing thr
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCanCreateAssistant.mockResolvedValue(true);
     writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
   });
 
@@ -255,6 +266,7 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — new thread c
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCanCreateAssistant.mockResolvedValue(true);
     writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
     mockCreateThread.mockResolvedValue({ id: 'thread-new', workspaceDir: '/workspace/new' });
     mockDb.update.mockImplementation(() => ({
@@ -323,8 +335,29 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — new thread c
   });
 });
 
+describe('POST /api/interviews/design-docs/:id/assistant-thread — create permission', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCanCreateAssistant.mockResolvedValue(false);
+  });
+
+  it('returns 403 when a viewer tries to create a new assistant thread', async () => {
+    const doc = { ...baseDoc, docAssistantThreadId: null };
+    mockGetDesignDoc.mockResolvedValue(doc);
+
+    const res = await request(buildApp()).post('/api/interviews/design-docs/doc-1/assistant-thread');
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/author.*admin.*assigned approver/i);
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/interviews/design-docs/:id/assistant-thread — error cases', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCanCreateAssistant.mockResolvedValue(true);
+  });
 
   it('returns 404 when the design doc does not exist', async () => {
     mockGetDesignDoc.mockResolvedValue(null);

@@ -4,6 +4,7 @@ import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
 import { markAsInterviewThread } from './chatAgentService';
+import { createNotification } from './notificationService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -21,6 +22,10 @@ export async function createInterview(opts: {
   repo: string;
   title?: string;
   chatThreadId: string;
+  prdOwnerId?: string;
+  designDocOwnerId?: string;
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
 }): Promise<{ interviewId: string; threadId: string }> {
   const [row] = await db
     .insert(interviews)
@@ -31,12 +36,56 @@ export async function createInterview(opts: {
       project: opts.project,
       repo: opts.repo,
       status: 'in_progress',
+      prdOwnerId: opts.prdOwnerId ?? null,
+      designDocOwnerId: opts.designDocOwnerId ?? null,
+      prdApproverIds: opts.prdApproverIds ?? null,
+      designDocApproverIds: opts.designDocApproverIds ?? null,
     })
     .returning({ id: interviews.id });
 
   markAsInterviewThread(opts.chatThreadId);
 
-  return { interviewId: row.id, threadId: opts.chatThreadId };
+  const interviewId = row.id;
+  const interviewTitle = opts.title ?? 'Untitled Interview';
+
+  try {
+    const notificationPromises: Promise<void>[] = [];
+
+    if (opts.prdOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.prdOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as PRD Owner',
+          body: `You were assigned as PRD owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (opts.designDocOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.designDocOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Design Doc Owner',
+          body: `You were assigned as Design Doc owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (notificationPromises.length > 0) {
+      const results = await Promise.allSettled(notificationPromises);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('[interviewService] Section-owner notification failed:', result.reason);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[interviewService] Notification dispatch error:', err);
+  }
+
+  return { interviewId, threadId: opts.chatThreadId };
 }
 
 export async function listInterviews(
@@ -62,6 +111,10 @@ export async function listInterviews(
       project: interviews.project,
       repo: interviews.repo,
       status: interviews.status,
+      prdOwnerId: interviews.prdOwnerId,
+      designDocOwnerId: interviews.designDocOwnerId,
+      prdApproverIds: interviews.prdApproverIds,
+      designDocApproverIds: interviews.designDocApproverIds,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
@@ -85,6 +138,10 @@ export async function listInterviews(
     repo: row.repo,
     status: row.status as InterviewStatus,
     prdCount: prdCountMap.get(row.id) ?? 0,
+    prdOwnerId: row.prdOwnerId ?? undefined,
+    designDocOwnerId: row.designDocOwnerId ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -93,7 +150,7 @@ export async function listInterviews(
 export async function getInterview(id: string): Promise<Interview | null> {
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, id),
-    with: { prds: true },
+    with: { prds: true, prdOwner: true, designDocOwner: true },
   });
 
   if (!row) return null;
@@ -122,6 +179,12 @@ export async function getInterview(id: string): Promise<Interview | null> {
     repo: row.repo,
     status: row.status as InterviewStatus,
     prdCount: row.prds.length,
+    prdOwnerId: row.prdOwnerId ?? undefined,
+    prdOwnerName: row.prdOwner?.displayName ?? undefined,
+    designDocOwnerId: row.designDocOwnerId ?? undefined,
+    designDocOwnerName: row.designDocOwner?.displayName ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,

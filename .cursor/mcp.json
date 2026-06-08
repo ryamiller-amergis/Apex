@@ -10,6 +10,13 @@
     "ado-skills": {
       "type": "http",
       "url": "http://localhost:3001/mcp/ado-skills"
+    },
+    "sendgrid": {
+      "command": "npx",
+      "args": ["-y", "sendgrid-mcp"],
+      "env": {
+        "SENDGRID_API_KEY": "${SENDGRID_API_KEY}"
+      }
     }
   }
 }

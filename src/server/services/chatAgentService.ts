@@ -1,5 +1,6 @@
 import { Agent, CursorAgentError } from '@cursor/sdk';
 import type { SDKAgent } from '@cursor/sdk/dist/cjs/agent.js';
+import type { McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -22,7 +23,7 @@ import {
   deleteThread as pgDeleteThread,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import { interviews, prds, designDocs } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -226,6 +227,49 @@ function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMet
   ].join('\n');
 }
 
+/**
+ * Resolve a key/value map where values may reference environment variables.
+ * Values matching "${VAR_NAME}" are replaced with process.env.VAR_NAME at runtime.
+ */
+function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    const match = value.match(/^\$\{([^}]+)\}$/);
+    resolved[key] = match ? (process.env[match[1]] ?? '') : value;
+  }
+  return resolved;
+}
+
+/**
+ * Build the mcpServers map for the Cursor SDK agent.
+ * Always includes ado-skills; conditionally adds any MCP pill selected for this thread.
+ * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
+ */
+function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Record<string, McpServerConfig> {
+  const servers: Record<string, McpServerConfig> = {
+    'ado-skills': { url: adoSkillsUrl },
+  };
+
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
+    if (pill.transport === 'stdio') {
+      servers[pill.mcpServerName] = {
+        type: 'stdio',
+        command: pill.command,
+        ...(pill.args ? { args: pill.args } : {}),
+        ...(pill.env ? { env: resolveEnvRefs(pill.env) } : {}),
+      };
+    } else {
+      servers[pill.mcpServerName] = {
+        url: pill.url,
+        ...(pill.headers ? { headers: resolveEnvRefs(pill.headers) } : {}),
+      };
+    }
+  }
+
+  return servers;
+}
+
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.branch ?? 'main';
   const parts: string[] = [
@@ -252,20 +296,91 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
     `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
   ];
 
-  if (kickoff.freeformContext) {
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
     parts.push(
       ``,
-      `# Design doc context`,
-      `The design doc content for this session has been written to \`.ai-pilot/kickoff-context.md\`.`,
-      `Read this file IMMEDIATELY before responding to any user message — it contains the full design doc (Design, Tech Spec, and Assumptions sections) that you are assisting with.`,
-      `The file also contains the \`doc_id\` and \`thread_id\` values you must pass when calling \`update_design_doc\`.`,
-      ``,
-      `# Applying edits`,
-      `You have an \`update_design_doc\` MCP tool available. Use it when the user asks you to apply, save, or write changes to the document.`,
-      `- Call it once per section that needs updating.`,
-      `- Pass the \`doc_id\` and \`thread_id\` from \`.ai-pilot/kickoff-context.md\`.`,
-      `- After a successful save, confirm to the user that the changes have been applied.`,
+      `# Additional MCP server: \`${pill.mcpServerName}\``,
+      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools to help the user.`,
     );
+  }
+
+  if (kickoff.freeformContext) {
+    if (kickoff.assistantType === 'prd') {
+      // Extract prd_id and thread_id from the freeform context so the agent
+      // has them directly in the system prompt — no file-read required.
+      const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
+      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const prdId = prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# PRD session identifiers`,
+        `Use these exact values when calling MCP tools — do not guess or substitute them:`,
+        `  prd_id:    ${prdId}`,
+        `  thread_id: ${threadId}`,
+        ``,
+        `# PRD context`,
+        `The full PRD content, backlog, and review comments have been written to \`.ai-pilot/kickoff-context.md\`.`,
+        `Read this file when you need the current PRD text or backlog to answer a question or produce an edit.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the PRD or backlog:`,
+        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+        `2. Produce the full updated text for the changed section.`,
+        `3. Call \`update_prd\` with the prd_id and thread_id above. Do NOT describe the change without calling the tool.`,
+        `   - \`section="content"\` for the PRD narrative (full markdown)`,
+        `   - \`section="backlog"\` for the backlog (full JSON string)`,
+        `4. After the tool succeeds, confirm briefly what was changed.`,
+        ``,
+        `# User stories live in the backlog (single ownership)`,
+        `User stories are OWNED by the backlog (the \`userStory\` object on each PBI). The PRD does NOT contain an authored "User Stories" section — the PRD view renders stories as a READ-ONLY projection of the backlog PBIs.`,
+        `Therefore, to add, change, reword, or remove a user story you MUST call \`update_prd\` with \`section="backlog"\` (NOT \`section="content"\`) and edit the relevant PBI's \`userStory\` (\`persona\`/\`iWant\`/\`soThat\`).`,
+        `Never write user stories into the PRD markdown via \`section="content"\` — they would not render and would duplicate the backlog.`,
+        `Assumptions are the mirror case: the PRD's \`## Assumptions Made\` section OWNS assumptions; the backlog's \`assumptionsMade\` is just a copy of it.`,
+        ``,
+        `# Keep PRD content and backlog consistent`,
+        `The PRD content (markdown) and the backlog (JSON with epics/features/PBIs) describe the SAME feature, but each field has a single owner — do not duplicate an owned field into the other artifact.`,
+        `When a change crosses the ownership line, update the owning artifact:`,
+        `- Adding/removing/rewording a user story → edit the backlog PBI's \`userStory\` (section="backlog"). Do NOT touch the PRD markdown for this.`,
+        `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
+        `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
+        `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
+        `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
+        ``,
+        `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,
+        `  Pass the \`comment_id\` from the Review Comments section in \`.ai-pilot/kickoff-context.md\`.`,
+        ``,
+        `# Addressing review comments`,
+        `When the user asks you to address comments: read the Review Comments section, revise the relevant content,`,
+        `call \`update_prd\`, then call \`resolve_prd_comment\` for each comment addressed.`,
+        `Confirm what was changed and which comments were resolved.`,
+      );
+    } else {
+      const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
+      const docThreadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const docId = docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const docThreadId = docThreadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# Design doc session identifiers`,
+        `Use these exact values when calling MCP tools:`,
+        `  doc_id:    ${docId}`,
+        `  thread_id: ${docThreadId}`,
+        ``,
+        `# Design doc context`,
+        `The full design doc content has been written to \`.ai-pilot/kickoff-context.md\`.`,
+        `Read this file when you need the current document text to answer a question or produce an edit.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the document:`,
+        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+        `2. Produce the full updated text for the changed section.`,
+        `3. Call \`update_design_doc\` with the doc_id and thread_id above. Do NOT describe the change without calling the tool.`,
+        `   - Call it once per section that needs updating.`,
+        `4. After the tool succeeds, confirm briefly what was changed.`,
+      );
+    }
   }
 
   if (kickoff.transcript) {
@@ -335,6 +450,15 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     );
   }
 
+  if (kickoff.mcpPill) {
+    const pill = kickoff.mcpPill;
+    parts.push(
+      ``,
+      `# Additional MCP server: \`${pill.mcpServerName}\``,
+      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools when helpful.`,
+    );
+  }
+
   return parts.join('\n');
 }
 
@@ -363,6 +487,34 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
 }
 
 /**
+ * Returns a label (e.g. "prd", "design_doc") if this thread is referenced by
+ * a PRD or design doc row, or null if it's a standalone chat thread.
+ *
+ * Used by closeThread to avoid deleting the chat_threads row when an
+ * ON DELETE CASCADE FK would silently destroy the parent document.
+ */
+async function threadBacksDocument(threadId: string): Promise<string | null> {
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  if (prdRow) return 'prd';
+
+  const ddRow = await db.query.designDocs.findFirst({
+    where: or(
+      eq(designDocs.chatThreadId, threadId),
+      eq(designDocs.qaChatThreadId, threadId),
+      eq(designDocs.docAssistantThreadId, threadId),
+      eq(designDocs.validationThreadId, threadId),
+    ),
+    columns: { id: true },
+  });
+  if (ddRow) return 'design_doc';
+
+  return null;
+}
+
+/**
  * Return live ThreadState from memory, or hydrate from Postgres (e.g. after server restart).
  */
 async function ensureThreadState(threadId: string): Promise<ThreadState | null> {
@@ -377,6 +529,24 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
   if (thread.status === 'running') {
     thread.status = 'idle';
     thread.activeRunId = undefined;
+  }
+
+  // Recreate the sandbox workspace if it was wiped (e.g. OS temp cleanup on
+  // reboot, or the stale-workspace cleanup pass). Without this, Agent.resume /
+  // Agent.create would fail because its cwd no longer exists, and a resumed
+  // interview would silently produce no agent output.
+  if (thread.workspaceDir && !fs.existsSync(thread.workspaceDir)) {
+    try {
+      fs.mkdirSync(thread.workspaceDir, { recursive: true });
+      injectKickoffFiles(thread.workspaceDir, thread.kickoff, thread.id);
+    } catch (err) {
+      console.error(
+        '[chat] failed to recreate workspace for thread',
+        threadId,
+        ':',
+        (err as Error).message,
+      );
+    }
   }
 
   const isInterview = await checkIsInterviewThread(threadId);
@@ -451,7 +621,7 @@ export function getAgentHealthStats(): AgentHealthStats {
 export async function createThread(
   userId: string,
   kickoff: ChatThreadKickoff,
-  options?: { skipAutoKickoff?: boolean },
+  options?: { skipAutoKickoff?: boolean; kickoffMessage?: string },
 ): Promise<ChatThread> {
   ensureDirs();
 
@@ -494,9 +664,10 @@ export async function createThread(
   // (e.g. skill slug only, or modal/panel open). If skipAutoKickoff is set, the client POSTs
   // the real first message next so the transcript shows the user request before the agent.
   if (!options?.skipAutoKickoff) {
+    const msg = options?.kickoffMessage ?? 'Begin.';
     setImmediate(() => {
       console.log('[chat] auto-kickoff firing', { threadId, skillPath: kickoff.skillPath });
-      sendMessage(threadId, 'Begin.').then(() => {
+      sendMessage(threadId, msg, undefined, [], { hidden: true }).then(() => {
         console.log('[chat] auto-kickoff completed', { threadId });
       }).catch((err: Error) => {
         console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
@@ -505,6 +676,20 @@ export async function createThread(
   }
 
   return thread;
+}
+
+/**
+ * Replace the freeformContext stored in a thread's kickoff with an updated
+ * version. Used by the PRD / design-doc assistant routes to swap out the
+ * `__THREAD_ID__` placeholder that was passed to createThread (before the real
+ * ID was known) with the actual thread UUID, so the system prompt contains the
+ * correct thread_id when the agent first runs.
+ */
+export function updateThreadKickoffContext(threadId: string, freeformContext: string): void {
+  const state = threads.get(threadId);
+  if (!state) return;
+  state.thread.kickoff = { ...state.thread.kickoff, freeformContext };
+  persistThread(state.thread);
 }
 
 /**
@@ -691,6 +876,11 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
       await syncPrdContent(prdRow.id, content, backlog ?? undefined);
       console.log(`[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`);
       fullySynced = content !== null && backlog !== null;
+    } else if (prdRow.status === 'generating') {
+      await db.update(prds)
+        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
+      console.warn(`[chat] post-run: agent produced no PRD output — reset to draft (prdId=${prdRow.id})`);
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -827,11 +1017,37 @@ function cleanupWorkspaceDir(workspaceDir: string): void {
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Reset any PRD or design doc stuck in 'generating' status for this thread
+ * back to 'draft'. Called when the agent run throws before syncOutputToDb
+ * can run, so the document doesn't stay in a generating limbo forever.
+ */
+async function failGeneratingDocuments(threadId: string): Promise<void> {
+  const [prdResult] = await db.update(prds)
+    .set({ status: 'draft', updatedAt: new Date().toISOString() })
+    .where(and(eq(prds.chatThreadId, threadId), eq(prds.status, 'generating')))
+    .returning({ id: prds.id });
+
+  if (prdResult) {
+    console.warn(`[chat] failGeneratingDocuments: reset PRD to draft (prdId=${prdResult.id}, threadId=${threadId})`);
+  }
+
+  const [ddResult] = await db.update(designDocs)
+    .set({ status: 'draft', updatedAt: new Date().toISOString() })
+    .where(and(eq(designDocs.chatThreadId, threadId), eq(designDocs.status, 'generating')))
+    .returning({ id: designDocs.id });
+
+  if (ddResult) {
+    console.warn(`[chat] failGeneratingDocuments: reset design doc to draft (designDocId=${ddResult.id}, threadId=${threadId})`);
+  }
+}
+
 export async function sendMessage(
   threadId: string,
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
+  options?: { hidden?: boolean },
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
@@ -853,6 +1069,7 @@ export async function sendMessage(
   }
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
 
   const turnId = uuidv4();
   const attachmentMeta = writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
@@ -865,6 +1082,7 @@ export async function sendMessage(
     text: text.trim() || 'Uploaded files for context.',
     ts: new Date().toISOString(),
     attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+    ...(options?.hidden ? { hidden: true } : {}),
   };
   state.thread.messages.push(userMsg);
   state.thread.lastActivityAt = userMsg.ts;
@@ -896,7 +1114,7 @@ export async function sendMessage(
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
-            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+            mcpServers,
           }),
           sdkRetryOpts,
         );
@@ -906,7 +1124,7 @@ export async function sendMessage(
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
-            mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+            mcpServers,
           }),
           sdkRetryOpts,
         );
@@ -931,52 +1149,108 @@ export async function sendMessage(
     state.thread.activeRunId = (run as any).id;
     persistThread(state.thread);
 
-    // Stream tokens and tool calls
+    const MAX_RUN_RETRIES = 2;
+    let currentRun = run;
     let agentTextBuffer = '';
 
-    if (run.supports('stream')) {
-      for await (const event of run.stream()) {
-        if (event.type === 'assistant') {
-          for (const block of event.message.content) {
-            if (block.type === 'text') {
-              agentTextBuffer += block.text;
-              broadcast(state, { type: 'token', text: block.text });
-            }
-            if (block.type === 'tool_use') {
-              broadcast(state, {
-                type: 'tool_call',
-                toolName: block.name,
-                input: block.input,
-              });
+    for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
+      agentTextBuffer = '';
+
+      // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
+      if (currentRun.supports('stream')) {
+        try {
+          for await (const event of currentRun.stream()) {
+            if (event.type === 'assistant') {
+              for (const block of event.message.content) {
+                if (block.type === 'text') {
+                  agentTextBuffer += block.text;
+                  broadcast(state, { type: 'token', text: block.text });
+                }
+                if (block.type === 'tool_use') {
+                  broadcast(state, {
+                    type: 'tool_call',
+                    toolName: block.name,
+                    input: block.input,
+                  });
+                }
+              }
             }
           }
+        } catch (streamErr) {
+          if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
+            console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
+            broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+
+            if (state.agent) {
+              await state.agent[Symbol.asyncDispose]().catch(() => {});
+              state.agent = null;
+            }
+            if (state.thread.cursorAgentId) {
+              state.agent = await retryWithBackoff(
+                () => Agent.resume(state.thread.cursorAgentId!, {
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: { cwd: state.thread.workspaceDir },
+                  mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                }),
+                sdkRetryOpts,
+              );
+              currentRun = await state.agent.send(prompt);
+              state.thread.activeRunId = (currentRun as any).id;
+              continue;
+            }
+          }
+          throw streamErr;
         }
       }
-    }
 
-    const result = await run.wait();
+      const result = await currentRun.wait();
 
-    if (result.status === 'error') {
-      const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
-      console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
-      trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
-      state.thread.lastError = reason;
-      broadcast(state, { type: 'error', error: reason });
-      // Always dispose the in-memory agent object
-      if (state.agent) {
-        await state.agent[Symbol.asyncDispose]().catch(() => {});
-        state.agent = null;
+      if (result.status === 'error') {
+        const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
+
+        if (attempt < MAX_RUN_RETRIES && !isFatalRunError(reason)) {
+          console.warn(`[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, reason);
+          broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+
+          if (state.agent) {
+            await state.agent[Symbol.asyncDispose]().catch(() => {});
+            state.agent = null;
+          }
+          if (state.thread.cursorAgentId) {
+            state.agent = await retryWithBackoff(
+              () => Agent.resume(state.thread.cursorAgentId!, {
+                apiKey,
+                model: { id: resolvedModel },
+                local: { cwd: state.thread.workspaceDir },
+                mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+              }),
+              sdkRetryOpts,
+            );
+            currentRun = await state.agent.send(prompt);
+            state.thread.activeRunId = (currentRun as any).id;
+            continue;
+          }
+        }
+
+        console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
+        trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
+        state.thread.lastError = reason;
+        broadcast(state, { type: 'error', error: reason });
+        if (state.agent) {
+          await state.agent[Symbol.asyncDispose]().catch(() => {});
+          state.agent = null;
+        }
+        if (isFatalRunError(reason)) {
+          state.thread.cursorAgentId = undefined;
+        }
+        state.thread.activeRunId = undefined;
+        state.thread.status = 'idle';
+        broadcast(state, { type: 'status', status: 'idle' });
+        break;
       }
-      if (isFatalRunError(reason)) {
-        // Fatal (auth, invalid config) — clear agent ID; next send creates a fresh agent
-        state.thread.cursorAgentId = undefined;
-      }
-      // Transient/recoverable — keep cursorAgentId so Agent.resume can reconnect
-      state.thread.activeRunId = undefined;
-      state.thread.status = 'idle';
-      broadcast(state, { type: 'status', status: 'idle' });
-    } else {
-      // Commit the accumulated agent message
+
+      // Run succeeded
       if (agentTextBuffer) {
         const agentMsg: ChatMessage = {
           id: uuidv4(),
@@ -994,6 +1268,7 @@ export async function sendMessage(
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
+      break;
     }
 
     const prdContent = readOutputPrd(threadId);
@@ -1059,6 +1334,12 @@ export async function sendMessage(
     trackEvent('agent.run.errored', { threadId, errorTier: tier, errorCode, model: resolvedModel });
     broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
     broadcast(state, { type: 'done' });
+
+    try {
+      await failGeneratingDocuments(threadId);
+    } catch (fgErr) {
+      console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
+    }
   } finally {
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
@@ -1105,11 +1386,20 @@ export async function closeThread(threadId: string): Promise<void> {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
   } catch { /* non-fatal */ }
 
-  // Only delete from Postgres if the thread is not backing an interview.
-  // Interview threads use ON DELETE CASCADE, so deleting the chat_thread row
-  // would silently wipe the interview record. Leave the DB row intact; the
-  // in-memory state and workspace have already been cleaned up above.
+  // Never delete the chat_threads row when another table references it via
+  // ON DELETE CASCADE — doing so silently wipes the parent document.
+  //   - interviews.chat_thread_id  → CASCADE (deletes the interview)
+  //   - prds.chat_thread_id        → CASCADE (deletes the PRD)
+  // Design-doc thread columns don't have CASCADE FKs today, but deleting the
+  // row would orphan the workspace reference and break recovery/sync. Guard
+  // them the same way so document data is never lost.
   if (state.isInterviewThread) return;
+
+  const backsDocument = await threadBacksDocument(threadId);
+  if (backsDocument) {
+    console.log(`[chat] closeThread: skipping pg delete — thread ${threadId} backs a ${backsDocument}`);
+    return;
+  }
 
   pgDeleteThread(threadId).catch((err: Error) =>
     console.error('[chat] pg deleteThread failed:', err.message),

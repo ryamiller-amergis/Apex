@@ -60,6 +60,7 @@ export function useAppShell() {
   const [permissions, setPermissions] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -106,6 +107,7 @@ export function useAppShell() {
           setPermissions(d.permissions);
           setRoles(d.roles);
           setUserId(d.userId ?? '');
+          setIsSuperAdmin(d.isSuperAdmin ?? false);
           setHasUnreadChangelog(d.changelogUnread);
           setShowChangelogOnLogin(d.showChangelogOnLogin);
         }
@@ -215,7 +217,7 @@ export function useAppShell() {
     setPendingDueDateChange(null);
   }, [pendingDueDateChange, updateDueDate]);
 
-  const can = useCallback((key: string) => permissions.includes(key), [permissions]);
+  const can = useCallback((key: string) => isSuperAdmin || permissions.includes(key), [isSuperAdmin, permissions]);
 
   const handleMarkChangelogAsRead = useCallback(() => {
     setHasUnreadChangelog(false);
@@ -257,7 +259,8 @@ export function useAppShell() {
     userId,
     permissionsLoaded,
     can,
-    isAdmin: roles.includes('admin'),
+    isSuperAdmin,
+    isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
     loading,
     error,

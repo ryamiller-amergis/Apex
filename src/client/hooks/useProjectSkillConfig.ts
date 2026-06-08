@@ -139,8 +139,31 @@ export function useAvailableModels() {
   });
 }
 
+export interface BedrockModel {
+  id: string;
+  label: string;
+}
+
+export function useAvailableBedrockModels() {
+  return useQuery<BedrockModel[]>({
+    queryKey: ['available-bedrock-models'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/available-bedrock-models', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch available Bedrock models');
+      const data = (await res.json()) as { models: BedrockModel[] };
+      return data.models;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+export interface ProjectApproversResponse {
+  approvers: ProjectApprover[];
+  approverGroups: Array<{ groupId: string; groupName: string; documentType: string }>;
+}
+
 export function useProjectApprovers(project: string | null) {
-  return useQuery<ProjectApprover[]>({
+  return useQuery<ProjectApproversResponse>({
     queryKey: ['admin', 'project-approvers', project],
     queryFn: async () => {
       const res = await fetch(
@@ -148,7 +171,7 @@ export function useProjectApprovers(project: string | null) {
         { credentials: 'include' },
       );
       if (!res.ok) throw new Error('Failed to fetch approvers');
-      return res.json() as Promise<ProjectApprover[]>;
+      return res.json() as Promise<ProjectApproversResponse>;
     },
     enabled: !!project,
     staleTime: 60_000,
@@ -158,14 +181,25 @@ export function useProjectApprovers(project: string | null) {
 export function useSetProjectApprovers() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ project, designDocApprovers, prdApprovers, designPrototypeApprovers }: SetApproversRequest) => {
+    mutationFn: async ({
+      project,
+      designDocApprovers,
+      prdApprovers,
+      designDocApproverGroups,
+      prdApproverGroups,
+      designPrototypeApprovers }: SetApproversRequest) => {
       const res = await fetch(
         `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
         {
           method: 'PUT',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ designDocApprovers, prdApprovers, designPrototypeApprovers }),
+          body: JSON.stringify({
+            designDocApprovers,
+            prdApprovers,
+            designDocApproverGroups,
+            prdApproverGroups,
+          designPrototypeApprovers }),
         },
       );
       if (!res.ok) throw new Error('Failed to save approvers');

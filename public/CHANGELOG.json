@@ -1,5 +1,78 @@
 [
   {
+    "version": "1.25.0",
+    "date": "2026-06-05",
+    "title": "PRD Apex Assistant & Inline Editing",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added Apex Assistant button to PRD view (when not yet approved) — opens a resizable slide-out chat panel pre-loaded with the full PRD, backlog, and all reviewer comments so the AI can bulk-address feedback and propose content changes"
+      },
+      {
+        "type": "feature",
+        "description": "AI-proposed PRD or backlog changes are staged for review — a GitHub-style diff banner appears with Accept and Reject buttons so authors control exactly what gets applied"
+      },
+      {
+        "type": "feature",
+        "description": "New resolve_prd_comment MCP tool lets the Apex Assistant automatically mark reviewer comments as resolved after addressing them in the content, closing the feedback loop without manual intervention"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the full-document Edit tab with a header Edit button (opens a focused modal) and per-section pencil icons in the Preview tab — hover a section heading to edit just that section without touching the rest of the document"
+      },
+      {
+        "type": "improvement",
+        "description": "Backlog tab is now editable — each epic, feature, and item card has an edit icon that opens a pre-filled form, letting authors update titles, descriptions, and priorities without leaving the PRD view"
+      }
+    ]
+  },
+  {
+    "version": "1.24.0",
+    "date": "2026-06-02",
+    "title": "Inline Review Comments",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Reviewers can now highlight text in PRDs and Design Docs to leave inline comments — a sidebar panel shows all threads with reply, resolve, reopen, and delete actions"
+      },
+      {
+        "type": "feature",
+        "description": "Approve button is blocked until all inline review comments are resolved, ensuring no document is approved with outstanding feedback"
+      },
+      {
+        "type": "improvement",
+        "description": "Owner and assigned reviewer names are now always visible in the document header, regardless of document status"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the Request Revision modal with the inline comment workflow — reviewers leave structured, text-anchored feedback instead of a single free-text reason"
+      }
+    ]
+  },
+  {
+    "version": "1.23.0",
+    "date": "2026-06-02",
+    "title": "Section Owners & Chat Resilience",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Assign PRD and Design Doc owners when starting an interview — a modal lets you select section owners from active users, and each owner receives an in-app notification on assignment"
+      },
+      {
+        "type": "feature",
+        "description": "PRD and Design Doc owner names are now displayed as chips in the interview header"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agent retries transient run failures automatically and shows a live 'Retrying…' indicator in the conversation instead of immediately surfacing an error"
+      },
+      {
+        "type": "improvement",
+        "description": "Error messages in interview chat now include a '↺ Try again' button to re-send the last user message without leaving the chat"
+      }
+    ]
+  },
+  {
     "version": "1.22.0",
     "date": "2026-06-01",
     "title": "Interview Context & Agent Reliability",

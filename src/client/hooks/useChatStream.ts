@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage, SseEvent, SseErrorEvent, ChatThreadStatus } from '../../shared/types/chat';
+import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, ChatThreadStatus } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 
 interface ChatStreamState {
@@ -125,6 +125,13 @@ export function useChatStream(
         }
         case 'status': {
           setStatus(event.status);
+          break;
+        }
+        case 'retrying': {
+          const retryEvent = event as SseRetryingEvent;
+          setIsRetrying(true);
+          setRetryReason(`Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`);
+          clearRetryTimeout();
           break;
         }
         case 'error': {

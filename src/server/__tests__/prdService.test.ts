@@ -32,6 +32,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         prds: { findFirst: jest.fn() },
+        interviews: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -57,6 +58,10 @@ jest.mock('../services/documentApprovalService', () => ({
   isApprovalComplete: jest.fn().mockResolvedValue({ complete: true, mode: 'any_one' }),
 }));
 
+jest.mock('../services/reviewCommentService', () => ({
+  getUnresolvedCount: jest.fn().mockResolvedValue(0),
+}));
+
 import {
   createPrd,
   listPrds,
@@ -69,9 +74,18 @@ import {
   reviewPrd,
   deletePrd,
   syncPrdContent,
+  startPrdWatcher,
 } from '../services/prdService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+
+const {
+  readOutputPrd: mockReadOutputPrd,
+  readOutputBacklog: mockReadOutputBacklog,
+} = jest.requireMock('../services/chatAgentService') as {
+  readOutputPrd: jest.Mock;
+  readOutputBacklog: jest.Mock;
+};
 
 const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
   isAdminUser: jest.Mock;
@@ -88,6 +102,20 @@ const {
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
 };
+
+// ── Select chain helper ────────────────────────────────────────────────────────
+// Services now issue multiple .leftJoin() calls before .where()/.orderBy()/.limit().
+// This helper builds a self-referential mock chain that satisfies any number of joins.
+
+function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit') {
+  const resolved = jest.fn().mockResolvedValue(data);
+  const chain: Record<string, jest.Mock> = {};
+  chain.leftJoin = jest.fn().mockReturnValue(chain);
+  chain.where = jest.fn().mockReturnValue(chain);
+  chain.orderBy = terminal === 'orderBy' ? resolved : jest.fn().mockResolvedValue(data);
+  chain.limit = terminal === 'limit' ? resolved : jest.fn().mockResolvedValue(data);
+  return { from: jest.fn().mockReturnValue(chain) };
+}
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -161,11 +189,7 @@ describe('listPrds', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns all PRDs when no filters are given', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds();
 
@@ -174,11 +198,7 @@ describe('listPrds', () => {
   });
 
   it('returns an empty array when no PRDs match', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([], 'orderBy'));
 
     const result = await listPrds({ userId: 'user-nobody' });
 
@@ -186,11 +206,7 @@ describe('listPrds', () => {
   });
 
   it('returns only PRDs linked to the specified project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-alpha' });
 
@@ -202,11 +218,7 @@ describe('listPrds', () => {
   });
 
   it('returns empty array when no PRDs exist for the given project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-nonexistent' });
 
@@ -215,11 +227,7 @@ describe('listPrds', () => {
 
   it('does not return PRDs from other projects', async () => {
     // The DB filters by project directly; mock returns only proj-alpha PRDs
-    const orderByMock = jest.fn().mockResolvedValue([{ prd: makePrdRow(), reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
 
     const result = await listPrds({ project: 'proj-alpha' });
 
@@ -235,11 +243,7 @@ describe('getPrd', () => {
 
   it('returns a full PRD with content and backlogJson', async () => {
     const prdRow = makePrdRow({ content: 'Detailed content', backlogJson: { items: [] } });
-    const limitMock = jest.fn().mockResolvedValue([{ prd: prdRow, reviewerDisplayName: null }]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: prdRow, reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }]));
 
     const result = await getPrd('prd-1');
 
@@ -250,11 +254,7 @@ describe('getPrd', () => {
   });
 
   it('returns null when the PRD does not exist', async () => {
-    const limitMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select.mockReturnValue(makeSelectChain([]));
 
     const result = await getPrd('prd-missing');
 
@@ -287,7 +287,7 @@ describe('updatePrdContent', () => {
     await updatePrdContent('prd-1', 'user-1', 'Revised content');
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft', reviewerId: null, reviewComment: null }),
+      expect.objectContaining({ status: 'draft', reviewerId: null }),
     );
   });
 
@@ -303,7 +303,7 @@ describe('updatePrdContent', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(updatePrdContent('prd-1', 'user-other', 'x')).rejects.toMatchObject({
-      message: 'Only the author can edit PRD content',
+      message: 'Only the author or owner can edit PRD content',
     });
   });
 
@@ -313,6 +313,20 @@ describe('updatePrdContent', () => {
     await expect(updatePrdContent('prd-1', 'user-1', 'x')).rejects.toMatchObject({
       message: 'Approved PRDs cannot be edited',
     });
+  });
+
+  it('allows the document owner (interview.prdOwnerId) to edit content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updatePrdContent('prd-1', 'owner-user', 'Owner updated content');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'Owner updated content' }),
+    );
   });
 });
 
@@ -370,8 +384,22 @@ describe('submitForReview', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ content: 'x' }));
 
     await expect(submitForReview('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can submit for review',
+      message: 'Only the author or owner can submit for review',
     });
+  });
+
+  it('allows the document owner to submit for review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'owner-user');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
   });
 
   it('calls assignApprovers when prdApproverIds provided', async () => {
@@ -435,8 +463,20 @@ describe('withdrawFromReview', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'pending_review' }));
 
     await expect(withdrawFromReview('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can withdraw from review',
+      message: 'Only the author or owner can withdraw from review',
     });
+  });
+
+  it('allows the document owner to withdraw from review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'pending_review' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await withdrawFromReview('prd-1', 'owner-user');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 });
 
@@ -460,26 +500,14 @@ describe('reviewPrd', () => {
     );
   });
 
-  it('requests revision with a comment', async () => {
-    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision', comment: 'Revise section 2' });
-
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'revision_requested' }),
-    );
-  });
-
-  it('throws 400 when requesting revision without a comment', async () => {
+  it('throws 400 for invalid review action', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
 
     await expect(
-      reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision' }),
+      reviewPrd('prd-1', 'user-reviewer', { action: 'request_revision' } as any),
     ).rejects.toMatchObject({
-      message: 'A comment is required when requesting revision',
+      message: expect.stringContaining('Invalid review action'),
+      status: 400,
     });
   });
 
@@ -569,6 +597,42 @@ describe('reviewPrd', () => {
       expect.objectContaining({ status: 'approved' }),
     );
   });
+
+  it('admin approval bypasses isApprovalComplete check entirely', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
+    mockIsAssignedApprover.mockResolvedValue(false);
+    mockIsAdminUser.mockResolvedValue(true);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewPrd('prd-1', 'user-admin', { action: 'approve' });
+
+    expect(mockIsApprovalComplete).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved' }),
+    );
+  });
+
+  it('designated approver approval transitions PRD to approved (any_one mode)', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+
+    expect(mockRecordApproverResponse).toHaveBeenCalledWith(
+      'prd-1', 'prd', 'user-reviewer', 'approved',
+    );
+    expect(mockIsApprovalComplete).toHaveBeenCalledWith('prd-1', 'prd', 'proj-alpha');
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
+    );
+  });
 });
 
 // ── deletePrd ──────────────────────────────────────────────────────────────────
@@ -599,9 +663,21 @@ describe('deletePrd', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(deletePrd('prd-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can delete this PRD',
+      message: 'Only the author or owner can delete this PRD',
     });
     expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('allows the document owner to delete the PRD', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: whereMock });
+
+    await deletePrd('prd-1', 'owner-user');
+
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(whereMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -679,7 +755,7 @@ describe('updatePrdBacklog', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
 
     await expect(updatePrdBacklog('prd-1', 'user-other', {})).rejects.toMatchObject({
-      message: 'Only the author can update backlog',
+      message: 'Only the author or owner can update backlog',
     });
   });
 
@@ -689,6 +765,19 @@ describe('updatePrdBacklog', () => {
     await expect(updatePrdBacklog('prd-1', 'user-1', {})).rejects.toMatchObject({
       message: 'Approved PRDs cannot be edited',
     });
+  });
+
+  it('allows the document owner to update the backlog', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft' }));
+    mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const backlog = { items: [{ id: 2, title: 'Owner task' }] };
+    await updatePrdBacklog('prd-1', 'owner-user', backlog);
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ backlogJson: backlog }));
   });
 });
 
@@ -711,7 +800,6 @@ describe('reopenForReview', () => {
       expect.objectContaining({
         status: 'pending_review',
         reviewerId: null,
-        reviewComment: null,
         reviewedAt: null,
       }),
     );
@@ -735,6 +823,85 @@ describe('reopenForReview', () => {
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+});
+
+// ── startPrdWatcher ───────────────────────────────────────────────────────────
+
+describe('startPrdWatcher', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('syncs content to DB when both files are found', async () => {
+    mockReadOutputPrd.mockReturnValue('# Generated PRD');
+    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    // Also mock the workspace cleanup query
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    // Advance past one interval tick
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockReadOutputPrd).toHaveBeenCalledWith('thread-1');
+    expect(mockReadOutputBacklog).toHaveBeenCalledWith('thread-1');
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '# Generated PRD', status: 'pending_review' }),
+    );
+  });
+
+  it('resets PRD to draft when watcher times out without finding files', async () => {
+    mockReadOutputPrd.mockReturnValue(null);
+    mockReadOutputBacklog.mockReturnValue(null);
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    // Advance past all 360 ticks + 1 to trigger the timeout
+    for (let i = 0; i <= 360; i++) {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft' }),
+    );
+  });
+
+  it('does not sync when only PRD file is found without backlog', async () => {
+    mockReadOutputPrd.mockReturnValue('# PRD');
+    mockReadOutputBacklog.mockReturnValue(null);
+
+    const setMock = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // syncPrdContent should NOT have been called (requires both files)
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.any(String), status: 'pending_review' }),
     );
   });
 });

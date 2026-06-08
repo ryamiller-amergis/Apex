@@ -1,8 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import {
   createThread,
-  getThread,
-  getThreadAsync,
   listThreadSummaries,
   sendMessage,
   subscribeToThread,
@@ -11,13 +9,16 @@ import {
   readOutputPrd,
   readOutputBacklog,
   isPrdReady,
+  getThread,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../db/schema';
 import { toggleFlag } from '../services/chatThreadRepository';
+import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
 import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
+import type { ThreadAccess } from '../services/threadAccessService';
 import { requirePermission } from '../middleware/rbac';
 
 const router = Router();
@@ -27,22 +28,46 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 
+interface ThreadRequest extends Request {
+  thread?: ChatThread;
+  threadAccess?: ThreadAccess;
+}
+
 /**
- * Middleware that loads a thread by :id and verifies the requesting user owns it.
- * Returns 404 for both "not found" and "wrong owner" to avoid leaking thread existence.
- * Attaches the loaded thread to req for downstream handlers to reuse.
+ * Loads a thread when the user has read access (owner or document-scoped viewer).
+ * Returns 404 when access is denied to avoid leaking thread existence.
  */
-async function requireThreadOwner(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const thread = await getThreadAsync(req.params.id);
-  if (!thread) {
+async function requireThreadRead(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const result = await resolveThreadAccess(getUserId(req), req.params.id);
+  if (!result) {
     res.status(404).json({ error: 'Thread not found' });
     return;
   }
-  if (thread.userId !== getUserId(req)) {
+  const treq = req as ThreadRequest;
+  treq.thread = result.thread;
+  treq.threadAccess = result.access;
+  next();
+}
+
+/**
+ * Requires write access (thread owner, or assistant-thread approver/admin rules).
+ */
+async function requireThreadWrite(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const userId = getUserId(req);
+  const threadId = req.params.id;
+  const result = await resolveThreadAccess(userId, threadId);
+  if (!result) {
     res.status(404).json({ error: 'Thread not found' });
     return;
   }
-  (req as any).thread = thread;
+  const allowed = await canWriteThread(userId, threadId);
+  if (!allowed) {
+    res.status(404).json({ error: 'Thread not found' });
+    return;
+  }
+  const treq = req as ThreadRequest;
+  treq.thread = result.thread;
+  treq.threadAccess = result.access;
   next();
 }
 
@@ -138,7 +163,7 @@ router.post('/threads', async (req: Request, res: Response) => {
  * Get thread metadata and message history (falls back to Postgres for historical threads).
  * Augments the response with a computed `prdReady` flag based on file existence.
  */
-router.get('/threads/:id', requireThreadOwner, (req: Request, res: Response) => {
+router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
   const thread = (req as any).thread as ChatThread;
   res.json({ ...thread, prdReady: isPrdReady(thread.id) });
 });
@@ -147,7 +172,7 @@ router.get('/threads/:id', requireThreadOwner, (req: Request, res: Response) => 
  * GET /api/chat/threads/:id/stream
  * Server-Sent Events stream for real-time agent output.
  */
-router.get('/threads/:id/stream', requireThreadOwner, (req: Request, res: Response) => {
+router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as any).thread as ChatThread;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -160,6 +185,14 @@ router.get('/threads/:id/stream', requireThreadOwner, (req: Request, res: Respon
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  // Hydrate the thread into memory BEFORE subscribing. subscribeToThread only
+  // attaches to the in-memory threads Map; if the thread was evicted (idle
+  // timeout) or lost (server restart), subscribing without hydration is a
+  // silent no-op and the client would receive no agent output when it later
+  // sends a message (e.g. resuming an interview the next day). Hydration also
+  // normalizes a stale 'running' status back to 'idle'.
+  const hydrated = await getThread(req.params.id).catch(() => null);
+
   // Replay all existing messages so late-joining subscribers (including
   // the very first connect right after thread creation) never miss events.
   for (const msg of thread.messages) {
@@ -167,8 +200,9 @@ router.get('/threads/:id/stream', requireThreadOwner, (req: Request, res: Respon
   }
 
   // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator.
-  sendEvent({ type: 'status', status: thread.status });
+  // the full history before seeing the running/idle indicator. Prefer the
+  // hydrated status since it reflects the normalized in-memory state.
+  sendEvent({ type: 'status', status: hydrated?.status ?? thread.status });
 
   const unsubscribe = subscribeToThread(req.params.id, sendEvent);
 
@@ -188,7 +222,7 @@ router.get('/threads/:id/stream', requireThreadOwner, (req: Request, res: Respon
  * Send a user message. The agent response streams via SSE.
  * Body: SendMessageRequest
  */
-router.post('/threads/:id/messages', requireThreadOwner, async (req: Request, res: Response) => {
+router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
   try {
@@ -214,7 +248,7 @@ router.post('/threads/:id/messages', requireThreadOwner, async (req: Request, re
  * POST /api/chat/threads/:id/cancel
  * Cancel the active run.
  */
-router.post('/threads/:id/cancel', requireThreadOwner, async (req: Request, res: Response) => {
+router.post('/threads/:id/cancel', requireThreadWrite, async (req: Request, res: Response) => {
   try {
     await cancelRun(req.params.id);
     res.json({ ok: true });
@@ -227,7 +261,7 @@ router.post('/threads/:id/cancel', requireThreadOwner, async (req: Request, res:
  * GET /api/chat/threads/:id/prd
  * Read the output PRD.md written by the agent (if available).
  */
-router.get('/threads/:id/prd', requireThreadOwner, (req: Request, res: Response) => {
+router.get('/threads/:id/prd', requireThreadRead, (req: Request, res: Response) => {
   const content = readOutputPrd(req.params.id);
   if (content === null) return res.status(404).json({ error: 'PRD not yet generated' });
   res.type('text/markdown').send(content);
@@ -237,7 +271,7 @@ router.get('/threads/:id/prd', requireThreadOwner, (req: Request, res: Response)
  * GET /api/chat/threads/:id/backlog
  * Read the output *.backlog.json written by the agent (if available).
  */
-router.get('/threads/:id/backlog', requireThreadOwner, (req: Request, res: Response) => {
+router.get('/threads/:id/backlog', requireThreadRead, (req: Request, res: Response) => {
   const content = readOutputBacklog(req.params.id);
   if (content === null) return res.status(404).json({ error: 'Backlog not yet generated' });
   res.json(content);
@@ -248,7 +282,7 @@ router.get('/threads/:id/backlog', requireThreadOwner, (req: Request, res: Respo
  * Overwrite the PRD with user-edited content.
  * Body: plain text (text/markdown or text/plain)
  */
-router.put('/threads/:id/prd', requireThreadOwner, async (req: Request, res: Response) => {
+router.put('/threads/:id/prd', requireThreadWrite, async (req: Request, res: Response) => {
   const content = typeof req.body === 'string' ? req.body : req.body?.content;
   if (typeof content !== 'string') return res.status(400).json({ error: 'body must be the markdown text' });
   try {
@@ -269,7 +303,7 @@ router.put('/threads/:id/prd', requireThreadOwner, async (req: Request, res: Res
  * Toggle the flagged state for a thread.
  * Body: { flagged: boolean }
  */
-router.patch('/threads/:id/flag', requireThreadOwner, async (req: Request, res: Response) => {
+router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: Response) => {
   const { flagged } = req.body as { flagged?: boolean };
   if (typeof flagged !== 'boolean') {
     return res.status(400).json({ error: 'flagged (boolean) is required' });
@@ -287,7 +321,7 @@ router.patch('/threads/:id/flag', requireThreadOwner, async (req: Request, res: 
  * DELETE /api/chat/threads/:id
  * Close the thread, dispose the agent, and remove the workspace.
  */
-router.delete('/threads/:id', requireThreadOwner, async (req: Request, res: Response) => {
+router.delete('/threads/:id', requireThreadWrite, async (req: Request, res: Response) => {
   try {
     await closeThread(req.params.id);
     res.json({ ok: true });

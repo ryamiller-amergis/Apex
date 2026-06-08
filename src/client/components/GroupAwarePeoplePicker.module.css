@@ -1,0 +1,130 @@
+.wrapper {
+  position: relative;
+}
+
+.chipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-height: 32px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.groupChip {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+.chipRemove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 0.9rem;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.chipRemove:hover {
+  opacity: 1;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  margin-top: 4px;
+}
+
+.sectionHeader {
+  padding: 6px 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.option:hover {
+  background: var(--bg-secondary);
+}
+
+.optionName {
+  font-weight: 500;
+}
+
+.optionDetail {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.groupIcon {
+  font-size: 0.9rem;
+}
+
+.emptyState {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.noSelection {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}

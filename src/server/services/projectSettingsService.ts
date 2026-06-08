@@ -1,7 +1,8 @@
 import { db } from '../db/drizzle';
-import { projectSkillSettings, projectApprovers, appUsers } from '../db/schema';
+import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, ApproverPoolResponse } from '../../shared/types/projectSettings';
+import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
 function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
@@ -44,6 +45,11 @@ export async function upsertSkillConfig(
   quickSkillPills?: QuickSkillPill[] | null | undefined,
   defaultModel?: string | null,
   approvalMode?: ApprovalMode,
+  quickMcpPills?: QuickMcpPill[] | null | undefined,
+  prdAssistantSkillPath?: string | null,
+  prdAssistantModel?: string | null,
+  prdReviewBedrockModelId?: string | null,
+  prdReviewBedrockMaxTokens?: number | null,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = approvalMode ?? 'any_one';
@@ -61,6 +67,7 @@ export async function upsertSkillConfig(
       designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
       designPrototypeSkillPath: designPrototypeSkillPath ?? null,
       designDocValidationSkillPath: designDocValidationSkillPath ?? null,
+      prdAssistantSkillPath: prdAssistantSkillPath ?? null,
       interviewModel: interviewModel ?? null,
       prdModel: prdModel ?? null,
       designDocModel: designDocModel ?? null,
@@ -68,7 +75,11 @@ export async function upsertSkillConfig(
       designDocAssistantModel: designDocAssistantModel ?? null,
       designPrototypeModel: designPrototypeModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
+      prdAssistantModel: prdAssistantModel ?? null,
+      prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
+      prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
       quickSkillPills: quickSkillPills ?? null,
+      quickMcpPills: quickMcpPills ?? null,
       defaultModel: defaultModel ?? null,
       approvalMode: approvalModeValue,
       updatedAt: now,
@@ -86,6 +97,7 @@ export async function upsertSkillConfig(
         designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
         designPrototypeSkillPath: designPrototypeSkillPath ?? null,
         designDocValidationSkillPath: designDocValidationSkillPath ?? null,
+        prdAssistantSkillPath: prdAssistantSkillPath ?? null,
         interviewModel: interviewModel ?? null,
         prdModel: prdModel ?? null,
         designDocModel: designDocModel ?? null,
@@ -93,7 +105,11 @@ export async function upsertSkillConfig(
         designDocAssistantModel: designDocAssistantModel ?? null,
         designPrototypeModel: designPrototypeModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
+        prdAssistantModel: prdAssistantModel ?? null,
+        prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
+        prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
         quickSkillPills: quickSkillPills ?? null,
+        quickMcpPills: quickMcpPills ?? null,
         defaultModel: defaultModel ?? null,
         approvalMode: approvalModeValue,
         updatedAt: now,
@@ -207,4 +223,112 @@ export async function getApproversForDocument(
     ...r,
     documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
   }));
+}
+
+export async function setApproverGroups(
+  project: string,
+  documentType: 'design_doc' | 'prd',
+  groupIds: string[],
+  assignedBy?: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(projectApproverGroups)
+      .where(and(eq(projectApproverGroups.project, project), eq(projectApproverGroups.documentType, documentType)));
+
+    if (groupIds.length > 0) {
+      await tx.insert(projectApproverGroups).values(
+        groupIds.map((groupId) => ({
+          project,
+          groupId,
+          documentType,
+          assignedBy: assignedBy ?? null,
+        })),
+      );
+    }
+  });
+}
+
+export async function getApproverPool(
+  project: string,
+  documentType: 'design_doc' | 'prd',
+): Promise<ApproverPoolResponse> {
+  const individuals = await getApproversForDocument(project, documentType);
+
+  const groupRefs = await db
+    .select({
+      id: projectApproverGroups.id,
+      project: projectApproverGroups.project,
+      groupId: projectApproverGroups.groupId,
+      documentType: projectApproverGroups.documentType,
+      assignedBy: projectApproverGroups.assignedBy,
+      assignedAt: projectApproverGroups.assignedAt,
+      groupName: appGroups.name,
+      groupDescription: appGroups.description,
+      groupCreatedBy: appGroups.createdBy,
+      groupCreatedAt: appGroups.createdAt,
+    })
+    .from(projectApproverGroups)
+    .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
+    .where(and(eq(projectApproverGroups.project, project), eq(projectApproverGroups.documentType, documentType)));
+
+  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }> = [];
+  for (const ref of groupRefs) {
+    const memberRows = await db
+      .select({
+        groupId: appGroupMembers.groupId,
+        userId: appGroupMembers.userId,
+        displayName: appUsers.displayName,
+        email: appUsers.email,
+        addedBy: appGroupMembers.addedBy,
+        addedAt: appGroupMembers.addedAt,
+      })
+      .from(appGroupMembers)
+      .innerJoin(appUsers, eq(appGroupMembers.userId, appUsers.oid))
+      .where(eq(appGroupMembers.groupId, ref.groupId));
+
+    groups.push({
+      id: ref.groupId,
+      name: ref.groupName,
+      description: ref.groupDescription,
+      createdBy: ref.groupCreatedBy,
+      createdAt: ref.groupCreatedAt,
+      documentType: ref.documentType as 'design_doc' | 'prd',
+      members: memberRows,
+    });
+  }
+
+  return { individuals, groups };
+}
+
+export async function getApproverUserIds(
+  project: string,
+  documentType: 'design_doc' | 'prd',
+): Promise<string[]> {
+  const pool = await getApproverPool(project, documentType);
+  const userIds = new Set<string>();
+  for (const ind of pool.individuals) {
+    userIds.add(ind.userId);
+  }
+  for (const group of pool.groups) {
+    for (const member of group.members) {
+      userIds.add(member.userId);
+    }
+  }
+  return [...userIds];
+}
+
+export async function listApproverGroupsForProject(
+  project: string,
+): Promise<Array<{ groupId: string; groupName: string; documentType: string }>> {
+  const rows = await db
+    .select({
+      groupId: projectApproverGroups.groupId,
+      groupName: appGroups.name,
+      documentType: projectApproverGroups.documentType,
+    })
+    .from(projectApproverGroups)
+    .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
+    .where(eq(projectApproverGroups.project, project));
+  return rows;
 }

@@ -199,6 +199,13 @@
   background: color-mix(in srgb, var(--error-color) 6%, var(--bg-primary));
 }
 
+.transportActive {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-secondary));
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
 /* ── Primary / cancel buttons ────────────────────────────────────────────── */
 
 .btnPrimary {

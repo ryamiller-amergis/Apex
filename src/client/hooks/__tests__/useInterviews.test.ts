@@ -28,6 +28,7 @@ import {
   useSyncDesignDoc,
   useGenerateDesignDoc,
   useReopenPrd,
+  useActiveUsers,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -259,6 +260,43 @@ describe('usePrd', () => {
   });
 });
 
+// ── useActiveUsers ─────────────────────────────────────────────────────────────
+
+describe('useActiveUsers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/interviews/active-users and returns the list', async () => {
+    const users = [
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+      { oid: 'bob', displayName: 'Bob Jones', email: 'bob@example.com' },
+    ];
+    mockFetchOk(users);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toHaveLength(2);
+    expect(result.current.data![0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/active-users',
+      expect.any(Object),
+    );
+  });
+
+  it('returns an empty list when no active users exist', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([]);
+  });
+});
+
 // ── useCreateInterview ─────────────────────────────────────────────────────────
 
 describe('useCreateInterview', () => {
@@ -281,6 +319,28 @@ describe('useCreateInterview', () => {
       '/api/interviews',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('includes prdOwnerId and designDocOwnerId in the POST body when provided', async () => {
+    mockFetchOk({ interviewId: 'interview-new', threadId: 'thread-new' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCreateInterview(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        prdOwnerId: 'user-prd',
+        designDocOwnerId: 'user-dd',
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(callBody).toMatchObject({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' });
   });
 
   it('surfaces errors from the API', async () => {
@@ -517,21 +577,6 @@ describe('useReviewPrd', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when requesting revision', async () => {
-    mockFetchOk({ ok: true });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useReviewPrd(), { wrapper });
-
-    await act(async () => {
-      result.current.mutate({ prdId: 'prd-1', action: 'request_revision', comment: 'Needs more work' });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs more work' });
-  });
 });
 
 // ── useSyncPrd ─────────────────────────────────────────────────────────────────
@@ -813,21 +858,6 @@ describe('useReviewDesignDoc', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when requesting revision', async () => {
-    mockFetchOk({ ok: true });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useReviewDesignDoc(), { wrapper });
-
-    await act(async () => {
-      result.current.mutate({ designDocId: 'dd-1', action: 'request_revision', comment: 'Needs work' });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs work' });
-  });
 });
 
 // ── useDeleteDesignDoc ────────────────────────────────────────────────────────

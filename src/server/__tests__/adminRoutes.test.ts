@@ -15,6 +15,7 @@ import * as projectSettingsService from '../services/projectSettingsService';
 
 jest.mock('../services/rbacService');
 jest.mock('../services/projectSettingsService');
+jest.mock('../services/groupService');
 
 jest.mock('@cursor/sdk', () => ({
   Cursor: {
@@ -32,6 +33,7 @@ jest.mock('../middleware/rbac', () => ({
   requireAnyPermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
+  requireSuperAdmin: (_req: any, _res: any, next: any) => next(),
 }));
 
 const mockService = rbacService as jest.Mocked<typeof rbacService>;
@@ -491,6 +493,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -549,6 +556,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -587,6 +599,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickSkillPills
       undefined,   // defaultModel
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -623,6 +640,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // quickSkillPills
       undefined,               // defaultModel
       undefined,               // approvalMode
+      undefined,               // quickMcpPills
+      undefined,               // prdAssistantSkillPath
+      undefined,               // prdAssistantModel
+      undefined,               // prdReviewBedrockModelId
+      undefined,               // prdReviewBedrockMaxTokens
     );
   });
 
@@ -658,6 +680,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // quickSkillPills
       undefined,                            // defaultModel
       undefined,                            // approvalMode
+      undefined,                            // quickMcpPills
+      undefined,                            // prdAssistantSkillPath
+      undefined,                            // prdAssistantModel
+      undefined,                            // prdReviewBedrockModelId
+      undefined,                            // prdReviewBedrockMaxTokens
     );
   });
 
@@ -688,6 +715,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,
       'composer-2',
       undefined,   // approvalMode
+      undefined,   // quickMcpPills
+      undefined,   // prdAssistantSkillPath
+      undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -722,6 +754,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // quickSkillPills
       undefined,         // defaultModel
       'all_required',    // approvalMode
+      undefined,         // quickMcpPills
+      undefined,         // prdAssistantSkillPath
+      undefined,         // prdAssistantModel
+      undefined,         // prdReviewBedrockModelId
+      undefined,         // prdReviewBedrockMaxTokens
     );
   });
 
@@ -762,7 +799,10 @@ describe('DELETE /api/admin/project-settings/:project', () => {
 // ── GET/PUT /api/admin/project-settings/:project/approvers ────────────────────
 
 describe('GET /api/admin/project-settings/:project/approvers', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockProjectSettings.listApproverGroupsForProject.mockResolvedValue([]);
+  });
 
   const approvers = [
     {
@@ -783,7 +823,8 @@ describe('GET /api/admin/project-settings/:project/approvers', () => {
     const res = await request(buildApp()).get('/api/admin/project-settings/proj-alpha/approvers');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(approvers);
+    expect(res.body.approvers).toEqual(approvers);
+    expect(res.body.approverGroups).toEqual([]);
     expect(mockProjectSettings.listApprovers).toHaveBeenCalledWith('proj-alpha');
   });
 

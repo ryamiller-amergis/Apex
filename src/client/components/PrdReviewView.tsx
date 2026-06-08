@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,6 +9,7 @@ import {
   usePrd,
   useInterview,
   useUpdatePrdContent,
+  useUpdatePrdBacklog,
   useSubmitPrd,
   useWithdrawPrd,
   useReopenPrd,
@@ -17,17 +20,95 @@ import {
   useSyncPrdAdoStatus,
   useDocumentAssignments,
   useReassignApprovers,
+  useFixPrdWithAi,
 } from '../hooks/useInterviews';
+import {
+  useReviewComments,
+  useUnresolvedCommentCount,
+  useCreateComment,
+  useResolveComment,
+  useReopenComment as useReopenReviewComment,
+  useDeleteComment,
+} from '../hooks/useReviewComments';
+import { ProposedChangesReview } from './ProposedChangesReview';
 import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { ReviewReasonModal } from './ReviewReasonModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import { AnnotationLayer } from './AnnotationLayer';
+import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import type { PrdStatus } from '../../shared/types/interview';
+import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './PrdReviewView.module.css';
 
-type TabId = 'preview' | 'edit' | 'backlog';
+type TabId = 'preview' | 'backlog';
+
+/* ── User-story projection (read-only, derived from the backlog) ──────────────── */
+
+interface ProjectedUserStory {
+  id: string;
+  persona: string;
+  iWant: string;
+  soThat: string;
+}
+
+/**
+ * Project user stories from the backlog JSON. Stories are single-owned by the
+ * backlog (PBI `userStory` objects under epics[].features[].items[]); the PRD
+ * view renders them read-only rather than the stored PRD markdown authoring them.
+ */
+function projectUserStories(backlogJson: unknown): ProjectedUserStory[] {
+  if (typeof backlogJson !== 'object' || backlogJson === null) return [];
+  const backlog = backlogJson as {
+    epics?: Array<{
+      features?: Array<{
+        items?: Array<{
+          type?: string;
+          id?: string;
+          userStory?: { persona?: string; iWant?: string; soThat?: string };
+        }>;
+      }>;
+    }>;
+  };
+
+  const stories: ProjectedUserStory[] = [];
+  for (const epic of backlog.epics ?? []) {
+    for (const feature of epic.features ?? []) {
+      for (const item of feature.items ?? []) {
+        if (item.type !== 'PBI' || !item.userStory) continue;
+        const { persona, iWant, soThat } = item.userStory;
+        if (!persona && !iWant && !soThat) continue;
+        stories.push({
+          id: item.id ?? `story-${stories.length}`,
+          persona: persona ?? '',
+          iWant: iWant ?? '',
+          soThat: soThat ?? '',
+        });
+      }
+    }
+  }
+  return stories;
+}
+
+function formatUserStory(story: ProjectedUserStory): string {
+  return `As a ${story.persona || 'user'}, I want ${story.iWant || '…'}, so that ${story.soThat || '…'}.`;
+}
+
+/* ── Section parsing helpers ─────────────────────────────────────────────────── */
+
+function parsePrdSections(content: string): string[] {
+  if (!content) return [];
+  return content.split(/(?=\n## )/).filter((s) => s !== '');
+}
+
+function stitchSections(sections: string[], index: number, newContent: string): string {
+  const updated = [...sections];
+  updated[index] = newContent;
+  return updated.join('');
+}
+
+/* ── Status helpers ──────────────────────────────────────────────────────────── */
 
 function statusBadgeClass(status: PrdStatus): string {
   switch (status) {
@@ -59,12 +140,14 @@ export const PrdReviewView: React.FC = () => {
   const navigate = useNavigate();
   const { can, userId, isAdmin } = useAppShell();
 
+  const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(prd?.status === 'approved' ? id : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
 
   const updateContent = useUpdatePrdContent();
+  const updateBacklog = useUpdatePrdBacklog();
   const submitPrd = useSubmitPrd();
   const withdrawPrd = useWithdrawPrd();
   const reopenPrd = useReopenPrd();
@@ -72,39 +155,78 @@ export const PrdReviewView: React.FC = () => {
   const deletePrd = useDeletePrd();
   const createAdoItems = useCreatePrdAdoItems();
   const syncAdoStatus = useSyncPrdAdoStatus(id);
+  const fixWithAi = useFixPrdWithAi(id ?? '');
 
   const [activeTab, setActiveTab] = useState<TabId>('preview');
-  const [editContent, setEditContent] = useState('');
-  const [isDirty, setIsDirty] = useState(false);
+
+  /* ── Full-document edit modal ─────────────────────────────────────────────── */
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editModalContent, setEditModalContent] = useState('');
+
+  /* ── Section-level edit modal ────────────────────────────────────────────── */
+  const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
+  const [sectionEditContent, setSectionEditContent] = useState('');
+
+  const parsedSections = useMemo(() => parsePrdSections(prd?.content ?? ''), [prd?.content]);
+
+  const projectedUserStories = useMemo(() => projectUserStories(prd?.backlogJson), [prd?.backlogJson]);
 
   const reassignApprovers = useReassignApprovers();
 
-  const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const { data: reviewComments = [] } = useReviewComments(id, 'prd');
+  const { data: unresolvedData } = useUnresolvedCommentCount(id, 'prd');
+  const unresolvedCount = unresolvedData?.count ?? 0;
+  const createComment = useCreateComment('prd', id);
+  const resolveComment = useResolveComment(userId ?? '');
+  const reopenReviewComment = useReopenReviewComment();
+  const deleteComment = useDeleteComment();
+
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [pendingSelector, setPendingSelector] = useState<{ sectionKey: ReviewSectionKey; selector: TextSelector } | null>(null);
+  const [newCommentBody, setNewCommentBody] = useState('');
+
+  const [assistantOpen, setAssistantOpen] = useState(false);
+
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAdoModal, setShowAdoModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [showAllLinks, setShowAllLinks] = useState(false);
 
-  const { data: assignments = [] } = useDocumentAssignments(
-    prd?.status === 'pending_review' ? id : null,
-    'prd',
-  );
+  const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
 
-  const isGenerating = !!prd && prd.content === '';
+  const isGenerating = !!prd && prd.status === 'generating' && prd.content === '';
+  const generationFailed = !!prd && prd.status === 'draft' && prd.content === '';
 
-  const handleSaveContent = useCallback(async () => {
-    if (!id || !prd) return;
-    await updateContent.mutateAsync({ prdId: id, content: editContent });
-    setIsDirty(false);
-  }, [id, prd, editContent, updateContent]);
+  /* ── Full-document edit handlers ─────────────────────────────────────────── */
 
-  const handleDiscard = useCallback(() => {
+  const handleOpenEditModal = useCallback(() => {
     if (!prd) return;
-    setEditContent(prd.content);
-    setIsDirty(false);
-    setActiveTab('preview');
+    setEditModalContent(prd.content);
+    setShowEditModal(true);
   }, [prd]);
+
+  const handleSaveEditModal = useCallback(async () => {
+    if (!id || !prd) return;
+    await updateContent.mutateAsync({ prdId: id, content: editModalContent });
+    setShowEditModal(false);
+  }, [id, prd, editModalContent, updateContent]);
+
+  /* ── Section edit handlers ───────────────────────────────────────────────── */
+
+  const handleEditSection = useCallback((index: number) => {
+    setSectionEditContent(parsedSections[index]);
+    setEditingSectionIndex(index);
+  }, [parsedSections]);
+
+  const handleSaveSectionEdit = useCallback(async () => {
+    if (!id || !prd || editingSectionIndex === null) return;
+    const updatedContent = stitchSections(parsedSections, editingSectionIndex, sectionEditContent);
+    await updateContent.mutateAsync({ prdId: id, content: updatedContent });
+    setEditingSectionIndex(null);
+  }, [id, prd, editingSectionIndex, sectionEditContent, parsedSections, updateContent]);
+
+  /* ── Other handlers ──────────────────────────────────────────────────────── */
 
   const handleSubmit = useCallback(() => {
     if (!id) return;
@@ -144,22 +266,41 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, reviewPrd, navigate]);
 
-  const handleReviewConfirm = useCallback(async (reason: string) => {
-    if (!id) return;
-    await reviewPrd.mutateAsync({ prdId: id, action: 'request_revision', comment: reason });
-    setShowRevisionModal(false);
-  }, [id, reviewPrd]);
+  const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
+    setPendingSelector({ sectionKey, selector });
+    setNewCommentBody('');
+  }, []);
 
-  const handleTabChange = useCallback((tab: TabId) => {
-    if (tab === 'edit' && prd) {
-      setEditContent(prd.content);
-      setIsDirty(false);
+  const handleSubmitComment = useCallback(async () => {
+    if (!pendingSelector || !newCommentBody.trim()) return;
+    await createComment.mutateAsync({
+      sectionKey: pendingSelector.sectionKey,
+      body: newCommentBody.trim(),
+      selector: pendingSelector.selector,
+    });
+    setPendingSelector(null);
+    setNewCommentBody('');
+  }, [pendingSelector, newCommentBody, createComment]);
+
+  const handleReply = useCallback(async (commentId: string, body: string) => {
+    await fetch(`/api/review-comments/${commentId}/replies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ body }),
+    });
+    void queryClient.invalidateQueries({ queryKey: ['review-comments', 'prd', id] });
+  }, [queryClient, id]);
+
+  const handleCommentClick = useCallback((commentId: string) => {
+    const comment = reviewComments.find((c) => c.id === commentId);
+    if (comment) {
+      const targetTab: TabId = comment.sectionKey === 'backlog' ? 'backlog' : 'preview';
+      setActiveTab(targetTab);
     }
-    setActiveTab(tab);
-  }, [prd]);
+    setActiveCommentId(commentId);
+  }, [reviewComments]);
 
-  // Auto-verify ADO IDs once when an approved PRD with backlog ADO items loads.
-  // Silently clears any IDs that were deleted in ADO.
   useEffect(() => {
     if (!prd || prd.status !== 'approved' || !prd.backlogJson) return;
     const backlog = prd.backlogJson as { epics?: Array<{ adoWorkItemId?: number }> };
@@ -179,6 +320,7 @@ export const PrdReviewView: React.FC = () => {
   if (isError || !prd) return <div className={styles.errorState}>PRD not found.</div>;
 
   const isAuthor = prd.authorId === userId;
+  const isOwner = prd.ownerId === userId;
   const canManage = can('interviews:manage');
   const canReview = can('prds:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
@@ -190,6 +332,73 @@ export const PrdReviewView: React.FC = () => {
     && anyDesignDocApproved
     && can('workitems:write')
     && hasUnpushedItems;
+
+  const showCommentLayer =
+    (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
+    (canPerformReview || isAuthor || isOwner || isAdmin);
+
+  const canEditContent = canManage && (isAuthor || isOwner || isAdmin) && prd.status !== 'approved';
+
+  const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
+  const backlogComments = reviewComments.filter((c) => c.sectionKey === 'backlog');
+
+  /* ── Pencil SVG icon ─────────────────────────────────────────────────────── */
+  const pencilIcon = (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11.5 2.5l2 2L5 13H3v-2L11.5 2.5z" />
+    </svg>
+  );
+
+  /* ── Preview content (with optional section editing) ────────────────────── */
+  const previewContent = prd.content ? (
+    canEditContent ? (
+      <>
+        {parsedSections.map((section, index) => (
+          <div key={index} className={styles.sectionWrapper}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{section}</ReactMarkdown>
+            <button
+              type="button"
+              className={styles.sectionEditBtn}
+              aria-label="Edit section"
+              onClick={() => handleEditSection(index)}
+            >
+              {pencilIcon}
+            </button>
+          </div>
+        ))}
+      </>
+    ) : (
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
+    )
+  ) : (
+    <div className={styles.emptyPreview}>
+      No content yet.{canEditContent ? ' Use the Edit button to write the PRD.' : ''}
+    </div>
+  );
+
+  /* ── User Stories (read-only projection from the backlog) ────────────────── */
+  const userStoriesBody = projectedUserStories.length > 0 ? (
+    <section className={styles.userStoriesProjection}>
+      <div className={styles.userStoriesHeading}>
+        <h2>User Stories</h2>
+        <span
+          className={styles.derivedBadge}
+          title="User stories are owned by the backlog. Edit them on the Backlog tab — this view is read-only."
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="2" width="10" height="12" rx="1.5" />
+            <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+          </svg>
+          Synced from backlog · read-only
+        </span>
+      </div>
+      <ol className={styles.userStoryList}>
+        {projectedUserStories.map((story) => (
+          <li key={story.id} className={styles.userStoryItem}>{formatUserStory(story)}</li>
+        ))}
+      </ol>
+    </section>
+  ) : null;
 
   return (
     <div className={styles.container}>
@@ -213,7 +422,21 @@ export const PrdReviewView: React.FC = () => {
                 </span>
               )}
             </div>
-            {(sourceInterview || (prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0) || prd.reviewComment) && (() => {
+            <div className={styles.metaRow}>
+              <span className={styles.metaItem}>
+                <span className={styles.metaLabel}>Owner:</span>
+                <span className={styles.metaValue}>{prd.ownerName ?? prd.ownerId ?? prd.authorName ?? prd.authorId}</span>
+              </span>
+              {assignments.length > 0 && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Reviewer(s):</span>
+                  <span className={styles.metaValue}>
+                    {assignments.map((a) => a.approverDisplayName ?? a.approverUserId).join(', ')}
+                  </span>
+                </span>
+              )}
+            </div>
+            {(sourceInterview || (prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0)) && (() => {
               const MAX_VISIBLE = 3;
               const docs = (prd.status === 'approved' && relatedDesignDocs) ? relatedDesignDocs : [];
               const totalChips = (sourceInterview ? 1 : 0) + docs.length;
@@ -278,11 +501,6 @@ export const PrdReviewView: React.FC = () => {
                       Show less
                     </button>
                   )}
-                  {prd.reviewComment && (
-                    <span className={styles.reviewCommentChip}>
-                      "{prd.reviewComment}"
-                    </span>
-                  )}
                 </div>
               );
             })()}
@@ -294,7 +512,34 @@ export const PrdReviewView: React.FC = () => {
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
 
-          {canManage && (isAuthor || isAdmin) && (
+          {prd.status !== 'approved' && (
+            <button
+              className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
+              onClick={() => setAssistantOpen((v) => !v)}
+              type="button"
+              aria-label="Apex Assistant"
+              aria-expanded={assistantOpen}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              Apex Assistant
+            </button>
+          )}
+
+          {canEditContent && (
+            <button
+              className={styles.actionBtn}
+              onClick={handleOpenEditModal}
+              type="button"
+              aria-label="Edit"
+            >
+              {pencilIcon}
+              Edit
+            </button>
+          )}
+
+          {canManage && (isAuthor || isOwner || isAdmin) && (
             <>
               {(prd.status === 'draft' || prd.status === 'revision_requested') && (
                 <button
@@ -352,20 +597,17 @@ export const PrdReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleApprove()}
-                  disabled={reviewPrd.isPending || !canPerformReview}
-                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
+                  disabled={reviewPrd.isPending || !canPerformReview || unresolvedCount > 0}
+                  title={
+                    !canPerformReview
+                      ? 'You are not an assigned approver for this document'
+                      : unresolvedCount > 0
+                        ? 'Resolve all comments before approving'
+                        : undefined
+                  }
                   type="button"
                 >
                   Approve
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => setShowRevisionModal(true)}
-                  disabled={!canPerformReview}
-                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>
@@ -383,7 +625,7 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
-          {prd.status === 'pending_review' && (
+          {prd.status === 'pending_review' && canManage && (isAuthor || isOwner || isAdmin) && (
             <>
               <span className={styles.actionDivider} />
               <button
@@ -438,12 +680,21 @@ export const PrdReviewView: React.FC = () => {
         </div>
       )}
 
+      {(prd.proposedContent != null || prd.proposedBacklogJson != null) && (
+        <ProposedChangesReview
+          prdId={prd.id}
+          currentContent={prd.content}
+          currentBacklogJson={prd.backlogJson}
+          proposedContent={prd.proposedContent}
+          proposedBacklogJson={prd.proposedBacklogJson}
+        />
+      )}
+
       {isGenerating ? (
-        /* ── Generating skeleton ─────────────────────────────────────── */
+        /* ── Generating skeleton ─────────────────────────────────────────────── */
         <>
           <div className={styles.tabs}>
             <button className={`${styles.tab} ${styles.active}`} disabled type="button">Preview</button>
-            <button className={styles.tab} disabled type="button">Edit</button>
             <button className={styles.tab} disabled type="button">Backlog</button>
           </div>
           <div className={styles.tabContent}>
@@ -489,29 +740,46 @@ export const PrdReviewView: React.FC = () => {
             </div>
           </div>
         </>
+      ) : generationFailed ? (
+        /* ── Generation failed banner ────────────────────────────────────────── */
+        <div className={styles.tabContent}>
+          <div className={styles.failedBanner}>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              style={{ width: 24, height: 24, flexShrink: 0 }}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <div>
+              <div className={styles.bannerTitle}>PRD generation did not complete</div>
+              <div className={styles.bannerSub}>
+                The AI agent finished without producing output. You can return to the interview and try generating again.
+              </div>
+            </div>
+          </div>
+        </div>
       ) : (
-        /* ── Normal tabs ─────────────────────────────────────────────── */
+        /* ── Normal tabs ─────────────────────────────────────────────────────── */
         <>
           <div className={styles.tabs}>
             <button
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
-              onClick={() => handleTabChange('preview')}
+              onClick={() => setActiveTab('preview')}
               type="button"
             >
               Preview
             </button>
-            {canManage && (isAuthor || isAdmin) && prd.status !== 'approved' && (
-              <button
-                className={`${styles.tab} ${activeTab === 'edit' ? styles.active : ''}`}
-                onClick={() => handleTabChange('edit')}
-                type="button"
-              >
-                Edit
-              </button>
-            )}
             <button
               className={`${styles.tab} ${activeTab === 'backlog' ? styles.active : ''}`}
-              onClick={() => handleTabChange('backlog')}
+              onClick={() => setActiveTab('backlog')}
               type="button"
             >
               Backlog
@@ -520,56 +788,192 @@ export const PrdReviewView: React.FC = () => {
 
           <div className={styles.tabContent}>
             {activeTab === 'preview' && (
-              <div className={styles.preview}>
-                {prd.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
-                ) : (
-                  <div className={styles.emptyPreview}>
-                    No content yet.{canManage && (isAuthor || isAdmin) ? ' Use the Edit tab to write the PRD.' : ''}
-                  </div>
+              <div className={styles.previewWithSidebar}>
+                <div className={styles.preview}>
+                  {showCommentLayer ? (
+                    <>
+                      <AnnotationLayer
+                        sectionKey="prd"
+                        comments={sectionComments}
+                        activeCommentId={activeCommentId}
+                        onAddComment={handleAddComment}
+                        onCommentClick={handleCommentClick}
+                      >
+                        {previewContent}
+                      </AnnotationLayer>
+                      {userStoriesBody && (
+                        /* Stories are owned by the backlog — tag comments here
+                           "backlog" so Fix-with-AI routes them to the backlog fixer. */
+                        <AnnotationLayer
+                          sectionKey="backlog"
+                          comments={backlogComments}
+                          activeCommentId={activeCommentId}
+                          onAddComment={handleAddComment}
+                          onCommentClick={handleCommentClick}
+                        >
+                          {userStoriesBody}
+                        </AnnotationLayer>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {previewContent}
+                      {userStoriesBody}
+                    </>
+                  )}
+                </div>
+                {showCommentLayer && (
+                  <ReviewCommentSidebar
+                    comments={reviewComments}
+                    activeCommentId={activeCommentId}
+                    currentUserId={userId ?? ''}
+                    documentAuthorUserId={prd.authorId}
+                    documentOwnerUserId={prd.ownerId}
+                    isAssignedApprover={isAssignedApprover}
+                    onCommentClick={handleCommentClick}
+                    onReply={(commentId, body) => void handleReply(commentId, body)}
+                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                    onDelete={(commentId) => deleteComment.mutate(commentId)}
+                    onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
+                    isFixingWithAi={fixWithAi.isPending}
+                    fixAiError={fixWithAi.error?.message}
+                  />
                 )}
               </div>
             )}
 
-            {activeTab === 'edit' && (
-              <div className={styles.editArea}>
-                <textarea
-                  className={styles.textarea}
-                  value={editContent}
-                  onChange={(e) => { setEditContent(e.target.value); setIsDirty(true); }}
-                  placeholder="Write your PRD in Markdown…"
-                />
-                <div className={styles.editActions}>
-                  <button
-                    className={styles.btnPrimary}
-                    onClick={() => void handleSaveContent()}
-                    disabled={!isDirty || updateContent.isPending}
-                    type="button"
-                  >
-                    {updateContent.isPending ? 'Saving…' : 'Save'}
-                  </button>
-                  <button
-                    className={styles.btnSecondary}
-                    onClick={handleDiscard}
-                    type="button"
-                  >
-                    Discard
-                  </button>
-                </div>
-              </div>
-            )}
-
             {activeTab === 'backlog' && (
-              <div className={styles.backlogView}>
-                {prd.backlogJson ? (
-                  <BacklogViewer data={prd.backlogJson} />
-                ) : (
-                  <div className={styles.emptyPreview}>No backlog data yet.</div>
+              <div className={styles.previewWithSidebar}>
+                <div className={styles.backlogView}>
+                  {prd.backlogJson ? (
+                    showCommentLayer ? (
+                      <AnnotationLayer
+                        sectionKey="backlog"
+                        comments={backlogComments}
+                        activeCommentId={activeCommentId}
+                        onAddComment={handleAddComment}
+                        onCommentClick={handleCommentClick}
+                      >
+                        <BacklogViewer
+                          data={prd.backlogJson}
+                          editable={canEditContent}
+                          onSaveBacklog={(updatedData) => {
+                            if (id) void updateBacklog.mutateAsync({ prdId: id, backlogData: updatedData });
+                          }}
+                        />
+                      </AnnotationLayer>
+                    ) : (
+                      <BacklogViewer
+                        data={prd.backlogJson}
+                        editable={canEditContent}
+                        onSaveBacklog={(updatedData) => {
+                          if (id) void updateBacklog.mutateAsync({ prdId: id, backlogData: updatedData });
+                        }}
+                      />
+                    )
+                  ) : (
+                    <div className={styles.emptyPreview}>No backlog data yet.</div>
+                  )}
+                </div>
+                {showCommentLayer && (
+                  <ReviewCommentSidebar
+                    comments={reviewComments}
+                    activeCommentId={activeCommentId}
+                    currentUserId={userId ?? ''}
+                    documentAuthorUserId={prd.authorId}
+                    documentOwnerUserId={prd.ownerId}
+                    isAssignedApprover={isAssignedApprover}
+                    onCommentClick={handleCommentClick}
+                    onReply={(commentId, body) => void handleReply(commentId, body)}
+                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                    onDelete={(commentId) => deleteComment.mutate(commentId)}
+                    onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
+                    isFixingWithAi={fixWithAi.isPending}
+                    fixAiError={fixWithAi.error?.message}
+                  />
                 )}
               </div>
             )}
           </div>
         </>
+      )}
+
+      {/* ── Full-document edit modal ────────────────────────────────────────── */}
+      {showEditModal && (
+        <div
+          className={styles.editModal}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowEditModal(false); }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit PRD"
+        >
+          <div className={styles.editModalCard}>
+            <h3 className={styles.editModalTitle}>Edit PRD</h3>
+            <textarea
+              className={styles.textarea}
+              value={editModalContent}
+              onChange={(e) => setEditModalContent(e.target.value)}
+              placeholder="Write your PRD in Markdown…"
+            />
+            <div className={styles.editActions}>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => void handleSaveEditModal()}
+                disabled={updateContent.isPending}
+                type="button"
+              >
+                {updateContent.isPending ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setShowEditModal(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Section edit modal ──────────────────────────────────────────────── */}
+      {editingSectionIndex !== null && (
+        <div
+          className={styles.editModal}
+          onClick={(e) => { if (e.target === e.currentTarget) setEditingSectionIndex(null); }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit section"
+        >
+          <div className={styles.editModalCard}>
+            <h3 className={styles.editModalTitle}>Edit Section</h3>
+            <textarea
+              className={styles.textarea}
+              value={sectionEditContent}
+              onChange={(e) => setSectionEditContent(e.target.value)}
+              placeholder="Section content in Markdown…"
+            />
+            <div className={styles.editActions}>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => void handleSaveSectionEdit()}
+                disabled={updateContent.isPending}
+                type="button"
+              >
+                {updateContent.isPending ? 'Saving…' : 'Save section'}
+              </button>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setEditingSectionIndex(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showDeleteModal && prd && (
@@ -587,14 +991,38 @@ export const PrdReviewView: React.FC = () => {
         />
       )}
 
-      {showRevisionModal && (
-        <ReviewReasonModal
-          itemName={prd.title}
-          docTypeName="PRD"
-          isPending={reviewPrd.isPending}
-          onConfirm={(reason) => void handleReviewConfirm(reason)}
-          onCancel={() => setShowRevisionModal(false)}
-        />
+      {pendingSelector && (
+        <div className={styles.commentModal} onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }} role="dialog" aria-modal="true">
+          <div className={styles.commentModalCard}>
+            <h3 className={styles.commentModalTitle}>Add Comment</h3>
+            <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
+            <textarea
+              className={styles.commentModalInput}
+              value={newCommentBody}
+              onChange={(e) => setNewCommentBody(e.target.value)}
+              placeholder="Write your comment…"
+              rows={3}
+              autoFocus
+            />
+            <div className={styles.commentModalActions}>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setPendingSelector(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => void handleSubmitComment()}
+                disabled={!newCommentBody.trim() || createComment.isPending}
+                type="button"
+              >
+                {createComment.isPending ? 'Posting…' : 'Post Comment'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showAdoModal && prd && (
@@ -634,6 +1062,13 @@ export const PrdReviewView: React.FC = () => {
           isSubmitting={reassignApprovers.isPending}
         />
       )}
+
+      <PrdAssistantPanel
+        prdId={prd.id}
+        open={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        existingThreadId={prd.prdAssistantThreadId}
+      />
     </div>
   );
 };

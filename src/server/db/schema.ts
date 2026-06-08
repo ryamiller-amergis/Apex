@@ -3,8 +3,9 @@ import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
-import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
+import type { MenuItemKey } from '../../shared/types/menuSettings';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,7 @@ export const appUserRoles = pgTable('app_user_roles', {
 
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
+  groupMemberships: many(appGroupMembers),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -135,6 +137,39 @@ export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
 }));
 
+// ── Groups Tables ─────────────────────────────────────────────────────────────
+// Reusable, organizational user groups (e.g. Developers, Product, UI/UX).
+// Fully separate from RBAC app_roles, which are permission-based.
+
+export const appGroups = pgTable('app_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').unique().notNull(),
+  description: text('description'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const appGroupMembers = pgTable('app_group_members', {
+  groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  addedBy: text('added_by'),
+  addedAt: timestamp('added_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.groupId, t.userId] }),
+}));
+
+// ── Groups Relations ──────────────────────────────────────────────────────────
+
+export const appGroupsRelations = relations(appGroups, ({ many }) => ({
+  members: many(appGroupMembers),
+  projectApproverGroups: many(projectApproverGroups),
+}));
+
+export const appGroupMembersRelations = relations(appGroupMembers, ({ one }) => ({
+  group: one(appGroups, { fields: [appGroupMembers.groupId], references: [appGroups.id] }),
+  user: one(appUsers, { fields: [appGroupMembers.userId], references: [appUsers.oid] }),
+}));
+
 // ── Interview Tables ───────────────────────────────────────────────────────────
 
 export const interviews = pgTable('interviews', {
@@ -144,6 +179,10 @@ export const interviews = pgTable('interviews', {
   title: text('title').notNull().default('Untitled Interview'),
   project: text('project').notNull(),
   repo: text('repo').notNull(),
+  prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  prdApproverIds: jsonb('prd_approver_ids').$type<string[]>(),
+  designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -163,6 +202,9 @@ export const prds = pgTable('prds', {
   reviewComment: text('review_comment'),
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
+  prdAssistantThreadId: uuid('prd_assistant_thread_id'),
+  proposedContent: text('proposed_content'),
+  proposedBacklogJson: jsonb('proposed_backlog_json'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -199,6 +241,16 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   chatThread: one(chatThreads, {
     fields: [interviews.chatThreadId],
     references: [chatThreads.id],
+  }),
+  prdOwner: one(appUsers, {
+    fields: [interviews.prdOwnerId],
+    references: [appUsers.oid],
+    relationName: 'interviewPrdOwner',
+  }),
+  designDocOwner: one(appUsers, {
+    fields: [interviews.designDocOwnerId],
+    references: [appUsers.oid],
+    relationName: 'interviewDesignDocOwner',
   }),
   prds: many(prds),
 }));
@@ -260,8 +312,13 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPrototypeModel: text('design_prototype_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
+  prdAssistantSkillPath: text('prd_assistant_skill_path'),
+  prdAssistantModel: text('prd_assistant_model'),
   defaultModel: text('default_model'),
+  prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
+  prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
+  quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -286,6 +343,29 @@ export const projectApproversRelations = relations(projectApprovers, ({ one }) =
   user: one(appUsers, {
     fields: [projectApprovers.userId],
     references: [appUsers.oid],
+  }),
+}));
+
+// Live group references in a project's approver pool, expanded to members at read time.
+export const projectApproverGroups = pgTable('project_approver_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
+  documentType: text('document_type').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.project, t.groupId, t.documentType),
+}));
+
+export const projectApproverGroupsRelations = relations(projectApproverGroups, ({ one }) => ({
+  projectSkillSetting: one(projectSkillSettings, {
+    fields: [projectApproverGroups.project],
+    references: [projectSkillSettings.project],
+  }),
+  group: one(appGroups, {
+    fields: [projectApproverGroups.groupId],
+    references: [appGroups.id],
   }),
 }));
 
@@ -356,6 +436,84 @@ export const appSettings = pgTable('app_settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
   updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+// ── Review Comments (Inline Annotations) ──────────────────────────────────────
+
+export const reviewComments = pgTable('review_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  documentId: uuid('document_id').notNull(),
+  documentType: text('document_type').notNull(),
+  sectionKey: text('section_key').notNull(),
+  authorUserId: text('author_user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  selectorExact: text('selector_exact').notNull(),
+  selectorPrefix: text('selector_prefix').notNull().default(''),
+  selectorSuffix: text('selector_suffix').notNull().default(''),
+  selectorStart: integer('selector_start').notNull(),
+  selectorEnd: integer('selector_end').notNull(),
+  status: text('status').notNull().default('open'),
+  resolvedBy: text('resolved_by'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.documentId, t.documentType, t.sectionKey, t.selectorExact, t.selectorStart, t.authorUserId),
+}));
+
+export const reviewReplies = pgTable('review_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  commentId: uuid('comment_id').notNull().references(() => reviewComments.id, { onDelete: 'cascade' }),
+  authorUserId: text('author_user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+// ── Review Comments Relations ─────────────────────────────────────────────────
+
+export const reviewCommentsRelations = relations(reviewComments, ({ one, many }) => ({
+  author: one(appUsers, {
+    fields: [reviewComments.authorUserId],
+    references: [appUsers.oid],
+  }),
+  replies: many(reviewReplies),
+}));
+
+export const reviewRepliesRelations = relations(reviewReplies, ({ one }) => ({
+  comment: one(reviewComments, {
+    fields: [reviewReplies.commentId],
+    references: [reviewComments.id],
+  }),
+  author: one(appUsers, {
+    fields: [reviewReplies.authorUserId],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Deployment Outcomes ───────────────────────────────────────────────────────
+
+export const deploymentOutcomes = pgTable('deployment_outcomes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  deploymentId: text('deployment_id').notNull(),
+  releaseVersion: text('release_version').notNull(),
+  environment: text('environment').notNull().default('production'),
+  result: text('result').notNull(),
+  downtimeMinutes: integer('downtime_minutes'),
+  details: text('details'),
+  reportedBy: text('reported_by').notNull(),
+  reportedAt: timestamp('reported_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }),
+});
+
+// ── Project Menu Settings ─────────────────────────────────────────────────────
+
+export const projectMenuSettings = pgTable('project_menu_settings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').unique().notNull(),
+  enabledViews: jsonb('enabled_views').$type<MenuItemKey[]>().notNull().default([]),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 

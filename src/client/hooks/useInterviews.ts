@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ActiveUser,
   CreateDesignDocResponse,
   CreateInterviewResponse,
   CreatePrdAdoItemsRequest,
@@ -23,6 +24,7 @@ import type {
   SubmitDesignDocForReviewRequest,
   SubmitForReviewRequest,
 } from '../../shared/types/approvals';
+import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -77,8 +79,11 @@ export function usePrd(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/prds/${id}`),
     enabled: !!id,
     staleTime: 30_000,
-    refetchInterval: (query) =>
-      query.state.data?.content === '' ? 5_000 : false,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      return data.status === 'generating' && data.content === '' ? 5_000 : false;
+    },
   });
 }
 
@@ -117,14 +122,35 @@ export function useDesignDoc(id: string | null) {
       if (!d) return false;
       if (d.status === 'interviewing') return 10_000;
       if (d.status === 'validating') return 10_000;
-      return (d.designContent === '' || d.techSpecContent === '' || d.assumptionsContent === '') ? 5_000 : false;
+      if (d.status === 'generating' && (d.designContent === '' || d.techSpecContent === '' || d.assumptionsContent === '')) return 5_000;
+      return false;
     },
+  });
+}
+
+// ── Active users query ─────────────────────────────────────────────────────────
+
+export function useActiveUsers() {
+  return useQuery<ActiveUser[]>({
+    queryKey: ['active-users'],
+    queryFn: () => apiFetch('/api/interviews/active-users'),
+    staleTime: 60_000,
   });
 }
 
 // ── Interview mutations ────────────────────────────────────────────────────────
 
 // ── Approver queries ──────────────────────────────────────────────────────────
+
+export function useAvailableApproverPool(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
+  const qs = excludeSelf ? '?excludeSelf=true' : '';
+  return useQuery<ApproverPoolResponse>({
+    queryKey: ['available-approver-pool', project, documentType, excludeSelf],
+    queryFn: () => apiFetch(`/api/admin/project-settings/${encodeURIComponent(project)}/approver-pool/${documentType}${qs}`),
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+}
 
 export function useAvailableApprovers(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
   const qs = excludeSelf ? '?excludeSelf=true' : '';
@@ -172,7 +198,7 @@ export function useDocumentAssignments(documentId: string | null, documentType: 
 
 export function useCreateInterview() {
   const qc = useQueryClient();
-  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string }>({
+  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[] }>({
     mutationFn: (body) =>
       apiFetch('/api/interviews', {
         method: 'POST',
@@ -260,6 +286,19 @@ export function useUpdatePrdContent() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
+      }),
+    onSuccess: (_data, { prdId }) => qc.invalidateQueries({ queryKey: ['prd', prdId] }),
+  });
+}
+
+export function useUpdatePrdBacklog() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { prdId: string; backlogData: unknown }>({
+    mutationFn: ({ prdId, backlogData }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/backlog`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backlogData }),
       }),
     onSuccess: (_data, { prdId }) => qc.invalidateQueries({ queryKey: ['prd', prdId] }),
   });
@@ -457,7 +496,7 @@ export function useDesignDocValidation(docId: string | null) {
     enabled: !!docId,
     refetchInterval: (query) => {
       const score = (query.state.data as any)?.validationScore;
-      return score === null || score === undefined ? 5000 : false;
+      return score === null || score === undefined ? 10_000 : false;
     },
   });
 }
@@ -564,6 +603,41 @@ export function useValidationReport(docId: string | null, validationThreadId: st
       if (query.state.data?.markdown) return false;
       if (docStatus === 'validating') return 10_000;
       return false;
+    },
+  });
+}
+
+export function useApplyProposedPrd(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/apply-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['unresolved-comment-count', 'prd', prdId] });
+    },
+  });
+}
+
+export function useRejectProposedPrd(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/reject-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useFixPrdWithAi(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-with-ai`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
     },
   });
 }

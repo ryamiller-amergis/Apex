@@ -9,6 +9,8 @@ export interface ChatMessage {
   toolName?: string;
   /** User-uploaded context files attached to this message */
   attachments?: ChatAttachmentMeta[];
+  /** When true, this message is an internal prompt and should not be shown in the UI */
+  hidden?: boolean;
 }
 
 export interface ChatAttachment {
@@ -41,6 +43,10 @@ export interface ChatThreadKickoff {
   transcript?: string;
   /** Additional freeform context */
   freeformContext?: string;
+  /** MCP pill selected on the home page — wires an external MCP server into this thread */
+  mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Identifies the type of assistant thread — controls system prompt behavior */
+  assistantType?: 'design-doc' | 'prd';
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
@@ -80,6 +86,7 @@ export type SseEventType =
   | 'tool_call'   // agent invoked a tool
   | 'status'      // thread status changed
   | 'error'       // run-level error
+  | 'retrying'    // server is transparently retrying a transient failure
   | 'done';       // turn completed
 
 export interface SseTokenEvent {
@@ -111,6 +118,12 @@ export interface SseErrorEvent {
   errorCode?: SseErrorCode;
 }
 
+export interface SseRetryingEvent {
+  type: 'retrying';
+  attempt: number;
+  maxAttempts: number;
+}
+
 export interface SseDoneEvent {
   type: 'done';
   runId?: string;
@@ -124,6 +137,7 @@ export type SseEvent =
   | SseToolCallEvent
   | SseStatusEvent
   | SseErrorEvent
+  | SseRetryingEvent
   | SseDoneEvent;
 
 // ── Thread summary (lightweight, no messages) ─────────────────────────────────

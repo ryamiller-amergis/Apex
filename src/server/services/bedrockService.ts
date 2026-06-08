@@ -32,6 +32,21 @@ const UI_MOCK_MAX_TOKENS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 16000;
 })();
 
+/** Default max-tokens used by PRD Apex Review when no project-level override is set. */
+export const PRD_REVIEW_DEFAULT_MAX_TOKENS = 16000;
+
+/**
+ * Curated list of Bedrock models available for selection in the admin UI.
+ * IDs use the cross-region inference prefix (us.*) which works in us-east-1.
+ */
+export const AVAILABLE_BEDROCK_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5 (fast, economical)' },
+  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku (fast, economical)' },
+  { id: 'us.anthropic.claude-sonnet-4-5-20251001-v1:0', label: 'Claude Sonnet 4.5 (balanced)' },
+  { id: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet v2 (balanced)' },
+  { id: 'us.anthropic.claude-opus-4-5-20251001-v1:0', label: 'Claude Opus 4.5 (most capable)' },
+];
+
 /* ── SDLC skill content cache ─────────────────────────────── */
 
 const SKILL_REPO = 'MaxView';
@@ -2279,6 +2294,130 @@ export function synthesisePlanFromUiMock(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/* ════════════════════════════════════════════════════════════
+   PRD FIX-WITH-AI
+   ════════════════════════════════════════════════════════════ */
+
+export interface PrdCommentReply {
+  authorName?: string;
+  body: string;
+}
+
+export interface PrdComment {
+  sectionKey?: string | null;
+  exact?: string | null;
+  body: string;
+  authorName?: string;
+  replies?: PrdCommentReply[];
+}
+
+function formatCommentsForPrompt(comments: PrdComment[]): string {
+  return comments
+    .map((c, i) => {
+      const parts: string[] = [`### Comment ${i + 1}`];
+      if (c.authorName) parts.push(`Reviewer: ${c.authorName}`);
+      if (c.exact) parts.push(`Highlighted text (MUST be the focus of this fix): "${c.exact}"`);
+      parts.push(`Feedback: ${c.body}`);
+      if (c.replies && c.replies.length > 0) {
+        parts.push('Thread replies (often contain specific fix instructions):');
+        for (const reply of c.replies) {
+          const prefix = reply.authorName ? `${reply.authorName}: ` : '';
+          parts.push(`  - ${prefix}${reply.body}`);
+        }
+      }
+      return parts.join('\n');
+    })
+    .join('\n\n');
+}
+
+/**
+ * Apply open review comments to a PRD and return the revised markdown.
+ * Calls Bedrock once — returns the full updated PRD content as a string.
+ */
+export async function fixPrdContentWithBedrock(
+  prdContent: string,
+  comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
+): Promise<string> {
+  const commentLines = formatCommentsForPrompt(comments);
+
+  const prompt = `You are a senior product owner. Revise the PRD below to address every review comment listed.
+
+## Current PRD Content
+
+${prdContent || '(empty)'}
+
+## Review Comments to Address
+
+${commentLines}
+
+## Instructions
+
+- Each comment has a "Highlighted text" field — this is the EXACT passage the reviewer selected. Your fix MUST target that specific text. Do not make unrelated changes elsewhere.
+- Pay close attention to thread replies — they often contain the specific wording or instructions for what to change.
+- Produce the complete revised PRD as clean markdown.
+- Only modify the passages referenced by the highlighted text. Keep all other content unchanged.
+- Preserve all sections, heading levels, and overall structure unless a comment explicitly asks to change them.
+- Do NOT add a preamble, summary, or explanation — output ONLY the revised markdown, starting directly with the first heading.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+
+  const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
+  return fenced ? fenced[1].trim() : text.trim();
+}
+
+/**
+ * Apply open review comments to a PRD backlog and return the revised backlog JSON.
+ * Calls Bedrock once — returns the updated backlog as a parsed object.
+ */
+export async function fixPrdBacklogWithBedrock(
+  backlogJson: unknown,
+  comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
+): Promise<unknown> {
+  const commentLines = formatCommentsForPrompt(comments);
+  const backlogStr = JSON.stringify(backlogJson, null, 2);
+
+  const prompt = `You are a senior product owner. Revise the backlog JSON below to address every review comment listed.
+
+## Current Backlog JSON
+
+\`\`\`json
+${backlogStr}
+\`\`\`
+
+## Review Comments to Address
+
+${commentLines}
+
+## Instructions
+
+- Each comment has a "Highlighted text" field — this is the EXACT text the reviewer selected from the rendered backlog. Your fix MUST target that specific content (e.g. a specific epic title, feature description, user story, acceptance criteria, etc.). Do not make unrelated changes.
+- Pay close attention to thread replies — they often contain the specific wording or instructions for what to change.
+- Output ONLY the complete revised backlog as valid JSON (no markdown fences, no preamble, no explanation).
+- Only modify the fields/items referenced by the highlighted text. Keep all other data unchanged.
+- Preserve the exact same JSON structure and all existing fields.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+
+  // Strip any accidental code fences
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const cleaned = fenced ? fenced[1].trim() : text.trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // If the model produces invalid JSON, fall back to returning null so caller knows it failed
+    return null;
+  }
 }
 
 /* ════════════════════════════════════════════════════════════

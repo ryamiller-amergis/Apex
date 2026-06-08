@@ -28,14 +28,24 @@ import {
 } from '../hooks/useInterviews';
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { ReviewReasonModal } from './ReviewReasonModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import { AnnotationLayer } from './AnnotationLayer';
+import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap } from '../../shared/types/interview';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import {
+  useReviewComments,
+  useUnresolvedCommentCount,
+  useCreateComment,
+  useResolveComment,
+  useReopenComment as useReopenReviewComment,
+  useDeleteComment,
+} from '../hooks/useReviewComments';
 import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
+import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
 
 type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation' | 'qa-context';
@@ -506,16 +516,27 @@ interface DesignDocAssistantPanelProps {
   designDocId: string;
   onClose: () => void;
   discussContext?: DiscussContext;
+  docAssistantThreadId?: string | null;
+  canCreateThread: boolean;
+  readOnly: boolean;
 }
 
 const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 800;
 const DEFAULT_PANEL_WIDTH = 380;
 
-const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ designDocId, onClose, discussContext }) => {
-  const [threadId, setThreadId] = useState<string | null>(() =>
-    discussContext ? null : localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId)),
-  );
+const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
+  designDocId,
+  onClose,
+  discussContext,
+  docAssistantThreadId,
+  canCreateThread,
+  readOnly,
+}) => {
+  const [threadId, setThreadId] = useState<string | null>(() => {
+    if (discussContext) return null;
+    return docAssistantThreadId ?? localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId));
+  });
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -574,6 +595,14 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
       skipAutoCreateRef.current = false;
       return;
     }
+    if (!canCreateThread && !docAssistantThreadId) {
+      setCreateError('No assistant conversation is available for this document.');
+      return;
+    }
+    if (!canCreateThread && docAssistantThreadId) {
+      setThreadId(docAssistantThreadId);
+      return;
+    }
     setIsCreating(true);
     setCreateError(null);
     fetch(`/api/interviews/design-docs/${designDocId}/assistant-thread`, {
@@ -591,7 +620,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
       })
       .catch(() => setCreateError('Failed to start assistant. Please try again.'))
       .finally(() => setIsCreating(false));
-  }, [designDocId, threadId, discussContext]);
+  }, [designDocId, threadId, discussContext, canCreateThread, docAssistantThreadId]);
 
   const discussContextSentRef = useRef(false);
   useEffect(() => {
@@ -652,7 +681,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId) return;
+    if (!text || isRunning || isSending || !threadId || readOnly) return;
     setInput('');
     setIsSending(true);
     try {
@@ -665,7 +694,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
     } finally {
       setIsSending(false);
     }
-  }, [input, isRunning, isSending, threadId]);
+  }, [input, isRunning, isSending, threadId, readOnly]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -745,6 +774,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
           <span className={styles.assistantPanelTitle}>Apex Assistant</span>
         </div>
         <div className={styles.assistantPanelHeaderActions}>
+          {!readOnly && canCreateThread && (
           <button
             className={styles.assistantPanelIconBtn}
             onClick={() => setShowNewConvConfirm(true)}
@@ -756,6 +786,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
               <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
             </svg>
           </button>
+          )}
           <button className={styles.assistantPanelClose} onClick={onClose} type="button" aria-label="Close assistant">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
               <path d="M1 1l12 12M13 1L1 13" />
@@ -812,35 +843,41 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({ desig
         </div>
       </div>
 
-      <div className={styles.qaInputArea}>
-        <div className={styles.qaInputBox}>
-          <textarea
-            ref={textareaRef}
-            className={styles.qaInputField}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              isCreating ? 'Starting assistant…' :
-              isRunning ? 'Agent is thinking…' :
-              'Ask about this design doc… (Enter to send)'
-            }
-            rows={1}
-            disabled={isRunning || isSending || isCreating || !threadId}
-          />
-          <button
-            className={styles.qaSendBtn}
-            onClick={() => void handleSend()}
-            disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
-            type="button"
-            aria-label="Send"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor">
-              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-            </svg>
-          </button>
+      {!readOnly ? (
+        <div className={styles.qaInputArea}>
+          <div className={styles.qaInputBox}>
+            <textarea
+              ref={textareaRef}
+              className={styles.qaInputField}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                isCreating ? 'Starting assistant…' :
+                isRunning ? 'Agent is thinking…' :
+                'Ask about this design doc… (Enter to send)'
+              }
+              rows={1}
+              disabled={isRunning || isSending || isCreating || !threadId}
+            />
+            <button
+              className={styles.qaSendBtn}
+              onClick={() => void handleSend()}
+              disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
+              type="button"
+              aria-label="Send"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+          Assistant is read-only — you can view the conversation but cannot send messages.
+        </div>
+      )}
     </div>
     </>
   );
@@ -889,9 +926,15 @@ interface DesignDocQaChatProps {
   designDocId: string;
   qaChatThreadId: string;
   canTriggerGenerate: boolean;
+  canSend: boolean;
 }
 
-const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatThreadId, canTriggerGenerate }) => {
+const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({
+  designDocId,
+  qaChatThreadId,
+  canTriggerGenerate,
+  canSend,
+}) => {
   const { messages, streamingText, status: threadStatus } = useChatStream(qaChatThreadId);
   const generateDoc = useGenerateDesignDoc();
   const [input, setInput] = useState('');
@@ -1032,6 +1075,7 @@ const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatTh
         </div>
       </div>
 
+      {canSend ? (
       <div className={styles.qaInputArea}>
         <div className={styles.qaInputBox}>
           <textarea
@@ -1057,6 +1101,11 @@ const DesignDocQaChat: React.FC<DesignDocQaChatProps> = ({ designDocId, qaChatTh
           </button>
         </div>
       </div>
+      ) : (
+        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+          Q&amp;A is read-only for this document.
+        </div>
+      )}
     </div>
   );
 };
@@ -1084,6 +1133,18 @@ export const DesignDocReviewView: React.FC = () => {
   const revertSection = useRevertDesignDocSection();
 
   const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
+
+  const { data: reviewComments = [] } = useReviewComments(id, 'design_doc');
+  const { data: unresolvedData } = useUnresolvedCommentCount(id, 'design_doc');
+  const unresolvedCount = unresolvedData?.count ?? 0;
+  const createComment = useCreateComment('design_doc', id);
+  const resolveComment = useResolveComment(userId ?? '');
+  const reopenReviewComment = useReopenReviewComment();
+  const deleteComment = useDeleteComment();
+
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [pendingSelector, setPendingSelector] = useState<{ sectionKey: ReviewSectionKey; selector: TextSelector } | null>(null);
+  const [newCommentBody, setNewCommentBody] = useState('');
 
   // Restore fix review state from server's fixBaseline on page load.
   // If the doc has a fixBaseline stored (fix was done but not yet accepted/reverted),
@@ -1188,20 +1249,16 @@ export const DesignDocReviewView: React.FC = () => {
 
   const reassignApprovers = useReassignApprovers();
 
-  const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
 
-  const { data: assignments = [] } = useDocumentAssignments(
-    doc?.status === 'pending_review' ? id : null,
-    'design_doc',
-  );
+  const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
 
   const isInterviewing = doc?.status === 'interviewing';
-  const isGenerating = !isInterviewing && !!doc && (
+  const isGenerating = !isInterviewing && !!doc && doc.status === 'generating' && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
   );
 
@@ -1449,15 +1506,45 @@ export const DesignDocReviewView: React.FC = () => {
     }
   }, [validationReport, doc?.status, id, refreshValidation]);
 
-  const handleRequestRevision = useCallback(async (reason: string) => {
-    if (!id) return;
-    await reviewDoc.mutateAsync({
-      designDocId: id,
-      action: 'request_revision',
-      comment: reason,
+  const sectionKeyToTab: Record<string, TabId> = {
+    'design': 'design',
+    'tech_spec': 'tech-spec',
+    'assumptions': 'assumptions',
+  };
+
+  const handleCommentClick = useCallback((commentId: string) => {
+    const comment = reviewComments.find((c) => c.id === commentId);
+    if (comment) {
+      const targetTab = sectionKeyToTab[comment.sectionKey];
+      if (targetTab) setActiveTab(targetTab);
+    }
+    setActiveCommentId(commentId);
+  }, [reviewComments]);
+
+  const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
+    setPendingSelector({ sectionKey, selector });
+    setNewCommentBody('');
+  }, []);
+
+  const handleSubmitComment = useCallback(async () => {
+    if (!pendingSelector || !newCommentBody.trim()) return;
+    await createComment.mutateAsync({
+      sectionKey: pendingSelector.sectionKey,
+      body: newCommentBody.trim(),
+      selector: pendingSelector.selector,
     });
-    setShowRevisionModal(false);
-  }, [id, reviewDoc]);
+    setPendingSelector(null);
+    setNewCommentBody('');
+  }, [pendingSelector, newCommentBody, createComment]);
+
+  const handleCommentReply = useCallback(async (commentId: string, body: string) => {
+    await fetch(`/api/review-comments/${commentId}/replies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ body }),
+    });
+  }, []);
 
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
@@ -1472,9 +1559,22 @@ export const DesignDocReviewView: React.FC = () => {
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
   const canUseAssistant = (isReviewer || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+  const canWriteAssistant = canEdit || canPerformReview;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
+
+  const showCommentLayer =
+    (doc.status === 'pending_review' || doc.status === 'revision_requested') &&
+    (canPerformReview || isAuthor || isAdmin);
+
+  const tabToSectionKey: Record<string, ReviewSectionKey> = {
+    'design': 'design',
+    'tech-spec': 'tech_spec',
+    'assumptions': 'assumptions',
+  };
+  const activeSectionKey = tabToSectionKey[activeTab] ?? 'design';
+  const activeSectionComments = reviewComments.filter((c) => c.sectionKey === activeSectionKey);
 
   const showFixBanner =
     validationBlocking &&
@@ -1548,30 +1648,37 @@ export const DesignDocReviewView: React.FC = () => {
                 </span>
               )}
             </div>
-            {(sourcePrd || doc.reviewComment) && (
-              <div className={styles.parentLinks}>
-                {sourcePrd && (
-                  <button
-                    className={styles.parentLinkChip}
-                    onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
-                    type="button"
-                    title={`View PRD: ${sourcePrd.title}`}
-                  >
-                    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="1" width="10" height="12" rx="1.5" />
-                      <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
-                    </svg>
-                    {sourcePrd.title}
-                    <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 8, height: 8, opacity: 0.6 }}>
-                      <path d="M2 8L8 2M5 2h3v3" />
-                    </svg>
-                  </button>
-                )}
-                {doc.reviewComment && (
-                  <span className={styles.reviewCommentChip}>
-                    "{doc.reviewComment}"
+            <div className={styles.metaRow}>
+              <span className={styles.metaItem}>
+                <span className={styles.metaLabel}>Owner:</span>
+                <span className={styles.metaValue}>{doc.ownerName ?? doc.ownerId ?? doc.authorName ?? doc.authorId}</span>
+              </span>
+              {assignments.length > 0 && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Reviewer(s):</span>
+                  <span className={styles.metaValue}>
+                    {assignments.map((a) => a.approverDisplayName ?? a.approverUserId).join(', ')}
                   </span>
-                )}
+                </span>
+              )}
+            </div>
+            {sourcePrd && (
+              <div className={styles.parentLinks}>
+                <button
+                  className={styles.parentLinkChip}
+                  onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
+                  type="button"
+                  title={`View PRD: ${sourcePrd.title}`}
+                >
+                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="1" width="10" height="12" rx="1.5" />
+                    <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
+                  </svg>
+                  {sourcePrd.title}
+                  <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 8, height: 8, opacity: 0.6 }}>
+                    <path d="M2 8L8 2M5 2h3v3" />
+                  </svg>
+                </button>
               </div>
             )}
           </div>
@@ -1676,26 +1783,19 @@ export const DesignDocReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleApprove()}
-                  disabled={reviewDoc.isPending || validationBlocking || !canPerformReview}
+                  disabled={reviewDoc.isPending || validationBlocking || !canPerformReview || unresolvedCount > 0}
                   title={
                     !canPerformReview
                       ? 'You are not an assigned approver for this document'
-                      : validationBlocking
-                        ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
-                        : undefined
+                      : unresolvedCount > 0
+                        ? 'Resolve all comments before approving'
+                        : validationBlocking
+                          ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
+                          : undefined
                   }
                   type="button"
                 >
                   Approve
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => setShowRevisionModal(true)}
-                  disabled={!canPerformReview}
-                  title={!canPerformReview ? 'You are not an assigned approver for this document' : undefined}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>
@@ -1730,6 +1830,7 @@ export const DesignDocReviewView: React.FC = () => {
           designDocId={doc.id}
           qaChatThreadId={doc.qaChatThreadId ?? ''}
           canTriggerGenerate={canManage && (isAuthor || isAdmin)}
+          canSend={canEdit}
         />
       ) : isGenerating ? (
         /* ── Generating skeleton ─────────────────────────────────────── */
@@ -1970,38 +2071,77 @@ export const DesignDocReviewView: React.FC = () => {
                         <div className={styles.validationReportEmptySub}>No interview Q&amp;A has been recorded for this document.</div>
                       </div>
                 ) : (
-                  <>
-                    {doc.status === 'validating' && (
-                      <div className={styles.validatingBanner}>
-                        <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
-                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                        </svg>
-                        <div className={styles.validatingBannerText}>
-                          <div className={styles.validatingBannerTitle}>Validation in progress</div>
-                          <div className={styles.validatingBannerSub}>
-                            The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
+                  <div className={styles.contentWithSidebar}>
+                    <div className={styles.contentMain}>
+                      {doc.status === 'validating' && (
+                        <div className={styles.validatingBanner}>
+                          <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
+                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                          </svg>
+                          <div className={styles.validatingBannerText}>
+                            <div className={styles.validatingBannerTitle}>Validation in progress</div>
+                            <div className={styles.validatingBannerSub}>
+                              The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
+                      {showCommentLayer && editingTab !== activeTab ? (
+                        <AnnotationLayer
+                          sectionKey={activeSectionKey}
+                          comments={activeSectionComments}
+                          activeCommentId={activeCommentId}
+                          onAddComment={handleAddComment}
+                          onCommentClick={handleCommentClick}
+                        >
+                          <ContentPane
+                            content={tabContent[activeTab]}
+                            isEditing={false}
+                            editValue=""
+                            isDirty={false}
+                            isSaving={false}
+                            canEdit={canEdit}
+                            placeholder={tabPlaceholder[activeTab]}
+                            markdownComponents={markdownComponents}
+                            onEditChange={() => {}}
+                            onSave={() => {}}
+                            onDiscard={() => {}}
+                          />
+                        </AnnotationLayer>
+                      ) : (
+                        <ContentPane
+                          content={tabContent[activeTab]}
+                          isEditing={editingTab === activeTab}
+                          editValue={
+                            activeTab === 'design' ? designEdit :
+                            activeTab === 'tech-spec' ? techSpecEdit :
+                            assumptionsEdit
+                          }
+                          isDirty={dirtyTabs.has(activeTab)}
+                          isSaving={updateContent.isPending}
+                          canEdit={canEdit}
+                          placeholder={tabPlaceholder[activeTab]}
+                          markdownComponents={markdownComponents}
+                          onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation' | 'qa-context'>, v)}
+                          onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
+                          onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
+                        />
+                      )}
+                    </div>
+                    {showCommentLayer && (
+                      <ReviewCommentSidebar
+                        comments={reviewComments}
+                        activeCommentId={activeCommentId}
+                        currentUserId={userId ?? ''}
+                        documentAuthorUserId={doc.authorId}
+                        onCommentClick={handleCommentClick}
+                        onReply={(commentId, body) => void handleCommentReply(commentId, body)}
+                        onResolve={(commentId) => resolveComment.mutate(commentId)}
+                        onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                        onDelete={(commentId) => deleteComment.mutate(commentId)}
+                      />
                     )}
-                    <ContentPane
-                      content={tabContent[activeTab]}
-                      isEditing={editingTab === activeTab}
-                      editValue={
-                        activeTab === 'design' ? designEdit :
-                        activeTab === 'tech-spec' ? techSpecEdit :
-                        assumptionsEdit
-                      }
-                      isDirty={dirtyTabs.has(activeTab)}
-                      isSaving={updateContent.isPending}
-                      canEdit={canEdit}
-                      placeholder={tabPlaceholder[activeTab]}
-                      markdownComponents={markdownComponents}
-                      onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation' | 'qa-context'>, v)}
-                      onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
-                      onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation' | 'qa-context'>)}
-                    />
-                  </>
+                  </div>
                 )}
               </div>
             </>
@@ -2014,6 +2154,9 @@ export const DesignDocReviewView: React.FC = () => {
           designDocId={doc.id}
           onClose={handleAssistantClose}
           discussContext={discussContext ?? undefined}
+          docAssistantThreadId={doc.docAssistantThreadId}
+          canCreateThread={canWriteAssistant}
+          readOnly={!canWriteAssistant}
         />
       )}
 
@@ -2032,14 +2175,38 @@ export const DesignDocReviewView: React.FC = () => {
         />
       )}
 
-      {showRevisionModal && (
-        <ReviewReasonModal
-          itemName={doc.title}
-          docTypeName="Design Doc"
-          isPending={reviewDoc.isPending}
-          onConfirm={(reason) => void handleRequestRevision(reason)}
-          onCancel={() => setShowRevisionModal(false)}
-        />
+      {pendingSelector && (
+        <div className={styles.commentModal} onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }} role="dialog" aria-modal="true">
+          <div className={styles.commentModalCard}>
+            <h3 className={styles.commentModalTitle}>Add Comment</h3>
+            <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
+            <textarea
+              className={styles.commentModalInput}
+              value={newCommentBody}
+              onChange={(e) => setNewCommentBody(e.target.value)}
+              placeholder="Write your comment…"
+              rows={3}
+              autoFocus
+            />
+            <div className={styles.commentModalActions}>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setPendingSelector(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => void handleSubmitComment()}
+                disabled={!newCommentBody.trim() || createComment.isPending}
+                type="button"
+              >
+                {createComment.isPending ? 'Posting…' : 'Post Comment'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showApproverModal && doc && (
