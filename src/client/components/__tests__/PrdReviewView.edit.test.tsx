@@ -69,6 +69,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useSyncPrdAdoStatus: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixPrdWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useFixPrdCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDocumentAssignments: jest.fn(() => ({ data: [] })),
 }));
 
