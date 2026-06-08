@@ -23,13 +23,13 @@ const UI_MOCK_MODEL_ID = process.env.BEDROCK_UI_MOCK_MODEL_ID ?? MODEL_ID;
  * Max output tokens for UI mock generation. Bigger/newer models (Sonnet 4.6,
  * Opus 4.7) produce much longer HTML+JSON responses than Haiku 4.5, and the
  * default 4096 cap was truncating them mid-output, causing JSON parse failures.
- * 16K covers a typical mock comfortably; raise via env var if you observe
- * "model refused" / truncated-JSON errors with a particularly large mock.
+ * 32K covers Opus 4.7 design prototype output comfortably; override via env var
+ * if you observe truncated-JSON errors with particularly large mocks.
  */
 const UI_MOCK_MAX_TOKENS = (() => {
   const raw = process.env.BEDROCK_UI_MOCK_MAX_TOKENS;
   const parsed = raw ? Number(raw) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 16000;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32000;
 })();
 
 /** Default max-tokens used by PRD Apex Review when no project-level override is set. */

@@ -306,7 +306,7 @@ const NewInterviewCompose: React.FC = () => {
     setShowOwnerModal(true);
   }, [input, title, attachments, isSending, resolvedRepoName, speech]);
 
-  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[] }) => {
+  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
@@ -329,8 +329,10 @@ const NewInterviewCompose: React.FC = () => {
         chatThreadId: threadResult.threadId,
         prdOwnerId: selections.prdOwnerId,
         designDocOwnerId: selections.designDocOwnerId,
+        designPrototypeOwnerId: selections.designPrototypeOwnerId,
         prdApproverIds: selections.prdApproverIds,
         designDocApproverIds: selections.designDocApproverIds,
+        designPrototypeApproverIds: selections.designPrototypeApproverIds,
       });
       trackEvent('interview.started', {
         interviewId: result.interviewId,
@@ -857,7 +859,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
             </div>
-            {(interview.prdOwnerName || interview.designDocOwnerName) && (
+            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
               <div className={styles.ownerChips}>
                 {interview.prdOwnerName && (
                   <span className={styles.ownerChip}>
@@ -867,6 +869,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 {interview.designDocOwnerName && (
                   <span className={styles.ownerChip}>
                     Design Doc: {interview.designDocOwnerName}
+                  </span>
+                )}
+                {interview.designPrototypeOwnerName && (
+                  <span className={styles.ownerChip}>
+                    Design Prototype: {interview.designPrototypeOwnerName}
                   </span>
                 )}
               </div>

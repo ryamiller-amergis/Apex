@@ -198,7 +198,7 @@ export async function updatePrdBacklog(
 export async function submitForReview(
   id: string,
   requestingUserId: string,
-  opts?: { prdApproverIds?: string[]; designDocApproverIds?: string[] },
+  opts?: { prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[] },
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
@@ -213,17 +213,21 @@ export async function submitForReview(
 
   let effectivePrdApproverIds = opts?.prdApproverIds;
   let effectiveDdApproverIds = opts?.designDocApproverIds;
+  let effectivePrototypeApproverIds = opts?.designPrototypeApproverIds;
 
   if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
     const interview = await db.query.interviews.findFirst({
       where: eq(interviews.id, row.interviewId),
-      columns: { prdApproverIds: true, designDocApproverIds: true },
+      columns: { prdApproverIds: true, designDocApproverIds: true, designPrototypeApproverIds: true },
     });
     if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
       effectivePrdApproverIds = interview.prdApproverIds;
     }
     if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
       effectiveDdApproverIds = interview?.designDocApproverIds ?? undefined;
+    }
+    if (!effectivePrototypeApproverIds || effectivePrototypeApproverIds.length === 0) {
+      effectivePrototypeApproverIds = interview?.designPrototypeApproverIds ?? undefined;
     }
   }
 
@@ -236,6 +240,10 @@ export async function submitForReview(
 
   if (effectiveDdApproverIds && effectiveDdApproverIds.length > 0) {
     updates.designDocApproverIds = effectiveDdApproverIds;
+  }
+
+  if (effectivePrototypeApproverIds && effectivePrototypeApproverIds.length > 0) {
+    updates.designPrototypeApproverIds = effectivePrototypeApproverIds;
   }
 
   await db.update(prds).set(updates).where(eq(prds.id, id));
