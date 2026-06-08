@@ -142,7 +142,7 @@ export function useActiveUsers() {
 
 // ── Approver queries ──────────────────────────────────────────────────────────
 
-export function useAvailableApproverPool(project: string, documentType: 'prd' | 'design_doc', excludeSelf = true) {
+export function useAvailableApproverPool(project: string, documentType: 'prd' | 'design_doc' | 'design_prototype', excludeSelf = true) {
   const qs = excludeSelf ? '?excludeSelf=true' : '';
   return useQuery<ApproverPoolResponse>({
     queryKey: ['available-approver-pool', project, documentType, excludeSelf],
@@ -198,7 +198,7 @@ export function useDocumentAssignments(documentId: string | null, documentType: 
 
 export function useCreateInterview() {
   const qc = useQueryClient();
-  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[] }>({
+  return useMutation<CreateInterviewResponse, Error, { project: string; repo: string; title?: string; chatThreadId: string; prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[] }>({
     mutationFn: (body) =>
       apiFetch('/api/interviews', {
         method: 'POST',

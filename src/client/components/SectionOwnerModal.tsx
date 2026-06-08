@@ -166,8 +166,10 @@ interface SectionOwnerModalProps {
   onConfirm: (selections: {
     prdOwnerId?: string;
     designDocOwnerId?: string;
+    designPrototypeOwnerId?: string;
     prdApproverIds?: string[];
     designDocApproverIds?: string[];
+    designPrototypeApproverIds?: string[];
   }) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
@@ -255,12 +257,15 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
 }) => {
   const [prdOwnerId, setPrdOwnerId] = useState('');
   const [designDocOwnerId, setDesignDocOwnerId] = useState('');
+  const [designPrototypeOwnerId, setDesignPrototypeOwnerId] = useState('');
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
   const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
+  const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
 
   const { data: users = [], isLoading } = useActiveUsers();
   const { data: prdPool, isLoading: prdPoolLoading } = useAvailableApproverPool(project, 'prd', false);
   const { data: ddPool, isLoading: ddPoolLoading } = useAvailableApproverPool(project, 'design_doc', false);
+  const { data: protoPool, isLoading: protoPoolLoading } = useAvailableApproverPool(project, 'design_prototype', false);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -272,12 +277,15 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
 
   const hasPrdPool = prdPool && (prdPool.individuals.length > 0 || prdPool.groups.length > 0);
   const hasDdPool = ddPool && (ddPool.individuals.length > 0 || ddPool.groups.length > 0);
+  const hasProtoPool = protoPool && (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
 
   const canConfirm =
     !!prdOwnerId &&
     !!designDocOwnerId &&
+    !!designPrototypeOwnerId &&
     (!hasPrdPool || prdApproverIds.length > 0) &&
     (!hasDdPool || designDocApproverIds.length > 0) &&
+    (!hasProtoPool || designPrototypeApproverIds.length > 0) &&
     !isSubmitting;
 
   const handleConfirm = () => {
@@ -285,8 +293,10 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     onConfirm({
       prdOwnerId,
       designDocOwnerId,
+      designPrototypeOwnerId,
       prdApproverIds: prdApproverIds.length > 0 ? prdApproverIds : undefined,
       designDocApproverIds: designDocApproverIds.length > 0 ? designDocApproverIds : undefined,
+      designPrototypeApproverIds: designPrototypeApproverIds.length > 0 ? designPrototypeApproverIds : undefined,
     });
   };
 
@@ -296,6 +306,10 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
 
   const toggleDdApprover = useCallback((id: string) => {
     setDesignDocApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }, []);
+
+  const toggleProtoApprover = useCallback((id: string) => {
+    setDesignPrototypeApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }, []);
 
   return (
@@ -313,7 +327,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               Assign Owners &amp; Reviewers
             </h2>
             <p className={styles.subtitle}>
-              Select owners and reviewers for PRD and Design Doc. All fields are required.
+              Select owners and reviewers for PRD, Design Doc, and Design Prototypes. All fields are required.
             </p>
           </div>
           <button
@@ -364,6 +378,24 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
           </div>
 
           <div className={styles.field}>
+            <label className={styles.label} htmlFor="so-proto-owner">
+              Design Prototype Owner (UI/UX) *
+            </label>
+            {isLoading ? (
+              <span className={styles.loadingText}>Loading users…</span>
+            ) : (
+              <UserCombobox
+                id="so-proto-owner"
+                users={users}
+                selectedId={designPrototypeOwnerId}
+                onSelect={setDesignPrototypeOwnerId}
+                placeholder="Search by name or email…"
+                disabled={isSubmitting}
+              />
+            )}
+          </div>
+
+          <div className={styles.field}>
             <label className={styles.label}>PRD Reviewers *</label>
             {prdPoolLoading ? (
               <span className={styles.loadingText}>Loading…</span>
@@ -384,12 +416,23 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover)
             )}
           </div>
+
+          <div className={styles.field}>
+            <label className={styles.label}>Design Prototype Reviewers *</label>
+            {protoPoolLoading ? (
+              <span className={styles.loadingText}>Loading…</span>
+            ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
+              <span className={styles.noApprovers}>No approvers configured</span>
+            ) : (
+              renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
+            )}
+          </div>
         </div>
 
         {!canConfirm && !isSubmitting && (
           <p className={styles.validationHint}>
-            {!prdOwnerId || !designDocOwnerId
-              ? 'Select both owners to continue'
+            {!prdOwnerId || !designDocOwnerId || !designPrototypeOwnerId
+              ? 'Select all owners to continue'
               : 'Select at least one reviewer in each section'}
           </p>
         )}

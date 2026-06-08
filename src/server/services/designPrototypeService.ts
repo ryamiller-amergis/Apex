@@ -144,13 +144,14 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
     });
   }
 
-  // Assign the project's design-prototype approver pool to this PRD's prototype
-  // set and notify them that there are prototypes to review. Keyed by prdId since
-  // the review screen shows all feature prototypes for the PRD together.
+  // Assign kick-off prototype reviewers (or fall back to the project pool) and notify them.
   try {
     const { getApproverUserIds } = await import('./projectSettingsService');
     const { assignApprovers } = await import('./documentApprovalService');
-    const poolIds = await getApproverUserIds(prd.project, 'design_prototype');
+    const kickoffIds = prd.designPrototypeApproverIds?.filter(Boolean) ?? [];
+    const poolIds = kickoffIds.length > 0
+      ? kickoffIds
+      : await getApproverUserIds(prd.project, 'design_prototype');
     if (poolIds.length > 0) {
       await assignApprovers(prdId, 'design_prototype', poolIds, prd.authorId);
     }
