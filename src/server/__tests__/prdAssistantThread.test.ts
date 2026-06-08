@@ -99,6 +99,12 @@ jest.mock('../db/drizzle', () => {
       select: jest.fn().mockImplementation(makeSelectChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
       execute: jest.fn().mockResolvedValue(undefined),
+      // apply-proposed reads fixCommentId via the relational query API.
+      // Default: null → bulk resolution path (all open comments resolved).
+      query: {
+        prds: { findFirst: jest.fn().mockResolvedValue(null) },
+        designDocs: { findFirst: jest.fn().mockResolvedValue(null) },
+      },
     },
   };
 });
@@ -110,7 +116,14 @@ const { getPrd: mockGetPrd } = jest.requireMock('../services/prdService') as { g
 let permissionsRequestedAtLoad: string[] = [];
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
 const { createThread: mockCreateThread } = jest.requireMock('../services/chatAgentService') as { createThread: jest.Mock };
-const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { db: mockDb } = jest.requireMock('../db/drizzle') as {
+  db: {
+    select: jest.Mock;
+    update: jest.Mock;
+    execute: jest.Mock;
+    query: { prds: { findFirst: jest.Mock }; designDocs: { findFirst: jest.Mock } };
+  };
+};
 const { requirePermission: mockRequirePermission } = jest.requireMock('../middleware/rbac') as { requirePermission: jest.Mock };
 
 // Capture route-registration permission calls before any clearAllMocks
@@ -330,6 +343,8 @@ describe('POST /api/interviews/prds/:prdId/apply-proposed', () => {
       where: jest.fn().mockResolvedValue(undefined),
     }));
     mockDb.execute.mockResolvedValue(undefined);
+    // Default: no fixCommentId — bulk resolution path
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
   });
 
   it('atomically promotes proposed content via raw SQL and returns { ok: true }', async () => {

@@ -18,6 +18,10 @@ interface ReviewCommentSidebarProps {
   onFixWithAi?: () => void;
   isFixingWithAi?: boolean;
   fixAiError?: string;
+  /** When provided, a sparkle "Fix with Apex" icon button appears on each open comment card */
+  onFixCommentWithAi?: (commentId: string) => void;
+  /** The commentId currently being fixed (shows spinner on that card) */
+  fixingCommentId?: string | null;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -47,6 +51,8 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
   onFixWithAi,
   isFixingWithAi = false,
   fixAiError,
+  onFixCommentWithAi,
+  fixingCommentId,
 }) => {
   const sorted = [...comments].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
@@ -118,6 +124,8 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
               onResolve={onResolve}
               onReopen={onReopen}
               onDelete={onDelete}
+              onFixCommentWithAi={onFixCommentWithAi}
+              fixingCommentId={fixingCommentId}
             />
           ))
         )}
@@ -137,6 +145,8 @@ interface ThreadCardProps {
   onResolve: (commentId: string) => void;
   onReopen: (commentId: string) => void;
   onDelete: (commentId: string) => void;
+  onFixCommentWithAi?: (commentId: string) => void;
+  fixingCommentId?: string | null;
 }
 
 const ThreadCard: React.FC<ThreadCardProps> = ({
@@ -150,6 +160,8 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
   onResolve,
   onReopen,
   onDelete,
+  onFixCommentWithAi,
+  fixingCommentId,
 }) => {
   const [replyText, setReplyText] = useState('');
   const cardRef = useRef<HTMLDivElement>(null);
@@ -253,6 +265,26 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
               <path d="M3 4h10M6 4V2.5h4V4M5 4l.5 9h5l.5-9" />
             </svg>
             Delete
+          </button>
+        )}
+        {!isResolved && onFixCommentWithAi && (
+          <button
+            className={styles.fixCommentBtn}
+            onClick={(e) => { e.stopPropagation(); onFixCommentWithAi(comment.id); }}
+            disabled={fixingCommentId === comment.id}
+            type="button"
+            title="Fix this comment with Apex"
+          >
+            {fixingCommentId === comment.id ? (
+              <svg className={styles.fixAiSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5Z" />
+                <path d="M19 15l.75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75Z" />
+              </svg>
+            )}
           </button>
         )}
       </div>

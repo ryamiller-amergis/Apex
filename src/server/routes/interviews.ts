@@ -8,7 +8,7 @@ import { db } from '../db/drizzle';
 import { eq, and, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable } from '../db/schema';
 import { getComments } from '../services/reviewCommentService';
-import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
   deleteInterview,
@@ -465,36 +465,60 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
 });
 
 // POST /prds/:prdId/apply-proposed — atomically promote proposed content to live
-// content and auto-resolve open comments that the fix addressed.
+// content and auto-resolve the comment(s) that the fix addressed.
+// When triggered by a single-comment fix (fixCommentId is set) only that comment
+// is resolved. When triggered by the bulk "Fix with Apex" button (fixCommentId is
+// null) all open comments are resolved.
 router.post('/prds/:prdId/apply-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const prdId = req.params.prdId;
 
-    // Atomic update: copy proposed → live, clear proposed columns in one statement
-    // This avoids race conditions between read and write.
+    // Read the fixCommentId before the atomic update so we know which comment to resolve.
+    const prdRow = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, prdId),
+      columns: { fixCommentId: true },
+    });
+    const fixCommentId = prdRow?.fixCommentId ?? null;
+
+    // Atomic update: copy proposed → live, clear proposed + fixCommentId columns.
     await db.execute(sql`
       UPDATE prds
       SET content = COALESCE(proposed_content, content),
           backlog_json = COALESCE(proposed_backlog_json, backlog_json),
           proposed_content = NULL,
           proposed_backlog_json = NULL,
+          fix_comment_id = NULL,
           updated_at = NOW()
       WHERE id = ${prdId}
     `);
 
-    // Auto-resolve all open comments — the accepted fix addressed them
+    // Resolve only the triggering comment (single fix) or all open comments (bulk fix).
     const now = new Date().toISOString();
-    await db
-      .update(reviewCommentsTable)
-      .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(reviewCommentsTable.documentId, prdId),
-          eq(reviewCommentsTable.documentType, 'prd'),
-          eq(reviewCommentsTable.status, 'open'),
-        ),
-      );
+    if (fixCommentId) {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.id, fixCommentId),
+            eq(reviewCommentsTable.documentId, prdId),
+            eq(reviewCommentsTable.documentType, 'prd'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    } else {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.documentId, prdId),
+            eq(reviewCommentsTable.documentType, 'prd'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    }
 
     res.json({ ok: true });
   } catch (err) {
@@ -558,7 +582,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
     const prdComments = openComments.filter((c) => c.sectionKey === 'prd');
     const backlogComments = openComments.filter((c) => c.sectionKey === 'backlog');
 
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: null };
 
     if (prdComments.length > 0) {
       const fixedContent = await fixPrdContentWithBedrock(
@@ -580,6 +604,78 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
       }
+    }
+
+    await db
+      .update(prdsTable)
+      .set(updates as any)
+      .where(eq(prdsTable.id, req.params.prdId));
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-comment-with-ai — fix a SINGLE PRD comment
+router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { commentId } = req.body as { commentId: string };
+
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+
+    const allComments = await getComments(req.params.prdId, 'prd');
+    const comment = allComments.find((c) => c.id === commentId && c.status === 'open');
+    if (!comment) {
+      res.status(404).json({ error: 'Comment not found or not open' });
+      return;
+    }
+
+    const projectConfig = await getSkillConfig(prd.project);
+    const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
+    const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
+
+    const mapped = {
+      sectionKey: comment.sectionKey,
+      exact: comment.selector?.exact ?? null,
+      body: comment.body,
+      authorName: comment.authorDisplayName ?? undefined,
+      replies: comment.replies.map((r) => ({
+        authorName: r.authorDisplayName ?? undefined,
+        body: r.body,
+      })),
+    };
+
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: commentId };
+
+    if (comment.sectionKey === 'prd') {
+      updates['proposedContent'] = await fixPrdContentWithBedrock(
+        prd.content ?? '',
+        [mapped],
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+    } else if (comment.sectionKey === 'backlog') {
+      const fixedBacklog = await fixPrdBacklogWithBedrock(
+        prd.backlogJson,
+        [mapped],
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+      if (fixedBacklog != null) {
+        updates['proposedBacklogJson'] = fixedBacklog;
+      }
+    } else {
+      res.status(400).json({ error: `Unknown PRD section key: ${comment.sectionKey}` });
+      return;
     }
 
     await db
@@ -1182,6 +1278,255 @@ router.put('/design-docs/:id/assignments', requirePermission('admin:roles'), asy
     const userId = getUserId(req);
     const assignments = await reassignApprovers(req.params.id, 'design_doc', approverUserIds, userId);
     res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/fix-with-ai — fix ALL open comments across all sections
+router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+
+    const allComments = await getComments(req.params.id, 'design_doc');
+    const openComments = allComments.filter((c) => c.status === 'open');
+
+    if (openComments.length === 0) {
+      res.status(400).json({ error: 'No open comments to fix' });
+      return;
+    }
+
+    const projectConfig = await getSkillConfig(doc.project);
+    const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
+    const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
+
+    const mapComment = (c: typeof openComments[number]) => ({
+      sectionKey: c.sectionKey,
+      exact: c.selector?.exact ?? null,
+      body: c.body,
+      authorName: c.authorDisplayName ?? undefined,
+      replies: c.replies.map((r) => ({
+        authorName: r.authorDisplayName ?? undefined,
+        body: r.body,
+      })),
+    });
+
+    const designComments = openComments.filter((c) => c.sectionKey === 'design');
+    const techSpecComments = openComments.filter((c) => c.sectionKey === 'tech_spec');
+    const assumptionsComments = openComments.filter((c) => c.sectionKey === 'assumptions');
+
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: null };
+
+    if (designComments.length > 0) {
+      const fixed = await fixDesignDocSectionWithBedrock(
+        doc.designContent ?? '',
+        'Design',
+        designComments.map(mapComment),
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+      updates['proposedDesignContent'] = fixed;
+    }
+
+    if (techSpecComments.length > 0) {
+      const fixed = await fixDesignDocSectionWithBedrock(
+        doc.techSpecContent ?? '',
+        'Tech Spec',
+        techSpecComments.map(mapComment),
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+      updates['proposedTechSpecContent'] = fixed;
+    }
+
+    if (assumptionsComments.length > 0) {
+      const fixed = await fixDesignDocSectionWithBedrock(
+        doc.assumptionsContent ?? '',
+        'Assumptions',
+        assumptionsComments.map(mapComment),
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+      updates['proposedAssumptionsContent'] = fixed;
+    }
+
+    await db
+      .update(designDocsTable)
+      .set(updates as any)
+      .where(eq(designDocsTable.id, req.params.id));
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/fix-comment-with-ai — fix a SINGLE comment
+router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { commentId } = req.body as { commentId: string };
+
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+
+    const allComments = await getComments(req.params.id, 'design_doc');
+    const comment = allComments.find((c) => c.id === commentId && c.status === 'open');
+    if (!comment) {
+      res.status(404).json({ error: 'Comment not found or not open' });
+      return;
+    }
+
+    const projectConfig = await getSkillConfig(doc.project);
+    const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
+    const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
+
+    const mapped = {
+      sectionKey: comment.sectionKey,
+      exact: comment.selector?.exact ?? null,
+      body: comment.body,
+      authorName: comment.authorDisplayName ?? undefined,
+      replies: comment.replies.map((r) => ({
+        authorName: r.authorDisplayName ?? undefined,
+        body: r.body,
+      })),
+    };
+
+    const sectionKey = comment.sectionKey;
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: commentId };
+
+    if (sectionKey === 'design') {
+      updates['proposedDesignContent'] = await fixDesignDocSectionWithBedrock(
+        doc.designContent ?? '',
+        'Design',
+        [mapped],
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+    } else if (sectionKey === 'tech_spec') {
+      updates['proposedTechSpecContent'] = await fixDesignDocSectionWithBedrock(
+        doc.techSpecContent ?? '',
+        'Tech Spec',
+        [mapped],
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+    } else if (sectionKey === 'assumptions') {
+      updates['proposedAssumptionsContent'] = await fixDesignDocSectionWithBedrock(
+        doc.assumptionsContent ?? '',
+        'Assumptions',
+        [mapped],
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+    } else {
+      res.status(400).json({ error: `Unknown section key: ${sectionKey}` });
+      return;
+    }
+
+    await db
+      .update(designDocsTable)
+      .set(updates as any)
+      .where(eq(designDocsTable.id, req.params.id));
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/apply-proposed — atomically promote proposed → live and auto-resolve
+// the comment(s) that the fix addressed.
+// When triggered by a single-comment fix (fixCommentId is set) only that comment is resolved.
+// When triggered by the bulk "Fix with Apex" button (fixCommentId is null) all open comments
+// are resolved.
+router.post('/design-docs/:id/apply-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const docId = req.params.id;
+
+    // Read the fixCommentId before the atomic update so we know which comment to resolve.
+    const docRow = await db.query.designDocs.findFirst({
+      where: eq(designDocsTable.id, docId),
+      columns: { fixCommentId: true },
+    });
+    const fixCommentId = docRow?.fixCommentId ?? null;
+
+    await db.execute(sql`
+      UPDATE design_docs
+      SET design_content = COALESCE(proposed_design_content, design_content),
+          tech_spec_content = COALESCE(proposed_tech_spec_content, tech_spec_content),
+          assumptions_content = COALESCE(proposed_assumptions_content, assumptions_content),
+          proposed_design_content = NULL,
+          proposed_tech_spec_content = NULL,
+          proposed_assumptions_content = NULL,
+          fix_comment_id = NULL,
+          updated_at = NOW()
+      WHERE id = ${docId}
+    `);
+
+    // Resolve only the triggering comment (single fix) or all open comments (bulk fix).
+    const now = new Date().toISOString();
+    if (fixCommentId) {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.id, fixCommentId),
+            eq(reviewCommentsTable.documentId, docId),
+            eq(reviewCommentsTable.documentType, 'design_doc'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    } else {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.documentId, docId),
+            eq(reviewCommentsTable.documentType, 'design_doc'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/reject-proposed — discard proposed changes
+router.post('/design-docs/:id/reject-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+
+    await db
+      .update(designDocsTable)
+      .set({ proposedDesignContent: null, proposedTechSpecContent: null, proposedAssumptionsContent: null, updatedAt: new Date().toISOString() } as any)
+      .where(eq(designDocsTable.id, req.params.id));
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

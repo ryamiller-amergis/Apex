@@ -21,6 +21,7 @@ import {
   useDocumentAssignments,
   useReassignApprovers,
   useFixPrdWithAi,
+  useFixPrdCommentWithAi,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -156,8 +157,10 @@ export const PrdReviewView: React.FC = () => {
   const createAdoItems = useCreatePrdAdoItems();
   const syncAdoStatus = useSyncPrdAdoStatus(id);
   const fixWithAi = useFixPrdWithAi(id ?? '');
+  const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
 
   const [activeTab, setActiveTab] = useState<TabId>('preview');
+  const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
 
   /* ── Full-document edit modal ─────────────────────────────────────────────── */
   const [showEditModal, setShowEditModal] = useState(false);
@@ -300,6 +303,16 @@ export const PrdReviewView: React.FC = () => {
     }
     setActiveCommentId(commentId);
   }, [reviewComments]);
+
+  const handleFixCommentWithAi = useCallback(async (commentId: string) => {
+    if (!id) return;
+    setFixingCommentId(commentId);
+    try {
+      await fixPrdCommentWithAi.mutateAsync({ commentId });
+    } finally {
+      setFixingCommentId(null);
+    }
+  }, [id, fixPrdCommentWithAi]);
 
   useEffect(() => {
     if (!prd || prd.status !== 'approved' || !prd.backlogJson) return;
@@ -838,6 +851,8 @@ export const PrdReviewView: React.FC = () => {
                     onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
                     isFixingWithAi={fixWithAi.isPending}
                     fixAiError={fixWithAi.error?.message}
+                    onFixCommentWithAi={canManage ? handleFixCommentWithAi : undefined}
+                    fixingCommentId={fixingCommentId}
                   />
                 )}
               </div>
@@ -892,6 +907,8 @@ export const PrdReviewView: React.FC = () => {
                     onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
                     isFixingWithAi={fixWithAi.isPending}
                     fixAiError={fixWithAi.error?.message}
+                    onFixCommentWithAi={canManage ? handleFixCommentWithAi : undefined}
+                    fixingCommentId={fixingCommentId}
                   />
                 )}
               </div>

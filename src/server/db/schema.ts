@@ -208,6 +208,7 @@ export const prds = pgTable('prds', {
   prdAssistantThreadId: uuid('prd_assistant_thread_id'),
   proposedContent: text('proposed_content'),
   proposedBacklogJson: jsonb('proposed_backlog_json'),
+  fixCommentId: uuid('fix_comment_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -230,6 +231,10 @@ export const designDocs = pgTable('design_docs', {
   designContent: text('design_content').notNull().default(''),
   techSpecContent: text('tech_spec_content').notNull().default(''),
   assumptionsContent: text('assumptions_content').notNull().default(''),
+  proposedDesignContent: text('proposed_design_content'),
+  proposedTechSpecContent: text('proposed_tech_spec_content'),
+  proposedAssumptionsContent: text('proposed_assumptions_content'),
+  fixCommentId: uuid('fix_comment_id'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
