@@ -33,6 +33,7 @@ jest.mock('../middleware/rbac', () => ({
   requireAnyPermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
+  requireSuperAdmin: (_req: any, _res: any, next: any) => next(),
 }));
 
 const mockService = rbacService as jest.Mocked<typeof rbacService>;
