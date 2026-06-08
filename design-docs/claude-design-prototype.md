@@ -413,7 +413,7 @@ Existing `interviews:view` covers read access. Existing `interviews:manage` cove
 
 ```
 BEDROCK_UI_MOCK_MODEL_ID=us.anthropic.claude-opus-4-7   ✅ correct format
-BEDROCK_UI_MOCK_MAX_TOKENS=16000                         ✅ sufficient for single-Feature prototypes
+BEDROCK_UI_MOCK_MAX_TOKENS=32000                         ✅ sufficient for single-Feature prototypes
 AWS_REGION=us-east-2                                     ✅ Opus 4.7 available
 ```
 
