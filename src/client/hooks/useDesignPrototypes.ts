@@ -5,6 +5,7 @@ import type {
   DesignPrototypeSummary,
   DesignPrototypeStatus,
 } from '../../shared/types/designPrototype';
+import type { DocumentApproverAssignment } from '../../shared/types/approvals';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -19,6 +20,39 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 const GENERATING_STATUSES: DesignPrototypeStatus[] = ['generating', 'regenerating'];
 
 // ── Queries ─────────────────────────────────────────────────────────────────
+
+export function useDesignPrototypeList(opts: {
+  status?: string;
+  project?: string;
+  author?: string;
+} = {}) {
+  const params = new URLSearchParams();
+  if (opts.status) params.set('status', opts.status);
+  if (opts.project) params.set('project', opts.project);
+  if (opts.author) params.set('author', opts.author);
+  const qs = params.toString();
+
+  return useQuery<DesignPrototypeSummary[]>({
+    queryKey: ['design-prototypes', opts],
+    queryFn: () => apiFetch(`/api/design-prototypes${qs ? `?${qs}` : ''}`),
+    staleTime: 15_000,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      const hasGenerating = data.some(p => GENERATING_STATUSES.includes(p.status));
+      return hasGenerating ? 5_000 : false;
+    },
+  });
+}
+
+export function usePrototypeAssignments(prdId: string | null) {
+  return useQuery<DocumentApproverAssignment[]>({
+    queryKey: ['design-prototypes', 'assignments', prdId],
+    queryFn: () => apiFetch(`/api/design-prototypes/prd/${prdId}/assignments`),
+    enabled: !!prdId,
+    staleTime: 10_000,
+  });
+}
 
 export function usePrototypesForPrd(prdId: string | null) {
   return useQuery<DesignPrototypeSummary[]>({
@@ -121,6 +155,17 @@ export function useAddPrototypeComment() {
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['design-prototype-comments', variables.prototypeId] });
+    },
+  });
+}
+
+export function useDeletePrototype() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) =>
+      apiFetch(`/api/design-prototypes/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-prototypes'] });
     },
   });
 }

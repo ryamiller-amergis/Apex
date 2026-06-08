@@ -37,6 +37,8 @@ export async function upsertSkillConfig(
   designDocQaModel?: string | null,
   designDocAssistantSkillPath?: string | null,
   designDocAssistantModel?: string | null,
+  designPrototypeSkillPath?: string | null,
+  designPrototypeModel?: string | null,
   designDocValidationSkillPath?: string | null,
   designDocValidationModel?: string | null,
   quickSkillPills?: QuickSkillPill[] | null | undefined,
@@ -57,12 +59,14 @@ export async function upsertSkillConfig(
       designDocSkillPath: designDocSkillPath ?? null,
       designDocQaSkillPath: designDocQaSkillPath ?? null,
       designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
+      designPrototypeSkillPath: designPrototypeSkillPath ?? null,
       designDocValidationSkillPath: designDocValidationSkillPath ?? null,
       interviewModel: interviewModel ?? null,
       prdModel: prdModel ?? null,
       designDocModel: designDocModel ?? null,
       designDocQaModel: designDocQaModel ?? null,
       designDocAssistantModel: designDocAssistantModel ?? null,
+      designPrototypeModel: designPrototypeModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
       quickSkillPills: quickSkillPills ?? null,
       defaultModel: defaultModel ?? null,
@@ -80,12 +84,14 @@ export async function upsertSkillConfig(
         designDocSkillPath: designDocSkillPath ?? null,
         designDocQaSkillPath: designDocQaSkillPath ?? null,
         designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
+        designPrototypeSkillPath: designPrototypeSkillPath ?? null,
         designDocValidationSkillPath: designDocValidationSkillPath ?? null,
         interviewModel: interviewModel ?? null,
         prdModel: prdModel ?? null,
         designDocModel: designDocModel ?? null,
         designDocQaModel: designDocQaModel ?? null,
         designDocAssistantModel: designDocAssistantModel ?? null,
+        designPrototypeModel: designPrototypeModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
         quickSkillPills: quickSkillPills ?? null,
         defaultModel: defaultModel ?? null,
@@ -121,7 +127,7 @@ export async function listApprovers(project: string): Promise<ProjectApprover[]>
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
   }));
 }
 
@@ -144,7 +150,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
   for (const r of rows) {
     const approver: ProjectApprover = {
       ...r,
-      documentType: r.documentType as 'design_doc' | 'prd',
+      documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
     };
     if (!grouped[r.project]) grouped[r.project] = [];
     grouped[r.project].push(approver);
@@ -154,7 +160,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
 
 export async function setApprovers(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
   userIds: string[],
   assignedBy?: string,
 ): Promise<ProjectApprover[]> {
@@ -180,7 +186,7 @@ export async function setApprovers(
 
 export async function getApproversForDocument(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
@@ -199,6 +205,6 @@ export async function getApproversForDocument(
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
   }));
 }

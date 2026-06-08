@@ -18,18 +18,21 @@ export interface ProjectSkillConfig {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   approvalMode?: ApprovalMode;
   designDocApproverCount?: number;
   prdApproverCount?: number;
+  designPrototypeApproverCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -42,12 +45,14 @@ export interface UpsertProjectSkillConfigRequest {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
@@ -58,7 +63,7 @@ export interface ProjectApprover {
   id: string;
   project: string;
   userId: string;
-  documentType: 'design_doc' | 'prd';
+  documentType: 'design_doc' | 'prd' | 'design_prototype';
   displayName: string | null;
   email: string | null;
   assignedBy: string | null;
@@ -69,6 +74,7 @@ export interface SetApproversRequest {
   project: string;
   designDocApprovers: string[];
   prdApprovers: string[];
+  designPrototypeApprovers: string[];
 }
 
 export interface ProjectSkillConfigResponse {
@@ -80,12 +86,14 @@ export interface ProjectSkillConfigResponse {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;

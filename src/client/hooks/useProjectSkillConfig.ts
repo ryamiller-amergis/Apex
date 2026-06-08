@@ -158,14 +158,14 @@ export function useProjectApprovers(project: string | null) {
 export function useSetProjectApprovers() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ project, designDocApprovers, prdApprovers }: SetApproversRequest) => {
+    mutationFn: async ({ project, designDocApprovers, prdApprovers, designPrototypeApprovers }: SetApproversRequest) => {
       const res = await fetch(
         `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
         {
           method: 'PUT',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ designDocApprovers, prdApprovers }),
+          body: JSON.stringify({ designDocApprovers, prdApprovers, designPrototypeApprovers }),
         },
       );
       if (!res.ok) throw new Error('Failed to save approvers');

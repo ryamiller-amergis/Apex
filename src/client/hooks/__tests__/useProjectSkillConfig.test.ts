@@ -442,6 +442,7 @@ describe('useSetProjectApprovers', () => {
         project: 'proj-alpha',
         designDocApprovers: ['user-1'],
         prdApprovers: [],
+        designPrototypeApprovers: [],
       });
     });
 
@@ -452,6 +453,7 @@ describe('useSetProjectApprovers', () => {
     expect(JSON.parse(init.body)).toEqual({
       designDocApprovers: ['user-1'],
       prdApprovers: [],
+      designPrototypeApprovers: [],
     });
   });
 });

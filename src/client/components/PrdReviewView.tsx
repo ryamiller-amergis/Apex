@@ -18,6 +18,7 @@ import {
   useDocumentAssignments,
   useReassignApprovers,
 } from '../hooks/useInterviews';
+import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
@@ -60,6 +61,7 @@ export const PrdReviewView: React.FC = () => {
 
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
+  const { data: relatedPrototypes = [] } = usePrototypesForPrd(prd?.status === 'approved' ? id : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
 
   const updateContent = useUpdatePrdContent();
@@ -136,9 +138,9 @@ export const PrdReviewView: React.FC = () => {
 
   const handleApprove = useCallback(async () => {
     if (!id) return;
-    const data = await reviewPrd.mutateAsync({ prdId: id, action: 'approve' });
-    if (data.designDocId) {
-      navigate(`/backlog/design-doc/${data.designDocId}`);
+    const result = await reviewPrd.mutateAsync({ prdId: id, action: 'approve' });
+    if (result?.approved) {
+      navigate(`/backlog/design-prototypes/${id}`);
     }
   }, [id, reviewPrd, navigate]);
 
@@ -406,7 +408,27 @@ export const PrdReviewView: React.FC = () => {
 
   
 
-      {prd.status === 'approved' && (
+      {prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            {relatedPrototypes.length === 1
+              ? '1 design prototype was generated for this PRD.'
+              : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}
+            {' '}
+            {relatedPrototypes.filter(p => p.status === 'approved').length} of {relatedPrototypes.length} approved.
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            View Design Prototypes →
+          </button>
+        </div>
+      )}
+
+      {prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0 && (
         <div className={styles.designDocBanner}>
           <span className={styles.designDocBannerText}>
             {relatedDesignDocs.length === 1

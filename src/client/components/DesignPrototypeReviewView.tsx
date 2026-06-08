@@ -1,8 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   usePrototypesForPrd,
+  usePrototypeAssignments,
   usePrototype,
   usePrototypeComments,
   useRegeneratePrototype,
@@ -34,11 +35,12 @@ function badgeClass(status: DesignPrototypeSummary['status']): string {
 const DesignPrototypeReviewView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { can, authenticatedUser } = useAppShell();
+  const { can, userId, isAdmin } = useAppShell();
 
   const prdId = location.pathname.split('/').pop() ?? '';
 
   const { data: prototypes = [], isLoading: isLoadingList } = usePrototypesForPrd(prdId);
+  const { data: prototypeAssignments = [] } = usePrototypeAssignments(prdId);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const selectedProto = prototypes[selectedIndex] ?? null;
@@ -48,6 +50,13 @@ const DesignPrototypeReviewView: React.FC = () => {
   const [feedback, setFeedback] = useState('');
   const [commentText, setCommentText] = useState('');
   const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [pendingRegeneration, setPendingRegeneration] = useState(false);
+
+  useEffect(() => {
+    if (pendingRegeneration && selectedProto?.status === 'regenerating') {
+      setPendingRegeneration(false);
+    }
+  }, [pendingRegeneration, selectedProto?.status]);
 
   const regenerate = useRegeneratePrototype();
   const retry = useRetryPrototype();
@@ -63,7 +72,11 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   const handleRegenerate = useCallback(() => {
     if (!selectedProto || !feedback.trim()) return;
-    regenerate.mutate({ id: selectedProto.id, feedback: feedback.trim() });
+    setPendingRegeneration(true);
+    regenerate.mutate(
+      { id: selectedProto.id, feedback: feedback.trim() },
+      { onError: () => setPendingRegeneration(false) },
+    );
     setFeedback('');
   }, [selectedProto, feedback, regenerate]);
 
@@ -74,16 +87,33 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   const handleApprove = useCallback(() => {
     if (!selectedProto) return;
-    review.mutate({ id: selectedProto.id, action: 'approve' });
-  }, [selectedProto, review]);
+    // If approving this prototype completes the whole set, the server kicks off
+    // design-doc generation — send the reviewer to the PRD page where the
+    // resulting design docs surface as they are created.
+    const willCompleteAll =
+      prototypes.length > 0 &&
+      prototypes.every(p => p.id === selectedProto.id || p.status === 'approved');
+    review.mutate(
+      { id: selectedProto.id, action: 'approve' },
+      {
+        onSuccess: () => {
+          if (willCompleteAll) navigate(`/backlog/prd/${prdId}`);
+        },
+      },
+    );
+  }, [selectedProto, prototypes, review, navigate, prdId]);
 
   const handleRequestRevision = useCallback((comment: string) => {
     if (!selectedProto) return;
+    setPendingRegeneration(true);
     review.mutate(
       { id: selectedProto.id, action: 'revision_requested', comment },
       {
         onSuccess: () => {
           regenerate.mutate({ id: selectedProto.id, feedback: comment });
+        },
+        onError: () => {
+          setPendingRegeneration(false);
         },
       },
     );
@@ -123,13 +153,15 @@ const DesignPrototypeReviewView: React.FC = () => {
       }
     : null;
 
-  const canReview = can('design-prototypes:review') && selectedProto?.authorId !== authenticatedUser?.oid;
+  // Only designated design-prototype approvers (or admins) may approve/reject.
+  const isAssignedApprover = prototypeAssignments.some(a => a.approverUserId === userId);
+  const canReview = can('design-prototypes:review') && (isAssignedApprover || isAdmin);
   const isReviewable = selectedProto?.status === 'pending_review';
 
   const renderPreviewContent = () => {
-    const isGenerating = selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating';
+    const isGenerating = pendingRegeneration || selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating';
     if (isGenerating) {
-      const label = selectedProto?.status === 'generating' ? 'Generating prototype...' : 'Regenerating with feedback...';
+      const label = selectedProto?.status === 'generating' ? 'Generating prototype...' : 'Regenerating with your feedback...';
       return (
         <div className={styles.statusOverlay}>
           <div className={styles.spinner} />
@@ -210,11 +242,52 @@ const DesignPrototypeReviewView: React.FC = () => {
             Back to PRD
           </button>
           <span className={styles.headerTitle}>Design Prototypes</span>
-        </div>
-        <div className={styles.headerRight}>
           <span className={styles.progressText}>
             {approvedCount} of {totalCount} approved
           </span>
+        </div>
+        <div className={styles.headerRight}>
+          {(pendingRegeneration || selectedProto?.status === 'regenerating' || selectedProto?.status === 'generating') ? (
+            <span className={`${styles.badge} ${styles.badgeGenerating}`}>
+              <span className={styles.headerSpinner} /> Regenerating…
+            </span>
+          ) : (
+            <>
+              {selectedProto?.status === 'revision_requested' && can('interviews:manage') && (
+                <button
+                  className={styles.btnPrimary}
+                  onClick={handleRegenerate}
+                  disabled={isBusy || !feedback.trim()}
+                  title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
+                >
+                  Regenerate
+                </button>
+              )}
+              {isReviewable && canReview && (
+                <>
+                  <button
+                    className={`${styles.btnSecondary} ${styles.btnRevision}`}
+                    onClick={() => setShowRevisionModal(true)}
+                    disabled={isBusy}
+                  >
+                    Request Changes
+                  </button>
+                  <button
+                    className={`${styles.btnPrimary} ${styles.btnApprove}`}
+                    onClick={handleApprove}
+                    disabled={isBusy}
+                  >
+                    Approve
+                  </button>
+                </>
+              )}
+              {selectedProto?.status === 'approved' && (
+                <span className={`${styles.badge} ${styles.badgeApproved}`}>
+                  Approved
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -298,63 +371,24 @@ const DesignPrototypeReviewView: React.FC = () => {
             </div>
           )}
 
-          {/* Actions bar */}
-          {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && (
+          {/* Comment bar */}
+          {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && can('interviews:manage') && (
             <div className={styles.actionsBar}>
               <div className={styles.actionsLeft}>
-                {can('interviews:manage') && (
-                  <>
-                    <input
-                      className={styles.feedbackInput}
-                      placeholder="Add a comment..."
-                      value={commentText}
-                      onChange={e => setCommentText(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleAddComment(); }}
-                    />
-                    <button
-                      className={styles.btnSecondary}
-                      onClick={handleAddComment}
-                      disabled={!commentText.trim()}
-                    >
-                      Comment
-                    </button>
-                  </>
-                )}
-              </div>
-              <div className={styles.actionsRight}>
-                {selectedProto.status === 'revision_requested' && can('interviews:manage') && (
-                  <button
-                    className={styles.btnPrimary}
-                    onClick={handleRegenerate}
-                    disabled={isBusy || !feedback.trim()}
-                    title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
-                  >
-                    Regenerate
-                  </button>
-                )}
-                {isReviewable && canReview && (
-                  <>
-                    <button
-                      className={`${styles.btnSecondary} ${styles.btnRevision}`}
-                      onClick={() => setShowRevisionModal(true)}
-                      disabled={isBusy}
-                    >
-                      Request Changes
-                    </button>
-                    <button
-                      className={`${styles.btnPrimary} ${styles.btnApprove}`}
-                      onClick={handleApprove}
-                      disabled={isBusy}
-                    >
-                      Approve
-                    </button>
-                  </>
-                )}
-                {selectedProto.status === 'approved' && (
-                  <span className={`${styles.badge} ${styles.badgeApproved}`}>
-                    Approved
-                  </span>
-                )}
+                <input
+                  className={styles.feedbackInput}
+                  placeholder="Add a comment..."
+                  value={commentText}
+                  onChange={e => setCommentText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAddComment(); }}
+                />
+                <button
+                  className={styles.btnSecondary}
+                  onClick={handleAddComment}
+                  disabled={!commentText.trim()}
+                >
+                  Comment
+                </button>
               </div>
             </div>
           )}

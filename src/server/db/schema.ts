@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
@@ -251,11 +251,13 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocSkillPath: text('design_doc_skill_path'),
   designDocQaSkillPath: text('design_doc_qa_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
+  designPrototypeSkillPath: text('design_prototype_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
   designDocModel: text('design_doc_model'),
   designDocQaModel: text('design_doc_qa_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
+  designPrototypeModel: text('design_prototype_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
   defaultModel: text('default_model'),

@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import {
+  listPrototypes,
   listPrototypesForPrd,
   getPrototype,
+  deletePrototype,
   regeneratePrototype,
   retryPrototype,
   reviewPrototype,
@@ -11,6 +13,7 @@ import {
   addComment,
   resolveComment,
 } from '../services/designPrototypeService';
+import { getAssignments } from '../services/documentApprovalService';
 import type {
   ReviewDesignPrototypeRequest,
   RegeneratePrototypeRequest,
@@ -19,11 +22,37 @@ import type {
 
 const router = Router();
 
+// GET / — list all prototypes (project-wide, with optional filters)
+router.get('/', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prototypes = await listPrototypes({
+      status: req.query.status as string | undefined,
+      project: req.query.project as string | undefined,
+      author: req.query.author as string | undefined,
+      requestUserId: userId,
+    });
+    res.json(prototypes);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /prd/:prdId — list all prototypes for a PRD
 router.get('/prd/:prdId', requirePermission('interviews:view'), async (req, res, next) => {
   try {
     const prototypes = await listPrototypesForPrd(req.params.prdId);
     res.json(prototypes);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /prd/:prdId/assignments — designated design-prototype approvers for the PRD
+router.get('/prd/:prdId/assignments', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const assignments = await getAssignments(req.params.prdId, 'design_prototype');
+    res.json(assignments);
   } catch (err) {
     next(err);
   }
@@ -38,6 +67,16 @@ router.get('/:id', requirePermission('interviews:view'), async (req, res, next) 
       return;
     }
     res.json(proto);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /:id — delete a prototype
+router.delete('/:id', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await deletePrototype(req.params.id);
+    res.status(204).end();
   } catch (err) {
     next(err);
   }

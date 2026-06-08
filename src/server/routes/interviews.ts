@@ -189,90 +189,15 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
   try {
     const userId = getUserId(req);
     const body = req.body as ReviewPrdRequest;
-    await reviewPrd(req.params.prdId, userId, body);
+    const { approved } = await reviewPrd(req.params.prdId, userId, body);
 
-    if (body.action === 'approve') {
-      try {
-        const prd = await getPrd(req.params.prdId);
-        if (!prd) {
-          res.json({ ok: true });
-          return;
-        }
-
-        // Fire-and-forget: generate Claude design prototypes for each Feature in the PRD
-        generatePrototypesForPrd(req.params.prdId).catch(err => {
-          console.error('[interviews] Design prototype generation failed:', err);
-        });
-
-        const skillConfig = await getSkillConfig(prd.project);
-        const globalModel = await getDefaultModel();
-
-        const prdFreeformContext = [
-          '# PRD Content',
-          prd.content,
-          ...(prd.backlogJson
-            ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
-            : []),
-        ].join('\n');
-
-        if (skillConfig?.designDocQaSkillPath) {
-          // ── Q&A phase: create interview thread, defer generation ──────────
-          const qaModel = skillConfig.designDocQaModel ?? globalModel;
-          const qaThread = await createThread(userId, {
-            project: prd.project,
-            repo: skillConfig.skillRepo,
-            branch: skillConfig.skillBranch ?? 'main',
-            skillPath: skillConfig.designDocQaSkillPath,
-            freeformContext: prdFreeformContext,
-            model: qaModel,
-          });
-
-          const { designDocId } = await createDesignDoc({
-            prdId: req.params.prdId,
-            project: prd.project,
-            userId,
-            qaChatThreadId: qaThread.id,
-            title: prd.title,
-            status: 'interviewing',
-          });
-
-          res.json({ ok: true, designDocId });
-          return;
-        } else {
-          // ── No Q&A: go straight to generation (original behavior) ─────────
-          const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
-          const model = skillConfig?.designDocModel ?? globalModel;
-
-          const thread = await createThread(userId, {
-            project: prd.project,
-            repo: skillConfig?.skillRepo ?? prd.project,
-            branch: skillConfig?.skillBranch ?? 'main',
-            skillPath: designDocSkillPath,
-            freeformContext: prdFreeformContext,
-            model,
-          });
-
-          const { designDocId } = await createDesignDoc({
-            prdId: req.params.prdId,
-            project: prd.project,
-            userId,
-            chatThreadId: thread.id,
-            title: prd.title,
-          });
-
-          startDesignDocWatcher(designDocId, thread.id);
-
-          res.json({ ok: true, designDocId });
-          return;
-        }
-      } catch {
-        // Design doc creation failed — PRD is still approved
-        res.json({ ok: true });
-        return;
-      }
+    if (approved) {
+      generatePrototypesForPrd(req.params.prdId).catch(err => {
+        console.error('[interviews] Design prototype generation failed:', err);
+      });
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, prdId: req.params.prdId, approved });
   } catch (err) {
     next(err);
   }

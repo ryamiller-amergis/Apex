@@ -161,6 +161,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
         ...cfg,
         designDocApproverCount: approvers.filter((a) => a.documentType === 'design_doc').length,
         prdApproverCount: approvers.filter((a) => a.documentType === 'prd').length,
+        designPrototypeApproverCount: approvers.filter((a) => a.documentType === 'design_prototype').length,
       };
     });
     res.json(enriched);
@@ -172,7 +173,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -193,6 +194,8 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       designDocQaModel,
       designDocAssistantSkillPath,
       designDocAssistantModel,
+      designPrototypeSkillPath,
+      designPrototypeModel,
       designDocValidationSkillPath,
       designDocValidationModel,
       quickSkillPills,
@@ -230,17 +233,18 @@ router.get('/project-settings/:project/approvers', async (req: Request, res: Res
 router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { designDocApprovers, prdApprovers } = req.body as SetApproversRequest;
-    if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers)) {
-      res.status(400).json({ error: 'designDocApprovers and prdApprovers must be arrays' });
+    const { designDocApprovers, prdApprovers, designPrototypeApprovers } = req.body as SetApproversRequest;
+    if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
+      res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
       return;
     }
     const assignedBy = (req.user as any)?.profile?.oid ?? undefined;
-    const [designDoc, prd] = await Promise.all([
+    const [designDoc, prd, designPrototype] = await Promise.all([
       projectSettingsService.setApprovers(project, 'design_doc', designDocApprovers, assignedBy),
       projectSettingsService.setApprovers(project, 'prd', prdApprovers, assignedBy),
+      projectSettingsService.setApprovers(project, 'design_prototype', designPrototypeApprovers, assignedBy),
     ]);
-    res.json({ designDoc, prd });
+    res.json({ designDoc, prd, designPrototype });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

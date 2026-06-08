@@ -9,6 +9,7 @@ import {
   useDeletePrd,
   useDeleteDesignDoc,
 } from '../hooks/useInterviews';
+import { useDesignPrototypeList, useDeletePrototype } from '../hooks/useDesignPrototypes';
 import type {
   InterviewStatus,
   PrdStatus,
@@ -17,10 +18,11 @@ import type {
   PrdSummary,
   DesignDocSummary,
 } from '../../shared/types/interview';
+import type { DesignPrototypeSummary, DesignPrototypeStatus } from '../../shared/types/designPrototype';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import styles from './InterviewsDashboard.module.css';
 
-type TabId = 'interviews' | 'prds' | 'design-docs';
+type TabId = 'interviews' | 'prds' | 'design-prototypes' | 'design-docs';
 
 const INTERVIEW_FILTERS: { label: string; value: InterviewStatus | undefined }[] = [
   { label: 'All', value: undefined },
@@ -103,6 +105,37 @@ function designDocStatusLabel(status: DesignDocStatus): string {
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
+  }
+}
+
+const PROTOTYPE_FILTERS: { label: string; value: DesignPrototypeStatus | undefined }[] = [
+  { label: 'All', value: undefined },
+  { label: 'Generating', value: 'generating' },
+  { label: 'Pending Review', value: 'pending_review' },
+  { label: 'Approved', value: 'approved' },
+  { label: 'Revision Requested', value: 'revision_requested' },
+  { label: 'Failed', value: 'generation_failed' },
+];
+
+function prototypeBadgeClass(status: DesignPrototypeStatus): string {
+  switch (status) {
+    case 'generating': return styles.badgeGenerating;
+    case 'generation_failed': return styles.badgeRevisionRequested;
+    case 'pending_review': return styles.badgePendingReview;
+    case 'revision_requested': return styles.badgeRevisionRequested;
+    case 'regenerating': return styles.badgeGenerating;
+    case 'approved': return styles.badgeApproved;
+  }
+}
+
+function prototypeStatusLabel(status: DesignPrototypeStatus): string {
+  switch (status) {
+    case 'generating': return 'Generating…';
+    case 'generation_failed': return 'Failed';
+    case 'pending_review': return 'Pending Review';
+    case 'revision_requested': return 'Revision Requested';
+    case 'regenerating': return 'Regenerating…';
+    case 'approved': return 'Approved';
   }
 }
 
@@ -321,6 +354,52 @@ const DesignDocGroupCard: React.FC<DesignDocGroupCardProps> = ({ prdTitle, docs,
   );
 };
 
+interface DesignPrototypeCardProps {
+  proto: DesignPrototypeSummary;
+  canDelete: boolean;
+  onDelete: (proto: DesignPrototypeSummary) => void;
+}
+
+const DesignPrototypeCard: React.FC<DesignPrototypeCardProps> = ({ proto, canDelete, onDelete }) => {
+  const navigate = useNavigate();
+  return (
+    <div className={styles.card} onClick={() => navigate(`/backlog/design-prototypes/${proto.prdId}`)}>
+      <div className={styles.cardHeader}>
+        <h3 className={styles.cardTitle}>{proto.featureName}</h3>
+        {canDelete && (
+          <button
+            className={styles.cardDeleteBtn}
+            title="Delete prototype"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDelete(proto); }}
+            aria-label={`Delete prototype "${proto.featureName}"`}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="2 4 4 4 14 4" />
+              <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+              <path d="M6.5 7v4M9.5 7v4" />
+              <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+            </svg>
+          </button>
+        )}
+      </div>
+      <div className={styles.cardFooter}>
+        <span className={`${styles.badge} ${prototypeBadgeClass(proto.status)}`}>
+          {prototypeStatusLabel(proto.status)}
+        </span>
+        <div className={styles.cardFooterRight}>
+          {proto.prdTitle && (
+            <span className={styles.cardPrdBadge} title={proto.prdTitle}>
+              {proto.prdTitle.length > 25 ? `${proto.prdTitle.slice(0, 25)}…` : proto.prdTitle}
+            </span>
+          )}
+          <span className={styles.cardDate}>{formatDate(proto.updatedAt)}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 type OwnerFilter = 'all' | 'mine';
 
 export const InterviewsDashboard: React.FC = () => {
@@ -331,6 +410,7 @@ export const InterviewsDashboard: React.FC = () => {
   const rawTab = searchParams.get('tab');
   const initialTab: TabId =
     rawTab === 'prds' ? 'prds' :
+    rawTab === 'design-prototypes' ? 'design-prototypes' :
     rawTab === 'design-docs' ? 'design-docs' :
     'interviews';
 
@@ -338,21 +418,25 @@ export const InterviewsDashboard: React.FC = () => {
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
   const [interviewFilter, setInterviewFilter] = useState<InterviewStatus | undefined>(undefined);
   const [prdFilter, setPrdFilter] = useState<PrdStatus | undefined>(undefined);
+  const [protoFilter, setProtoFilter] = useState<DesignPrototypeStatus | undefined>(undefined);
   const [designDocFilter, setDesignDocFilter] = useState<DesignDocStatus | undefined>(undefined);
   const [interviewSearch, setInterviewSearch] = useState('');
   const [prdSearch, setPrdSearch] = useState('');
+  const [protoSearch, setProtoSearch] = useState('');
   const [designDocSearch, setDesignDocSearch] = useState('');
 
   const [expandedPrdGroups, setExpandedPrdGroups] = useState<Set<string>>(new Set());
   const [pendingDeleteInterview, setPendingDeleteInterview] = useState<InterviewSummary | null>(null);
   const [pendingDeletePrd, setPendingDeletePrd] = useState<PrdSummary | null>(null);
   const [pendingDeleteDesignDoc, setPendingDeleteDesignDoc] = useState<DesignDocSummary | null>(null);
+  const [pendingDeletePrototype, setPendingDeletePrototype] = useState<DesignPrototypeSummary | null>(null);
   const [pendingDeleteGroup, setPendingDeleteGroup] = useState<{ prdTitle: string; docs: DesignDocSummary[] } | null>(null);
   const [isDeletingGroup, setIsDeletingGroup] = useState(false);
 
   const deleteInterview = useDeleteInterview();
   const deletePrd = useDeletePrd();
   const deleteDesignDoc = useDeleteDesignDoc();
+  const deletePrototype = useDeletePrototype();
 
   const authorParam = ownerFilter === 'mine' ? 'me' as const : undefined;
 
@@ -363,6 +447,11 @@ export const InterviewsDashboard: React.FC = () => {
   });
   const { data: prds = [], isLoading: prdLoading } = usePrdList({
     ...(prdFilter ? { status: prdFilter } : {}),
+    ...(selectedProject ? { project: selectedProject } : {}),
+    ...(authorParam ? { author: authorParam } : {}),
+  });
+  const { data: prototypes = [], isLoading: protoLoading } = useDesignPrototypeList({
+    ...(protoFilter ? { status: protoFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
     ...(authorParam ? { author: authorParam } : {}),
   });
@@ -381,6 +470,12 @@ export const InterviewsDashboard: React.FC = () => {
   const filteredPrds = prdSearch.trim()
     ? prds.filter((prd) => prd.title.toLowerCase().includes(prdSearch.toLowerCase()))
     : prds;
+
+  const filteredPrototypes = protoSearch.trim()
+    ? prototypes.filter((p) =>
+        p.featureName.toLowerCase().includes(protoSearch.toLowerCase()) ||
+        (p.prdTitle ?? '').toLowerCase().includes(protoSearch.toLowerCase()))
+    : prototypes;
 
   const filteredDesignDocs = designDocSearch.trim()
     ? designDocs.filter((doc) => doc.title.toLowerCase().includes(designDocSearch.toLowerCase()))
@@ -430,6 +525,13 @@ export const InterviewsDashboard: React.FC = () => {
           type="button"
         >
           PRDs ({prds.length})
+        </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
+          onClick={() => setActiveTab('design-prototypes')}
+          type="button"
+        >
+          Design Prototypes ({prototypes.length})
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'design-docs' ? styles.active : ''}`}
@@ -585,6 +687,71 @@ export const InterviewsDashboard: React.FC = () => {
         </>
       )}
 
+      {activeTab === 'design-prototypes' && (
+        <>
+          <div className={styles.filtersRow}>
+            <div className={styles.filters}>
+              {PROTOTYPE_FILTERS.map((f) => (
+                <button
+                  key={f.label}
+                  className={`${styles.filterPill} ${protoFilter === f.value ? styles.active : ''}`}
+                  onClick={() => setProtoFilter(f.value)}
+                  type="button"
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className={styles.searchWrap}>
+              <svg className={styles.searchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6.5" cy="6.5" r="4.5" />
+                <line x1="10" y1="10" x2="14" y2="14" />
+              </svg>
+              <input
+                className={styles.searchInput}
+                type="search"
+                placeholder="Search prototypes…"
+                value={protoSearch}
+                onChange={(e) => setProtoSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          {protoLoading ? (
+            <div className={styles.emptyState}>Loading…</div>
+          ) : filteredPrototypes.length === 0 ? (
+            <div className={styles.emptyState}>
+              {protoSearch.trim() ? (
+                <p className={styles.emptyStateText}>No prototypes match &ldquo;{protoSearch}&rdquo;</p>
+              ) : (
+                <>
+                  <div className={styles.emptyStateIconWrap}>
+                    <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="4" width="32" height="32" rx="4" />
+                      <rect x="10" y="10" width="8" height="8" rx="1" />
+                      <rect x="22" y="10" width="8" height="3" rx="1" />
+                      <rect x="22" y="16" width="8" height="2" rx="1" />
+                      <rect x="10" y="22" width="20" height="8" rx="1" />
+                    </svg>
+                  </div>
+                  <p className={styles.emptyStateText}>No design prototypes yet. Approve a PRD to generate prototypes.</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className={styles.grid}>
+              {filteredPrototypes.map((proto) => (
+                <DesignPrototypeCard
+                  key={proto.id}
+                  proto={proto}
+                  canDelete={canManage}
+                  onDelete={setPendingDeletePrototype}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
       {activeTab === 'design-docs' && (
         <>
           <div className={styles.filtersRow}>
@@ -707,6 +874,21 @@ export const InterviewsDashboard: React.FC = () => {
             });
           }}
           onCancel={() => setPendingDeleteDesignDoc(null)}
+        />
+      )}
+
+      {pendingDeletePrototype && (
+        <ConfirmDeleteModal
+          title="Delete Design Prototype"
+          itemName={pendingDeletePrototype.featureName}
+          description="Are you sure you want to permanently delete the design prototype"
+          isPending={deletePrototype.isPending}
+          onConfirm={() => {
+            deletePrototype.mutate(pendingDeletePrototype.id, {
+              onSuccess: () => setPendingDeletePrototype(null),
+            });
+          }}
+          onCancel={() => setPendingDeletePrototype(null)}
         />
       )}
 

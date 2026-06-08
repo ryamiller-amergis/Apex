@@ -1,49 +1,39 @@
 /**
  * Lightweight server-side HTML sanitizer for AI-generated mock HTML.
  *
- * Strategy:
- *   1. Strip <script> … </script> blocks (with any attributes).
- *   2. Remove all event-handler attributes (on*="…").
- *   3. Remove javascript: href/src values.
- *   4. Remove external URL references (http/https in src/href/url() pointing outside the app).
- *   5. Collapse any <link> tags (external stylesheets).
- *   6. Collapse any <meta http-equiv> tags (CSP bypass vector).
- *
- * This is intentionally NOT a full HTML parser — the mock HTML is always
- * Bedrock-generated and sandboxed in a CSP-restricted iframe, so a
- * regex pass is sufficient to block the obvious injection vectors.
+ * The iframe uses sandbox="allow-scripts" (without allow-same-origin)
+ * so scripts cannot access the parent page. We allow inline <script>
+ * tags and event handlers for prototype interactivity, but still strip
+ * network calls, external resources, and navigation vectors.
  */
 
 export function sanitizeMockHtml(raw: string): string {
   let html = raw;
 
-  // 1. Strip <script … > … </script>
-  html = html.replace(/<script[\s\S]*?<\/script\s*>/gi, '');
-
-  // 2. Strip event-handler attributes (onclick, onmouseover, onerror, etc.)
-  html = html.replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-
-  // 3. Strip javascript: anywhere in attribute values
+  // 1. Strip javascript: in href/src attribute values
   html = html.replace(/javascript\s*:/gi, 'removed:');
 
-  // 4. Strip external http(s) references in src / href / url()
+  // 2. Strip external http(s) references in src / href / url()
   //    — keeps relative paths intact
   html = html.replace(/((?:src|href)\s*=\s*["'])https?:\/\/[^"']+/gi, '$1#removed');
   html = html.replace(/url\(\s*['"]?https?:\/\/[^'")]+['"]?\s*\)/gi, 'url(#removed)');
 
-  // 5. Strip <link> tags (external stylesheets can load arbitrary CSS)
+  // 3. Strip <link> tags (external stylesheets can load arbitrary CSS)
   html = html.replace(/<link\b[^>]*>/gi, '');
 
-  // 6. Strip <meta http-equiv> (avoids CSP or refresh bypass)
+  // 4. Strip <meta http-equiv> (avoids CSP or refresh bypass)
   html = html.replace(/<meta\s+http-equiv\b[^>]*>/gi, '');
 
-  // 7. Strip <base> tags
+  // 5. Strip <base> tags
   html = html.replace(/<base\b[^>]*>/gi, '');
 
-  // 8. Neutralize all <a> href values so clicking links doesn't navigate
-  //    within the iframe (which shows a blank page). Preserve the visual
-  //    styling by keeping the tag and text content intact.
+  // 6. Neutralize <a> href values to prevent navigation within the iframe.
   html = html.replace(/<a\b([^>]*?)href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '<a$1href="#"');
+
+  // 7. Strip network APIs from inline scripts (fetch, XMLHttpRequest, etc.)
+  html = html.replace(/\bfetch\s*\(/gi, '/* blocked */void(');
+  html = html.replace(/new\s+XMLHttpRequest/gi, '/* blocked */void 0');
+  html = html.replace(/window\s*\.\s*(?:open|location)/gi, '/* blocked */void 0');
 
   return html.trim();
 }

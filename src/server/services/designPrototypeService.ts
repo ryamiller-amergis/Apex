@@ -1,7 +1,9 @@
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, desc, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designPrototypes, designPrototypeComments, prds } from '../db/schema';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
+import { isAdminUser } from '../utils/rbacHelpers';
+import { isAssignedApprover } from './documentApprovalService';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -111,6 +113,10 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
 
+  const { getSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await getSkillConfig(prd.project);
+  const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+
   const features = extractFeatures(prd.backlogJson);
   if (features.length === 0) {
     console.warn(`[designPrototypeService] No features found in PRD ${prdId} backlogJson`);
@@ -133,15 +139,30 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
       .returning({ id: designPrototypes.id });
     ids.push(row.id);
 
-    generateSinglePrototype(row.id, feature).catch(err => {
+    generateSinglePrototype(row.id, feature, prototypeModel).catch(err => {
       console.error(`[designPrototypeService] Background generation failed for ${row.id}:`, err);
     });
+  }
+
+  // Assign the project's design-prototype approver pool to this PRD's prototype
+  // set and notify them that there are prototypes to review. Keyed by prdId since
+  // the review screen shows all feature prototypes for the PRD together.
+  try {
+    const { getApproversForDocument } = await import('./projectSettingsService');
+    const { assignApprovers } = await import('./documentApprovalService');
+    const pool = await getApproversForDocument(prd.project, 'design_prototype');
+    const poolIds = pool.map(a => a.userId);
+    if (poolIds.length > 0) {
+      await assignApprovers(prdId, 'design_prototype', poolIds, prd.authorId);
+    }
+  } catch (err) {
+    console.error(`[designPrototypeService] Failed to assign/notify prototype reviewers for PRD ${prdId}:`, err);
   }
 
   return ids;
 }
 
-async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature): Promise<void> {
+async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
@@ -151,7 +172,7 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
       featureName: feature.title,
       featureDescription: feature.description,
       pbis,
-    });
+    }, modelId);
 
     const html = sanitizeMockHtml(rawHtml);
     const now = new Date().toISOString();
@@ -202,6 +223,11 @@ export async function regeneratePrototype(prototypeId: string, feedback: string)
   try {
     const { regenerateDesignPrototypeHtml } = await import('./bedrockService');
 
+    const prd = await db.query.prds.findFirst({ where: eq(prds.id, proto.prdId) });
+    const { getSkillConfig } = await import('./projectSettingsService');
+    const skillConfig = prd ? await getSkillConfig(prd.project) : null;
+    const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+
     const comments = await db
       .select()
       .from(designPrototypeComments)
@@ -217,6 +243,7 @@ export async function regeneratePrototype(prototypeId: string, feedback: string)
       proto.mockHtml,
       feedback,
       unresolvedTexts,
+      prototypeModel,
     );
 
     const html = sanitizeMockHtml(rawHtml);
@@ -285,12 +312,16 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
   const feature = features[proto.featureIndex];
   if (!feature) throw new Error(`Feature at index ${proto.featureIndex} not found`);
 
+  const { getSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await getSkillConfig(prd.project);
+  const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+
   await db
     .update(designPrototypes)
     .set({ status: 'generating', generationError: null, updatedAt: new Date().toISOString() })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }
@@ -305,6 +336,40 @@ export async function listPrototypesForPrd(prdId: string): Promise<DesignPrototy
     .orderBy(asc(designPrototypes.featureIndex));
 
   return rows.map(toSummary);
+}
+
+export async function listPrototypes(opts: {
+  status?: string;
+  project?: string;
+  author?: string;
+  requestUserId?: string;
+}): Promise<DesignPrototypeSummary[]> {
+  const conditions: SQL[] = [];
+  if (opts.status) {
+    conditions.push(eq(designPrototypes.status, opts.status));
+  }
+  if (opts.project) {
+    conditions.push(eq(prds.project, opts.project));
+  }
+  if (opts.author === 'me' && opts.requestUserId) {
+    conditions.push(eq(designPrototypes.authorId, opts.requestUserId));
+  }
+
+  const rows = await db
+    .select({
+      proto: designPrototypes,
+      prdTitle: prds.title,
+    })
+    .from(designPrototypes)
+    .innerJoin(prds, eq(designPrototypes.prdId, prds.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(designPrototypes.updatedAt));
+
+  return rows.map(r => ({ ...toSummary(r.proto), prdTitle: r.prdTitle }));
+}
+
+export async function deletePrototype(id: string): Promise<void> {
+  await db.delete(designPrototypes).where(eq(designPrototypes.id, id));
 }
 
 export async function getPrototype(id: string): Promise<DesignPrototype | null> {
@@ -340,6 +405,14 @@ export async function reviewPrototype(
   if (!proto) throw new Error(`Prototype ${prototypeId} not found`);
   if (proto.status !== 'pending_review') throw Object.assign(new Error(`Cannot review a prototype in status '${proto.status}'`), { status: 409 });
 
+  // Only a designated design-prototype approver (or an admin) may approve/reject.
+  // These approvers are distinct from PRD approvers; everyone else can view only.
+  const admin = await isAdminUser(reviewerId);
+  const assigned = await isAssignedApprover(proto.prdId, 'design_prototype', reviewerId);
+  if (!assigned && !admin) {
+    throw Object.assign(new Error('You are not a designated design prototype approver'), { status: 403 });
+  }
+
   const now = new Date().toISOString();
   await db
     .update(designPrototypes)
@@ -366,11 +439,101 @@ export async function checkAllApprovedAndProceed(prdId: string): Promise<boolean
   const allApproved = all.length > 0 && all.every(p => p.status === 'approved');
 
   if (allApproved) {
-    console.log(`[designPrototypeService] All prototypes approved for PRD ${prdId} — ready for design doc + ADO items`);
-    // Future: trigger Design Doc generation and ADO work item creation here
+    console.log(`[designPrototypeService] All prototypes approved for PRD ${prdId} — triggering Design Doc generation`);
+    triggerDesignDocGeneration(prdId).catch(err => {
+      console.error(`[designPrototypeService] Design Doc generation failed for PRD ${prdId}:`, err);
+    });
   }
 
   return allApproved;
+}
+
+async function triggerDesignDocGeneration(prdId: string): Promise<void> {
+  const { createDesignDoc, startDesignDocWatcher } = await import('./designDocService');
+  const { createThread } = await import('./chatAgentService');
+  const { getSkillConfig } = await import('./projectSettingsService');
+  const { getDefaultModel } = await import('./appSettingsService');
+
+  const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!prd) return;
+
+  const skillConfig = await getSkillConfig(prd.project);
+  const globalModel = await getDefaultModel();
+
+  // Pull the approved prototypes (one per feature) so the design doc is grounded
+  // in the actual UI/UX that was reviewed and signed off, not just the PRD text.
+  const approvedPrototypes = await db
+    .select()
+    .from(designPrototypes)
+    .where(
+      and(
+        eq(designPrototypes.prdId, prdId),
+        eq(designPrototypes.status, 'approved'),
+      )
+    )
+    .orderBy(asc(designPrototypes.featureIndex));
+
+  const prototypesContext = approvedPrototypes.length > 0
+    ? [
+        '\n# Approved Design Prototypes',
+        'The HTML prototypes below were reviewed and approved for each feature. Treat them as the source of truth for the UI/UX (layout, components, states, and visual styling) the design doc must describe.',
+        ...approvedPrototypes
+          .filter(p => p.mockHtml)
+          .map(p => `\n## Prototype — ${p.featureName} (v${p.mockVersion})\n\n\`\`\`html\n${p.mockHtml}\n\`\`\``),
+      ].join('\n')
+    : '';
+
+  const prdFreeformContext = [
+    '# PRD Content',
+    prd.content,
+    ...(prd.backlogJson
+      ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
+      : []),
+    ...(prototypesContext ? [prototypesContext] : []),
+  ].join('\n');
+
+  if (skillConfig?.designDocQaSkillPath) {
+    const qaModel = skillConfig.designDocQaModel ?? globalModel;
+    const qaThread = await createThread(prd.authorId, {
+      project: prd.project,
+      repo: skillConfig.skillRepo,
+      branch: skillConfig.skillBranch ?? 'main',
+      skillPath: skillConfig.designDocQaSkillPath,
+      freeformContext: prdFreeformContext,
+      model: qaModel,
+    });
+
+    await createDesignDoc({
+      prdId,
+      project: prd.project,
+      userId: prd.authorId,
+      qaChatThreadId: qaThread.id,
+      title: prd.title,
+      status: 'interviewing',
+    });
+  } else {
+    const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+    const model = skillConfig?.designDocModel ?? globalModel;
+
+    const thread = await createThread(prd.authorId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: designDocSkillPath,
+      freeformContext: prdFreeformContext,
+      model,
+    });
+
+    const { designDocId } = await createDesignDoc({
+      prdId,
+      project: prd.project,
+      userId: prd.authorId,
+      chatThreadId: thread.id,
+      title: prd.title,
+    });
+
+    startDesignDocWatcher(designDocId, thread.id);
+  }
 }
 
 // ── Comments ────────────────────────────────────────────────────────────────

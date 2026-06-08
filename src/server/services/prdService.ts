@@ -228,7 +228,7 @@ export async function reviewPrd(
   id: string,
   reviewerId: string,
   opts: ReviewPrdRequest,
-): Promise<void> {
+): Promise<{ approved: boolean }> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
@@ -258,9 +258,11 @@ export async function reviewPrd(
   }
 
   if (opts.action === 'approve') {
-    const { complete } = await isApprovalComplete(id, 'prd', row.project);
-    if (!complete) {
-      return;
+    if (!admin) {
+      const { complete } = await isApprovalComplete(id, 'prd', row.project);
+      if (!complete) {
+        return { approved: false };
+      }
     }
   }
 
@@ -279,6 +281,8 @@ export async function reviewPrd(
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, id));
+
+  return { approved: opts.action === 'approve' };
 }
 
 export async function syncPrdContent(

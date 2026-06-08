@@ -17,11 +17,19 @@ import type {
 } from '../../shared/types/approvals';
 import type { ProjectApprover } from '../../shared/types/projectSettings';
 
+/**
+ * Document kinds that support approver assignment.
+ * For `design_prototype`, the `documentId` is the PRD id — prototypes are
+ * reviewed as a set on the per-PRD prototype review screen.
+ */
+type DocumentType = 'prd' | 'design_doc' | 'design_prototype';
+
 async function getProjectForDocument(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
 ): Promise<string> {
-  if (documentType === 'prd') {
+  // design_prototype assignments key off the PRD id, so they resolve via prds too.
+  if (documentType === 'prd' || documentType === 'design_prototype') {
     const rows = await db
       .select({ project: prds.project })
       .from(prds)
@@ -39,8 +47,8 @@ async function getProjectForDocument(
   return rows[0].project;
 }
 
-async function getDocumentTitle(documentId: string, documentType: 'prd' | 'design_doc'): Promise<string> {
-  if (documentType === 'prd') {
+async function getDocumentTitle(documentId: string, documentType: DocumentType): Promise<string> {
+  if (documentType === 'prd' || documentType === 'design_prototype') {
     const rows = await db.select({ title: prds.title }).from(prds).where(eq(prds.id, documentId)).limit(1);
     return rows[0]?.title ?? 'Untitled PRD';
   }
@@ -48,24 +56,40 @@ async function getDocumentTitle(documentId: string, documentType: 'prd' | 'desig
   return rows[0]?.title ?? 'Untitled Design Doc';
 }
 
+function assignmentNotificationCopy(
+  documentId: string,
+  documentType: DocumentType,
+  docTitle: string,
+): { title: string; link: string } {
+  switch (documentType) {
+    case 'prd':
+      return { title: 'You have been assigned as a PRD reviewer', link: `/backlog/prd/${documentId}` };
+    case 'design_prototype':
+      return {
+        title: 'You have been assigned as a design prototype reviewer',
+        link: `/backlog/design-prototypes/${documentId}`,
+      };
+    case 'design_doc':
+    default:
+      return { title: 'You have been assigned as a design doc approver', link: `/backlog/design-doc/${documentId}` };
+  }
+}
+
 async function notifyAssignedApprovers(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   approverUserIds: string[],
 ): Promise<void> {
   if (approverUserIds.length === 0) return;
   const docTitle = await getDocumentTitle(documentId, documentType);
+  const { title, link } = assignmentNotificationCopy(documentId, documentType, docTitle);
   await Promise.allSettled(
     approverUserIds.map((userId) =>
       createNotification(userId, {
         type: 'user-action',
-        title: documentType === 'prd'
-          ? 'You have been assigned as a PRD reviewer'
-          : 'You have been assigned as a design doc approver',
+        title,
         body: `Review requested for: ${docTitle}`,
-        link: documentType === 'prd'
-          ? `/backlog/prd/${documentId}`
-          : `/backlog/design-doc/${documentId}`,
+        link,
       }),
     ),
   );
@@ -75,7 +99,7 @@ async function notifyAssignedApprovers(
 
 export async function assignApprovers(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   approverUserIds: string[],
   assignedBy: string,
 ): Promise<DocumentApproverAssignment[]> {
@@ -112,7 +136,7 @@ export async function assignApprovers(
 
 export async function getAssignments(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
 ): Promise<DocumentApproverAssignment[]> {
   const rows = await db
     .select({
@@ -138,7 +162,7 @@ export async function getAssignments(
 
   return rows.map(({ approverDisplayName, documentType: dt, status, ...rest }) => ({
     ...rest,
-    documentType: dt as 'prd' | 'design_doc',
+    documentType: dt as DocumentType,
     approverDisplayName: approverDisplayName ?? undefined,
     status: status as ApproverResponseStatus,
   }));
@@ -146,7 +170,7 @@ export async function getAssignments(
 
 export async function recordApproverResponse(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   approverUserId: string,
   status: 'approved' | 'revision_requested',
   comment?: string,
@@ -176,7 +200,7 @@ export async function recordApproverResponse(
 
 export async function isApprovalComplete(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   project: string,
 ): Promise<ApprovalCompletionResult> {
   const settings = await db
@@ -199,7 +223,7 @@ export async function isApprovalComplete(
 
 export async function isAssignedApprover(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   userId: string,
 ): Promise<boolean> {
   const rows = await db
@@ -219,7 +243,7 @@ export async function isAssignedApprover(
 
 export async function reassignApprovers(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   approverUserIds: string[],
   reassignedBy: string,
 ): Promise<DocumentApproverAssignment[]> {
@@ -282,7 +306,7 @@ export async function reassignApprovers(
 
 export async function getAvailableApprovers(
   project: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ProjectApprover[]> {
   const approvers = await getApproversForDocument(project, documentType);

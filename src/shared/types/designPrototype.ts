@@ -22,6 +22,7 @@ export interface PbiRequirement {
 export interface DesignPrototypeSummary {
   id: string;
   prdId: string;
+  prdTitle?: string;
   featureName: string;
   featureIndex: number;
   authorId: string;
