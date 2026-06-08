@@ -35,7 +35,7 @@ router.get('/projects', async (_req: Request, res: Response) => {
     const adoService = new AzureDevOpsService();
     let projects = await adoService.getProjects();
 
-    const allowList = (process.env.ADO_ALLOWED_PROJECTS || '')
+    const allowList = (process.env.ADO_ALLOWED_PROJECTS || 'MaxView,MatterWorx')
       .split(',')
       .map((p) => p.trim())
       .filter(Boolean);
@@ -3657,6 +3657,8 @@ import { attachPermissions } from '../middleware/rbac';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getMenuConfig } from '../services/menuSettingsService';
+import type { MenuItemKey } from '../../shared/types/menuSettings';
+const ALL_MENU_VIEWS: MenuItemKey[] = ['calendar', 'planning', 'cloudcost', 'backlog'];
 
 function readCurrentChangelogVersion(): string {
   try {
@@ -3766,7 +3768,7 @@ router.get('/menu-config', async (req: Request, res: Response): Promise<void> =>
       return;
     }
     const config = await getMenuConfig(project);
-    res.json({ enabledViews: config?.enabledViews ?? [] });
+    res.json({ enabledViews: config?.enabledViews ?? ALL_MENU_VIEWS });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
