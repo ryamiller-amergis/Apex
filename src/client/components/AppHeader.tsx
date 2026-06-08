@@ -88,7 +88,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const visibleNavItems = navItems.filter((item) => {
     if (item.view === 'home') return true;
     if (item.view === 'admin') return can('admin:roles');
-    return isSuperAdmin || menuEnabledViews.includes(item.view);
+    if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
+    if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
+    return true;
   });
 
   const handleMobileNavClick = (onNavigate: () => void) => {

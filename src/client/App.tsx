@@ -9,7 +9,7 @@ import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
-import { PlanningTabs } from './components/PlanningTabs';
+import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
 import { ChatAgentPanel } from './components/ChatAgentPanel';
@@ -43,10 +43,17 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminMenuSettings = lazy(() => import('./components/AdminMenuSettings').then(m => ({ default: m.AdminMenuSettings })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
-type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
-
 const DEFAULT_PLANNING_TAB: PlanningTab = 'dev-stats';
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+
+const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
+  'cycle-time':  'planning:view',
+  'dev-stats':   'planning:devstats',
+  'qa':          'planning:qa',
+  'ai-analysis': 'planning:ai-analysis',
+  'roadmap':     'planning:roadmap',
+  'releases':    'planning:releases',
+};
 
 const isPlanningTab = (value: string | undefined): value is PlanningTab => (
   value !== undefined && PLANNING_TABS.includes(value as PlanningTab)
@@ -135,12 +142,20 @@ function App() {
   useEffect(() => {
     if (!permissionsLoaded) return;
     if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
-    if (currentView === 'calendar'      && !isSuperAdmin && !enabledViews.includes('calendar'))  navigate('/home');
-    if (currentView === 'planning'      && !isSuperAdmin && !enabledViews.includes('planning'))  navigate('/home');
-    if (currentView === 'cloudcost'     && !isSuperAdmin && !enabledViews.includes('cloudcost')) navigate('/home');
-    if (currentView === 'backlog'       && !isSuperAdmin && !enabledViews.includes('backlog'))   navigate('/home');
+    if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
+    if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
+    if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
-  }, [currentView, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
+    if (currentView === 'planning') {
+      if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
+        navigate('/home');
+      } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
+        // Redirect to the first accessible sub-tab; if none, go home
+        const firstAccessible = PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
+        navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
+      }
+    }
+  }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
 
   // Auto-show changelog once per session when the user lands on /home with an
   // unread version, unless they've opted out via showChangelogOnLogin.
@@ -386,6 +401,7 @@ function App() {
               <div className="planning-view">
                 <PlanningTabs
                   activeTab={planningTab}
+                  can={can}
                   onNavigate={(tab) => navigate(`/planning/${tab}`)}
                 />
                 <div className="planning-content">
