@@ -50,6 +50,8 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDocumentAssignments: jest.fn(() => ({ data: [{ approverUserId: 'user-reviewer', status: 'pending' }] })),
 }));
