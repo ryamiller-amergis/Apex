@@ -487,6 +487,21 @@ export const reviewRepliesRelations = relations(reviewReplies, ({ one }) => ({
   }),
 }));
 
+// ── Deployment Outcomes ───────────────────────────────────────────────────────
+
+export const deploymentOutcomes = pgTable('deployment_outcomes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  deploymentId: text('deployment_id').notNull(),
+  releaseVersion: text('release_version').notNull(),
+  environment: text('environment').notNull().default('production'),
+  result: text('result').notNull(),
+  downtimeMinutes: integer('downtime_minutes'),
+  details: text('details'),
+  reportedBy: text('reported_by').notNull(),
+  reportedAt: timestamp('reported_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }),
+});
+
 // ── Project Menu Settings ─────────────────────────────────────────────────────
 
 export const projectMenuSettings = pgTable('project_menu_settings', {

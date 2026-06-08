@@ -19,6 +19,7 @@ import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
 import notificationRoutes from './routes/notifications';
 import reviewCommentRoutes from './routes/reviewComments';
+import deploymentOutcomesRouter from './routes/deploymentOutcomes';
 import { mountAdoMcp } from './mcp/ado/express';
 import { ensureAuthenticated } from './middleware/auth';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
@@ -120,6 +121,7 @@ app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
 app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
 app.use('/api/workitems', ensureAuthenticated, workitemsFromPrdRoutes);
 app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
+app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 

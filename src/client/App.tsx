@@ -43,8 +43,10 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminMenuSettings = lazy(() => import('./components/AdminMenuSettings').then(m => ({ default: m.AdminMenuSettings })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
-const DEFAULT_PLANNING_TAB: PlanningTab = 'dev-stats';
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+
+/** Tabs visible in the tab bar, in display order — used for permission-aware default/fallback. */
+const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
 const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
   'cycle-time':  'planning:view',
@@ -90,7 +92,6 @@ function App() {
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
     : undefined;
-  const planningTab = isPlanningTab(planningTabSegment) ? planningTabSegment : DEFAULT_PLANNING_TAB;
 
   // Close the slide-out panel when landing on the home view — the full-page
   // AgentHome already provides the complete chat experience there.
@@ -135,6 +136,9 @@ function App() {
     handleFieldUpdate,
   } = useAppShell();
 
+  const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
+    : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
+
   const { enabledViews } = useProjectMenuConfig(selectedProject);
 
   // Guard all gated routes: redirect to /home if the user lacks the required permission.
@@ -150,8 +154,7 @@ function App() {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
       } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
-        // Redirect to the first accessible sub-tab; if none, go home
-        const firstAccessible = PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
+        const firstAccessible = VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
         navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
       }
     }
