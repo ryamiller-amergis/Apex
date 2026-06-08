@@ -6,6 +6,7 @@ import * as groupService from '../services/groupService';
 import * as menuSettingsService from '../services/menuSettingsService';
 import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
+import { AVAILABLE_BEDROCK_MODELS } from '../services/bedrockService';
 import type {
   CreateRoleRequest,
   UpdateRoleRequest,
@@ -151,6 +152,10 @@ router.get('/available-models', async (_req: Request, res: Response): Promise<vo
   }
 });
 
+router.get('/available-bedrock-models', (_req: Request, res: Response): void => {
+  res.json({ models: AVAILABLE_BEDROCK_MODELS });
+});
+
 // ── Groups ──────────────────────────────────────────────────────────────────
 
 router.get('/groups', async (req: Request, res: Response): Promise<void> => {
@@ -260,7 +265,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -289,6 +294,8 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       quickMcpPills,
       prdAssistantSkillPath,
       prdAssistantModel,
+      prdReviewBedrockModelId,
+      prdReviewBedrockMaxTokens,
     );
     res.json(config);
   } catch {

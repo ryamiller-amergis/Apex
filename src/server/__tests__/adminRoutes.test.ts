@@ -496,6 +496,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickMcpPills
       undefined,   // prdAssistantSkillPath
       undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -557,6 +559,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickMcpPills
       undefined,   // prdAssistantSkillPath
       undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -598,6 +602,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickMcpPills
       undefined,   // prdAssistantSkillPath
       undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -637,6 +643,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // quickMcpPills
       undefined,               // prdAssistantSkillPath
       undefined,               // prdAssistantModel
+      undefined,               // prdReviewBedrockModelId
+      undefined,               // prdReviewBedrockMaxTokens
     );
   });
 
@@ -675,6 +683,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // quickMcpPills
       undefined,                            // prdAssistantSkillPath
       undefined,                            // prdAssistantModel
+      undefined,                            // prdReviewBedrockModelId
+      undefined,                            // prdReviewBedrockMaxTokens
     );
   });
 
@@ -708,6 +718,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // quickMcpPills
       undefined,   // prdAssistantSkillPath
       undefined,   // prdAssistantModel
+      undefined,   // prdReviewBedrockModelId
+      undefined,   // prdReviewBedrockMaxTokens
     );
   });
 
@@ -745,6 +757,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // quickMcpPills
       undefined,         // prdAssistantSkillPath
       undefined,         // prdAssistantModel
+      undefined,         // prdReviewBedrockModelId
+      undefined,         // prdReviewBedrockMaxTokens
     );
   });
 

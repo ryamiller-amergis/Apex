@@ -42,6 +42,7 @@
   white-space: nowrap;
   transition: all 0.15s ease;
   animation: fadeInButton 0.12s ease;
+  transform: translateX(-50%);
 }
 
 .addCommentButton:hover {

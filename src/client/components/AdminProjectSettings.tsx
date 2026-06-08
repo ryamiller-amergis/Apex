@@ -4,6 +4,7 @@ import {
   useUpsertProjectSkillConfig,
   useDeleteProjectSkillConfig,
   useAvailableModels,
+  useAvailableBedrockModels,
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
@@ -432,6 +433,8 @@ interface EditState {
   designDocAssistantModel: string;
   designDocValidationModel: string;
   defaultModel: string;
+  prdReviewBedrockModelId: string;
+  prdReviewBedrockMaxTokens: number;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -445,6 +448,8 @@ const emptyEdit = (): EditState => ({
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '',
   defaultModel: '',
+  prdReviewBedrockModelId: '',
+  prdReviewBedrockMaxTokens: 16000,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
@@ -456,6 +461,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
+  const { data: bedrockModels = [] } = useAvailableBedrockModels();
   const { data: allUsers = [] } = useUsers();
 
   // ── Derived: filter to current project ────────────────────────────────
@@ -472,6 +478,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     repo: true,
     skills: false,
     models: false,
+    bedrockReview: false,
     approvers: false,
     pills: false,
     mcpPills: false,
@@ -540,7 +547,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const handleAddNew = () => {
     setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false, mcpPills: false });
+    setExpandedSections({ repo: true, skills: false, models: false, bedrockReview: false, approvers: false, pills: false, mcpPills: false });
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
@@ -561,6 +568,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocAssistantModel: config.designDocAssistantModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
       defaultModel: config.defaultModel ?? '',
+      prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
+      prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
@@ -607,6 +616,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocAssistantModel: edit.designDocAssistantModel || null,
           designDocValidationModel: edit.designDocValidationModel || null,
           defaultModel: edit.defaultModel || null,
+          prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
+          prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
           quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
@@ -844,7 +855,54 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 4: Reviewers */}
+            {/* Section 4: PRD Apex Review (Bedrock) */}
+            <AccordionSection
+              title="PRD Apex Review"
+              hint={edit.prdReviewBedrockModelId
+                ? bedrockModels.find((m) => m.id === edit.prdReviewBedrockModelId)?.label ?? edit.prdReviewBedrockModelId
+                : undefined}
+              expanded={expandedSections.bedrockReview}
+              onToggle={() => toggleSection('bedrockReview')}
+            >
+              <p className={styles.accordionHelp}>
+                Configure the AWS Bedrock model used when "Fix with Apex" applies open review comments to a PRD.
+                Defaults to the service-level model ({process.env.NODE_ENV === 'production' ? 'configured via BEDROCK_MODEL_ID env var' : 'Claude Haiku 4.5'}) with a 16 000-token output limit.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-bedrock-model"
+                    className={styles.select}
+                    value={edit.prdReviewBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Use service default</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.prdReviewBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000 (small PRDs)</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000 (large PRDs)</option>
+                    <option value="64000">64 000 (very large PRDs)</option>
+                  </select>
+                </div>
+              </div>
+            </AccordionSection>
+
+            {/* Section 5: Reviewers */}
             <AccordionSection
               title="Reviewers"
               hint={
@@ -899,7 +957,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
             </AccordionSection>
 
-            {/* Section 5: Quick Skill Pills */}
+            {/* Section 6: Quick Skill Pills */}
             <AccordionSection
               title="Quick Skill Pills"
               hint={edit.quickSkillPills.length > 0 ? `${edit.quickSkillPills.length} configured` : undefined}
@@ -1048,7 +1106,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 6: Quick MCP Pills */}
+            {/* Section 7: Quick MCP Pills */}
             <AccordionSection
               title="Quick MCP Pills"
               hint={edit.quickMcpPills.length > 0 ? `${edit.quickMcpPills.length} configured` : undefined}

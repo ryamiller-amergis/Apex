@@ -77,6 +77,8 @@ export interface ProjectSkillConfig {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   defaultModel?: string | null;
+  prdReviewBedrockModelId?: string | null;
+  prdReviewBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -104,6 +106,8 @@ export interface UpsertProjectSkillConfigRequest {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   defaultModel?: string | null;
+  prdReviewBedrockModelId?: string | null;
+  prdReviewBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;

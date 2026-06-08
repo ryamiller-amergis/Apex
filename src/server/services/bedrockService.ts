@@ -31,6 +31,21 @@ const UI_MOCK_MAX_TOKENS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 16000;
 })();
 
+/** Default max-tokens used by PRD Apex Review when no project-level override is set. */
+export const PRD_REVIEW_DEFAULT_MAX_TOKENS = 16000;
+
+/**
+ * Curated list of Bedrock models available for selection in the admin UI.
+ * IDs use the cross-region inference prefix (us.*) which works in us-east-1.
+ */
+export const AVAILABLE_BEDROCK_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5 (fast, economical)' },
+  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku (fast, economical)' },
+  { id: 'us.anthropic.claude-sonnet-4-5-20251001-v1:0', label: 'Claude Sonnet 4.5 (balanced)' },
+  { id: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet v2 (balanced)' },
+  { id: 'us.anthropic.claude-opus-4-5-20251001-v1:0', label: 'Claude Opus 4.5 (most capable)' },
+];
+
 /* ── SDLC skill content cache ─────────────────────────────── */
 
 const SKILL_REPO = 'MaxView';
@@ -2311,6 +2326,8 @@ function formatCommentsForPrompt(comments: PrdComment[]): string {
 export async function fixPrdContentWithBedrock(
   prdContent: string,
   comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -2333,7 +2350,9 @@ ${commentLines}
 - Preserve all sections, heading levels, and overall structure unless a comment explicitly asks to change them.
 - Do NOT add a preamble, summary, or explanation — output ONLY the revised markdown, starting directly with the first heading.`;
 
-  const text = await invokeModel(prompt, undefined, MODEL_ID, 8000);
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
 
   const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
   return fenced ? fenced[1].trim() : text.trim();
@@ -2346,6 +2365,8 @@ ${commentLines}
 export async function fixPrdBacklogWithBedrock(
   backlogJson: unknown,
   comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
 ): Promise<unknown> {
   const commentLines = formatCommentsForPrompt(comments);
   const backlogStr = JSON.stringify(backlogJson, null, 2);
@@ -2370,7 +2391,9 @@ ${commentLines}
 - Only modify the fields/items referenced by the highlighted text. Keep all other data unchanged.
 - Preserve the exact same JSON structure and all existing fields.`;
 
-  const text = await invokeModel(prompt, undefined, MODEL_ID, 8000);
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
 
   // Strip any accidental code fences
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);

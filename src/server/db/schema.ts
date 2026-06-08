@@ -311,6 +311,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   prdAssistantSkillPath: text('prd_assistant_skill_path'),
   prdAssistantModel: text('prd_assistant_model'),
   defaultModel: text('default_model'),
+  prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
+  prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),

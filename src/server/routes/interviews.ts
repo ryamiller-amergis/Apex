@@ -8,7 +8,7 @@ import { db } from '../db/drizzle';
 import { eq, and, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable } from '../db/schema';
 import { getComments } from '../services/reviewCommentService';
-import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock } from '../services/bedrockService';
+import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
   deleteInterview,
@@ -607,6 +607,10 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       return;
     }
 
+    const projectConfig = await getSkillConfig(prd.project);
+    const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
+    const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
+
     const mapComment = (c: typeof openComments[number]) => ({
       sectionKey: c.sectionKey,
       exact: c.selector?.exact ?? null,
@@ -627,6 +631,8 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       const fixedContent = await fixPrdContentWithBedrock(
         prd.content ?? '',
         prdComments.map(mapComment),
+        bedrockModelId,
+        bedrockMaxTokens,
       );
       updates['proposedContent'] = fixedContent;
     }
@@ -635,6 +641,8 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       const fixedBacklog = await fixPrdBacklogWithBedrock(
         prd.backlogJson,
         backlogComments.map(mapComment),
+        bedrockModelId,
+        bedrockMaxTokens,
       );
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
@@ -648,6 +656,10 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
 
     res.json({ ok: true });
   } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });

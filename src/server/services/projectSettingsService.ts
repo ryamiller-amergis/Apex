@@ -46,6 +46,8 @@ export async function upsertSkillConfig(
   quickMcpPills?: QuickMcpPill[] | null | undefined,
   prdAssistantSkillPath?: string | null,
   prdAssistantModel?: string | null,
+  prdReviewBedrockModelId?: string | null,
+  prdReviewBedrockMaxTokens?: number | null,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = approvalMode ?? 'any_one';
@@ -70,6 +72,8 @@ export async function upsertSkillConfig(
       designDocAssistantModel: designDocAssistantModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
       prdAssistantModel: prdAssistantModel ?? null,
+      prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
+      prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
       quickSkillPills: quickSkillPills ?? null,
       quickMcpPills: quickMcpPills ?? null,
       defaultModel: defaultModel ?? null,
@@ -96,6 +100,8 @@ export async function upsertSkillConfig(
         designDocAssistantModel: designDocAssistantModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
         prdAssistantModel: prdAssistantModel ?? null,
+        prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
+        prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
         quickSkillPills: quickSkillPills ?? null,
         quickMcpPills: quickMcpPills ?? null,
         defaultModel: defaultModel ?? null,

@@ -815,6 +815,7 @@ export const PrdReviewView: React.FC = () => {
                     onDelete={(commentId) => deleteComment.mutate(commentId)}
                     onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
                     isFixingWithAi={fixWithAi.isPending}
+                    fixAiError={fixWithAi.error?.message}
                   />
                 )}
               </div>
@@ -868,6 +869,7 @@ export const PrdReviewView: React.FC = () => {
                     onDelete={(commentId) => deleteComment.mutate(commentId)}
                     onFixWithAi={canManage ? () => fixWithAi.mutate() : undefined}
                     isFixingWithAi={fixWithAi.isPending}
+                    fixAiError={fixWithAi.error?.message}
                   />
                 )}
               </div>

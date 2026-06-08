@@ -19,20 +19,68 @@ interface FloatingButton {
 
 const CONTEXT_CHARS = 30;
 
+/**
+ * When a selection spans multiple block elements (e.g. a heading + a paragraph),
+ * browsers insert `\n` between them in `sel.toString()`, but `element.textContent`
+ * concatenates without any such separator. This helper finds the start/end offsets
+ * in the original containerText by stripping whitespace from both sides and mapping
+ * the match position back to the original character indices.
+ */
+function findStrippedMatch(
+  containerText: string,
+  strippedTarget: string,
+): { start: number; end: number } | null {
+  if (!strippedTarget) return null;
+  const origPositions: number[] = [];
+  for (let i = 0; i < containerText.length; i++) {
+    if (!/\s/.test(containerText[i])) origPositions.push(i);
+  }
+  const strippedContainer = origPositions.map((i) => containerText[i]).join('');
+  const idx = strippedContainer.indexOf(strippedTarget);
+  if (idx < 0) return null;
+  const start = origPositions[idx];
+  const end = origPositions[idx + strippedTarget.length - 1] + 1;
+  return { start, end };
+}
+
 function buildTextSelector(
   selectedText: string,
   containerText: string,
   anchorOffset: number,
 ): TextSelector | null {
-  const idx = containerText.indexOf(selectedText, Math.max(0, anchorOffset - selectedText.length - 10));
-  const start = idx >= 0 ? idx : containerText.indexOf(selectedText);
-  if (start < 0) return null;
+  // Normalize: collapse whitespace sequences (browsers add \n between block elements)
+  const normalized = selectedText.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
 
-  const end = start + selectedText.length;
-  const prefix = containerText.slice(Math.max(0, start - CONTEXT_CHARS), start);
-  const suffix = containerText.slice(end, end + CONTEXT_CHARS);
+  // 1. Try direct match with the normalized text
+  let idx = containerText.indexOf(normalized, Math.max(0, anchorOffset - normalized.length - 10));
+  if (idx < 0) idx = containerText.indexOf(normalized);
 
-  return { exact: selectedText, prefix, suffix, start, end };
+  if (idx >= 0) {
+    const end = idx + normalized.length;
+    return {
+      exact: normalized,
+      prefix: containerText.slice(Math.max(0, idx - CONTEXT_CHARS), idx),
+      suffix: containerText.slice(end, end + CONTEXT_CHARS),
+      start: idx,
+      end,
+    };
+  }
+
+  // 2. Fallback: strip all whitespace from both and map positions back.
+  //    Handles cross-block selections where textContent has no whitespace between elements.
+  const strippedTarget = normalized.replace(/\s/g, '');
+  if (strippedTarget.length < 3) return null;
+  const stripped = findStrippedMatch(containerText, strippedTarget);
+  if (!stripped) return null;
+
+  return {
+    exact: normalized,
+    prefix: containerText.slice(Math.max(0, stripped.start - CONTEXT_CHARS), stripped.start),
+    suffix: containerText.slice(stripped.end, stripped.end + CONTEXT_CHARS),
+    start: stripped.start,
+    end: stripped.end,
+  };
 }
 
 function getTextOffset(container: Node, targetNode: Node, targetOffset: number): number {
@@ -282,8 +330,13 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
     const rect = range.getBoundingClientRect();
     const containerRect = containerRef.current.getBoundingClientRect();
 
+    // Place the button above the selection; if there isn't enough room above
+    // (near the top of the container), flip it below instead.
+    const rawTop = rect.top - containerRect.top - 36;
+    const top = rawTop < 4 ? rect.bottom - containerRect.top + 4 : rawTop;
+
     setFloatingButton({
-      top: rect.top - containerRect.top - 36,
+      top,
       left: rect.left - containerRect.left + rect.width / 2,
       selector,
     });

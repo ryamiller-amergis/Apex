@@ -17,6 +17,7 @@ interface ReviewCommentSidebarProps {
   /** When provided, a "Fix with AI" button is shown in the header. */
   onFixWithAi?: () => void;
   isFixingWithAi?: boolean;
+  fixAiError?: string;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -45,6 +46,7 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
   onDelete,
   onFixWithAi,
   isFixingWithAi = false,
+  fixAiError,
 }) => {
   const sorted = [...comments].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
@@ -90,6 +92,9 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
           </button>
         )}
       </div>
+      {fixAiError && (
+        <div className={styles.fixAiError}>{fixAiError}</div>
+      )}
 
       <div className={styles.threadList}>
         {sorted.length === 0 ? (

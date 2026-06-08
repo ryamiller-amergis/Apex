@@ -139,6 +139,24 @@ export function useAvailableModels() {
   });
 }
 
+export interface BedrockModel {
+  id: string;
+  label: string;
+}
+
+export function useAvailableBedrockModels() {
+  return useQuery<BedrockModel[]>({
+    queryKey: ['available-bedrock-models'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/available-bedrock-models', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch available Bedrock models');
+      const data = (await res.json()) as { models: BedrockModel[] };
+      return data.models;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
 export interface ProjectApproversResponse {
   approvers: ProjectApprover[];
   approverGroups: Array<{ groupId: string; groupName: string; documentType: string }>;
