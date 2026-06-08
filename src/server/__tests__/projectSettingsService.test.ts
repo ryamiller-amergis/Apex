@@ -239,6 +239,8 @@ describe('upsertSkillConfig', () => {
       undefined,
       undefined,
       undefined,
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
       'composer-2',
     );
 
@@ -302,6 +304,8 @@ describe('upsertSkillConfig', () => {
       undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
       '.cursor/skills/validate/SKILL.md', // designDocValidationSkillPath
       'claude-3-opus', // designDocValidationModel
     );
@@ -338,21 +342,23 @@ describe('upsertSkillConfig', () => {
       'org/skills-repo',
       'main',
       'alice',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'all_required',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocQaSkillPath
+      undefined, // designDocQaModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      'all_required', // approvalMode
     );
 
     expect(result).toMatchObject({ approvalMode: 'all_required' });
@@ -405,6 +411,8 @@ describe('upsertSkillConfig', () => {
       undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
       undefined, // designDocValidationSkillPath
       undefined, // designDocValidationModel
       undefined, // quickSkillPills

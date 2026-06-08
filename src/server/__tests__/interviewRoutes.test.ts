@@ -588,7 +588,7 @@ describe('POST /api/interviews/prds/:prdId/review', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns 200 { ok: true } on approve', async () => {
-    mockPrdService.reviewPrd.mockResolvedValue(undefined);
+    mockPrdService.reviewPrd.mockResolvedValue({ approved: true });
 
     const res = await request(buildApp())
       .post('/api/interviews/prds/prd-1/review')
@@ -705,90 +705,24 @@ describe('POST /api/interviews/:interviewId/prds', () => {
   });
 });
 
-// ── POST /api/interviews/prds/:prdId/review — design doc model resolution ─────
+// ── POST /api/interviews/prds/:prdId/review (approve) — prototype trigger ─────
 
-describe('POST /api/interviews/prds/:prdId/review (approve) — design doc model resolution', () => {
-  const approvedPrd = { ...prd, status: 'pending_review' as const };
-
+describe('POST /api/interviews/prds/:prdId/review (approve) — prototype trigger', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockPrdService.reviewPrd.mockResolvedValue(undefined);
-    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
-    mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockPrdService.reviewPrd.mockResolvedValue({ approved: true });
   });
 
-  it('passes designDocModel from skillConfig to createThread when set', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: 'gpt-4o',
-    });
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'gpt-4o' }),
-    );
-  });
-
-  it('falls back to global default model when skillConfig.designDocModel is null', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: null,
-    });
-    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
-    );
-  });
-
-  it('falls back to global default model when skillConfig is null (no config for project)', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue(null);
-    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
-    );
-  });
-
-  it('returns 200 { ok: true, designDocId } on successful approval with design doc creation', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: 'gpt-4o',
-    });
-
+  it('returns 200 { ok, prdId, approved } and does not create a design doc directly', async () => {
     const res = await request(buildApp())
       .post('/api/interviews/prds/prd-1/review')
       .send({ action: 'approve' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, designDocId: 'design-doc-1' });
+    expect(res.body).toMatchObject({ ok: true, prdId: 'prd-1', approved: true });
+    // Design-doc creation moved to POST /design-docs (triggered after prototype
+    // approval), so the review endpoint must not create a design doc directly.
+    expect(mockCreateDesignDoc).not.toHaveBeenCalled();
   });
 });
 

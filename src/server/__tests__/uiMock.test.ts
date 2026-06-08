@@ -12,30 +12,34 @@ import { sanitizeMockHtml } from '../utils/htmlSanitizer';
    ════════════════════════════════════════════════════════════ */
 
 describe('sanitizeMockHtml', () => {
-  it('strips <script> blocks', () => {
+  // The mock renders inside an iframe with sandbox="allow-scripts" (no
+  // allow-same-origin), so inline scripts and event handlers are intentionally
+  // preserved for prototype interactivity. Network egress is blocked separately.
+  it('preserves inline <script> blocks for prototype interactivity', () => {
     const html = '<div>ok</div><script>alert(1)</script><p>safe</p>';
-    expect(sanitizeMockHtml(html)).not.toContain('<script');
-    expect(sanitizeMockHtml(html)).toContain('<div>ok</div>');
-    expect(sanitizeMockHtml(html)).toContain('<p>safe</p>');
+    const out = sanitizeMockHtml(html);
+    expect(out).toContain('<script>');
+    expect(out).toContain('<div>ok</div>');
+    expect(out).toContain('<p>safe</p>');
   });
 
-  it('strips <script> with attributes', () => {
+  it('preserves <script> with attributes', () => {
     const html = '<script type="text/javascript" src="evil.js">alert(2)</script>';
-    expect(sanitizeMockHtml(html)).toBe('');
+    expect(sanitizeMockHtml(html)).toContain('<script');
   });
 
-  it('strips event handler attributes', () => {
+  it('preserves event handler attributes for prototype interactivity', () => {
     const html = '<button onclick="steal()">Click</button>';
     const out = sanitizeMockHtml(html);
-    expect(out).not.toContain('onclick');
+    expect(out).toContain('onclick');
     expect(out).toContain('<button');
   });
 
-  it('strips multiple event handlers on same element', () => {
+  it('preserves multiple event handlers on the same element', () => {
     const html = '<div onmouseover="x()" onerror="y()">test</div>';
     const out = sanitizeMockHtml(html);
-    expect(out).not.toContain('onmouseover');
-    expect(out).not.toContain('onerror');
+    expect(out).toContain('onmouseover');
+    expect(out).toContain('onerror');
   });
 
   it('replaces javascript: hrefs', () => {
@@ -80,11 +84,12 @@ describe('sanitizeMockHtml', () => {
     expect(sanitizeMockHtml(html)).not.toContain('<base');
   });
 
-  it('preserves relative src and href paths', () => {
+  it('preserves relative src but neutralizes <a href> to # (no in-iframe navigation)', () => {
     const html = '<img src="/images/logo.png" /><a href="/dashboard">link</a>';
     const out = sanitizeMockHtml(html);
     expect(out).toContain('src="/images/logo.png"');
-    expect(out).toContain('href="/dashboard"');
+    expect(out).toContain('href="#"');
+    expect(out).not.toContain('href="/dashboard"');
   });
 
   it('preserves inline CSS with CSS variables', () => {
