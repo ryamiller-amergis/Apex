@@ -64,19 +64,20 @@ describe('SectionOwnerModal', () => {
     renderModal();
     expect(screen.getByText(/PRD Owner.*\*/)).toBeInTheDocument();
     expect(screen.getByText(/Design Doc Owner.*\*/)).toBeInTheDocument();
+    expect(screen.getByText(/Design Prototype Owner.*\*/)).toBeInTheDocument();
   });
 
-  it('shows loading text for both fields while users are being fetched', () => {
+  it('shows loading text for owner fields while users are being fetched', () => {
     mockUseActiveUsers.mockReturnValue({ data: [], isLoading: true });
     renderModal();
     const loadingEls = screen.getAllByText('Loading users…');
-    expect(loadingEls).toHaveLength(2);
+    expect(loadingEls).toHaveLength(3);
   });
 
   it('renders combobox inputs when users have loaded', () => {
     renderModal();
     const comboboxes = screen.getAllByRole('combobox');
-    expect(comboboxes).toHaveLength(2);
+    expect(comboboxes).toHaveLength(3);
   });
 
   it('clicking the close button calls onCancel', () => {

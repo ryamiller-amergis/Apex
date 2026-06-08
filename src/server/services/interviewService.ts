@@ -24,8 +24,10 @@ export async function createInterview(opts: {
   chatThreadId: string;
   prdOwnerId?: string;
   designDocOwnerId?: string;
+  designPrototypeOwnerId?: string;
   prdApproverIds?: string[];
   designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
 }): Promise<{ interviewId: string; threadId: string }> {
   const [row] = await db
     .insert(interviews)
@@ -38,8 +40,10 @@ export async function createInterview(opts: {
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
       designDocOwnerId: opts.designDocOwnerId ?? null,
+      designPrototypeOwnerId: opts.designPrototypeOwnerId ?? null,
       prdApproverIds: opts.prdApproverIds ?? null,
       designDocApproverIds: opts.designDocApproverIds ?? null,
+      designPrototypeApproverIds: opts.designPrototypeApproverIds ?? null,
     })
     .returning({ id: interviews.id });
 
@@ -68,6 +72,17 @@ export async function createInterview(opts: {
           type: 'user-action',
           title: 'Assigned as Design Doc Owner',
           body: `You were assigned as Design Doc owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (opts.designPrototypeOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.designPrototypeOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Design Prototype Owner',
+          body: `You were assigned as Design Prototype owner for the interview "${interviewTitle}".`,
           link: `/backlog/interview/${interviewId}`,
         }).then(() => undefined),
       );
@@ -113,8 +128,10 @@ export async function listInterviews(
       status: interviews.status,
       prdOwnerId: interviews.prdOwnerId,
       designDocOwnerId: interviews.designDocOwnerId,
+      designPrototypeOwnerId: interviews.designPrototypeOwnerId,
       prdApproverIds: interviews.prdApproverIds,
       designDocApproverIds: interviews.designDocApproverIds,
+      designPrototypeApproverIds: interviews.designPrototypeApproverIds,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
@@ -140,8 +157,10 @@ export async function listInterviews(
     prdCount: prdCountMap.get(row.id) ?? 0,
     prdOwnerId: row.prdOwnerId ?? undefined,
     designDocOwnerId: row.designDocOwnerId ?? undefined,
+    designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
     prdApproverIds: row.prdApproverIds ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
+    designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -150,7 +169,7 @@ export async function listInterviews(
 export async function getInterview(id: string): Promise<Interview | null> {
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, id),
-    with: { prds: true, prdOwner: true, designDocOwner: true },
+    with: { prds: true, prdOwner: true, designDocOwner: true, designPrototypeOwner: true },
   });
 
   if (!row) return null;
@@ -183,8 +202,11 @@ export async function getInterview(id: string): Promise<Interview | null> {
     prdOwnerName: row.prdOwner?.displayName ?? undefined,
     designDocOwnerId: row.designDocOwnerId ?? undefined,
     designDocOwnerName: row.designDocOwner?.displayName ?? undefined,
+    designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
+    designPrototypeOwnerName: row.designPrototypeOwner?.displayName ?? undefined,
     prdApproverIds: row.prdApproverIds ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
+    designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,

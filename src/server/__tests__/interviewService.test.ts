@@ -410,7 +410,7 @@ describe('getInterview', () => {
     expect(result).toBeNull();
   });
 
-  it('maps prdOwnerName and designDocOwnerName from joined owner relations', async () => {
+  it('maps owner names from joined owner relations', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({
       ...interviewRow,
       prds: [],
@@ -418,6 +418,8 @@ describe('getInterview', () => {
       prdOwner: { displayName: 'Alice PRD Owner' },
       designDocOwnerId: 'user-dd',
       designDocOwner: { displayName: 'Bob DD Owner' },
+      designPrototypeOwnerId: 'user-proto',
+      designPrototypeOwner: { displayName: 'Carol UX Owner' },
     });
 
     const result = await getInterview('interview-1');
@@ -427,6 +429,8 @@ describe('getInterview', () => {
     expect(result!.prdOwnerName).toBe('Alice PRD Owner');
     expect(result!.designDocOwnerId).toBe('user-dd');
     expect(result!.designDocOwnerName).toBe('Bob DD Owner');
+    expect(result!.designPrototypeOwnerId).toBe('user-proto');
+    expect(result!.designPrototypeOwnerName).toBe('Carol UX Owner');
   });
 
   it('returns undefined for owner name fields when owners are not set', async () => {
@@ -437,6 +441,8 @@ describe('getInterview', () => {
       prdOwner: null,
       designDocOwnerId: null,
       designDocOwner: null,
+      designPrototypeOwnerId: null,
+      designPrototypeOwner: null,
     });
 
     const result = await getInterview('interview-1');
@@ -445,6 +451,8 @@ describe('getInterview', () => {
     expect(result!.prdOwnerName).toBeUndefined();
     expect(result!.designDocOwnerId).toBeUndefined();
     expect(result!.designDocOwnerName).toBeUndefined();
+    expect(result!.designPrototypeOwnerId).toBeUndefined();
+    expect(result!.designPrototypeOwnerName).toBeUndefined();
   });
 });
 
