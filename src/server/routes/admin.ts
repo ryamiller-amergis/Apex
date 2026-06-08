@@ -334,7 +334,7 @@ router.get('/project-settings/:project/approvers', async (req: Request, res: Res
 router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers } = req.body as SetApproversRequest;
+    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups } = req.body as SetApproversRequest;
     if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
       res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
       return;
@@ -349,6 +349,7 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
     await Promise.all([
       projectSettingsService.setApproverGroups(project, 'design_doc', designDocApproverGroups ?? [], assignedBy),
       projectSettingsService.setApproverGroups(project, 'prd', prdApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(project, 'design_prototype', designPrototypeApproverGroups ?? [], assignedBy),
     ]);
 
     res.json({ designDoc, prd, designPrototype });
@@ -361,8 +362,8 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
 router.get('/project-settings/:project/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project, documentType } = req.params;
-    if (documentType !== 'prd' && documentType !== 'design_doc') {
-      res.status(400).json({ error: 'documentType must be prd or design_doc' });
+    if (documentType !== 'prd' && documentType !== 'design_doc' && documentType !== 'design_prototype') {
+      res.status(400).json({ error: 'documentType must be prd, design_doc, or design_prototype' });
       return;
     }
     const excludeSelf = req.query.excludeSelf === 'true';

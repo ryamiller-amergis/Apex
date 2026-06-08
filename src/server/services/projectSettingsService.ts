@@ -227,7 +227,7 @@ export async function getApproversForDocument(
 
 export async function setApproverGroups(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
   groupIds: string[],
   assignedBy?: string,
 ): Promise<void> {
@@ -251,7 +251,7 @@ export async function setApproverGroups(
 
 export async function getApproverPool(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<ApproverPoolResponse> {
   const individuals = await getApproversForDocument(project, documentType);
 
@@ -272,7 +272,7 @@ export async function getApproverPool(
     .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
     .where(and(eq(projectApproverGroups.project, project), eq(projectApproverGroups.documentType, documentType)));
 
-  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }> = [];
+  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }> = [];
   for (const ref of groupRefs) {
     const memberRows = await db
       .select({
@@ -293,7 +293,7 @@ export async function getApproverPool(
       description: ref.groupDescription,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
-      documentType: ref.documentType as 'design_doc' | 'prd',
+      documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype',
       members: memberRows,
     });
   }
@@ -303,7 +303,7 @@ export async function getApproverPool(
 
 export async function getApproverUserIds(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<string[]> {
   const pool = await getApproverPool(project, documentType);
   const userIds = new Set<string>();

@@ -148,10 +148,9 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   // set and notify them that there are prototypes to review. Keyed by prdId since
   // the review screen shows all feature prototypes for the PRD together.
   try {
-    const { getApproversForDocument } = await import('./projectSettingsService');
+    const { getApproverUserIds } = await import('./projectSettingsService');
     const { assignApprovers } = await import('./documentApprovalService');
-    const pool = await getApproversForDocument(prd.project, 'design_prototype');
-    const poolIds = pool.map(a => a.userId);
+    const poolIds = await getApproverUserIds(prd.project, 'design_prototype');
     if (poolIds.length > 0) {
       await assignApprovers(prdId, 'design_prototype', poolIds, prd.authorId);
     }

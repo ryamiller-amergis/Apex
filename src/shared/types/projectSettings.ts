@@ -137,12 +137,13 @@ export interface SetApproversRequest {
   /** Live group references (group IDs); expanded to members at read time. */
   designDocApproverGroups?: string[];
   prdApproverGroups?: string[];
-    designPrototypeApprovers: string[];
+  designPrototypeApprovers: string[];
+  designPrototypeApproverGroups?: string[];
 }
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }>;
+  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }>;
 }
 
 export interface ProjectSkillConfigResponse {

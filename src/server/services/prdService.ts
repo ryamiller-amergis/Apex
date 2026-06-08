@@ -314,11 +314,10 @@ export async function reviewPrd(
     await recordApproverResponse(id, 'prd', reviewerId, 'approved');
   }
 
-  if (!admin)  {
-      const { complete } = await isApprovalComplete(id, 'prd', row.project);
-      if (!complete) {
-        return { approved: false };
-      }
+  if (!admin) {
+    const { complete } = await isApprovalComplete(id, 'prd', row.project);
+    if (!complete) {
+      return { approved: false };
     }
   }
 

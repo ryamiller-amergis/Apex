@@ -173,7 +173,7 @@ export function useDeletePrototype() {
 export function useResolvePrototypeComment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ commentId, prototypeId }: { commentId: string; prototypeId: string }) =>
+    mutationFn: ({ commentId }: { commentId: string; prototypeId: string }) =>
       apiFetch(`/api/design-prototypes/comments/${commentId}/resolve`, { method: 'POST' }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['design-prototype-comments', variables.prototypeId] });

@@ -493,6 +493,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
   const [designDocApproverGroupIds, setDesignDocApproverGroupIds] = useState<string[]>([]);
   const [prdApproverGroupIds, setPrdApproverGroupIds] = useState<string[]>([]);
+  const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
+  const [designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
@@ -538,6 +540,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     );
     setDesignPrototypeApproverIds(
       approvers.filter((a) => a.documentType === 'design_prototype').map((a) => a.userId),
+    );
+    setDesignPrototypeApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'design_prototype').map((g) => g.groupId),
     );
   }, [approversData, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -640,7 +645,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocApproverIds.length > 0 ||
         prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
         designDocApproverGroupIds.length > 0 ||
-        prdApproverGroupIds.length > 0 ||
+        prdApproverGroupIds.length > 0 || designPrototypeApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
         await setApprovers.mutateAsync({
@@ -650,6 +655,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocApproverGroups: designDocApproverGroupIds,
           prdApproverGroups: prdApproverGroupIds,
           designPrototypeApprovers: designPrototypeApproverIds,
+          designPrototypeApproverGroups: designPrototypeApproverGroupIds,
         });
       }
 
@@ -930,7 +936,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               title="Reviewers"
               hint={
                 (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length} groups`
+                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
@@ -978,8 +984,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
               {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
               {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
-               {renderApproverSection('PRD Approvers', prdApproverIds, setPrdApproverIds)}
-              {renderApproverSection('Design Prototype Approvers', designPrototypeApproverIds, setDesignPrototypeApproverIds)}
+              {renderApproverSection('Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
             </AccordionSection>
 
             {/* Section 6: Quick Skill Pills */}
