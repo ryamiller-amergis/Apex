@@ -38,6 +38,8 @@ export async function upsertSkillConfig(
   designDocQaModel?: string | null,
   designDocAssistantSkillPath?: string | null,
   designDocAssistantModel?: string | null,
+  designPrototypeSkillPath?: string | null,
+  designPrototypeModel?: string | null,
   designDocValidationSkillPath?: string | null,
   designDocValidationModel?: string | null,
   quickSkillPills?: QuickSkillPill[] | null | undefined,
@@ -63,6 +65,7 @@ export async function upsertSkillConfig(
       designDocSkillPath: designDocSkillPath ?? null,
       designDocQaSkillPath: designDocQaSkillPath ?? null,
       designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
+      designPrototypeSkillPath: designPrototypeSkillPath ?? null,
       designDocValidationSkillPath: designDocValidationSkillPath ?? null,
       prdAssistantSkillPath: prdAssistantSkillPath ?? null,
       interviewModel: interviewModel ?? null,
@@ -70,6 +73,7 @@ export async function upsertSkillConfig(
       designDocModel: designDocModel ?? null,
       designDocQaModel: designDocQaModel ?? null,
       designDocAssistantModel: designDocAssistantModel ?? null,
+      designPrototypeModel: designPrototypeModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
       prdAssistantModel: prdAssistantModel ?? null,
       prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
@@ -91,6 +95,7 @@ export async function upsertSkillConfig(
         designDocSkillPath: designDocSkillPath ?? null,
         designDocQaSkillPath: designDocQaSkillPath ?? null,
         designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
+        designPrototypeSkillPath: designPrototypeSkillPath ?? null,
         designDocValidationSkillPath: designDocValidationSkillPath ?? null,
         prdAssistantSkillPath: prdAssistantSkillPath ?? null,
         interviewModel: interviewModel ?? null,
@@ -98,6 +103,7 @@ export async function upsertSkillConfig(
         designDocModel: designDocModel ?? null,
         designDocQaModel: designDocQaModel ?? null,
         designDocAssistantModel: designDocAssistantModel ?? null,
+        designPrototypeModel: designPrototypeModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
         prdAssistantModel: prdAssistantModel ?? null,
         prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
@@ -137,7 +143,7 @@ export async function listApprovers(project: string): Promise<ProjectApprover[]>
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
   }));
 }
 
@@ -160,7 +166,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
   for (const r of rows) {
     const approver: ProjectApprover = {
       ...r,
-      documentType: r.documentType as 'design_doc' | 'prd',
+      documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
     };
     if (!grouped[r.project]) grouped[r.project] = [];
     grouped[r.project].push(approver);
@@ -170,7 +176,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
 
 export async function setApprovers(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
   userIds: string[],
   assignedBy?: string,
 ): Promise<ProjectApprover[]> {
@@ -196,7 +202,7 @@ export async function setApprovers(
 
 export async function getApproversForDocument(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
@@ -215,13 +221,13 @@ export async function getApproversForDocument(
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
   }));
 }
 
 export async function setApproverGroups(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
   groupIds: string[],
   assignedBy?: string,
 ): Promise<void> {
@@ -245,7 +251,7 @@ export async function setApproverGroups(
 
 export async function getApproverPool(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<ApproverPoolResponse> {
   const individuals = await getApproversForDocument(project, documentType);
 
@@ -266,7 +272,7 @@ export async function getApproverPool(
     .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
     .where(and(eq(projectApproverGroups.project, project), eq(projectApproverGroups.documentType, documentType)));
 
-  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }> = [];
+  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }> = [];
   for (const ref of groupRefs) {
     const memberRows = await db
       .select({
@@ -287,7 +293,7 @@ export async function getApproverPool(
       description: ref.groupDescription,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
-      documentType: ref.documentType as 'design_doc' | 'prd',
+      documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype',
       members: memberRows,
     });
   }
@@ -297,7 +303,7 @@ export async function getApproverPool(
 
 export async function getApproverUserIds(
   project: string,
-  documentType: 'design_doc' | 'prd',
+  documentType: 'design_doc' | 'prd' | 'design_prototype',
 ): Promise<string[]> {
   const pool = await getApproverPool(project, documentType);
   const userIds = new Set<string>();

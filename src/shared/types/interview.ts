@@ -86,6 +86,8 @@ export interface ReviewPrdRequest {
 
 export interface ReviewPrdResponse {
   ok: boolean;
+  prdId?: string;
+  approved?: boolean;
   designDocId?: string;
 }
 

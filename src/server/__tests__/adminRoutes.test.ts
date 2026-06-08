@@ -488,6 +488,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designPrototypeSkillPath
+      undefined,   // designPrototypeModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
@@ -551,6 +553,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designPrototypeSkillPath
+      undefined,   // designPrototypeModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
@@ -594,6 +598,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designDocQaModel
       undefined,   // designDocAssistantSkillPath
       undefined,   // designDocAssistantModel
+      undefined,   // designPrototypeSkillPath
+      undefined,   // designPrototypeModel
       undefined,   // designDocValidationSkillPath
       undefined,   // designDocValidationModel
       undefined,   // quickSkillPills
@@ -635,6 +641,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designDocQaModel
       undefined,               // designDocAssistantSkillPath
       undefined,               // designDocAssistantModel
+      undefined,               // designPrototypeSkillPath
+      undefined,               // designPrototypeModel
       undefined,               // designDocValidationSkillPath
       undefined,               // designDocValidationModel
       undefined,               // quickSkillPills
@@ -675,6 +683,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // designDocQaModel
       undefined,                            // designDocAssistantSkillPath
       undefined,                            // designDocAssistantModel
+      undefined,                            // designPrototypeSkillPath
+      undefined,                            // designPrototypeModel
       '.cursor/skills/validate/SKILL.md',   // designDocValidationSkillPath
       'claude-3-opus',                      // designDocValidationModel
       undefined,                            // quickSkillPills
@@ -713,6 +723,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,
       undefined,
       undefined,
+      undefined,   // designPrototypeSkillPath
+      undefined,   // designPrototypeModel
       'composer-2',
       undefined,   // approvalMode
       undefined,   // quickMcpPills
@@ -749,6 +761,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // designDocQaModel
       undefined,         // designDocAssistantSkillPath
       undefined,         // designDocAssistantModel
+      undefined,         // designPrototypeSkillPath
+      undefined,         // designPrototypeModel
       undefined,         // designDocValidationSkillPath
       undefined,         // designDocValidationModel
       undefined,         // quickSkillPills
@@ -872,7 +886,7 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
 
     const res = await request(buildApp('oid-1'))
       .put('/api/admin/project-settings/proj-alpha/approvers')
-      .send({ designDocApprovers: ['user-1'], prdApprovers: ['user-2'] });
+      .send({ designDocApprovers: ['user-1'], prdApprovers: ['user-2'], designPrototypeApprovers: [] });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ designDoc, prd });
@@ -913,7 +927,7 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
 
     const res = await request(buildApp())
       .put('/api/admin/project-settings/proj-alpha/approvers')
-      .send({ designDocApprovers: [], prdApprovers: [] });
+      .send({ designDocApprovers: [], prdApprovers: [], designPrototypeApprovers: [] });
 
     expect(res.status).toBe(500);
   });

@@ -1,7 +1,8 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
+import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
@@ -264,6 +265,7 @@ export const prdsRelations = relations(prds, ({ one, many }) => ({
     references: [chatThreads.id],
   }),
   designDocs: many(designDocs),
+  designPrototypes: many(designPrototypes),
 }));
 
 export const designDocsRelations = relations(designDocs, ({ one }) => ({
@@ -301,11 +303,13 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocSkillPath: text('design_doc_skill_path'),
   designDocQaSkillPath: text('design_doc_qa_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
+  designPrototypeSkillPath: text('design_prototype_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
   designDocModel: text('design_doc_model'),
   designDocQaModel: text('design_doc_qa_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
+  designPrototypeModel: text('design_prototype_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
   prdAssistantSkillPath: text('prd_assistant_skill_path'),
@@ -512,3 +516,53 @@ export const projectMenuSettings = pgTable('project_menu_settings', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+// ── Design Prototype Tables ───────────────────────────────────────────────────
+
+export const designPrototypes = pgTable('design_prototypes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
+  featureName: text('feature_name').notNull(),
+  featureIndex: integer('feature_index').notNull(),
+  authorId: text('author_id').notNull(),
+  status: text('status').notNull().default('generating'),
+  mockHtml: text('mock_html'),
+  mockVersion: integer('mock_version').notNull().default(1),
+  history: jsonb('history').$type<DesignPrototypeHistoryEntry[]>().notNull().default([]),
+  reviewerId: text('reviewer_id'),
+  reviewComment: text('review_comment'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  generationError: text('generation_error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const designPrototypeComments = pgTable('design_prototype_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prototypeId: uuid('prototype_id').notNull().references(() => designPrototypes.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull(),
+  text: text('text').notNull(),
+  pinX: real('pin_x'),
+  pinY: real('pin_y'),
+  mockVersion: integer('mock_version').notNull(),
+  resolved: boolean('resolved').notNull().default(false),
+  resolvedBy: text('resolved_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+// ── Design Prototype Relations ────────────────────────────────────────────────
+
+export const designPrototypesRelations = relations(designPrototypes, ({ one, many }) => ({
+  prd: one(prds, {
+    fields: [designPrototypes.prdId],
+    references: [prds.id],
+  }),
+  comments: many(designPrototypeComments),
+}));
+
+export const designPrototypeCommentsRelations = relations(designPrototypeComments, ({ one }) => ({
+  prototype: one(designPrototypes, {
+    fields: [designPrototypeComments.prototypeId],
+    references: [designPrototypes.id],
+  }),
+}));

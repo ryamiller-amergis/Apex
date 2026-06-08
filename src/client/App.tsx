@@ -36,6 +36,7 @@ const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
 const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
+const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototypeReviewView'));
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
@@ -328,6 +329,8 @@ function App() {
                     <InterviewChatView />
                   ) : location.pathname.startsWith('/backlog/prd/') ? (
                     <PrdReviewView />
+                  ) : location.pathname.startsWith('/backlog/design-prototypes/') ? (
+                    <DesignPrototypeReviewView />
                   ) : location.pathname.startsWith('/backlog/design-doc/') ? (
                     <DesignDocReviewView />
                   ) : (

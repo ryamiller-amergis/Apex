@@ -31,6 +31,7 @@ import {
   useDeleteComment,
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
+import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -142,6 +143,7 @@ export const PrdReviewView: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
+  const { data: relatedPrototypes = [] } = usePrototypesForPrd(prd?.status === 'approved' ? id : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
 
   const updateContent = useUpdatePrdContent();
@@ -258,9 +260,9 @@ export const PrdReviewView: React.FC = () => {
 
   const handleApprove = useCallback(async () => {
     if (!id) return;
-    const data = await reviewPrd.mutateAsync({ prdId: id, action: 'approve' });
-    if (data.designDocId) {
-      navigate(`/backlog/design-doc/${data.designDocId}`);
+    const result = await reviewPrd.mutateAsync({ prdId: id, action: 'approve' });
+    if (result?.approved) {
+      navigate(`/backlog/design-prototypes/${id}`);
     }
   }, [id, reviewPrd, navigate]);
 
@@ -646,14 +648,34 @@ export const PrdReviewView: React.FC = () => {
         </div>
       </div>
 
-      {createAdoItems.isSuccess && createAdoItems.data && (
-        <div className={styles.adoSuccessBanner}>
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={styles.adoSuccessIcon}>
-            <polyline points="3 8 6.5 11.5 13 5" />
-          </svg>
-          <span>
-            {createAdoItems.data.totalCreated} work item{createAdoItems.data.totalCreated !== 1 ? 's' : ''} created in ADO
-            {createAdoItems.data.created.epics.length > 0 && ` — ${createAdoItems.data.created.epics.length} epic${createAdoItems.data.created.epics.length !== 1 ? 's' : ''}, ${createAdoItems.data.created.features.length} feature${createAdoItems.data.created.features.length !== 1 ? 's' : ''}, ${createAdoItems.data.created.pbis.length} PBI${createAdoItems.data.created.pbis.length !== 1 ? 's' : ''}`}
+  
+
+      {prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            {relatedPrototypes.length === 1
+              ? '1 design prototype was generated for this PRD.'
+              : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}
+            {' '}
+            {relatedPrototypes.filter(p => p.status === 'approved').length} of {relatedPrototypes.length} approved.
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            View Design Prototypes →
+          </button>
+        </div>
+      )}
+
+      {prd.status === 'approved' && relatedDesignDocs && relatedDesignDocs.length > 0 && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            {relatedDesignDocs.length === 1
+              ? 'A design doc was created from this PRD.'
+              : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
           </span>
         </div>
       )}

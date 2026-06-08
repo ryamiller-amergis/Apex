@@ -1,6 +1,7 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import https from 'https';
 import { getFigmaReference } from './figmaReferenceService';
+import { getMaxviewColorTokens } from './designTokensService';
 import type { DesignSystemCatalog } from './designSystemService';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
 
@@ -1459,6 +1460,18 @@ function buildCatalogSection(catalog: DesignSystemCatalog): string {
     parts.push('### Existing components in the codebase\n\n' + componentLines.join('\n'));
   }
 
+  // Canonical MaxView color palette — the AI must use these exact values rather
+  // than inventing hex/rgba colors. Bundled as a local asset (designTokensService).
+  const colorTokens = getMaxviewColorTokens();
+  if (colorTokens) {
+    parts.push(
+      '### MaxView Design Tokens — colors (REQUIRED)\n\n' +
+      'Use ONLY the colors defined below. Pick by semantic role (e.g. `error.main` for errors, ' +
+      '`primary.main` for primary actions). NEVER invent hex or rgba values not listed here.\n\n' +
+      colorTokens
+    );
+  }
+
   return `## MaxView Application Context\n\n${parts.join('\n\n')}\n\n---\n\n`;
 }
 
@@ -2405,4 +2418,198 @@ ${commentLines}
     // If the model produces invalid JSON, fall back to returning null so caller knows it failed
     return null;
   }
+}
+
+/* ════════════════════════════════════════════════════════════
+   DESIGN PROTOTYPE GENERATION (Claude Design POC)
+   ════════════════════════════════════════════════════════════ */
+
+export interface DesignPrototypeInput {
+  featureName: string;
+  featureDescription?: string;
+  pbis: Array<{
+    title: string;
+    description?: string;
+    acceptanceCriteria?: string;
+  }>;
+}
+
+export async function generateDesignPrototypeHtml(
+  input: DesignPrototypeInput,
+  modelId?: string,
+): Promise<string> {
+  const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
+  const catalogSection = buildCatalogSection(catalog);
+
+  const ref = getFigmaReference();
+  const image: ImageInput | undefined = ref.tablePageBase64
+    ? { base64: ref.tablePageBase64, mediaType: 'image/png', width: ref.tablePageWidth, height: ref.tablePageHeight }
+    : undefined;
+
+  const pbiSection = input.pbis.map((pbi, i) => {
+    const parts = [`### PBI ${i + 1}: ${pbi.title}`];
+    if (pbi.description) parts.push(pbi.description);
+    if (pbi.acceptanceCriteria) parts.push(`**Acceptance Criteria:**\n${pbi.acceptanceCriteria}`);
+    return parts.join('\n');
+  }).join('\n\n');
+
+  const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
+
+${catalogSection}
+
+## Feature to Design
+
+**Feature:** ${input.featureName}
+${input.featureDescription ? `**Description:** ${input.featureDescription}` : ''}
+
+## PBI Requirements
+
+${pbiSection}
+
+## Instructions
+
+Generate a single, self-contained HTML document with inline CSS and inline JavaScript (no external dependencies). The document must show **four state sections** stacked vertically, each clearly separated.
+
+### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
+
+You must follow these rules with zero exceptions:
+1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly mentioned in the PBI Requirements or the feature description above. If a card, widget, table, chart, or section is not described in the requirements, it MUST NOT appear.
+2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard nav items: Dashboard, Document Manager, Assignments, Shift Scheduler, Timecards) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render.
+3. **The content area must contain ONLY the new feature component** described in the PBI Requirements. Do not add other cards, widgets, summaries, charts, schedules, or any content that is not part of this feature.
+4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.
+
+### Visual annotation of the new feature
+
+Wrap the new feature area in a **2px dashed #1967d2 border** with 8px padding. Add a small floating label at the top-left corner reading "NEW: ${input.featureName}" styled with background #1967d2, white text, 10px bold font, 2px 6px padding, positioned so it overlaps the top border edge.
+
+### State sections
+
+1. **DEFAULT STATE** — Page shell + the annotated new feature area populated with realistic sample data. All PBI requirements must be visually represented. No other content in the content area.
+
+2. **EMPTY STATE** — Page shell + the annotated new feature area showing its empty state: helpful messaging and a call-to-action. No other content.
+
+3. **ERROR STATE** — Page shell + the annotated new feature area showing error states: inline validation errors, field-level red borders, and/or error banners with realistic messages derived from the acceptance criteria. No other content.
+
+4. **LOADING STATE** — Page shell + the annotated new feature area showing CSS-only animated skeleton placeholders (pulse animation) matching the default layout. No other content.
+
+### Interactivity — lightweight inline JavaScript
+
+Within each state section, add small UI interactions using vanilla JavaScript (no frameworks, no external scripts). These make the prototype feel realistic during review:
+- **Dropdowns / select menus**: clicking opens a styled list; clicking an option selects it and closes the list.
+- **Tabs**: clicking a tab switches the visible content panel below it.
+- **Accordions / expandable sections**: clicking a header toggles content visibility with a chevron rotation.
+- **Date pickers / calendars**: clicking a date input shows a simple month grid; clicking a date fills the input.
+- **Modals / dialogs**: clicking trigger buttons (e.g. "Add Task", "Create") opens a styled overlay with form fields and Close/Cancel buttons that dismiss it.
+- **Checkboxes / toggles**: clicking toggles checked/active state visually.
+- **Hover effects**: use CSS :hover for button highlights, row highlights, card elevation.
+- **Sidebar nav**: clicking a nav item highlights it as active (but does NOT navigate away).
+
+Rules:
+- All JavaScript must be inline in a single \`<script>\` tag at the end of \`<body>\`.
+- NEVER use \`fetch\`, \`XMLHttpRequest\`, \`window.open\`, \`window.location\`, or any network/navigation calls.
+- NEVER add \`<a href>\` links that navigate away. Use \`href="#"\` with \`event.preventDefault()\`.
+- Keep interactions purely visual and local — no data persistence, no API calls.
+
+### Icons and images rule — NO emojis, NO external images
+
+The prototype must be fully self-contained. Follow these rules strictly:
+- **NEVER** use emoji characters (🔔 📭 ✅ ⚠️ ⏳ etc.) anywhere in the prototype — not in nav items, buttons, headings, section headers, badges, or content.
+- **NEVER** use \`<img>\` tags with external URLs or placeholder services (unsplash, placeholder.com, picsum, etc.).
+- **ALL icons** must be inline SVGs using Material Icons paths (24×24 viewBox, \`fill="currentColor"\`). Examples:
+  - Dashboard: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>\`
+  - Checkmark: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>\`
+  - Warning: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>\`
+  - Error: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>\`
+  - Add/Plus: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>\`
+  - Search: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>\`
+  - Person: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>\`
+  - Notification: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>\`
+- For user avatars, use a simple colored circle with initials (e.g. \`<div style="width:32px;height:32px;border-radius:50%;background:#1967d2;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">RT</div>\`).
+- For section state headers, use a text label only with a colored dot or small inline SVG — NOT emoji.
+
+### Section formatting
+
+Each section must have:
+- A sticky-positioned section header with label and a small colored indicator (NOT emoji): "Default State" (green dot), "Empty State" (gray dot), "Error State" (red dot), "Loading State" (blue dot)
+- A subtle background tint difference to separate sections visually
+- Full MaxView design system styling throughout (sidebar, topbar, colors, typography)
+
+Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
+
+  const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
+  const text = await invokeModel(prompt, image, effectiveModel, UI_MOCK_MAX_TOKENS);
+
+  let html = text.trim();
+  if (html.startsWith('```')) {
+    html = html.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  return html;
+}
+
+export async function regenerateDesignPrototypeHtml(
+  priorHtml: string,
+  feedback: string,
+  unresolvedComments: string[],
+  modelId?: string,
+): Promise<string> {
+  const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
+  const catalogSection = buildCatalogSection(catalog);
+
+  const ref = getFigmaReference();
+  const image: ImageInput | undefined = ref.tablePageBase64
+    ? { base64: ref.tablePageBase64, mediaType: 'image/png', width: ref.tablePageWidth, height: ref.tablePageHeight }
+    : undefined;
+
+  const commentsSection = unresolvedComments.length > 0
+    ? `\n## Unresolved Review Comments\n\n${unresolvedComments.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n`
+    : '';
+
+  const prompt = `You are revising an existing MaxView UI prototype based on reviewer feedback.
+
+${catalogSection}
+
+## Current Prototype HTML
+
+${priorHtml}
+
+## Reviewer Feedback
+
+${feedback}
+${commentsSection}
+
+## Instructions
+
+Revise the HTML prototype to address the feedback and unresolved comments above. Maintain all four state sections (Default, Empty, Error, Loading). Keep the MaxView design system styling. Preserve sections that were not mentioned in the feedback. Maintain all inline JavaScript interactivity (dropdowns, tabs, modals, date pickers, checkboxes, accordion toggles).
+
+### CRITICAL SCOPING RULE — preserve in all revisions
+
+- The dashed blue annotation border (2px dashed #1967d2) with the "NEW: ..." label must remain around the new feature area in every section.
+- The page must contain ONLY the sidebar nav, header bar, and the annotated new feature component. Do NOT add any cards, widgets, summaries, charts, schedules, or content that is not part of this feature.
+- Do NOT invent or fabricate any UI elements not described in the feature requirements.
+- Empty, Error, and Loading states must ONLY affect the annotated new feature area — the sidebar and header remain unchanged.
+
+### Interactivity — preserve and enhance
+
+- Maintain all inline JavaScript interactions (dropdowns, tabs, modals, date pickers, checkboxes, accordions).
+- All JS must be in a single \`<script>\` tag at end of \`<body>\`. No external scripts, no fetch/network calls, no navigation.
+- Add new interactions if the feedback implies them (e.g. "make the calendar clickable").
+
+### Icons and images rule — NO emojis, NO external images
+
+- **NEVER** use emoji characters anywhere — replace any existing emojis with inline SVG icons (Material Icons style, 24×24 viewBox, \`fill="currentColor"\`).
+- **NEVER** use \`<img>\` tags with external URLs. Replace any external images with inline SVGs or colored circles with initials for avatars.
+- Section state headers must use colored dots or small inline SVGs — NOT emoji.
+
+Return ONLY the complete revised HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
+
+  const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
+  const text = await invokeModel(prompt, image, effectiveModel, UI_MOCK_MAX_TOKENS);
+
+  let html = text.trim();
+  if (html.startsWith('```')) {
+    html = html.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  return html;
 }

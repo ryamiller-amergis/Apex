@@ -253,6 +253,7 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({ title, hint, expand
 const SKILL_FIELDS = [
   { key: 'interviewSkillPath' as const, label: 'Interview Skill', desc: 'Guides the stakeholder interview process', emptyLabel: 'None (use default)' },
   { key: 'prdSkillPath' as const, label: 'PRD Skill', desc: 'Generates the product requirements document', emptyLabel: 'None (use default)' },
+  { key: 'designPrototypeSkillPath' as const, label: 'Design Prototype Skill', desc: 'Guides HTML prototype generation from approved requirements', emptyLabel: 'None (use default)' },
   { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
   { key: 'designDocQaSkillPath' as const, label: 'Design Doc Q&A Skill', desc: 'Runs the Q&A review phase on design docs', emptyLabel: 'None (skip Q&A phase)' },
   { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
@@ -262,6 +263,7 @@ const SKILL_FIELDS = [
 const MODEL_FIELDS = [
   { key: 'interviewModel' as const, label: 'Interview Model' },
   { key: 'prdModel' as const, label: 'PRD Model' },
+  { key: 'designPrototypeModel' as const, label: 'Design Prototype Model' },
   { key: 'designDocModel' as const, label: 'Design Doc Model' },
   { key: 'designDocQaModel' as const, label: 'Design Doc Q&A Model' },
   { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
@@ -425,12 +427,14 @@ interface EditState {
   designDocSkillPath: string;
   designDocQaSkillPath: string;
   designDocAssistantSkillPath: string;
+  designPrototypeSkillPath: string;
   designDocValidationSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
   designDocQaModel: string;
   designDocAssistantModel: string;
+  designPrototypeModel: string;
   designDocValidationModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
@@ -444,9 +448,9 @@ interface EditState {
 const emptyEdit = (): EditState => ({
   project: '', skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
-  designDocQaSkillPath: '', designDocAssistantSkillPath: '', designDocValidationSkillPath: '',
+  designDocQaSkillPath: '', designDocAssistantSkillPath: '', designPrototypeSkillPath: '', designDocValidationSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
-  designDocQaModel: '', designDocAssistantModel: '', designDocValidationModel: '',
+  designDocQaModel: '', designDocAssistantModel: '', designPrototypeModel: '', designDocValidationModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -489,6 +493,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
   const [designDocApproverGroupIds, setDesignDocApproverGroupIds] = useState<string[]>([]);
   const [prdApproverGroupIds, setPrdApproverGroupIds] = useState<string[]>([]);
+  const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
+  const [designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
@@ -532,6 +538,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     setPrdApproverGroupIds(
       approverGroups.filter((g) => g.documentType === 'prd').map((g) => g.groupId),
     );
+    setDesignPrototypeApproverIds(
+      approvers.filter((a) => a.documentType === 'design_prototype').map((a) => a.userId),
+    );
+    setDesignPrototypeApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'design_prototype').map((g) => g.groupId),
+    );
   }, [approversData, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ───────────────────────────────────────────────────────────
@@ -560,12 +572,14 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocSkillPath: config.designDocSkillPath ?? '',
       designDocQaSkillPath: config.designDocQaSkillPath ?? '',
       designDocAssistantSkillPath: config.designDocAssistantSkillPath ?? '',
+      designPrototypeSkillPath: config.designPrototypeSkillPath ?? '',
       designDocValidationSkillPath: config.designDocValidationSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
       designDocQaModel: config.designDocQaModel ?? '',
       designDocAssistantModel: config.designDocAssistantModel ?? '',
+      designPrototypeModel: config.designPrototypeModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
@@ -608,12 +622,14 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designDocSkillPath: edit.designDocSkillPath || null,
           designDocQaSkillPath: edit.designDocQaSkillPath || null,
           designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
+          designPrototypeSkillPath: edit.designPrototypeSkillPath || null,
           designDocValidationSkillPath: edit.designDocValidationSkillPath || null,
           interviewModel: edit.interviewModel || null,
           prdModel: edit.prdModel || null,
           designDocModel: edit.designDocModel || null,
           designDocQaModel: edit.designDocQaModel || null,
           designDocAssistantModel: edit.designDocAssistantModel || null,
+          designPrototypeModel: edit.designPrototypeModel || null,
           designDocValidationModel: edit.designDocValidationModel || null,
           defaultModel: edit.defaultModel || null,
           prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
@@ -627,9 +643,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       // Save approvers if any were configured
       const hasApprovers =
         designDocApproverIds.length > 0 ||
-        prdApproverIds.length > 0 ||
+        prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
         designDocApproverGroupIds.length > 0 ||
-        prdApproverGroupIds.length > 0 ||
+        prdApproverGroupIds.length > 0 || designPrototypeApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
         await setApprovers.mutateAsync({
@@ -638,6 +654,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           prdApprovers: prdApproverIds,
           designDocApproverGroups: designDocApproverGroupIds,
           prdApproverGroups: prdApproverGroupIds,
+          designPrototypeApprovers: designPrototypeApproverIds,
+          designPrototypeApproverGroups: designPrototypeApproverGroupIds,
         });
       }
 
@@ -662,11 +680,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const renderApproverBadge = (config: ProjectSkillConfig) => {
     const ddCount = config.designDocApproverCount ?? 0;
     const prdCount = config.prdApproverCount ?? 0;
-    if (ddCount === 0 && prdCount === 0) {
+    const dpCount = config.designPrototypeApproverCount ?? 0;
+    if (ddCount === 0 && prdCount === 0 && dpCount === 0) {
       return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No reviewers</span>;
     }
     const parts: string[] = [];
     if (ddCount > 0) parts.push(`${ddCount} design doc`);
+    if (dpCount > 0) parts.push(`${dpCount} design prototype`);
     if (prdCount > 0) parts.push(`${prdCount} PRD`);
     return <span className={styles.approverBadge}>{parts.join(' · ')}</span>;
   };
@@ -805,14 +825,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       className={styles.select}
                       value={edit[sf.key]}
                       onChange={(e) => setEdit((prev) => prev ? { ...prev, [sf.key]: e.target.value } : prev)}
-                      disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                      disabled={sf.key === 'designPrototypeSkillPath' || upsert.isPending || isLoadingSkills || !edit.skillRepo}
                     >
                       <option value="">{sf.emptyLabel}</option>
                       {skillList.map((s) => (
                         <option key={s.id} value={s.path}>{s.name}</option>
                       ))}
                     </select>
-                    <span className={styles.skillDescription}>{sf.desc}</span>
+                    <span className={styles.skillDescription}>
+                      {sf.key === 'designPrototypeSkillPath'
+                        ? 'Uses built-in Bedrock prompt — skill override not yet supported'
+                        : sf.desc}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -836,18 +860,23 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       className={styles.select}
                       value={edit[mf.key]}
                       onChange={(e) => setEdit((prev) => prev ? { ...prev, [mf.key]: e.target.value } : prev)}
-                      disabled={upsert.isPending || isLoadingModels}
+                      disabled={mf.key === 'designPrototypeModel' || upsert.isPending || isLoadingModels}
                     >
                       <option value="">Use project default</option>
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>{m.displayName}</option>
                       ))}
                     </select>
-                    {!edit[mf.key] && (
+                    {!edit[mf.key] && mf.key !== 'designPrototypeModel' && (
                       <span className={styles.modelDefault}>
                         Using: {edit.defaultModel
                           ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
                           : 'system default (composer-2)'}
+                      </span>
+                    )}
+                    {mf.key === 'designPrototypeModel' && (
+                      <span className={styles.modelDefault}>
+                        Uses Bedrock model from environment config (BEDROCK_UI_MOCK_MODEL_ID)
                       </span>
                     )}
                   </div>
@@ -906,8 +935,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <AccordionSection
               title="Reviewers"
               hint={
-                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length} groups`
+                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
@@ -955,6 +984,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
               {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
               {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
+              {renderApproverSection('Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
             </AccordionSection>
 
             {/* Section 6: Quick Skill Pills */}

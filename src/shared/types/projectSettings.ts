@@ -67,12 +67,14 @@ export interface ProjectSkillConfig {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
@@ -84,6 +86,7 @@ export interface ProjectSkillConfig {
   approvalMode?: ApprovalMode;
   designDocApproverCount?: number;
   prdApproverCount?: number;
+  designPrototypeApproverCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -96,12 +99,14 @@ export interface UpsertProjectSkillConfigRequest {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
@@ -117,7 +122,7 @@ export interface ProjectApprover {
   id: string;
   project: string;
   userId: string;
-  documentType: 'design_doc' | 'prd';
+  documentType: 'design_doc' | 'prd' | 'design_prototype';
   displayName: string | null;
   email: string | null;
   assignedBy: string | null;
@@ -132,11 +137,13 @@ export interface SetApproversRequest {
   /** Live group references (group IDs); expanded to members at read time. */
   designDocApproverGroups?: string[];
   prdApproverGroups?: string[];
+  designPrototypeApprovers: string[];
+  designPrototypeApproverGroups?: string[];
 }
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' }>;
+  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }>;
 }
 
 export interface ProjectSkillConfigResponse {
@@ -148,12 +155,14 @@ export interface ProjectSkillConfigResponse {
   designDocSkillPath?: string | null;
   designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
+  designPrototypeSkillPath?: string | null;
   designDocValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
   designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
+  designPrototypeModel?: string | null;
   designDocValidationModel?: string | null;
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;

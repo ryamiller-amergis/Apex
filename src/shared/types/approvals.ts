@@ -5,7 +5,7 @@ export type ApproverResponseStatus = 'pending' | 'approved' | 'revision_requeste
 export interface DocumentApproverAssignment {
   id: string;
   documentId: string;
-  documentType: 'prd' | 'design_doc';
+  documentType: 'prd' | 'design_doc' | 'design_prototype';
   approverUserId: string;
   approverDisplayName?: string;
   status: ApproverResponseStatus;
