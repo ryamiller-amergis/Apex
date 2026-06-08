@@ -1,0 +1,161 @@
+/* ── Proposed Design Doc Changes Review Banner ───────────────────────────────── */
+
+.banner {
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, #f59e0b 40%, var(--border-color));
+  flex-shrink: 0;
+}
+
+.bannerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 24px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bannerLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #d97706;
+}
+
+.bannerTitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #92400e;
+}
+
+[data-theme='dark'] .bannerTitle {
+  color: #fbbf24;
+}
+
+.bannerHint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.bannerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Shared button base ────────────────────────────────────────────────────── */
+
+.reviewBtn,
+.acceptBtn,
+.rejectBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.reviewBtn:disabled,
+.acceptBtn:disabled,
+.rejectBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Review button — neutral outlined */
+.reviewBtn {
+  background: transparent;
+  border-color: #d97706;
+  color: #d97706;
+}
+
+.reviewBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+}
+
+/* Accept button — green */
+.acceptBtn {
+  background: var(--success-color);
+  border-color: var(--success-color);
+  color: #fff;
+  font-weight: 600;
+}
+
+.acceptBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--success-color) 85%, #000);
+  border-color: color-mix(in srgb, var(--success-color) 85%, #000);
+}
+
+/* Reject button — neutral / muted */
+.rejectBtn {
+  background: transparent;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.rejectBtn:hover:not(:disabled) {
+  border-color: var(--error-color);
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 6%, transparent);
+}
+
+/* ── Expanded diff section ───────────────────────────────────────────────── */
+
+.diffSection {
+  border-top: 1px solid color-mix(in srgb, #f59e0b 30%, var(--border-color));
+  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.diffBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diffBlockLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .bannerTop {
+    padding: 10px 16px;
+    gap: 8px;
+  }
+
+  .diffSection {
+    padding: 12px 16px;
+  }
+
+  .bannerActions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}

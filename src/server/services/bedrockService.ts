@@ -2420,6 +2420,46 @@ ${commentLines}
   }
 }
 
+/**
+ * Apply open review comments to a single design-doc section and return the revised markdown.
+ * Calls Bedrock once — returns the full updated section content as a string.
+ */
+export async function fixDesignDocSectionWithBedrock(
+  sectionContent: string,
+  sectionName: string,
+  comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
+): Promise<string> {
+  const commentLines = formatCommentsForPrompt(comments);
+
+  const prompt = `You are a senior technical architect. Revise the design document section below to address every review comment listed.
+
+## Current ${sectionName} Content
+
+${sectionContent || '(empty)'}
+
+## Review Comments to Address
+
+${commentLines}
+
+## Instructions
+
+- Each comment has a "Highlighted text" field — this is the EXACT passage the reviewer selected. Your fix MUST target that specific text. Do not make unrelated changes elsewhere.
+- Pay close attention to thread replies — they often contain the specific wording or instructions for what to change.
+- Produce the complete revised section as clean markdown.
+- Only modify the passages referenced by the highlighted text. Keep all other content unchanged.
+- Preserve all subsections, heading levels, and overall structure unless a comment explicitly asks to change them.
+- Do NOT add a preamble, summary, or explanation — output ONLY the revised markdown, starting directly with the first heading or content.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+
+  const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
+  return fenced ? fenced[1].trim() : text.trim();
+}
+
 /* ════════════════════════════════════════════════════════════
    DESIGN PROTOTYPE GENERATION (Claude Design POC)
    ════════════════════════════════════════════════════════════ */

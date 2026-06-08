@@ -190,6 +190,9 @@ export interface DesignDoc extends DesignDocSummary {
   designContent: string;
   techSpecContent: string;
   assumptionsContent: string;
+  proposedDesignContent?: string | null;
+  proposedTechSpecContent?: string | null;
+  proposedAssumptionsContent?: string | null;
 }
 
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };

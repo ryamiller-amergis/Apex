@@ -642,6 +642,76 @@ export function useFixPrdWithAi(prdId: string) {
   });
 }
 
+export function useFixPrdCommentWithAi(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { commentId: string }>({
+    mutationFn: ({ commentId }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-comment-with-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commentId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+    },
+  });
+}
+
+// ── Design Doc AI Fix ─────────────────────────────────────────────────────────
+
+export function useFixDesignDocWithAi(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/fix-with-ai`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'design_doc', designDocId] });
+    },
+  });
+}
+
+export function useFixDesignDocCommentWithAi(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { commentId: string }>({
+    mutationFn: ({ commentId }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/fix-comment-with-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commentId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'design_doc', designDocId] });
+    },
+  });
+}
+
+export function useApplyProposedDesignDoc(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/apply-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'design_doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['unresolved-comment-count', 'design_doc', designDocId] });
+    },
+  });
+}
+
+export function useRejectProposedDesignDoc(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/reject-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+    },
+  });
+}
+
 // ── PRD → ADO Work Items ─────────────────────────────────────────────────────
 
 export function useCreatePrdAdoItems() {

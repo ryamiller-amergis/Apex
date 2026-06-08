@@ -143,6 +143,9 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
+    proposedDesignContent: row.proposedDesignContent ?? null,
+    proposedTechSpecContent: row.proposedTechSpecContent ?? null,
+    proposedAssumptionsContent: row.proposedAssumptionsContent ?? null,
   };
 }
 

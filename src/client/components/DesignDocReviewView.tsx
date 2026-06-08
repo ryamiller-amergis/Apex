@@ -25,7 +25,10 @@ import {
   useRevertDesignDocSection,
   useDocumentAssignments,
   useReassignApprovers,
+  useFixDesignDocWithAi,
+  useFixDesignDocCommentWithAi,
 } from '../hooks/useInterviews';
+import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
@@ -1131,8 +1134,11 @@ export const DesignDocReviewView: React.FC = () => {
   const fixValidation = useFixValidation();
   const acceptFixValidation = useAcceptFixValidation();
   const revertSection = useRevertDesignDocSection();
+  const fixDesignDocWithAi = useFixDesignDocWithAi(id ?? '');
+  const fixDesignDocCommentWithAi = useFixDesignDocCommentWithAi(id ?? '');
 
   const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
+  const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
 
   const { data: reviewComments = [] } = useReviewComments(id, 'design_doc');
   const { data: unresolvedData } = useUnresolvedCommentCount(id, 'design_doc');
@@ -1545,6 +1551,16 @@ export const DesignDocReviewView: React.FC = () => {
       body: JSON.stringify({ body }),
     });
   }, []);
+
+  const handleFixCommentWithAi = useCallback(async (commentId: string) => {
+    if (!id) return;
+    setFixingCommentId(commentId);
+    try {
+      await fixDesignDocCommentWithAi.mutateAsync({ commentId });
+    } finally {
+      setFixingCommentId(null);
+    }
+  }, [id, fixDesignDocCommentWithAi]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
@@ -1972,6 +1988,17 @@ export const DesignDocReviewView: React.FC = () => {
           {/* ── Normal content (hidden during fix flow) ──────────────── */}
           {!showFixFlow && (
             <>
+              {(doc.proposedDesignContent != null || doc.proposedTechSpecContent != null || doc.proposedAssumptionsContent != null) && (
+                <ProposedDesignDocChangesReview
+                  designDocId={doc.id}
+                  currentDesign={doc.designContent}
+                  currentTechSpec={doc.techSpecContent}
+                  currentAssumptions={doc.assumptionsContent}
+                  proposedDesignContent={doc.proposedDesignContent}
+                  proposedTechSpecContent={doc.proposedTechSpecContent}
+                  proposedAssumptionsContent={doc.proposedAssumptionsContent}
+                />
+              )}
               <div className={styles.tabs}>
                 {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
                   <button
@@ -2139,6 +2166,11 @@ export const DesignDocReviewView: React.FC = () => {
                         onResolve={(commentId) => resolveComment.mutate(commentId)}
                         onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
                         onDelete={(commentId) => deleteComment.mutate(commentId)}
+                        onFixWithAi={canEdit ? () => fixDesignDocWithAi.mutate() : undefined}
+                        isFixingWithAi={fixDesignDocWithAi.isPending}
+                        fixAiError={fixDesignDocWithAi.error?.message}
+                        onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
+                        fixingCommentId={fixingCommentId}
                       />
                     )}
                   </div>
