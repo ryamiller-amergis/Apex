@@ -30,7 +30,10 @@ router.get('/available-models', async (_req: Request, res: Response) => {
 
 // GET /api/projects - List ADO projects accessible to the configured PAT,
 // filtered to the allowlist in ADO_ALLOWED_PROJECTS (comma-separated).
-router.get('/projects', async (_req: Request, res: Response) => {
+// Users in APEX_ALLOWED_EMAILS also see the virtual "Apex" project (no ADO backing).
+const APEX_ALLOWED_EMAILS = new Set(['ryamiller@amergis.com', 'anedunur@amergis.com']);
+
+router.get('/projects', async (req: Request, res: Response) => {
   try {
     const adoService = new AzureDevOpsService();
     let projects = await adoService.getProjects();
@@ -45,6 +48,19 @@ router.get('/projects', async (_req: Request, res: Response) => {
       projects = projects.filter((p) => allowed.has(p.name.toLowerCase()));
       // Preserve the order defined in ADO_ALLOWED_PROJECTS
       projects.sort((a, b) => allowList.findIndex((p) => p.toLowerCase() === a.name.toLowerCase()) - allowList.findIndex((p) => p.toLowerCase() === b.name.toLowerCase()));
+    }
+
+    const profile = (req.user as any)?.profile;
+    const userEmail: string | undefined =
+      profile?.upn ??
+      profile?.email ??
+      profile?._json?.preferred_username ??
+      profile?._json?.email;
+    if (userEmail && APEX_ALLOWED_EMAILS.has(userEmail.toLowerCase())) {
+      projects = [
+        ...projects,
+        { id: 'apex-virtual', name: 'Apex', description: 'AI Pilot self-development — requirement flows & orchestration' },
+      ];
     }
 
     res.json(projects);
@@ -84,6 +100,7 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
 router.get('/workitems', async (req: Request, res: Response) => {
   try {
     const { from, to, project, areaPath } = req.query as WorkItemsQuery & { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     const adoService = new AzureDevOpsService(project, areaPath);
     const workItems = await adoService.getWorkItems(from, to);
     res.json(workItems);
@@ -903,6 +920,7 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 router.get('/releases/epics', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     const adoService = new AzureDevOpsService(project, areaPath);
     const epics = await adoService.getReleaseEpics();
     res.json(epics);
@@ -1084,6 +1102,7 @@ router.delete('/releases/:epicId', async (req: Request, res: Response) => {
 router.get('/releases', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     console.log(`[GET /releases] Fetching releases for project: ${project}, areaPath: ${areaPath}`);
     const adoService = new AzureDevOpsService(project, areaPath);
     const versions = await adoService.getReleaseVersions();

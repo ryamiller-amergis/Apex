@@ -9,7 +9,11 @@ export function isSuperAdminEmail(email: string): boolean {
 
 export function isSuperAdminRequest(req: Request): boolean {
   const profile = (req.user as any)?.profile;
-  const email: string | undefined = profile?.upn ?? profile?.email;
+  const email: string | undefined =
+    profile?.upn ??
+    profile?.email ??
+    profile?._json?.preferred_username ??
+    profile?._json?.email;
   if (!email) return false;
   return isSuperAdminEmail(email);
 }

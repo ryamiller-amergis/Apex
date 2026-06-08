@@ -243,7 +243,7 @@ export class AzureDevOpsService {
         { project: this.project }
       );
 
-      if (!queryResult.workItems || queryResult.workItems.length === 0) {
+      if (!queryResult?.workItems || queryResult.workItems.length === 0) {
         return [];
       }
 
@@ -1713,17 +1713,17 @@ export class AzureDevOpsService {
 
         console.log('[getReleaseVersions] Executing WIQL query for releases');
 
-        const queryResult = await witApi.queryByWiql(
-          { query: wiql },
-          { project: this.project }
-        );
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project }
+      );
 
-        if (!queryResult.workItems || queryResult.workItems.length === 0) {
-          console.log('[getReleaseVersions] No Features or Epics found');
-          return [];
-        }
+      if (!queryResult?.workItems || queryResult.workItems.length === 0) {
+        console.log('[getReleaseVersions] No Features or Epics found');
+        return [];
+      }
 
-        console.log(`[getReleaseVersions] Found ${queryResult.workItems.length} Features/Epics`);
+      console.log(`[getReleaseVersions] Found ${queryResult.workItems.length} Features/Epics`);
 
         const ids = queryResult.workItems.map((wi) => wi.id!);
         console.log(`[getReleaseVersions] Work item IDs to fetch:`, ids);
@@ -2065,7 +2065,7 @@ export class AzureDevOpsService {
         { project: this.project }
       );
 
-      if (!queryResult.workItems || queryResult.workItems.length === 0) {
+      if (!queryResult?.workItems || queryResult.workItems.length === 0) {
         return [];
       }
 
