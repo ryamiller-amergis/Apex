@@ -49,6 +49,7 @@ jobs:
           cp -r dist/* deploy/dist/
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
+          cp -r scripts deploy/
           cd deploy
           # NOTE: do NOT use --ignore-scripts here. Native deps such as sqlite3
           # (pulled in transitively by @cursor/sdk) rely on their install script
