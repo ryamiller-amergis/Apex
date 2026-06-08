@@ -141,6 +141,8 @@ jobs:
               AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
               AWS_REGION="${{ secrets.AWS_REGION }}" \
               BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}" \
+              BEDROCK_UI_MOCK_MODEL_ID="${{ secrets.BEDROCK_UI_MOCK_MODEL_ID }}" \
+              BEDROCK_UI_MOCK_MAX_TOKENS="32000" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
