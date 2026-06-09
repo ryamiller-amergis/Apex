@@ -164,19 +164,20 @@ export function useAvailableApprovers(project: string, documentType: 'prd' | 'de
 
 export function useReassignApprovers() {
   const qc = useQueryClient();
-  return useMutation<DocumentApproverAssignment[], Error, { documentId: string; documentType: 'prd' | 'design_doc'; approverUserIds: string[] }>({
-    mutationFn: ({ documentId, documentType, approverUserIds }) => {
+  return useMutation<DocumentApproverAssignment[], Error, { documentId: string; documentType: 'prd' | 'design_doc'; approverUserIds: string[]; designDocApproverIds?: string[] }>({
+    mutationFn: ({ documentId, documentType, approverUserIds, designDocApproverIds }) => {
       const endpoint = documentType === 'prd'
         ? `/api/interviews/prds/${documentId}/assignments`
         : `/api/interviews/design-docs/${documentId}/assignments`;
       return apiFetch(endpoint, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approverUserIds }),
+        body: JSON.stringify({ approverUserIds, ...(documentType === 'prd' && designDocApproverIds !== undefined ? { designDocApproverIds } : {}) }),
       });
     },
     onSuccess: (_data, { documentId, documentType }) => {
       qc.invalidateQueries({ queryKey: ['document-assignments', documentId, documentType] });
+      qc.invalidateQueries({ queryKey: ['prd', documentId] });
     },
   });
 }

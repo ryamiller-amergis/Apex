@@ -2,8 +2,6 @@ import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { generateBacklogId } from '../../shared/utils/backlogId';
 import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
-// figmaExportService intentionally unused — Figma design creation is handled
-// by the .cursor/hooks.json sessionStart hook running inside Cursor Desktop.
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
 // DesignDocKickoffStats is returned directly by the service - no import needed here
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';

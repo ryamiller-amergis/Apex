@@ -32,6 +32,7 @@ import {
   syncPrdContent,
   updatePrdBacklog,
   updatePrdContent,
+  updatePrdDesignDocApprovers,
   withdrawFromReview,
 } from '../services/prdService';
 import {
@@ -1245,7 +1246,7 @@ router.get('/design-docs/:id/assignments', requirePermission('interviews:view'),
 
 router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    const { approverUserIds } = req.body as { approverUserIds?: string[] };
+    const { approverUserIds, designDocApproverIds } = req.body as { approverUserIds?: string[]; designDocApproverIds?: string[] };
     if (!approverUserIds || !Array.isArray(approverUserIds)) {
       res.status(400).json({ error: 'approverUserIds is required and must be an array' });
       return;
@@ -1260,6 +1261,9 @@ router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), a
     if (!isOwnerOrAuthor && !(await isAdminUser(userId))) {
       res.status(403).json({ error: 'Only the document owner, author, or admin can reassign approvers' });
       return;
+    }
+    if (Array.isArray(designDocApproverIds)) {
+      await updatePrdDesignDocApprovers(req.params.prdId, designDocApproverIds);
     }
     const assignments = await reassignApprovers(req.params.prdId, 'prd', approverUserIds, userId);
     res.json(assignments);

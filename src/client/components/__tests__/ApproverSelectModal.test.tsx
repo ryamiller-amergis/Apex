@@ -54,15 +54,15 @@ describe('ApproverSelectModal — rendering', () => {
   it('renders PRD and Design Doc sections when documentType is prd', () => {
     render(<ApproverSelectModal {...baseProps} documentType="prd" />);
 
-    expect(screen.getByText('PRD Approvers')).toBeInTheDocument();
-    expect(screen.getByText('Design Doc Approvers')).toBeInTheDocument();
+    expect(screen.getByText('PRD Reviewers')).toBeInTheDocument();
+    expect(screen.getByText('Design Doc Reviewers')).toBeInTheDocument();
   });
 
   it('renders only Design Doc section when documentType is design_doc', () => {
     render(<ApproverSelectModal {...baseProps} documentType="design_doc" />);
 
-    expect(screen.getByText('Design Doc Approvers')).toBeInTheDocument();
-    expect(screen.queryByText('PRD Approvers')).not.toBeInTheDocument();
+    expect(screen.getByText('Design Doc Reviewers')).toBeInTheDocument();
+    expect(screen.queryByText('PRD Reviewers')).not.toBeInTheDocument();
   });
 
   it('shows loading state while approvers are loading', () => {

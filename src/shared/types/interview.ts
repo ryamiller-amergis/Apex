@@ -55,6 +55,8 @@ export interface Prd extends PrdSummary {
   prdAssistantThreadId?: string | null;
   proposedContent?: string | null;
   proposedBacklogJson?: unknown;
+  /** Design doc approver user OIDs stored on the PRD; used to pre-assign reviewers when design docs are submitted. */
+  designDocApproverIds?: string[];
 }
 
 export interface CreateInterviewRequest {

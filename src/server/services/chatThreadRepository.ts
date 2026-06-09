@@ -242,12 +242,22 @@ export async function clearStaleRun(threadId: string): Promise<void> {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function deriveTitle(thread: ChatThread): string {
+  // 1. Prefer explicit pill label from kickoff
+  if (thread.kickoff.pillLabel) {
+    const desc = thread.kickoff.pillDescription;
+    return desc
+      ? `${thread.kickoff.pillLabel} — ${desc}`.slice(0, 120)
+      : thread.kickoff.pillLabel;
+  }
+
+  // 2. Fall back to skill folder name
   if (thread.kickoff.skillPath) {
     const parts = thread.kickoff.skillPath.split('/');
     const skillFolder = parts[parts.length - 2] ?? parts[parts.length - 1] ?? 'Skill';
     return skillFolder.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  // 3. Fall back to first user message
   const firstUserMsg = thread.messages.find((m) => m.role === 'user');
   if (firstUserMsg?.text) {
     return firstUserMsg.text.slice(0, 80).replace(/\n/g, ' ').trim();

@@ -23,6 +23,34 @@ function formatRelativeTime(isoString: string): string {
   return new Date(isoString).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+type DateGroup = 'Today' | 'Yesterday' | 'Last 7 Days' | 'Older';
+
+function groupThreadsByDate(threads: ChatThreadSummary[]): { label: DateGroup; threads: ChatThreadSummary[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 86_400_000);
+  const startOf7DaysAgo = new Date(startOfToday.getTime() - 7 * 86_400_000);
+
+  const groups: Record<DateGroup, ChatThreadSummary[]> = {
+    'Today': [],
+    'Yesterday': [],
+    'Last 7 Days': [],
+    'Older': [],
+  };
+
+  for (const thread of threads) {
+    const ts = new Date(thread.lastActivityAt).getTime();
+    if (ts >= startOfToday.getTime()) groups['Today'].push(thread);
+    else if (ts >= startOfYesterday.getTime()) groups['Yesterday'].push(thread);
+    else if (ts >= startOf7DaysAgo.getTime()) groups['Last 7 Days'].push(thread);
+    else groups['Older'].push(thread);
+  }
+
+  return (['Today', 'Yesterday', 'Last 7 Days', 'Older'] as DateGroup[])
+    .filter((label) => groups[label].length > 0)
+    .map((label) => ({ label, threads: groups[label] }));
+}
+
 const STATUS_DOT_CLASS: Record<string, string> = {
   idle: styles['dot--idle'],
   running: styles['dot--running'],
@@ -107,16 +135,21 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
             {showFlaggedOnly ? 'No flagged conversations.' : 'No past conversations yet.'}
           </div>
         )}
-        {visibleThreads.map((thread) => (
-          <ThreadRow
-            key={thread.id}
-            thread={thread}
-            isActive={thread.id === activeThreadId}
-            isDeleting={pendingDeleteId === thread.id}
-            onSelect={onSelectThread}
-            onDelete={handleDelete}
-            onToggleFlag={handleToggleFlag}
-          />
+        {groupThreadsByDate(visibleThreads).map(({ label, threads: groupThreads }) => (
+          <React.Fragment key={label}>
+            <div className={styles['date-group-header']}>{label}</div>
+            {groupThreads.map((thread) => (
+              <ThreadRow
+                key={thread.id}
+                thread={thread}
+                isActive={thread.id === activeThreadId}
+                isDeleting={pendingDeleteId === thread.id}
+                onSelect={onSelectThread}
+                onDelete={handleDelete}
+                onToggleFlag={handleToggleFlag}
+              />
+            ))}
+          </React.Fragment>
         ))}
       </div>
     </div>

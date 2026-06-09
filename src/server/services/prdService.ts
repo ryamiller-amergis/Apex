@@ -146,6 +146,7 @@ export async function getPrd(id: string): Promise<Prd | null> {
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
     proposedContent: row.proposedContent ?? null,
     proposedBacklogJson: row.proposedBacklogJson ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
   };
 }
 
@@ -715,6 +716,13 @@ export async function syncPrdAdoStatus(prdId: string): Promise<{ cleared: number
     .where(eq(prds.id, prdId));
 
   return { cleared: deletedIds.length, updatedBacklog: backlog };
+}
+
+export async function updatePrdDesignDocApprovers(id: string, designDocApproverIds: string[]): Promise<void> {
+  await db
+    .update(prds)
+    .set({ designDocApproverIds, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, id));
 }
 
 export async function deletePrd(id: string, requestingUserId: string): Promise<void> {
