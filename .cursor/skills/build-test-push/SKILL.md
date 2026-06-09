@@ -1,6 +1,6 @@
 ---
 name: build-test-push
-description: Run build, run impacted tests, auto-fix failures, then git add/commit/push. Use when the user says "build test push", "ship it", "run the pipeline", "build and push", or wants to validate changes and commit them.
+description: Run build, run impacted tests, auto-fix failures, then git add/commit/push, and optionally open a GitHub PR. Use when the user says "build test push", "ship it", "run the pipeline", "build and push", "open a PR", or wants to validate changes, commit them, and create a pull request.
 disable-model-invocation: true
 ---
 
@@ -144,6 +144,62 @@ git push
 ```
 
 If `git push` is rejected (non-fast-forward), run `git pull --rebase` then push again.
+
+## Step 6 — Create a Pull Request
+
+After a successful push, offer to open a PR. If the user confirms (or already asked for it), run:
+
+```bash
+gh pr create --fill
+```
+
+`--fill` auto-populates the title and body from the commit messages. The command will open an editor only if no commits exist — otherwise it proceeds immediately.
+
+### If the branch already has an open PR
+
+```bash
+gh pr view --web
+```
+
+Just open the existing PR in the browser instead.
+
+### Linking to a GitHub Project
+
+To add the new PR to a GitHub Project board, run:
+
+```bash
+gh pr create --fill --project "<Project name or URL>"
+```
+
+To discover available projects for the repo's org:
+
+```bash
+gh project list --owner <org-or-user>
+```
+
+If the user has not specified a project, ask:
+
+> "Would you like to add this PR to a GitHub Project board? If so, which one? (Run `gh project list --owner <org>` to see options.)"
+
+Do not add to a project automatically without confirmation.
+
+### PR body template
+
+When not using `--fill`, draft the body with:
+
+```
+## Summary
+<bullet list of what changed and why>
+
+## Test plan
+<list of tests run and their results>
+```
+
+### Guardrails for PR creation
+
+- Never open a PR from `main` or `master` into itself.
+- If the remote branch is behind `main`, warn the user before opening the PR.
+- Always confirm the base branch is correct (`gh pr create --base <base-branch>`) — default is the repo's default branch.
 
 ## Guardrails
 
