@@ -500,6 +500,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdAssistantModel
       undefined,   // prdReviewBedrockModelId
       undefined,   // prdReviewBedrockMaxTokens
+      undefined,   // designPrototypeBedrockModelId
+      undefined,   // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -565,6 +567,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdAssistantModel
       undefined,   // prdReviewBedrockModelId
       undefined,   // prdReviewBedrockMaxTokens
+      undefined,   // designPrototypeBedrockModelId
+      undefined,   // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -610,6 +614,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdAssistantModel
       undefined,   // prdReviewBedrockModelId
       undefined,   // prdReviewBedrockMaxTokens
+      undefined,   // designPrototypeBedrockModelId
+      undefined,   // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -653,6 +659,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // prdAssistantModel
       undefined,               // prdReviewBedrockModelId
       undefined,               // prdReviewBedrockMaxTokens
+      undefined,               // designPrototypeBedrockModelId
+      undefined,               // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -695,6 +703,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // prdAssistantModel
       undefined,                            // prdReviewBedrockModelId
       undefined,                            // prdReviewBedrockMaxTokens
+      undefined,                            // designPrototypeBedrockModelId
+      undefined,                            // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -732,6 +742,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdAssistantModel
       undefined,   // prdReviewBedrockModelId
       undefined,   // prdReviewBedrockMaxTokens
+      undefined,   // designPrototypeBedrockModelId
+      undefined,   // designPrototypeBedrockMaxTokens
     );
   });
 
@@ -773,6 +785,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // prdAssistantModel
       undefined,         // prdReviewBedrockModelId
       undefined,         // prdReviewBedrockMaxTokens
+      undefined,         // designPrototypeBedrockModelId
+      undefined,         // designPrototypeBedrockMaxTokens
     );
   });
 
