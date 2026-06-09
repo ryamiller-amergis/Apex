@@ -1,4 +1,5 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
 import https from 'https';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
@@ -6,6 +7,10 @@ import type { DesignSystemCatalog } from './designSystemService';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
 
 const client = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION ?? 'us-east-1',
+});
+
+const controlPlaneClient = new BedrockClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
 });
 
@@ -40,12 +45,96 @@ export const PRD_REVIEW_DEFAULT_MAX_TOKENS = 16000;
  * IDs use the cross-region inference prefix (us.*) which works in us-east-1.
  */
 export const AVAILABLE_BEDROCK_MODELS: Array<{ id: string; label: string }> = [
+  // Claude 4.8 / 4.6 generation (latest)
+  { id: 'us.anthropic.claude-opus-4-8', label: 'Claude Opus 4.8 (most capable)' },
+  { id: 'us.anthropic.claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (balanced, 1M ctx)' },
+  { id: 'us.anthropic.claude-opus-4-6-v1', label: 'Claude Opus 4.6 (highly capable)' },
+  // Claude 4.5 generation
   { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5 (fast, economical)' },
-  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku (fast, economical)' },
   { id: 'us.anthropic.claude-sonnet-4-5-20251001-v1:0', label: 'Claude Sonnet 4.5 (balanced)' },
+  { id: 'us.anthropic.claude-opus-4-5-20251001-v1:0', label: 'Claude Opus 4.5 (capable)' },
+  // Claude 3.5 generation
+  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku (fast, economical)' },
   { id: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet v2 (balanced)' },
-  { id: 'us.anthropic.claude-opus-4-5-20251001-v1:0', label: 'Claude Opus 4.5 (most capable)' },
 ];
+
+/* ── Dynamic Bedrock model listing ──────────────────────────────────────────
+ * Fetches active SYSTEM_DEFINED cross-region inference profiles from the
+ * Bedrock control plane, filtered to Anthropic US-geo profiles.
+ * Falls back to AVAILABLE_BEDROCK_MODELS when AWS credentials are absent
+ * (local dev without AWS config) or the API call fails for any reason.
+ * Results are cached for 1 hour so the UI endpoint stays fast.
+ * ─────────────────────────────────────────────────────────────────────────*/
+
+interface BedrockModelOption {
+  id: string;
+  label: string;
+}
+
+let _cachedModels: BedrockModelOption[] | null = null;
+let _cacheExpiry = 0;
+const MODEL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function formatInferenceProfileLabel(name: string): string {
+  // "US Anthropic Claude Sonnet 4.6" → "Claude Sonnet 4.6"
+  // "US Claude Opus 4.1"             → "Claude Opus 4.1"
+  return name.replace(/^(US|EU|AP|AU|JP|Global)\s+(Anthropic\s+)?/i, '').trim();
+}
+
+export async function listAvailableBedrockModels(): Promise<BedrockModelOption[]> {
+  if (_cachedModels && Date.now() < _cacheExpiry) {
+    return _cachedModels;
+  }
+
+  // Skip the API call in local dev when no AWS credentials are configured.
+  if (!process.env.AWS_ACCESS_KEY_ID) {
+    return AVAILABLE_BEDROCK_MODELS;
+  }
+
+  try {
+    const allProfiles: BedrockModelOption[] = [];
+    let nextToken: string | undefined;
+
+    do {
+      const resp = await controlPlaneClient.send(
+        new ListInferenceProfilesCommand({ typeEquals: 'SYSTEM_DEFINED', nextToken }),
+      );
+      nextToken = resp.nextToken ?? undefined;
+      for (const p of resp.inferenceProfileSummaries ?? []) {
+        if (
+          p.status === 'ACTIVE' &&
+          p.inferenceProfileId?.startsWith('us.anthropic.')
+        ) {
+          allProfiles.push({
+            id: p.inferenceProfileId,
+            label: p.inferenceProfileName
+              ? formatInferenceProfileLabel(p.inferenceProfileName)
+              : p.inferenceProfileId,
+          });
+        }
+      }
+    } while (nextToken);
+
+    if (allProfiles.length > 0) {
+      // Sort newest/most-capable first: Opus before Sonnet before Haiku, higher version first.
+      allProfiles.sort((a, b) => {
+        const tier = (id: string) =>
+          id.includes('opus') ? 0 : id.includes('sonnet') ? 1 : 2;
+        const tierDiff = tier(a.id) - tier(b.id);
+        if (tierDiff !== 0) return tierDiff;
+        // Within the same tier, sort descending by ID string (newer versions sort later alphabetically).
+        return b.id.localeCompare(a.id);
+      });
+      _cachedModels = allProfiles;
+      _cacheExpiry = Date.now() + MODEL_CACHE_TTL_MS;
+      return allProfiles;
+    }
+  } catch (err) {
+    console.warn('[bedrockService] listAvailableBedrockModels failed, using fallback list:', err);
+  }
+
+  return AVAILABLE_BEDROCK_MODELS;
+}
 
 /* ── SDLC skill content cache ─────────────────────────────── */
 
@@ -2477,6 +2566,7 @@ export interface DesignPrototypeInput {
 export async function generateDesignPrototypeHtml(
   input: DesignPrototypeInput,
   modelId?: string,
+  maxTokens?: number,
 ): Promise<string> {
   const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
   const catalogSection = buildCatalogSection(catalog);
@@ -2577,7 +2667,8 @@ Each section must have:
 Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
-  const text = await invokeModel(prompt, image, effectiveModel, UI_MOCK_MAX_TOKENS);
+  const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
 
   let html = text.trim();
   if (html.startsWith('```')) {
@@ -2592,6 +2683,7 @@ export async function regenerateDesignPrototypeHtml(
   feedback: string,
   unresolvedComments: string[],
   modelId?: string,
+  maxTokens?: number,
 ): Promise<string> {
   const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
   const catalogSection = buildCatalogSection(catalog);
@@ -2644,7 +2736,8 @@ Revise the HTML prototype to address the feedback and unresolved comments above.
 Return ONLY the complete revised HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
-  const text = await invokeModel(prompt, image, effectiveModel, UI_MOCK_MAX_TOKENS);
+  const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
 
   let html = text.trim();
   if (html.startsWith('```')) {

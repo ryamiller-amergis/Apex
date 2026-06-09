@@ -81,6 +81,10 @@ export interface ProjectSkillConfig {
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
+  designPrototypeBedrockModelId?: string | null;
+  designPrototypeBedrockMaxTokens?: number | null;
+  designPrototypeRegenBedrockModelId?: string | null;
+  designPrototypeRegenBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -113,6 +117,10 @@ export interface UpsertProjectSkillConfigRequest {
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
+  designPrototypeBedrockModelId?: string | null;
+  designPrototypeBedrockMaxTokens?: number | null;
+  designPrototypeRegenBedrockModelId?: string | null;
+  designPrototypeRegenBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;

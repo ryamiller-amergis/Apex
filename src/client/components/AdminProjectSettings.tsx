@@ -263,7 +263,6 @@ const SKILL_FIELDS = [
 const MODEL_FIELDS = [
   { key: 'interviewModel' as const, label: 'Interview Model' },
   { key: 'prdModel' as const, label: 'PRD Model' },
-  { key: 'designPrototypeModel' as const, label: 'Design Prototype Model' },
   { key: 'designDocModel' as const, label: 'Design Doc Model' },
   { key: 'designDocQaModel' as const, label: 'Design Doc Q&A Model' },
   { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
@@ -439,6 +438,10 @@ interface EditState {
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
+  designPrototypeBedrockModelId: string;
+  designPrototypeBedrockMaxTokens: number;
+  designPrototypeRegenBedrockModelId: string;
+  designPrototypeRegenBedrockMaxTokens: number;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -454,6 +457,10 @@ const emptyEdit = (): EditState => ({
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
+  designPrototypeBedrockModelId: '',
+  designPrototypeBedrockMaxTokens: 16000,
+  designPrototypeRegenBedrockModelId: '',
+  designPrototypeRegenBedrockMaxTokens: 16000,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
@@ -584,6 +591,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
+      designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
+      designPrototypeBedrockMaxTokens: config.designPrototypeBedrockMaxTokens ?? 16000,
+      designPrototypeRegenBedrockModelId: config.designPrototypeRegenBedrockModelId ?? '',
+      designPrototypeRegenBedrockMaxTokens: config.designPrototypeRegenBedrockMaxTokens ?? 16000,
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
@@ -634,6 +645,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           defaultModel: edit.defaultModel || null,
           prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
           prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
+          designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
+          designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
+          designPrototypeRegenBedrockModelId: edit.designPrototypeRegenBedrockModelId || null,
+          designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
           quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
@@ -860,23 +875,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       className={styles.select}
                       value={edit[mf.key]}
                       onChange={(e) => setEdit((prev) => prev ? { ...prev, [mf.key]: e.target.value } : prev)}
-                      disabled={mf.key === 'designPrototypeModel' || upsert.isPending || isLoadingModels}
+                      disabled={upsert.isPending || isLoadingModels}
                     >
                       <option value="">Use project default</option>
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>{m.displayName}</option>
                       ))}
                     </select>
-                    {!edit[mf.key] && mf.key !== 'designPrototypeModel' && (
+                    {!edit[mf.key] && (
                       <span className={styles.modelDefault}>
                         Using: {edit.defaultModel
                           ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
                           : 'system default (composer-2)'}
-                      </span>
-                    )}
-                    {mf.key === 'designPrototypeModel' && (
-                      <span className={styles.modelDefault}>
-                        Uses Bedrock model from environment config (BEDROCK_UI_MOCK_MODEL_ID)
                       </span>
                     )}
                   </div>
@@ -884,18 +894,35 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 4: PRD Apex Review (Bedrock) */}
+            {/* Section 4: Apex Bedrock Models */}
             <AccordionSection
-              title="PRD Apex Review"
-              hint={edit.prdReviewBedrockModelId
-                ? bedrockModels.find((m) => m.id === edit.prdReviewBedrockModelId)?.label ?? edit.prdReviewBedrockModelId
-                : undefined}
+              title="Apex Bedrock Models"
+              hint={
+                edit.prdReviewBedrockModelId || edit.designPrototypeBedrockModelId || edit.designPrototypeRegenBedrockModelId
+                  ? [
+                      edit.prdReviewBedrockModelId
+                        ? `PRD: ${bedrockModels.find((m) => m.id === edit.prdReviewBedrockModelId)?.label ?? edit.prdReviewBedrockModelId}`
+                        : null,
+                      edit.designPrototypeBedrockModelId
+                        ? `Prototype: ${bedrockModels.find((m) => m.id === edit.designPrototypeBedrockModelId)?.label ?? edit.designPrototypeBedrockModelId}`
+                        : null,
+                      edit.designPrototypeRegenBedrockModelId
+                        ? `Regen: ${bedrockModels.find((m) => m.id === edit.designPrototypeRegenBedrockModelId)?.label ?? edit.designPrototypeRegenBedrockModelId}`
+                        : null,
+                    ].filter(Boolean).join(' · ') || undefined
+                  : undefined
+              }
               expanded={expandedSections.bedrockReview}
               onToggle={() => toggleSection('bedrockReview')}
             >
               <p className={styles.accordionHelp}>
-                Configure the AWS Bedrock model used when "Fix with Apex" applies open review comments to a PRD.
-                Defaults to the service-level model ({process.env.NODE_ENV === 'production' ? 'configured via BEDROCK_MODEL_ID env var' : 'Claude Haiku 4.5'}) with a 16 000-token output limit.
+                Configure the AWS Bedrock models used by Apex-powered features.
+                Defaults fall back to the service-level environment config ({process.env.NODE_ENV === 'production' ? 'BEDROCK_UI_MOCK_MODEL_ID env var' : 'Claude Haiku 4.5'}).
+              </p>
+
+              <p className={styles.label} style={{ marginBottom: 6, fontWeight: 600 }}>PRD Apex Review</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used when "Fix with Apex" applies open review comments to a PRD.
               </p>
               <div className={styles.fieldRow}>
                 <div className={styles.field}>
@@ -926,6 +953,81 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000 (large PRDs)</option>
                     <option value="64000">64 000 (very large PRDs)</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>Design Prototype Generation</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used for the initial HTML design prototype generation from approved PBI requirements.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-prototype-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-prototype-bedrock-model"
+                    className={styles.select}
+                    value={edit.designPrototypeBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Use service default</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-prototype-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-prototype-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.designPrototypeBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000</option>
+                    <option value="64000">64 000</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>Design Prototype Regeneration</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used when regenerating a prototype from UI/UX feedback. Defaults to the generation model above.
+                Use a faster/cheaper model (e.g. Sonnet) for edit-pass tasks.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-prototype-regen-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-prototype-regen-bedrock-model"
+                    className={styles.select}
+                    value={edit.designPrototypeRegenBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeRegenBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Same as generation model</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-prototype-regen-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-prototype-regen-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.designPrototypeRegenBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeRegenBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000</option>
+                    <option value="64000">64 000</option>
                   </select>
                 </div>
               </div>

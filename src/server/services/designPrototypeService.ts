@@ -115,7 +115,8 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
 
   const { getSkillConfig } = await import('./projectSettingsService');
   const skillConfig = await getSkillConfig(prd.project);
-  const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
+  const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
 
   const features = extractFeatures(prd.backlogJson);
   if (features.length === 0) {
@@ -139,7 +140,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
       .returning({ id: designPrototypes.id });
     ids.push(row.id);
 
-    generateSinglePrototype(row.id, feature, prototypeModel).catch(err => {
+    generateSinglePrototype(row.id, feature, prototypeModel, prototypeMaxTokens).catch(err => {
       console.error(`[designPrototypeService] Background generation failed for ${row.id}:`, err);
     });
   }
@@ -162,7 +163,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   return ids;
 }
 
-async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string): Promise<void> {
+async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string, maxTokens?: number): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
@@ -172,7 +173,7 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
       featureName: feature.title,
       featureDescription: feature.description,
       pbis,
-    }, modelId);
+    }, modelId, maxTokens);
 
     const html = sanitizeMockHtml(rawHtml);
     const now = new Date().toISOString();
@@ -226,7 +227,13 @@ export async function regeneratePrototype(prototypeId: string, feedback: string)
     const prd = await db.query.prds.findFirst({ where: eq(prds.id, proto.prdId) });
     const { getSkillConfig } = await import('./projectSettingsService');
     const skillConfig = prd ? await getSkillConfig(prd.project) : null;
-    const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+    // Prefer the regen-specific model; fall back to the generation model.
+    const prototypeModel = skillConfig?.designPrototypeRegenBedrockModelId
+      ?? skillConfig?.designPrototypeBedrockModelId
+      ?? undefined;
+    const prototypeMaxTokens = skillConfig?.designPrototypeRegenBedrockMaxTokens
+      ?? skillConfig?.designPrototypeBedrockMaxTokens
+      ?? undefined;
 
     const comments = await db
       .select()
@@ -244,6 +251,7 @@ export async function regeneratePrototype(prototypeId: string, feedback: string)
       feedback,
       unresolvedTexts,
       prototypeModel,
+      prototypeMaxTokens,
     );
 
     const html = sanitizeMockHtml(rawHtml);
@@ -314,14 +322,15 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
 
   const { getSkillConfig } = await import('./projectSettingsService');
   const skillConfig = await getSkillConfig(prd.project);
-  const prototypeModel = skillConfig?.designPrototypeModel ?? undefined;
+  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
+  const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
 
   await db
     .update(designPrototypes)
     .set({ status: 'generating', generationError: null, updatedAt: new Date().toISOString() })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature, prototypeModel).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }

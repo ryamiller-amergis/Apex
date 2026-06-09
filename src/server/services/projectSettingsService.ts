@@ -50,6 +50,10 @@ export async function upsertSkillConfig(
   prdAssistantModel?: string | null,
   prdReviewBedrockModelId?: string | null,
   prdReviewBedrockMaxTokens?: number | null,
+  designPrototypeBedrockModelId?: string | null,
+  designPrototypeBedrockMaxTokens?: number | null,
+  designPrototypeRegenBedrockModelId?: string | null,
+  designPrototypeRegenBedrockMaxTokens?: number | null,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = approvalMode ?? 'any_one';
@@ -78,6 +82,10 @@ export async function upsertSkillConfig(
       prdAssistantModel: prdAssistantModel ?? null,
       prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
       prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
+      designPrototypeBedrockModelId: designPrototypeBedrockModelId ?? null,
+      designPrototypeBedrockMaxTokens: designPrototypeBedrockMaxTokens ?? null,
+      designPrototypeRegenBedrockModelId: designPrototypeRegenBedrockModelId ?? null,
+      designPrototypeRegenBedrockMaxTokens: designPrototypeRegenBedrockMaxTokens ?? null,
       quickSkillPills: quickSkillPills ?? null,
       quickMcpPills: quickMcpPills ?? null,
       defaultModel: defaultModel ?? null,
@@ -108,6 +116,10 @@ export async function upsertSkillConfig(
         prdAssistantModel: prdAssistantModel ?? null,
         prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
         prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
+        designPrototypeBedrockModelId: designPrototypeBedrockModelId ?? null,
+        designPrototypeBedrockMaxTokens: designPrototypeBedrockMaxTokens ?? null,
+        designPrototypeRegenBedrockModelId: designPrototypeRegenBedrockModelId ?? null,
+        designPrototypeRegenBedrockMaxTokens: designPrototypeRegenBedrockMaxTokens ?? null,
         quickSkillPills: quickSkillPills ?? null,
         quickMcpPills: quickMcpPills ?? null,
         defaultModel: defaultModel ?? null,
