@@ -187,31 +187,31 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
     >
       <div className={styles.card}>
         <div>
-          <h2 className={styles.title} id="approver-select-title">Select Approvers</h2>
+          <h2 className={styles.title} id="approver-select-title">Select Reviewers</h2>
           <p className={styles.subtitle}>
             {allowEmpty
-              ? 'Select approvers or deselect all to remove pending approvers.'
-              : `Choose who should review this document. At least one approver is required${isPrdSection ? ' in each section' : ''}.`}
+              ? 'Select reviewers or deselect all to remove pending reviewers.'
+              : `Choose who should review this document. At least one reviewer is required${isPrdSection ? ' in each section' : ''}.`}
           </p>
         </div>
 
         {isPrdSection && (
           <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>PRD Approvers</h3>
+            <h3 className={styles.sectionTitle}>PRD Reviewers</h3>
             {renderGroupedChips(prdPool, prdLoading, selectedPrdApprovers, togglePrd)}
           </div>
         )}
 
         <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Design Doc Approvers</h3>
+          <h3 className={styles.sectionTitle}>Design Doc Reviewers</h3>
           {renderGroupedChips(ddPool, ddLoading, selectedDdApprovers, toggleDd)}
         </div>
 
         {!canConfirm && !isSubmitting && (
           <p className={styles.validationHint}>
             {isPrdSection
-              ? 'Select at least one PRD approver and one Design Doc approver'
-              : 'Select at least one approver'}
+              ? 'Select at least one PRD reviewer and one Design Doc reviewer'
+              : 'Select at least one reviewer'}
           </p>
         )}
 

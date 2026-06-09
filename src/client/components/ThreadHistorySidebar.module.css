@@ -330,6 +330,19 @@
   }
 }
 
+.date-group-header {
+  position: sticky;
+  top: 0;
+  padding: 8px 16px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  z-index: 1;
+}
+
 @media (max-width: 480px) {
   .header {
     padding: 10px 12px;

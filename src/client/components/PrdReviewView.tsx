@@ -246,12 +246,13 @@ export const PrdReviewView: React.FC = () => {
     setShowApproverModal(false);
   }, [id, submitPrd]);
 
-  const handleReassignConfirm = useCallback(async (selections: { prdApproverIds?: string[] }) => {
+  const handleReassignConfirm = useCallback(async (selections: { prdApproverIds?: string[]; designDocApproverIds?: string[] }) => {
     if (!id) return;
     await reassignApprovers.mutateAsync({
       documentId: id,
       documentType: 'prd',
       approverUserIds: selections.prdApproverIds ?? [],
+      designDocApproverIds: selections.designDocApproverIds,
     });
     setShowReassignModal(false);
   }, [id, reassignApprovers]);
@@ -613,7 +614,7 @@ export const PrdReviewView: React.FC = () => {
                   disabled={reviewPrd.isPending || !canPerformReview || unresolvedCount > 0}
                   title={
                     !canPerformReview
-                      ? 'You are not an assigned approver for this document'
+                      ? 'You are not an assigned reviewer for this document'
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : undefined
@@ -646,15 +647,15 @@ export const PrdReviewView: React.FC = () => {
                 onClick={() => setShowReassignModal(true)}
                 type="button"
                 title={assignments.length > 0
-                  ? `Approvers: ${assignments.map(a => a.approverDisplayName ?? a.approverUserId).join(', ')}`
-                  : 'Assign approvers'}
+                  ? `Reviewers: ${assignments.map(a => a.approverDisplayName ?? a.approverUserId).join(', ')}`
+                  : 'Assign reviewers'}
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <circle cx="6" cy="5" r="2.5" />
                   <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
                   <path d="M12 5.5l2 2 2-2" />
                 </svg>
-                {assignments.length > 0 ? `${assignments.length} Approver${assignments.length > 1 ? 's' : ''}` : 'Approvers'}
+                {assignments.length > 0 ? `${assignments.length} Reviewer${assignments.length > 1 ? 's' : ''}` : 'Reviewers'}
               </button>
             </>
           )}
@@ -1071,7 +1072,8 @@ export const PrdReviewView: React.FC = () => {
           documentType="prd"
           project={prd.project}
           initialPrdApproverIds={assignments.filter((a) => a.status === 'pending').map((a) => a.approverUserId)}
-          confirmLabel="Update Approvers"
+          initialDesignDocApproverIds={prd.designDocApproverIds ?? []}
+          confirmLabel="Update Reviewers"
           excludeSelf={false}
           allowEmpty
           onConfirm={(selections) => void handleReassignConfirm(selections)}

@@ -657,7 +657,7 @@ export async function createThread(
   };
 
   threads.set(threadId, state);
-  persistThread(thread);
+  await pgUpsertThread(thread);
   resetIdleTimer(state);
 
   // Auto-kickoff: start the skill when the client will not send a first message right away

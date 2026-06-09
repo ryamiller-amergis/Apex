@@ -778,6 +778,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             freeformContext,
             model,
             ...(selectedMcpPill ? { mcpPill: selectedMcpPill } : {}),
+            pillLabel: selectedQuickSkill?.label ?? selectedMcpPill?.label ?? undefined,
+            pillDescription: (selectedQuickSkill?.description ?? selectedMcpPill?.description) ?? undefined,
           },
           skipAutoKickoff: !skillSlugOnlyKickoff,
         });
