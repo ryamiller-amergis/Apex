@@ -1,4 +1,4 @@
-import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats, DesignDocKickoffStats, PullRequestFeedbackStats, PrResolutionMetricsStats } from '../types/workitem';
+import { WorkItem, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, QABugStats, InProgressTimeStats, DesignDocKickoffStats, PullRequestFeedbackStats, PrResolutionMetricsStats, EslintBurnDownGranularity, EslintBurnDownPoint, EslintBurnDownResponse, EslintBuildSnapshot } from '../types/workitem';
 import './DevStats.css';
 import { AiCapabilityLadderSection } from './AiCapabilityLadderSection';
 import { useState, useMemo, useEffect } from 'react';
@@ -44,6 +44,72 @@ function formatWeekLabel(weekMonday: string): string {
   return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function monthKey(d: Date): string {
+  const ys = d.getFullYear();
+  const ms = String(d.getMonth() + 1).padStart(2, '0');
+  return `${ys}-${ms}`;
+}
+
+function formatMonthLabel(monthKeyValue: string): string {
+  const [y, m] = monthKeyValue.split('-').map(Number) as [number, number];
+  const dt = new Date(y, m - 1, 1);
+  return dt.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
+function quarterKey(d: Date): string {
+  const quarter = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()}-Q${quarter}`;
+}
+
+function formatQuarterLabel(quarterKeyValue: string): string {
+  const [yearPart, quarterPart] = quarterKeyValue.split('-Q');
+  return `Q${quarterPart} ${yearPart}`;
+}
+
+function periodKeyForSnapshot(snapshot: EslintBuildSnapshot, granularity: EslintBurnDownGranularity): string | null {
+  const day = parseStatDay(snapshot.capturedAt);
+  if (!day) return null;
+  if (granularity === 'weekly') return weekStartMondayKey(day);
+  if (granularity === 'monthly') return monthKey(day);
+  return quarterKey(day);
+}
+
+function formatEslintPeriodLabel(periodKey: string, granularity: EslintBurnDownGranularity): string {
+  if (granularity === 'weekly') return formatWeekLabel(periodKey);
+  if (granularity === 'monthly') return formatMonthLabel(periodKey);
+  return formatQuarterLabel(periodKey);
+}
+
+function aggregateEslintBurnDown(
+  snapshots: EslintBuildSnapshot[],
+  granularity: EslintBurnDownGranularity,
+): EslintBurnDownPoint[] {
+  const bucket = new Map<string, EslintBurnDownPoint>();
+
+  for (const snapshot of snapshots) {
+    const periodKey = periodKeyForSnapshot(snapshot, granularity);
+    if (!periodKey) continue;
+
+    const existing = bucket.get(periodKey);
+    if (!existing || snapshot.capturedAt.localeCompare(existing.capturedAt) >= 0) {
+      bucket.set(periodKey, {
+        periodKey,
+        periodLabel: formatEslintPeriodLabel(periodKey, granularity),
+        capturedAt: snapshot.capturedAt,
+        buildId: snapshot.buildId,
+        buildNumber: snapshot.buildNumber,
+        totalErrors: snapshot.totalErrors,
+        totalWarnings: snapshot.totalWarnings,
+        issueCount: snapshot.issueCount,
+        filesWithProblems: snapshot.filesWithProblems,
+        fixableCount: snapshot.fixableCount,
+      });
+    }
+  }
+
+  return Array.from(bucket.values()).sort((a, b) => a.periodKey.localeCompare(b.periodKey));
+}
+
 interface DevStatsProps {
   workItems: WorkItem[];
   project: string;
@@ -68,6 +134,8 @@ const PR_FEEDBACK_DATA_KEY = 'devStatsPRFeedbackData';
 const PR_FEEDBACK_LOADING_STATE_KEY = 'devStatsPRFeedbackLoadingState';
 const PR_RESOLUTION_DATA_KEY = 'devStatsPrResolutionData';
 const PR_RESOLUTION_LOADING_STATE_KEY = 'devStatsPrResolutionLoadingState';
+const ESLINT_DATA_KEY = 'devStatsEslintData';
+const ESLINT_LOADING_STATE_KEY = 'devStatsEslintLoadingState';
 const SESSION_INITIALIZED_KEY = 'devStatsSessionInitialized';
 
 // Check for page refresh once - this runs before component render
@@ -93,6 +161,8 @@ const checkAndClearOnRefresh = () => {
     sessionStorage.removeItem(PR_FEEDBACK_LOADING_STATE_KEY);
     sessionStorage.removeItem(PR_RESOLUTION_DATA_KEY);
     sessionStorage.removeItem(PR_RESOLUTION_LOADING_STATE_KEY);
+    sessionStorage.removeItem(ESLINT_DATA_KEY);
+    sessionStorage.removeItem(ESLINT_LOADING_STATE_KEY);
     sessionStorage.setItem(SESSION_INITIALIZED_KEY, 'true');
     return true;
   }
@@ -327,6 +397,38 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     return savedLoading ? 'Loading PR resolution metrics in background...' : '';
   });
 
+  const [eslintBurnDown, setEslintBurnDown] = useState<EslintBurnDownResponse | null>(() => {
+    if (isPageRefresh) return null;
+    const savedData = sessionStorage.getItem(ESLINT_DATA_KEY);
+    return savedData ? JSON.parse(savedData).burnDown : null;
+  });
+  const [eslintGranularity, setEslintGranularity] = useState<EslintBurnDownGranularity>(() => {
+    if (isPageRefresh) return 'weekly';
+    const savedData = sessionStorage.getItem(ESLINT_DATA_KEY);
+    return savedData ? JSON.parse(savedData).granularity ?? 'weekly' : 'weekly';
+  });
+  const [eslintLoading, setEslintLoading] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(ESLINT_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [eslintHasLoaded, setEslintHasLoaded] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedData = sessionStorage.getItem(ESLINT_DATA_KEY);
+    return savedData ? JSON.parse(savedData).hasLoaded : false;
+  });
+  const [eslintError, setEslintError] = useState<string | null>(null);
+  const [showEslintNotification, setShowEslintNotification] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(ESLINT_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [eslintNotificationMessage, setEslintNotificationMessage] = useState(() => {
+    if (isPageRefresh) return '';
+    const savedLoading = sessionStorage.getItem(ESLINT_LOADING_STATE_KEY);
+    return savedLoading ? 'Loading MaxView ESLint burn-down in background...' : '';
+  });
+
   // Info tooltip state
   const [showChangesInfo, setShowChangesInfo] = useState(false);
   const [showHitRateInfo, setShowHitRateInfo] = useState(false);
@@ -339,8 +441,10 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   const [showAiAdoptionInfo, setShowAiAdoptionInfo] = useState(false);
   const [showPrCycleInfo, setShowPrCycleInfo] = useState(false);
   const [showAiCodeTagInfo, setShowAiCodeTagInfo] = useState(false);
+  const [showEslintInfo, setShowEslintInfo] = useState(false);
 
   // Collapse state for sections — all default to collapsed for better visibility
+  const [isEslintCollapsed, setIsEslintCollapsed] = useState(true);
   const [isAiAdoptionCollapsed, setIsAiAdoptionCollapsed] = useState(true);
   const [isPrCycleCollapsed, setIsPrCycleCollapsed] = useState(true);
   const [isAiCodeTagCollapsed, setIsAiCodeTagCollapsed] = useState(true);
@@ -682,6 +786,10 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   useEffect(() => {
     sessionStorage.setItem(PR_RESOLUTION_DATA_KEY, JSON.stringify({ stats: prResolutionStats, hasLoaded: prResolutionHasLoaded }));
   }, [prResolutionStats, prResolutionHasLoaded]);
+
+  useEffect(() => {
+    sessionStorage.setItem(ESLINT_DATA_KEY, JSON.stringify({ burnDown: eslintBurnDown, granularity: eslintGranularity, hasLoaded: eslintHasLoaded }));
+  }, [eslintBurnDown, eslintGranularity, eslintHasLoaded]);
 
   const fetchDueDateStats = async () => {
     setLoading(true);
@@ -1208,6 +1316,58 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     }
   };
 
+  const fetchEslintBurnDown = async () => {
+    setEslintLoading(true);
+    setEslintError(null);
+    setShowEslintNotification(true);
+    setEslintNotificationMessage('Loading MaxView ESLint burn-down from pipeline artifacts...');
+    sessionStorage.setItem(ESLINT_LOADING_STATE_KEY, JSON.stringify({ loading: true, timestamp: Date.now() }));
+
+    try {
+      const fromDate =
+        timeFrame === 'custom' && customFromDate
+          ? customFromDate
+          : (() => {
+              const d = new Date();
+              d.setDate(d.getDate() - parseInt(timeFrame || '90', 10));
+              return d.toISOString().split('T')[0]!;
+            })();
+      const toDate =
+        timeFrame === 'custom' && customToDate ? customToDate : new Date().toISOString().split('T')[0]!;
+
+      if (!fromDate || !toDate) {
+        throw new Error('Select a valid date range before loading ESLint burn-down data');
+      }
+
+      const params = new URLSearchParams({ from: fromDate, to: toDate });
+      const response = await fetch(`/api/maxview-eslint-burndown?${params.toString()}`, { credentials: 'include' });
+      if (!response.ok) {
+        let message = 'Failed to fetch MaxView ESLint burn-down';
+        try {
+          const body = await response.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // Keep the generic message if the API did not return JSON.
+        }
+        throw new Error(message);
+      }
+
+      const data: EslintBurnDownResponse = await response.json();
+      sessionStorage.setItem(ESLINT_DATA_KEY, JSON.stringify({ burnDown: data, granularity: eslintGranularity, hasLoaded: true }));
+      setEslintBurnDown(data);
+      setEslintHasLoaded(true);
+      setEslintNotificationMessage('MaxView ESLint burn-down loaded successfully!');
+      setTimeout(() => setShowEslintNotification(false), 3000);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setEslintError(errorMsg);
+      setEslintNotificationMessage(`Error: ${errorMsg}`);
+    } finally {
+      setEslintLoading(false);
+      sessionStorage.setItem(ESLINT_LOADING_STATE_KEY, JSON.stringify({ loading: false, timestamp: Date.now() }));
+    }
+  };
+
   const refreshAiAdoptionTrends = async () => {
     await Promise.all([
       fetchDesignDocKickoffStats(),
@@ -1377,6 +1537,11 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
         completedPrCount: row.completedCount,
       }));
   }, [filteredPrTimeStats]);
+
+  const eslintChartData = useMemo(() => {
+    if (!eslintBurnDown?.snapshots.length) return [];
+    return aggregateEslintBurnDown(eslintBurnDown.snapshots, eslintGranularity);
+  }, [eslintBurnDown, eslintGranularity]);
 
   /** Dynamic plain-language synopsis of the PR cycle time trend for the info panel. */
   const prCycleTimeSynopsis = useMemo(() => {
@@ -1682,6 +1847,201 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
           areaPath={teams.find(t => t.id === selectedTeam)?.areaPath || undefined}
         />
       </div>
+
+      {activeStatsTab === 'ai' && (
+      <div className="stats-section eslint-section">
+        <h3>
+          <button
+            type="button"
+            className="collapse-button"
+            onClick={() => setIsEslintCollapsed(!isEslintCollapsed)}
+            aria-label={isEslintCollapsed ? 'Expand section' : 'Collapse section'}
+          >
+            {isEslintCollapsed ? '▶' : '▼'}
+          </button>
+          MaxView ESLint Burn-down
+          <div
+            className="info-icon"
+            onClick={() => setShowEslintInfo(!showEslintInfo)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setShowEslintInfo(!showEslintInfo);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Show information about this section"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" />
+              <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />
+            </svg>
+          </div>
+        </h3>
+
+        {showEslintInfo && (
+          <div className="info-tooltip">
+            <button type="button" className="info-close" onClick={() => setShowEslintInfo(false)} aria-label="Close information">
+              ×
+            </button>
+            <p>
+              <strong>What this section shows:</strong>
+              <br />
+              ESLint issue counts from the nightly <code>mv-nightly-runs-workflow</code> pipeline artifact (<code>eslint-summary.json</code>).
+              Each point is the latest nightly run in that period — a downward line means the team is burning down lint debt.
+            </p>
+            <p>
+              <strong>How to interpret:</strong>
+              <br />
+              Use <strong>Weekly</strong> during active cleanup sprints, <strong>Monthly</strong> for steady progress reviews, and <strong>Quarterly</strong> for longer-term reporting.
+              The date range follows the Time Frame filter at the top of this page.
+            </p>
+          </div>
+        )}
+
+        {!isEslintCollapsed && (
+          <div className="filter-actions eslint-filter-actions">
+            <div className="filter-group">
+              <label htmlFor="eslint-granularity">View by:</label>
+              <select
+                id="eslint-granularity"
+                value={eslintGranularity}
+                onChange={e => setEslintGranularity(e.target.value as EslintBurnDownGranularity)}
+                className="filter-select"
+              >
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={fetchEslintBurnDown}
+              disabled={eslintLoading || (timeFrame === 'custom' && (!customFromDate || !customToDate))}
+              className="load-stats-button"
+            >
+              {eslintLoading ? 'Loading...' : eslintHasLoaded ? 'Refresh ESLint Burn-down' : 'Load ESLint Burn-down'}
+            </button>
+          </div>
+        )}
+
+        {!isEslintCollapsed && (showEslintNotification || eslintLoading) && (
+          <div className={`background-notification ${eslintLoading ? 'loading' : eslintError ? 'error' : 'success'}`}>
+            {eslintLoading && <div className="notification-spinner"></div>}
+            <span className="notification-text">{eslintLoading ? 'Loading MaxView ESLint burn-down from pipeline artifacts...' : eslintNotificationMessage}</span>
+            {!eslintLoading && (
+              <button
+                className="notification-close"
+                onClick={() => setShowEslintNotification(false)}
+                aria-label="Close notification"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
+        {!isEslintCollapsed && !eslintHasLoaded && !eslintLoading && (
+          <p className="placeholder-text">
+            Click <strong>Load ESLint Burn-down</strong> to pull nightly pipeline artifacts for the selected time frame.
+          </p>
+        )}
+
+        {!isEslintCollapsed && eslintHasLoaded && eslintBurnDown && (
+          <div className="eslint-summary">
+            <div className="eslint-summary-header">
+              <div>
+                <div className="eslint-summary-title">
+                  {eslintBurnDown.latest?.issueCount.toLocaleString() ?? '—'} current issue{(eslintBurnDown.latest?.issueCount ?? 0) === 1 ? '' : 's'}
+                </div>
+                <div className="eslint-summary-meta">
+                  {eslintBurnDown.definitionName} · build {eslintBurnDown.latest?.buildNumber ?? '—'} ·{' '}
+                  {eslintBurnDown.latest ? new Date(eslintBurnDown.latest.capturedAt).toLocaleString() : 'No artifact data'}
+                </div>
+                {eslintBurnDown.summary.issueReduction !== null && eslintBurnDown.summary.startingIssueCount !== null && (
+                  <div className="eslint-summary-delta">
+                    {eslintBurnDown.summary.issueReduction >= 0 ? '▼' : '▲'} {Math.abs(eslintBurnDown.summary.issueReduction).toLocaleString()} issues
+                    {eslintBurnDown.summary.reductionPercent !== null ? ` (${eslintBurnDown.summary.reductionPercent}%)` : ''} since {eslintBurnDown.from}
+                  </div>
+                )}
+              </div>
+              <div className={`eslint-health-badge ${(eslintBurnDown.latest?.totalErrors ?? 0) > 0 ? 'has-errors' : (eslintBurnDown.latest?.totalWarnings ?? 0) > 0 ? 'has-warnings' : 'clean'}`}>
+                {(eslintBurnDown.latest?.totalErrors ?? 0) > 0 ? 'Errors found' : (eslintBurnDown.latest?.totalWarnings ?? 0) > 0 ? 'Warnings only' : 'Clean'}
+              </div>
+            </div>
+
+            <div className="eslint-metric-grid">
+              <div className="eslint-metric-card">
+                <span className="eslint-metric-value">{eslintBurnDown.latest?.totalErrors.toLocaleString() ?? '—'}</span>
+                <span className="eslint-metric-label">Errors</span>
+              </div>
+              <div className="eslint-metric-card">
+                <span className="eslint-metric-value">{eslintBurnDown.latest?.totalWarnings.toLocaleString() ?? '—'}</span>
+                <span className="eslint-metric-label">Warnings</span>
+              </div>
+              <div className="eslint-metric-card">
+                <span className="eslint-metric-value">{eslintBurnDown.latest?.fixableCount.toLocaleString() ?? '—'}</span>
+                <span className="eslint-metric-label">Auto-fixable</span>
+              </div>
+              <div className="eslint-metric-card">
+                <span className="eslint-metric-value">{eslintBurnDown.latest?.filesWithProblems.toLocaleString() ?? '—'}</span>
+                <span className="eslint-metric-label">Files with issues</span>
+              </div>
+            </div>
+
+            <div className="eslint-run-meta">
+              {eslintBurnDown.summary.buildsWithArtifact} nightly run{eslintBurnDown.summary.buildsWithArtifact === 1 ? '' : 's'} with artifacts
+              {' '}({eslintBurnDown.summary.buildsScanned} builds scanned, {eslintBurnDown.from} to {eslintBurnDown.to})
+            </div>
+
+            {eslintChartData.length === 0 ? (
+              <p className="placeholder-text">No ESLint pipeline artifacts found in the selected date range.</p>
+            ) : (
+              <div className="eslint-burndown-chart-container" aria-label="ESLint issue burn-down line chart">
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={eslintChartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                    <CartesianGrid stroke="var(--border-color)" strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="periodLabel"
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                      interval="preserveStartEnd"
+                      angle={-30}
+                      textAnchor="end"
+                      height={56}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                      width={56}
+                      tickFormatter={value => Number(value).toLocaleString()}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'var(--card-bg)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 8,
+                        color: 'var(--text-primary)',
+                      }}
+                      labelFormatter={(_label, payload) => {
+                        const point = payload?.[0]?.payload as EslintBurnDownPoint | undefined;
+                        if (!point) return '';
+                        return `${point.periodLabel} · build ${point.buildNumber}`;
+                      }}
+                      formatter={(value, name) => [Number(value).toLocaleString(), name]}
+                    />
+                    <Legend wrapperStyle={{ color: 'var(--text-primary)' }} />
+                    <Line type="monotone" dataKey="totalErrors" name="Errors" stroke="#e74c3c" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                    <Line type="monotone" dataKey="totalWarnings" name="Warnings" stroke="#f39c12" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                    <Line type="monotone" dataKey="filesWithProblems" name="Files with issues" stroke="var(--accent-color)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      )}
 
       {activeStatsTab === 'ai' && (
       <div className="stats-section ai-adoption-section">

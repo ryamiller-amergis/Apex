@@ -198,6 +198,97 @@ export interface PrResolutionMetricsStats {
   }>;
 }
 
+export interface EslintMetricsSnapshot {
+  repoName: string;
+  capturedAt: string;
+  totalFiles: number;
+  filesWithIssues: number;
+  errorCount: number;
+  warningCount: number;
+  fixableErrorCount: number;
+  fixableWarningCount: number;
+  issueCount: number;
+  topRules: Array<{
+    ruleId: string;
+    count: number;
+    errorCount: number;
+    warningCount: number;
+  }>;
+  topFiles: Array<{
+    filePath: string;
+    errorCount: number;
+    warningCount: number;
+    issueCount: number;
+  }>;
+  stderr?: string;
+}
+
+/** JSON shape published by the MaxView nightly ESLint pipeline artifact. */
+export interface EslintSummaryArtifact {
+  schemaVersion: number;
+  generatedAt: string;
+  build: {
+    id: string;
+    buildNumber: string;
+    definitionName: string;
+    sourceBranch: string;
+    sourceVersion: string;
+  };
+  eslint: {
+    totalFiles: number;
+    filesWithProblems: number;
+    totalErrors: number;
+    totalWarnings: number;
+    totalFixableErrors: number;
+    totalFixableWarnings: number;
+  };
+}
+
+export interface EslintBuildSnapshot {
+  capturedAt: string;
+  buildId: string;
+  buildNumber: string;
+  definitionName: string;
+  totalFiles: number;
+  filesWithProblems: number;
+  totalErrors: number;
+  totalWarnings: number;
+  issueCount: number;
+  fixableCount: number;
+}
+
+export type EslintBurnDownGranularity = 'weekly' | 'monthly' | 'quarterly';
+
+export interface EslintBurnDownPoint {
+  periodKey: string;
+  periodLabel: string;
+  capturedAt: string;
+  buildId: string;
+  buildNumber: string;
+  totalErrors: number;
+  totalWarnings: number;
+  issueCount: number;
+  filesWithProblems: number;
+  fixableCount: number;
+}
+
+export interface EslintBurnDownResponse {
+  from: string;
+  to: string;
+  definitionName: string;
+  artifactName: string;
+  snapshots: EslintBuildSnapshot[];
+  latest: EslintBuildSnapshot | null;
+  summary: {
+    buildsScanned: number;
+    buildsWithArtifact: number;
+    startingIssueCount: number | null;
+    endingIssueCount: number | null;
+    issueReduction: number | null;
+    reductionPercent: number | null;
+  };
+}
+
 export interface QACycleTimeStats {
   qaAssignee: string;
   totalItems: number;
