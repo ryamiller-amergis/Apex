@@ -391,7 +391,7 @@ function App() {
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
                   ) : location.pathname === '/admin/groups' ? (
-                    <AdminGroups />
+                    <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/menu-settings' && isSuperAdmin ? (

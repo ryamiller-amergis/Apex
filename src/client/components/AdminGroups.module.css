@@ -36,6 +36,60 @@
   margin: 0;
 }
 
+/* ── Header actions group ────────────────────────────────────────────────── */
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.projectSelect {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.defaultBadge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent-color);
+  color: #fff;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.btnSecondary {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btnSecondary:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.btnSecondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Loading / empty states ──────────────────────────────────────────────── */
 
 .loading {

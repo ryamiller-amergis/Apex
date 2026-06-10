@@ -961,6 +961,126 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
   });
 });
 
+// ── Group routes ──────────────────────────────────────────────────────────────
+
+import * as groupService from '../services/groupService';
+const mockGroupService = groupService as jest.Mocked<typeof groupService>;
+
+const groupFixture = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  id: 'grp-1',
+  name: 'Developer',
+  description: 'Software development and engineering',
+  project: 'MyProject',
+  isDefault: true,
+  createdBy: null,
+  createdAt: '2026-06-10T12:00:00Z',
+  ...overrides,
+});
+
+const groupWithMembersFixture = () => ({ ...groupFixture(), members: [] });
+
+describe('GET /api/admin/groups', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns all groups when no project query param is given', async () => {
+    mockGroupService.listGroupsWithMembers.mockResolvedValue([groupWithMembersFixture()]);
+
+    const res = await request(buildApp()).get('/api/admin/groups?withMembers=true');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockGroupService.listGroupsWithMembers).toHaveBeenCalledWith(undefined);
+  });
+
+  it('passes the project filter to the service', async () => {
+    mockGroupService.listGroupsWithMembers.mockResolvedValue([groupWithMembersFixture()]);
+
+    const res = await request(buildApp()).get('/api/admin/groups?withMembers=true&project=MyProject');
+
+    expect(res.status).toBe(200);
+    expect(mockGroupService.listGroupsWithMembers).toHaveBeenCalledWith('MyProject');
+  });
+
+  it('calls listGroups (without members) when withMembers is not set', async () => {
+    mockGroupService.listGroups.mockResolvedValue([groupFixture() as any]);
+
+    const res = await request(buildApp()).get('/api/admin/groups?project=MyProject');
+
+    expect(res.status).toBe(200);
+    expect(mockGroupService.listGroups).toHaveBeenCalledWith('MyProject');
+    expect(mockGroupService.listGroupsWithMembers).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when the service throws', async () => {
+    mockGroupService.listGroupsWithMembers.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).get('/api/admin/groups?withMembers=true');
+
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('POST /api/admin/groups', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('creates a group with name, description, and project', async () => {
+    const created = groupFixture({ isDefault: false });
+    mockGroupService.createGroup.mockResolvedValue(created as any);
+
+    const res = await request(buildApp('oid-1'))
+      .post('/api/admin/groups')
+      .send({ name: 'Developer', description: 'desc', project: 'MyProject' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ name: 'Developer' });
+    expect(mockGroupService.createGroup).toHaveBeenCalledWith(
+      'Developer',
+      'desc',
+      'oid-1',
+      'MyProject',
+    );
+  });
+
+  it('returns 400 when name is missing', async () => {
+    const res = await request(buildApp()).post('/api/admin/groups').send({ project: 'MyProject' });
+
+    expect(res.status).toBe(400);
+    expect(mockGroupService.createGroup).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when createGroup throws', async () => {
+    mockGroupService.createGroup.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).post('/api/admin/groups').send({ name: 'Dev' });
+
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('POST /api/admin/groups/seed/:project', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('seeds defaults and returns the updated group list', async () => {
+    mockGroupService.seedDefaultGroupsForProject.mockResolvedValue(undefined);
+    mockGroupService.listGroupsWithMembers.mockResolvedValue([groupWithMembersFixture()]);
+
+    const res = await request(buildApp('oid-1')).post('/api/admin/groups/seed/MyProject');
+
+    expect(res.status).toBe(200);
+    expect(mockGroupService.seedDefaultGroupsForProject).toHaveBeenCalledWith('MyProject', 'oid-1');
+    expect(mockGroupService.listGroupsWithMembers).toHaveBeenCalledWith('MyProject');
+    expect(res.body).toHaveLength(1);
+  });
+
+  it('returns 500 when seeding throws', async () => {
+    mockGroupService.seedDefaultGroupsForProject.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).post('/api/admin/groups/seed/MyProject');
+
+    expect(res.status).toBe(500);
+  });
+});
+
 // ── GET /api/admin/available-models ───────────────────────────────────────────
 //
 // NOTE: modelsService holds the model list in module-level cache variables that

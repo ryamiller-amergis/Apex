@@ -24,6 +24,7 @@ import type { InterviewStatus } from '../../shared/types/interview';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
+import { ReadAloudButton } from './ReadAloudButton';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -178,6 +179,9 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
   if (choiceBlocks.length === 0) {
     return (
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+        <div className={styles.bubbleActions}>
+          <ReadAloudButton text={text} />
+        </div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
     );
@@ -186,6 +190,9 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
   let questionCounter = questionOffset;
   return (
     <div className={styles.assistantBubble}>
+      <div className={styles.bubbleActions}>
+        <ReadAloudButton text={text} />
+      </div>
       {parts.map((part) => {
         if (part.type === 'markdown') {
           return (
