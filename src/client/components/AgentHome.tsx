@@ -19,6 +19,7 @@ import type { ChatMessage, ChatThread } from '../../shared/types/chat';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { BrandLogo } from './BrandLogo';
+import { ReadAloudButton } from './ReadAloudButton';
 import styles from './AgentHome.module.css';
 
 interface AgentHomeProps {
@@ -321,6 +322,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, que
       </div>
       <div className={styles.agentBubblePanel}>
         <div className={`${styles.bubbleActions} ${styles.agentBubbleActions}`}>
+          <ReadAloudButton text={msg.text} />
           <MessageCopyButton text={msg.text} label="Copy agent response" />
         </div>
         {parts.map((part) => {

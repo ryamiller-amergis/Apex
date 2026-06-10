@@ -246,6 +246,12 @@
   border-bottom-left-radius: 3px;
 }
 
+.bubbleActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px 0;
+}
+
 .messageBubbleTool {
   align-self: flex-start;
   background: transparent;
