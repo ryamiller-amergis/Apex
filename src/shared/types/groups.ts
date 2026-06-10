@@ -2,6 +2,8 @@ export interface AppGroup {
   id: string;
   name: string;
   description: string | null;
+  project: string | null;
+  isDefault: boolean;
   createdBy: string | null;
   createdAt: string;
 }
@@ -22,6 +24,7 @@ export interface GroupWithMembers extends AppGroup {
 export interface CreateGroupRequest {
   name: string;
   description?: string;
+  project?: string;
 }
 
 export interface UpdateGroupRequest {

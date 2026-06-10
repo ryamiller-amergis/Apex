@@ -143,8 +143,10 @@ export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
 
 export const appGroups = pgTable('app_groups', {
   id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').unique().notNull(),
+  name: text('name').notNull(),
   description: text('description'),
+  project: text('project'),
+  isDefault: boolean('is_default').notNull().default(false),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });

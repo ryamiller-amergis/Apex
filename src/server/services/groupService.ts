@@ -3,13 +3,25 @@ import { appGroups, appGroupMembers, appUsers } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import type { AppGroup, GroupMember, GroupWithMembers } from '../../shared/types/groups';
 
-export async function listGroups(): Promise<AppGroup[]> {
+const DEFAULTS = [
+  { name: 'Product-Owner', description: 'Product ownership and strategy' },
+  { name: 'BA', description: 'Business analysis and requirements' },
+  { name: 'UI/UX', description: 'User interface and experience design' },
+  { name: 'Manager', description: 'Project and team management' },
+  { name: 'Developer', description: 'Software development and engineering' },
+];
+
+export async function listGroups(project?: string): Promise<AppGroup[]> {
+  if (project !== undefined) {
+    const rows = await db.select().from(appGroups).where(eq(appGroups.project, project)).orderBy(appGroups.name);
+    return rows as AppGroup[];
+  }
   const rows = await db.select().from(appGroups).orderBy(appGroups.name);
   return rows as AppGroup[];
 }
 
-export async function listGroupsWithMembers(): Promise<GroupWithMembers[]> {
-  const groups = await listGroups();
+export async function listGroupsWithMembers(project?: string): Promise<GroupWithMembers[]> {
+  const groups = await listGroups(project);
   if (groups.length === 0) return [];
 
   const allMembers = await db
@@ -55,12 +67,39 @@ export async function getGroupWithMembers(id: string): Promise<GroupWithMembers 
   return { ...group, members: memberRows };
 }
 
-export async function createGroup(name: string, description?: string, createdBy?: string): Promise<AppGroup> {
+export async function createGroup(
+  name: string,
+  description?: string,
+  createdBy?: string,
+  project?: string,
+  isDefault?: boolean,
+): Promise<AppGroup> {
   const [row] = await db
     .insert(appGroups)
-    .values({ name, description: description ?? null, createdBy: createdBy ?? null })
+    .values({
+      name,
+      description: description ?? null,
+      createdBy: createdBy ?? null,
+      project: project ?? null,
+      isDefault: isDefault ?? false,
+    })
     .returning();
   return row as AppGroup;
+}
+
+export async function seedDefaultGroupsForProject(project: string, createdBy?: string): Promise<void> {
+  await db
+    .insert(appGroups)
+    .values(
+      DEFAULTS.map((d) => ({
+        name: d.name,
+        description: d.description,
+        project,
+        isDefault: true,
+        createdBy: createdBy ?? null,
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 export async function updateGroup(id: string, updates: { name?: string; description?: string }): Promise<AppGroup> {
