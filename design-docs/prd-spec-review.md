@@ -183,7 +183,7 @@ Mirror design doc validation hooks for PRDs.
 ## Key Design Decisions
 
 1. **Shared validation service** — adapter pattern avoids duplicating watcher/sync/fix logic.
-2. **Same `ValidationScorecard` type** — PRD dimensions map to `features[]` entries (PRD markdown, backlog JSON, test cases).
+2. **Cross-documentation evaluation** — the scorecard evaluates all three artifacts as a coherent set, not independently. Because the backlog is a direct derivative of the PRD (it should faithfully represent every requirement as structured work items), validation comments must cross-reference documents: e.g. "requirement X in the PRD has no corresponding backlog item" or "backlog item Y has no traceable PRD requirement". Test cases are similarly evaluated for coverage against both the PRD scope and backlog items. `features[]` entries in `ValidationScorecard` represent PRD sections, and each dimension includes alignment scores across all three documents.
 3. **All-artifact gate before `validating`** — validation only starts when PRD content, backlog JSON, and test cases are all present. The status flow is: `generating` → `draft` (artifacts accumulating) → `validating` (all three ready) → `draft` | `pending_review`. Without the gate, partial artifacts would produce meaningless validation scores.
 4. **Test case save is the final trigger** — in the normal generation flow, test cases are the last artifact created. `testCaseService.ts` checks readiness after each save and fires `autoStartPrdValidation` when the gate opens.
 5. **Validation badge states** — four explicit states drive the UI badge:
@@ -192,7 +192,7 @@ Mirror design doc validation hooks for PRDs.
    - `passed` (green) — score ≥ 90; badge reads "Passed"
    - `error` (red) — score < 90 or thread error; badge reads "Error"
 6. **Optional per project** — no `prdValidationSkillPath` → badge is hidden entirely; skip to `pending_review`.
-7. **Fix flow uses `prdAssistantThreadId`** and existing `update_prd` MCP tool.
+7. **Fix flow is cross-document aware** — because validation failures often indicate misalignment between documents rather than a flaw in just the PRD text, the fix flow passes Apex the full context: PRD content, backlog JSON, and test cases together. Apex may need to update the PRD via `update_prd`, regenerate or patch the backlog, or flag test case gaps. The fix prompt must include the scorecard comments as cross-document annotations so Apex knows which document(s) to target. Uses `prdAssistantThreadId` as the thread anchor.
 8. **Admin settings** — `prdValidationSkillPath` in Process Skills; `prdValidationModel` in Model Overrides (same pattern as design doc validation).
 
 ## Phase Summary and Parallelization
