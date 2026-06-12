@@ -26,6 +26,7 @@ import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
 import { interviews, prds, designDocs, testCases } from '../db/schema';
 import { syncPrdContent } from './prdService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
@@ -889,6 +890,9 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
     if (content) {
       await syncPrdContent(prdRow.id, content, backlog ?? undefined);
       console.log(`[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`);
+      notifyAiCompletion('prd_generated', prdRow.id, { title: prdRow.title }).catch(err =>
+        console.error(`[chat] AI notification failed for prd_generated (prdId=${prdRow.id}):`, err),
+      );
       fullySynced = content !== null && backlog !== null;
     } else if (prdRow.status === 'generating') {
       await db.update(prds)

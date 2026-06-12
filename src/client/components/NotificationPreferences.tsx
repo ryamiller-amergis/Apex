@@ -9,7 +9,7 @@ import styles from './NotificationPreferences.module.css';
 const NOTIFICATION_TYPES: { type: NotificationType; label: string; description: string; comingSoon?: boolean }[] = [
   { type: 'user-action', label: 'User Actions', description: 'Assignments, approvals, rejections, revisions' },
   { type: 'system', label: 'System Events', description: 'Deployments, builds, releases', comingSoon: true },
-  { type: 'ai', label: 'AI Completions', description: 'Design doc reviews, PRD reviews, interviews', comingSoon: true },
+  { type: 'ai', label: 'AI Completions', description: 'PRD generation, test cases, validation, design docs, prototypes' },
   { type: 'background', label: 'Background Jobs', description: 'Job status updates', comingSoon: true },
 ];
 

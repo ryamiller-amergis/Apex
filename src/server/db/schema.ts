@@ -185,9 +185,11 @@ export const interviews = pgTable('interviews', {
   prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designPrototypeOwnerId: text('design_prototype_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  testCaseOwnerId: text('test_case_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   prdApproverIds: jsonb('prd_approver_ids').$type<string[]>(),
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
+  testCaseApproverIds: jsonb('test_case_approver_ids').$type<string[]>(),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -287,6 +289,11 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
     fields: [interviews.designPrototypeOwnerId],
     references: [appUsers.oid],
     relationName: 'interviewDesignPrototypeOwner',
+  }),
+  testCaseOwner: one(appUsers, {
+    fields: [interviews.testCaseOwnerId],
+    references: [appUsers.oid],
+    relationName: 'interviewTestCaseOwner',
   }),
   prds: many(prds),
 }));

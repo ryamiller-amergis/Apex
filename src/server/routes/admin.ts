@@ -262,17 +262,23 @@ router.put('/groups/:id/members', async (req: Request, res: Response): Promise<v
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [configs, approversByProject] = await Promise.all([
+    const [configs, approversByProject, approverGroupsByProject] = await Promise.all([
       projectSettingsService.listSkillConfigs(),
       projectSettingsService.listApproversForAllProjects(),
+      projectSettingsService.listApproverGroupsForAllProjects(),
     ]);
     const enriched = configs.map((cfg) => {
       const approvers = approversByProject[cfg.project] ?? [];
+      const approverGroups = approverGroupsByProject[cfg.project] ?? [];
+      const countByType = (documentType: string) =>
+        approvers.filter((a) => a.documentType === documentType).length +
+        approverGroups.filter((g) => g.documentType === documentType).length;
       return {
         ...cfg,
-        designDocApproverCount: approvers.filter((a) => a.documentType === 'design_doc').length,
-        prdApproverCount: approvers.filter((a) => a.documentType === 'prd').length,
-        designPrototypeApproverCount: approvers.filter((a) => a.documentType === 'design_prototype').length,
+        designDocApproverCount: countByType('design_doc'),
+        prdApproverCount: countByType('prd'),
+        designPrototypeApproverCount: countByType('design_prototype'),
+        testCaseApproverCount: countByType('test_case'),
       };
     });
     res.json(enriched);
@@ -360,25 +366,27 @@ router.get('/project-settings/:project/approvers', async (req: Request, res: Res
 router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups } = req.body as SetApproversRequest;
+    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups, testCaseApprovers, testCaseApproverGroups } = req.body as SetApproversRequest;
     if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
       res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
       return;
     }
     const assignedBy = (req.user as any)?.profile?.oid ?? undefined;
-    const [designDoc, prd, designPrototype] = await Promise.all([
+    const [designDoc, prd, designPrototype, testCase] = await Promise.all([
       projectSettingsService.setApprovers(project, 'design_doc', designDocApprovers, assignedBy),
       projectSettingsService.setApprovers(project, 'prd', prdApprovers, assignedBy),
       projectSettingsService.setApprovers(project, 'design_prototype', designPrototypeApprovers, assignedBy),
+      projectSettingsService.setApprovers(project, 'test_case', testCaseApprovers ?? [], assignedBy),
     ]);
 
     await Promise.all([
       projectSettingsService.setApproverGroups(project, 'design_doc', designDocApproverGroups ?? [], assignedBy),
       projectSettingsService.setApproverGroups(project, 'prd', prdApproverGroups ?? [], assignedBy),
       projectSettingsService.setApproverGroups(project, 'design_prototype', designPrototypeApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(project, 'test_case', testCaseApproverGroups ?? [], assignedBy),
     ]);
 
-    res.json({ designDoc, prd, designPrototype });
+    res.json({ designDoc, prd, designPrototype, testCase });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -388,8 +396,8 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
 router.get('/project-settings/:project/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project, documentType } = req.params;
-    if (documentType !== 'prd' && documentType !== 'design_doc' && documentType !== 'design_prototype') {
-      res.status(400).json({ error: 'documentType must be prd, design_doc, or design_prototype' });
+    if (documentType !== 'prd' && documentType !== 'design_doc' && documentType !== 'design_prototype' && documentType !== 'test_case') {
+      res.status(400).json({ error: 'documentType must be prd, design_doc, design_prototype, or test_case' });
       return;
     }
     const excludeSelf = req.query.excludeSelf === 'true';

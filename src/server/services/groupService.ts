@@ -9,6 +9,7 @@ const DEFAULTS = [
   { name: 'UI/UX', description: 'User interface and experience design' },
   { name: 'Manager', description: 'Project and team management' },
   { name: 'Developer', description: 'Software development and engineering' },
+  { name: 'QA', description: 'Quality assurance and test case review' },
 ];
 
 export async function listGroups(project?: string): Promise<AppGroup[]> {

@@ -54,6 +54,7 @@ import {
   deleteSkillConfig,
   listApprovers,
   listApproversForAllProjects,
+  listApproverGroupsForAllProjects,
   setApprovers,
   getApproversForDocument,
 } from '../services/projectSettingsService';
@@ -594,6 +595,26 @@ describe('listApproversForAllProjects', () => {
     const result = await listApproversForAllProjects();
 
     expect(result).toEqual({});
+  });
+});
+
+describe('listApproverGroupsForAllProjects', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('groups approver groups by project', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([
+      { project: 'proj-alpha', groupId: 'g1', groupName: 'QA', documentType: 'test_case' },
+      { project: 'proj-alpha', groupId: 'g2', groupName: 'BA', documentType: 'prd' },
+      { project: 'proj-beta', groupId: 'g3', groupName: 'QA', documentType: 'test_case' },
+    ]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproverGroupsForAllProjects();
+
+    expect(result['proj-alpha']).toHaveLength(2);
+    expect(result['proj-beta']).toHaveLength(1);
+    expect(result['proj-alpha']![0]).toMatchObject({ groupName: 'QA', documentType: 'test_case' });
   });
 });
 

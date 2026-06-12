@@ -313,7 +313,7 @@ const NewInterviewCompose: React.FC = () => {
     setShowOwnerModal(true);
   }, [input, title, attachments, isSending, resolvedRepoName, speech]);
 
-  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[] }) => {
+  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
@@ -337,9 +337,11 @@ const NewInterviewCompose: React.FC = () => {
         prdOwnerId: selections.prdOwnerId,
         designDocOwnerId: selections.designDocOwnerId,
         designPrototypeOwnerId: selections.designPrototypeOwnerId,
+        testCaseOwnerId: selections.testCaseOwnerId,
         prdApproverIds: selections.prdApproverIds,
         designDocApproverIds: selections.designDocApproverIds,
         designPrototypeApproverIds: selections.designPrototypeApproverIds,
+        testCaseApproverIds: selections.testCaseApproverIds,
       });
       trackEvent('interview.started', {
         interviewId: result.interviewId,
