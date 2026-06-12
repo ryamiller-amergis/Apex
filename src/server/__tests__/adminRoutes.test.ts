@@ -504,6 +504,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designPrototypeBedrockMaxTokens
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
+      undefined,   // testCaseSkillPath
+      undefined,   // testCaseModel
+      undefined,   // prdValidationSkillPath
+      undefined,   // prdValidationModel
     );
   });
 
@@ -573,6 +577,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designPrototypeBedrockMaxTokens
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
+      undefined,   // testCaseSkillPath
+      undefined,   // testCaseModel
+      undefined,   // prdValidationSkillPath
+      undefined,   // prdValidationModel
     );
   });
 
@@ -622,6 +630,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designPrototypeBedrockMaxTokens
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
+      undefined,   // testCaseSkillPath
+      undefined,   // testCaseModel
+      undefined,   // prdValidationSkillPath
+      undefined,   // prdValidationModel
     );
   });
 
@@ -669,6 +681,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // designPrototypeBedrockMaxTokens
       undefined,               // designPrototypeRegenBedrockModelId
       undefined,               // designPrototypeRegenBedrockMaxTokens
+      undefined,               // testCaseSkillPath
+      undefined,               // testCaseModel
+      undefined,               // prdValidationSkillPath
+      undefined,               // prdValidationModel
     );
   });
 
@@ -715,6 +731,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // designPrototypeBedrockMaxTokens
       undefined,                            // designPrototypeRegenBedrockModelId
       undefined,                            // designPrototypeRegenBedrockMaxTokens
+      undefined,                            // testCaseSkillPath
+      undefined,                            // testCaseModel
+      undefined,                            // prdValidationSkillPath
+      undefined,                            // prdValidationModel
     );
   });
 
@@ -756,6 +776,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // designPrototypeBedrockMaxTokens
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
+      undefined,   // testCaseSkillPath
+      undefined,   // testCaseModel
+      undefined,   // prdValidationSkillPath
+      undefined,   // prdValidationModel
     );
   });
 
@@ -801,6 +825,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // designPrototypeBedrockMaxTokens
       undefined,         // designPrototypeRegenBedrockModelId
       undefined,         // designPrototypeRegenBedrockMaxTokens
+      undefined,         // testCaseSkillPath
+      undefined,         // testCaseModel
+      undefined,         // prdValidationSkillPath
+      undefined,         // prdValidationModel
     );
   });
 
