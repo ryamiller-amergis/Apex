@@ -232,6 +232,46 @@ describe('createInterview', () => {
 
     expect(mockCreateNotification).not.toHaveBeenCalled();
   });
+
+  it('sends reviewer notifications for each approver role', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-reviewers' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      title: 'Sprint Planning',
+      chatThreadId: 'thread-abc',
+      prdApproverIds: ['user-prd-rev'],
+      designDocApproverIds: ['user-dd-rev'],
+      designPrototypeApproverIds: ['user-proto-rev'],
+      testCaseApproverIds: ['user-qa-rev'],
+    });
+
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-prd-rev',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as PRD Reviewer',
+        link: '/backlog/interview/interview-reviewers',
+      }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-dd-rev',
+      expect.objectContaining({ title: 'Assigned as Design Doc Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-proto-rev',
+      expect.objectContaining({ title: 'Assigned as Design Prototype Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-qa-rev',
+      expect.objectContaining({ title: 'Assigned as QA Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledTimes(4);
+  });
 });
 
 // ── listInterviews ─────────────────────────────────────────────────────────────

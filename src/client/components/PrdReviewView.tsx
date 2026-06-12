@@ -30,6 +30,7 @@ import {
   useAcceptFixPrdValidation,
   useRevertPrdSection,
   usePrdValidationReport,
+  useGenerateTestCases,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -375,6 +376,8 @@ export const PrdReviewView: React.FC = () => {
   const syncAdoStatus = useSyncPrdAdoStatus(id);
   const fixWithAi = useFixPrdWithAi(id ?? '');
   const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
+
+  const generateTestCases = useGenerateTestCases();
 
   // PRD Validation hooks
   const createPrdValidationThread = useCreatePrdValidationThread();
@@ -1161,6 +1164,17 @@ export const PrdReviewView: React.FC = () => {
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
               Apex Assistant
+            </button>
+          )}
+
+          {canManage && prd.status !== 'approved' && prd.content && (readiness?.state === 'test_cases_pending' || readiness?.state === 'test_case_generation_failed') && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => void generateTestCases.mutateAsync(prd.id)}
+              disabled={generateTestCases.isPending}
+              type="button"
+            >
+              {readiness.state === 'test_case_generation_failed' ? 'Regenerate Test Cases' : 'Generate Test Cases'}
             </button>
           )}
 

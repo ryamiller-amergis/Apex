@@ -402,6 +402,7 @@ describe('GET /api/admin/project-settings', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockProjectSettings.listApproversForAllProjects.mockResolvedValue({});
+    mockProjectSettings.listApproverGroupsForAllProjects.mockResolvedValue({});
   });
 
   const configs = [
@@ -418,6 +419,7 @@ describe('GET /api/admin/project-settings', () => {
     expect(res.body).toHaveLength(2);
     expect(res.body[0]).toMatchObject({ project: 'proj-alpha', skillBranch: 'main' });
     expect(mockProjectSettings.listApproversForAllProjects).toHaveBeenCalledTimes(1);
+    expect(mockProjectSettings.listApproverGroupsForAllProjects).toHaveBeenCalledTimes(1);
   });
 
   it('includes approver counts per project', async () => {
@@ -437,6 +439,27 @@ describe('GET /api/admin/project-settings', () => {
       project: 'proj-alpha',
       designDocApproverCount: 2,
       prdApproverCount: 1,
+    });
+  });
+
+  it('includes approver group counts in reviewer totals', async () => {
+    mockProjectSettings.listSkillConfigs.mockResolvedValue([configs[0]]);
+    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({ 'proj-alpha': [] });
+    mockProjectSettings.listApproverGroupsForAllProjects.mockResolvedValue({
+      'proj-alpha': [
+        { groupId: 'g1', groupName: 'QA', documentType: 'test_case' },
+        { groupId: 'g2', groupName: 'BA', documentType: 'prd' },
+      ],
+    });
+
+    const res = await request(buildApp()).get('/api/admin/project-settings');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      project: 'proj-alpha',
+      prdApproverCount: 1,
+      testCaseApproverCount: 1,
+      designDocApproverCount: 0,
     });
   });
 

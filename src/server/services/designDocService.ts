@@ -12,6 +12,7 @@ import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOut
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 import { getSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
@@ -436,6 +437,12 @@ export async function syncPerFeatureDesignDocs(
       });
     }
   }
+
+  notifyAiCompletion('design_doc_generated', seedId, {
+    title: `${features.length} design doc${features.length > 1 ? 's' : ''}`,
+  }).catch(err =>
+    console.error(`[designDoc] AI notification failed for design_doc_generated (seedId=${seedId}):`, err),
+  );
 }
 
 export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): void {
@@ -830,6 +837,14 @@ export async function syncValidationResult(
 
   await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
 
+  notifyAiCompletion('design_doc_validation_complete', designDocId, {
+    title: '',
+    score: Math.round(scorecard.overall_score),
+    passed: scorecard.is_ready,
+  }).catch(err =>
+    console.error(`[designDocValidation] AI notification failed (docId=${designDocId}):`, err),
+  );
+
   if (newStatus === 'pending_review') {
     notifyApproversDocumentReady(designDocId, 'design_doc').catch((err) =>
       console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
@@ -1145,6 +1160,10 @@ export async function acceptFixValidation(designDocId: string): Promise<void> {
   await db.update(designDocs)
     .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
     .where(eq(designDocs.id, designDocId));
+
+  notifyAiCompletion('design_doc_fix_complete', designDocId, { title: row.title }).catch(err =>
+    console.error(`[designDocFix] AI notification failed (docId=${designDocId}):`, err),
+  );
 
   await autoStartValidation(designDocId);
 }

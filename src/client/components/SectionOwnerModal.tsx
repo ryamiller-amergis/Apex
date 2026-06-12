@@ -167,9 +167,11 @@ interface SectionOwnerModalProps {
     prdOwnerId?: string;
     designDocOwnerId?: string;
     designPrototypeOwnerId?: string;
+    testCaseOwnerId?: string;
     prdApproverIds?: string[];
     designDocApproverIds?: string[];
     designPrototypeApproverIds?: string[];
+    testCaseApproverIds?: string[];
   }) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
@@ -255,50 +257,21 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   onCancel,
   isSubmitting = false,
 }) => {
+  const [step, setStep] = useState<1 | 2>(1);
   const [prdOwnerId, setPrdOwnerId] = useState('');
   const [designDocOwnerId, setDesignDocOwnerId] = useState('');
   const [designPrototypeOwnerId, setDesignPrototypeOwnerId] = useState('');
+  const [testCaseOwnerId, setTestCaseOwnerId] = useState('');
   const [prdApproverIds, setPrdApproverIds] = useState<string[]>([]);
   const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
   const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
+  const [testCaseApproverIds, setTestCaseApproverIds] = useState<string[]>([]);
 
   const { data: users = [], isLoading } = useActiveUsers();
   const { data: prdPool, isLoading: prdPoolLoading } = useAvailableApproverPool(project, 'prd', false);
   const { data: ddPool, isLoading: ddPoolLoading } = useAvailableApproverPool(project, 'design_doc', false);
   const { data: protoPool, isLoading: protoPoolLoading } = useAvailableApproverPool(project, 'design_prototype', false);
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onCancel]);
-
-  const hasPrdPool = prdPool && (prdPool.individuals.length > 0 || prdPool.groups.length > 0);
-  const hasDdPool = ddPool && (ddPool.individuals.length > 0 || ddPool.groups.length > 0);
-  const hasProtoPool = protoPool && (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
-
-  const canConfirm =
-    !!prdOwnerId &&
-    !!designDocOwnerId &&
-    !!designPrototypeOwnerId &&
-    (!hasPrdPool || prdApproverIds.length > 0) &&
-    (!hasDdPool || designDocApproverIds.length > 0) &&
-    (!hasProtoPool || designPrototypeApproverIds.length > 0) &&
-    !isSubmitting;
-
-  const handleConfirm = () => {
-    if (!canConfirm) return;
-    onConfirm({
-      prdOwnerId,
-      designDocOwnerId,
-      designPrototypeOwnerId,
-      prdApproverIds: prdApproverIds.length > 0 ? prdApproverIds : undefined,
-      designDocApproverIds: designDocApproverIds.length > 0 ? designDocApproverIds : undefined,
-      designPrototypeApproverIds: designPrototypeApproverIds.length > 0 ? designPrototypeApproverIds : undefined,
-    });
-  };
+  const { data: qaPool, isLoading: qaPoolLoading } = useAvailableApproverPool(project, 'test_case', false);
 
   const togglePrdApprover = useCallback((id: string) => {
     setPrdApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -311,6 +284,48 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   const toggleProtoApprover = useCallback((id: string) => {
     setDesignPrototypeApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }, []);
+
+  const toggleQaApprover = useCallback((id: string) => {
+    setTestCaseApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [onCancel]);
+
+  const allOwnersSelected =
+    !!prdOwnerId && !!designDocOwnerId && !!designPrototypeOwnerId && !!testCaseOwnerId;
+
+  const hasPrdPool = prdPool && (prdPool.individuals.length > 0 || prdPool.groups.length > 0);
+  const hasDdPool = ddPool && (ddPool.individuals.length > 0 || ddPool.groups.length > 0);
+  const hasProtoPool = protoPool && (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
+  const hasQaPool = qaPool && (qaPool.individuals.length > 0 || qaPool.groups.length > 0);
+
+  const canConfirm =
+    allOwnersSelected &&
+    (!hasPrdPool || prdApproverIds.length > 0) &&
+    (!hasDdPool || designDocApproverIds.length > 0) &&
+    (!hasProtoPool || designPrototypeApproverIds.length > 0) &&
+    (!hasQaPool || testCaseApproverIds.length > 0) &&
+    !isSubmitting;
+
+  const handleConfirm = () => {
+    if (!canConfirm) return;
+    onConfirm({
+      prdOwnerId,
+      designDocOwnerId,
+      designPrototypeOwnerId,
+      testCaseOwnerId,
+      prdApproverIds: prdApproverIds.length > 0 ? prdApproverIds : undefined,
+      designDocApproverIds: designDocApproverIds.length > 0 ? designDocApproverIds : undefined,
+      designPrototypeApproverIds: designPrototypeApproverIds.length > 0 ? designPrototypeApproverIds : undefined,
+      testCaseApproverIds: testCaseApproverIds.length > 0 ? testCaseApproverIds : undefined,
+    });
+  };
 
   return (
     <div
@@ -327,7 +342,9 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               Assign Owners &amp; Reviewers
             </h2>
             <p className={styles.subtitle}>
-              Select owners and reviewers for PRD, Design Doc, and Design Prototypes. All fields are required.
+              {step === 1
+                ? 'Assign an owner for each document type.'
+                : 'Select reviewers from the configured pool for each document type.'}
             </p>
           </div>
           <button
@@ -340,120 +357,189 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
           </button>
         </div>
 
-        <div className={styles.fields}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="so-prd-owner">
-              PRD Owner (BA) *
-            </label>
-            {isLoading ? (
-              <span className={styles.loadingText}>Loading users…</span>
-            ) : (
-              <UserCombobox
-                id="so-prd-owner"
-                users={users}
-                selectedId={prdOwnerId}
-                onSelect={setPrdOwnerId}
-                placeholder="Search by name or email…"
-                disabled={isSubmitting}
-              />
-            )}
+        <div className={styles.stepper}>
+          <div className={`${styles.stepDot} ${step >= 1 ? styles.stepActive : ''} ${step > 1 ? styles.stepComplete : ''}`}>
+            <span>1</span>
           </div>
-
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="so-dd-owner">
-              Design Doc Owner (Developer) *
-            </label>
-            {isLoading ? (
-              <span className={styles.loadingText}>Loading users…</span>
-            ) : (
-              <UserCombobox
-                id="so-dd-owner"
-                users={users}
-                selectedId={designDocOwnerId}
-                onSelect={setDesignDocOwnerId}
-                placeholder="Search by name or email…"
-                disabled={isSubmitting}
-              />
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="so-proto-owner">
-              Design Prototype Owner (UI/UX) *
-            </label>
-            {isLoading ? (
-              <span className={styles.loadingText}>Loading users…</span>
-            ) : (
-              <UserCombobox
-                id="so-proto-owner"
-                users={users}
-                selectedId={designPrototypeOwnerId}
-                onSelect={setDesignPrototypeOwnerId}
-                placeholder="Search by name or email…"
-                disabled={isSubmitting}
-              />
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label className={styles.label}>PRD Reviewers *</label>
-            {prdPoolLoading ? (
-              <span className={styles.loadingText}>Loading…</span>
-            ) : !prdPool || (prdPool.individuals.length === 0 && prdPool.groups.length === 0) ? (
-              <span className={styles.noApprovers}>No approvers configured</span>
-            ) : (
-              renderPoolChips(prdPool, prdApproverIds, togglePrdApprover)
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label className={styles.label}>Design Doc Reviewers *</label>
-            {ddPoolLoading ? (
-              <span className={styles.loadingText}>Loading…</span>
-            ) : !ddPool || (ddPool.individuals.length === 0 && ddPool.groups.length === 0) ? (
-              <span className={styles.noApprovers}>No approvers configured</span>
-            ) : (
-              renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover)
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label className={styles.label}>Design Prototype Reviewers *</label>
-            {protoPoolLoading ? (
-              <span className={styles.loadingText}>Loading…</span>
-            ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
-              <span className={styles.noApprovers}>No approvers configured</span>
-            ) : (
-              renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
-            )}
+          <div className={styles.stepLine} />
+          <div className={`${styles.stepDot} ${step >= 2 ? styles.stepActive : ''}`}>
+            <span>2</span>
           </div>
         </div>
+        <div className={styles.stepLabel}>
+          {step === 1 ? 'Step 1 of 2 — Select Owners' : 'Step 2 of 2 — Select Reviewers'}
+        </div>
 
-        {!canConfirm && !isSubmitting && (
+        {step === 1 && (
+          <div className={styles.fields}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="so-prd-owner">
+                PRD Owner (BA) *
+              </label>
+              {isLoading ? (
+                <span className={styles.loadingText}>Loading users…</span>
+              ) : (
+                <UserCombobox
+                  id="so-prd-owner"
+                  users={users}
+                  selectedId={prdOwnerId}
+                  onSelect={setPrdOwnerId}
+                  placeholder="Search by name or email…"
+                  disabled={isSubmitting}
+                />
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="so-dd-owner">
+                Design Doc Owner (Developer) *
+              </label>
+              {isLoading ? (
+                <span className={styles.loadingText}>Loading users…</span>
+              ) : (
+                <UserCombobox
+                  id="so-dd-owner"
+                  users={users}
+                  selectedId={designDocOwnerId}
+                  onSelect={setDesignDocOwnerId}
+                  placeholder="Search by name or email…"
+                  disabled={isSubmitting}
+                />
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="so-proto-owner">
+                Design Prototype Owner (UI/UX) *
+              </label>
+              {isLoading ? (
+                <span className={styles.loadingText}>Loading users…</span>
+              ) : (
+                <UserCombobox
+                  id="so-proto-owner"
+                  users={users}
+                  selectedId={designPrototypeOwnerId}
+                  onSelect={setDesignPrototypeOwnerId}
+                  placeholder="Search by name or email…"
+                  disabled={isSubmitting}
+                />
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="so-qa-owner">
+                Test Case Owner (QA) *
+              </label>
+              {isLoading ? (
+                <span className={styles.loadingText}>Loading users…</span>
+              ) : (
+                <UserCombobox
+                  id="so-qa-owner"
+                  users={users}
+                  selectedId={testCaseOwnerId}
+                  onSelect={setTestCaseOwnerId}
+                  placeholder="Search by name or email…"
+                  disabled={isSubmitting}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className={styles.fields}>
+            <div className={styles.field}>
+              <label className={styles.label}>PRD Reviewers *</label>
+              {prdPoolLoading ? (
+                <span className={styles.loadingText}>Loading…</span>
+              ) : !prdPool || (prdPool.individuals.length === 0 && prdPool.groups.length === 0) ? (
+                <span className={styles.noApprovers}>No approvers configured</span>
+              ) : (
+                renderPoolChips(prdPool, prdApproverIds, togglePrdApprover)
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label}>Design Doc Reviewers *</label>
+              {ddPoolLoading ? (
+                <span className={styles.loadingText}>Loading…</span>
+              ) : !ddPool || (ddPool.individuals.length === 0 && ddPool.groups.length === 0) ? (
+                <span className={styles.noApprovers}>No approvers configured</span>
+              ) : (
+                renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover)
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label}>Design Prototype Reviewers *</label>
+              {protoPoolLoading ? (
+                <span className={styles.loadingText}>Loading…</span>
+              ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
+                <span className={styles.noApprovers}>No approvers configured</span>
+              ) : (
+                renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label}>QA Reviewers *</label>
+              {qaPoolLoading ? (
+                <span className={styles.loadingText}>Loading…</span>
+              ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
+                <span className={styles.noApprovers}>No approvers configured</span>
+              ) : (
+                renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover)
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && !canConfirm && !isSubmitting && (
           <p className={styles.validationHint}>
-            {!prdOwnerId || !designDocOwnerId || !designPrototypeOwnerId
-              ? 'Select all owners to continue'
-              : 'Select at least one reviewer in each section'}
+            Select at least one reviewer in each section
           </p>
         )}
 
-        <div className={styles.footer}>
-          <button
-            className={styles.btnSkip}
-            onClick={onCancel}
-            disabled={isSubmitting}
-            type="button"
-          >
-            Cancel
-          </button>
-          <button
-            className={styles.btnConfirm}
-            onClick={handleConfirm}
-            disabled={!canConfirm}
-            type="button"
-          >
-            {isSubmitting ? 'Creating…' : 'Confirm & Start Interview'}
-          </button>
+        <div className={styles.navRow}>
+          {step === 1 ? (
+            <>
+              <button
+                className={styles.btnSkip}
+                onClick={onCancel}
+                disabled={isSubmitting}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.btnConfirm}
+                onClick={() => setStep(2)}
+                disabled={!allOwnersSelected || isSubmitting}
+                type="button"
+              >
+                Next →
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className={styles.btnSkip}
+                onClick={() => setStep(1)}
+                disabled={isSubmitting}
+                type="button"
+              >
+                ← Back
+              </button>
+              <button
+                className={styles.btnConfirm}
+                onClick={handleConfirm}
+                disabled={!canConfirm}
+                type="button"
+              >
+                {isSubmitting ? 'Creating…' : 'Confirm & Start Interview'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
