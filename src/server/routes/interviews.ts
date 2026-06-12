@@ -698,11 +698,6 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
       .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    await db
-      .update(prdsTable)
-      .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
-      .where(eq(prdsTable.id, req.params.prdId));
-
     try {
       if (comment.sectionKey === 'prd') {
         updates['proposedContent'] = await fixPrdContentWithBedrock(
