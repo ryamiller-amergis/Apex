@@ -51,6 +51,7 @@ export interface PrdSummary {
   createdAt: string;
   updatedAt: string;
   latestTestCase?: TestCaseSummary | null;
+  validationScoreThreshold?: number | null;
 }
 
 export interface Prd extends PrdSummary {

@@ -91,24 +91,28 @@ function validationStatus(
   return testCase?.validationStatus ?? 'not_available';
 }
 
-function prdSpecValidationStatus(prd: ReadinessPrd): 'passed' | 'failed' | 'not_available' {
-  if (prd.validationScorecard?.is_ready === true) return 'passed';
-  if (prd.validationScorecard?.is_ready === false) return 'failed';
+function prdSpecValidationStatus(prd: ReadinessPrd, scoreThreshold?: number): 'passed' | 'failed' | 'not_available' {
   const score = prd.validationScore ?? prd.validationScorecard?.overall_score;
-  if (score === null || score === undefined) return 'not_available';
-  return score >= (prd.validationScorecard?.ready_threshold ?? 90) ? 'passed' : 'failed';
+  if (score === null || score === undefined) {
+    if (prd.validationScorecard?.is_ready === true) return 'passed';
+    if (prd.validationScorecard?.is_ready === false) return 'failed';
+    return 'not_available';
+  }
+  const threshold = scoreThreshold ?? prd.validationScorecard?.ready_threshold ?? 90;
+  return score >= threshold ? 'passed' : 'failed';
 }
 
 export function derivePrdReadiness(
   prd: ReadinessPrd,
-  testCase: TestCaseSummary | null | undefined
+  testCase: TestCaseSummary | null | undefined,
+  scoreThreshold?: number,
 ): PrdReadiness {
   const hasContentSignal = Object.prototype.hasOwnProperty.call(prd, 'content');
   const prdGenerated =
     prd.status !== 'generating' && (!hasContentSignal || !!prd.content);
   const testCaseStatus = testCase?.status;
   const testCaseValidation = validationStatus(testCase);
-  const prdSpecValidation = prdSpecValidationStatus(prd);
+  const prdSpecValidation = prdSpecValidationStatus(prd, scoreThreshold);
   const validation =
     testCaseValidation === 'failed' || testCaseValidation === 'validating'
       ? testCaseValidation
@@ -202,7 +206,7 @@ export function derivePrdReadiness(
           : 'Validation passed.'
         : validation === 'failed'
           ? prdSpecValidation === 'failed'
-            ? `PRD validation needs ${prd.validationScorecard?.ready_threshold ?? 90}% to pass.`
+            ? `PRD validation needs ${scoreThreshold ?? prd.validationScorecard?.ready_threshold ?? 90}% to pass.`
             : 'Validation reported failures.'
           : validation === 'validating'
             ? 'Validation is running.'

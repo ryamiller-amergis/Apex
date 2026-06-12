@@ -21,6 +21,13 @@ export interface DesignPlanFeature {
   /** Index of the feature within the PRD backlog (matches design_prototypes.featureIndex). */
   featureIndex: number;
   featureName: string;
+  /**
+   * Plain-English design brief written by the LLM and editable by the reviewer.
+   * This is the primary content — describes what the screen looks like, user flows,
+   * key interactions, and design decisions in language a UI/UX designer understands.
+   * When present, this is the authoritative plan the prototype generator follows.
+   */
+  designBrief: string;
   /** Whether this feature is a brand-new page, an update to an existing page, or has no UI. */
   decision: UiMockDecision;
   /** Existing MaxView route this feature extends (for 'update-page'). */

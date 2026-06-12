@@ -2861,7 +2861,7 @@ function buildDesignPlanPrompt(input: GenerateDesignPlanInput, catalogSection: s
     return `### Feature ${f.featureIndex}: ${f.featureName}\n${f.featureDescription ? `${f.featureDescription}\n` : ''}${f.targetRoute ? `Suggested existing route to extend: \`${f.targetRoute}\`\n` : ''}PBIs:\n${pbis}`;
   }).join('\n\n');
 
-  return `You are a senior UI/UX designer producing a concise, structured **design plan** for a MaxView application PRD. This plan is reviewed and edited by a designer before any high-fidelity HTML is generated, so capture the key design decisions clearly and do NOT produce any HTML.
+  return `You are a senior UI/UX designer producing a **design plan** for a MaxView application PRD. This plan will be reviewed and edited by a UI/UX designer before any high-fidelity HTML prototype is generated. Write the plan in clear, plain English that a designer can understand and modify — not in developer jargon.
 
 ${catalogSection}${screensContextSection}
 ## PRD${input.prdTitle ? `: ${input.prdTitle}` : ''}
@@ -2879,6 +2879,7 @@ Respond with ONLY a JSON fenced block containing an array with one object per fe
   {
     "featureIndex": 0,
     "featureName": "<echo the feature name>",
+    "designBrief": "<MOST IMPORTANT — see instructions below>",
     "decision": "new-page" | "update-page" | "no-ui",
     "targetRoute": "/existing-route" | null,
     "targetPageTitle": "Human-readable page title" | null,
@@ -2888,13 +2889,25 @@ Respond with ONLY a JSON fenced block containing an array with one object per fe
     "pbiContributions": [
       { "pbiTitle": "<title>", "contribution": "<one sentence on how this PBI appears in the UI>" }
     ],
-    "rationale": "Two or three sentences explaining the new-page vs update-page decision and the layout choice.",
+    "rationale": "Two or three sentences explaining the design decisions.",
     "notes": ""
   }
 ]
 \`\`\`
 
-Rules:
+### designBrief — CRITICAL FIELD
+
+The \`designBrief\` is the primary content of the plan. It is a multi-paragraph, plain-English description of the screen that a UI/UX designer will read, edit, and approve before prototypes are generated. The prototype generator will follow this brief as its authoritative source. Write it as if you are briefing a designer colleague:
+
+1. **What the user sees:** Describe the page layout, the main content area, and every visible element — headers, tables, forms, cards, filters, buttons, empty states, etc. Be specific about placement (e.g. "a search bar at the top of the content area, followed by a data grid").
+2. **Key interactions:** Explain what happens when the user clicks, types, selects, or submits. Describe modals, drawers, inline edits, or navigation that occurs.
+3. **User flow:** Walk through the primary happy path and any important alternate flows (error handling, empty state, loading).
+4. **Design decisions:** Explain which layout pattern you chose and why. Reference specific design system components by name where possible.
+5. **Per-PBI mapping:** For each PBI, briefly explain how it manifests in the UI — which part of the screen, which interaction.
+
+Use newlines (\\n) to separate paragraphs for readability. Aim for 150–300 words per feature. Do NOT use markdown headings — just plain text with paragraph breaks.
+
+### Other rules
 - \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be one of the existing routes listed above.
 - \`primaryComponents\` should reference MWx Design System component names from the catalog where possible.
 - \`states\` should list the UI states worth designing (default/empty/error/loading is a good baseline).
@@ -2932,6 +2945,7 @@ function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): De
     return {
       featureIndex: feature.featureIndex,
       featureName: feature.featureName,
+      designBrief: typeof match.designBrief === 'string' ? match.designBrief : '',
       decision,
       targetRoute: typeof match.targetRoute === 'string' && match.targetRoute.trim() ? match.targetRoute : undefined,
       targetPageTitle: typeof match.targetPageTitle === 'string' && match.targetPageTitle.trim() ? match.targetPageTitle : undefined,
@@ -3000,6 +3014,7 @@ export interface DesignPrototypeInput {
    * When present, these override the model's own inference for layout/components/states.
    */
   plan?: {
+    designBrief?: string;
     decision?: string;
     layoutPattern?: string;
     targetPageTitle?: string;
@@ -3101,16 +3116,37 @@ You must follow these rules with zero exceptions:
 
   const plan = input.plan;
   const hasPlan = Boolean(
-    plan && (plan.decision || plan.layoutPattern || plan.primaryComponents?.length || plan.states?.length || plan.rationale || plan.notes || plan.pbiContributions?.length),
+    plan && (plan.designBrief || plan.decision || plan.layoutPattern || plan.primaryComponents?.length || plan.states?.length || plan.rationale || plan.notes || plan.pbiContributions?.length),
   );
-  const planSection = hasPlan
-    ? `## Approved Design Plan (AUTHORITATIVE — follow exactly)
 
-A designer has reviewed and approved the following design decisions for this feature. These decisions are authoritative and **override any inference you would otherwise make**. Honor them precisely:
-${plan!.decision ? `\n- **Decision:** ${plan!.decision}${plan!.decision === 'update-page' && input.targetRoute ? ` (extend the existing page at \`${input.targetRoute}\`)` : ''}` : ''}${plan!.targetPageTitle ? `\n- **Page title:** ${plan!.targetPageTitle}` : ''}${plan!.layoutPattern ? `\n- **Layout pattern:** ${plan!.layoutPattern}` : ''}${plan!.primaryComponents?.length ? `\n- **Primary components to use:** ${plan!.primaryComponents.join(', ')}` : ''}${plan!.states?.length ? `\n- **States to render:** ${plan!.states.join(', ')}` : ''}${plan!.pbiContributions?.length ? `\n- **Per-PBI UI contributions:**\n${plan!.pbiContributions.map(c => `  - ${c.pbiTitle}: ${c.contribution}`).join('\n')}` : ''}${plan!.rationale ? `\n- **Rationale:** ${plan!.rationale}` : ''}${plan!.notes?.trim() ? `\n- **Reviewer notes (must honor):** ${plan!.notes.trim()}` : ''}
+  let planSection = '';
+  if (hasPlan) {
+    const parts: string[] = [];
+    parts.push('## Approved Design Brief (AUTHORITATIVE — follow exactly)');
+    parts.push('');
+    parts.push('A designer has reviewed and approved the following design brief for this feature. This brief is authoritative and **overrides any inference you would otherwise make**. Honor it precisely.');
+    parts.push('');
 
-`
-    : '';
+    if (plan!.designBrief?.trim()) {
+      parts.push(plan!.designBrief.trim());
+      parts.push('');
+    }
+
+    const meta: string[] = [];
+    if (plan!.decision) meta.push(`- **Decision:** ${plan!.decision}${plan!.decision === 'update-page' && input.targetRoute ? ` (extend the existing page at \`${input.targetRoute}\`)` : ''}`);
+    if (plan!.targetPageTitle) meta.push(`- **Page title:** ${plan!.targetPageTitle}`);
+    if (plan!.layoutPattern) meta.push(`- **Layout pattern:** ${plan!.layoutPattern}`);
+    if (plan!.primaryComponents?.length) meta.push(`- **Primary components to use:** ${plan!.primaryComponents.join(', ')}`);
+    if (plan!.states?.length) meta.push(`- **States to render:** ${plan!.states.join(', ')}`);
+    if (plan!.rationale) meta.push(`- **Rationale:** ${plan!.rationale}`);
+    if (plan!.notes?.trim()) meta.push(`- **Reviewer notes (must honor):** ${plan!.notes.trim()}`);
+    if (meta.length) {
+      parts.push('### Technical details');
+      parts.push(...meta);
+      parts.push('');
+    }
+    planSection = parts.join('\n');
+  }
 
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
 

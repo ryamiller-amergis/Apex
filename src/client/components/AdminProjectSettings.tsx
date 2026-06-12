@@ -452,6 +452,7 @@ interface EditState {
   designPrototypeRegenBedrockMaxTokens: number;
   designPlanBedrockModelId: string;
   designPlanBedrockMaxTokens: number;
+  prdValidationScoreThreshold: number;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -473,6 +474,7 @@ const emptyEdit = (): EditState => ({
   designPrototypeRegenBedrockMaxTokens: 16000,
   designPlanBedrockModelId: '',
   designPlanBedrockMaxTokens: 4000,
+  prdValidationScoreThreshold: 90,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
@@ -621,6 +623,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designPrototypeRegenBedrockMaxTokens: config.designPrototypeRegenBedrockMaxTokens ?? 16000,
       designPlanBedrockModelId: config.designPlanBedrockModelId ?? '',
       designPlanBedrockMaxTokens: config.designPlanBedrockMaxTokens ?? 4000,
+      prdValidationScoreThreshold: config.prdValidationScoreThreshold ?? 90,
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
@@ -681,6 +684,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
           designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
           designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
+          prdValidationScoreThreshold: edit.prdValidationScoreThreshold !== 90 ? edit.prdValidationScoreThreshold : null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
           quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
@@ -1107,6 +1111,34 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
                     <option value="64000">64 000</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>PRD Validation Score Threshold</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Minimum validation score (%) required for a PRD to pass the readiness gate.
+                Defaults to 90% if not set.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-validation-threshold">Pass Threshold (%)</label>
+                  <select
+                    id="ps-validation-threshold"
+                    className={styles.select}
+                    value={String(edit.prdValidationScoreThreshold)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdValidationScoreThreshold: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="50">50%</option>
+                    <option value="60">60%</option>
+                    <option value="70">70%</option>
+                    <option value="75">75%</option>
+                    <option value="80">80%</option>
+                    <option value="85">85%</option>
+                    <option value="90">90% (default)</option>
+                    <option value="95">95%</option>
+                    <option value="100">100%</option>
                   </select>
                 </div>
               </div>

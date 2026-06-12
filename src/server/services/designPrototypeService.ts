@@ -255,6 +255,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
 function planFeatureToInput(planFeature?: DesignPlanFeature): DesignPrototypeInput['plan'] | undefined {
   if (!planFeature) return undefined;
   return {
+    designBrief: planFeature.designBrief,
     decision: planFeature.decision,
     layoutPattern: planFeature.layoutPattern,
     targetPageTitle: planFeature.targetPageTitle,

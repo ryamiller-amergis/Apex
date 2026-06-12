@@ -366,7 +366,7 @@ export const PrdReviewView: React.FC = () => {
   const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const readiness = prd ? derivePrdReadiness(prd, latestTestCase) : null;
+  const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
 
   const updateContent = useUpdatePrdContent();
   const updateBacklog = useUpdatePrdBacklog();
@@ -969,7 +969,7 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
-                if (prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore >= 90) {
+                if (prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore >= (prd.validationScoreThreshold ?? 90)) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgePassed}`}>
                       ✓ Passed ({prd.validationScore}%)
@@ -1392,7 +1392,7 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {/* Validation Banner */}
-      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < 90 && prd.status === 'draft' && prd.validationScorecard && (
+      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < (prd.validationScoreThreshold ?? 90) && prd.status === 'draft' && prd.validationScorecard && (
         <div className={styles.validationPanel}>
           {prdFixFlow.phase === 'fixing' ? (
             <FixingProgressView onCancel={handleFixValidationCancel} />
@@ -1400,7 +1400,7 @@ export const PrdReviewView: React.FC = () => {
             <div className={styles.validationBanner}>
               <div className={styles.validationBannerLeft}>
                 <span className={styles.validationBannerText}>
-                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ 90%).
+                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
                   {prdFixFlow.phase === 'reviewing'
                     ? prdFixFlow.agentError
                       ? ` ${prdFixFlow.agentError}`
@@ -1822,7 +1822,8 @@ export const PrdReviewView: React.FC = () => {
                     const reportMarkdown = validationReport?.markdown ?? prd.validationReportMd ?? '';
                     const passingReasonsMarkdown = buildPassingValidationReasonsMarkdown(sc);
                     const reportAlreadyIncludesPassingReasons = /passing validation reasons|passing reasons|positive findings|strengths/i.test(reportMarkdown);
-                    const scoreColor = sc.overall_score >= 90 ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
+                    const effectiveThreshold = prd.validationScoreThreshold ?? 90;
+                    const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
                     const allGaps = files.length > 0

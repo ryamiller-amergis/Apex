@@ -383,6 +383,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPrototypeRegenBedrockMaxTokens: integer('design_prototype_regen_bedrock_max_tokens'),
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
   designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
+  prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),

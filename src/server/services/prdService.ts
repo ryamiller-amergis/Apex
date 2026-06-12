@@ -164,8 +164,15 @@ export async function listPrds(
     rows.map(({ prd }) => prd.id),
   );
 
-  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) =>
-    rowToPrdSummary(
+  const projects = [...new Set(rows.map(({ prd }) => prd.project))];
+  const thresholdByProject = new Map<string, number | null>();
+  await Promise.all(projects.map(async (p) => {
+    const cfg = await getSkillConfig(p);
+    thresholdByProject.set(p, cfg?.prdValidationScoreThreshold ?? null);
+  }));
+
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) => ({
+    ...rowToPrdSummary(
       prd,
       reviewerDisplayName,
       authorDisplayName,
@@ -173,7 +180,8 @@ export async function listPrds(
       prdOwnerDisplayName,
       latestTestCases.get(prd.id) ?? null,
     ),
-  );
+    validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+  }));
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
@@ -214,6 +222,7 @@ export async function getPrd(id: string): Promise<Prd | null> {
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as PrdValidationBaseline | null) ?? null,
     prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    validationScoreThreshold: skillConfig?.prdValidationScoreThreshold ?? null,
     fixCommentId: row.fixCommentId ?? null,
   };
 }
@@ -279,6 +288,7 @@ export async function submitForReview(
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
+  const skillConfig = await getSkillConfig(row.project);
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -287,6 +297,7 @@ export async function submitForReview(
       validationScorecard: row.validationScorecard as ValidationScorecard | null,
     },
     await getTestCases(id),
+    skillConfig?.prdValidationScoreThreshold ?? undefined,
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
@@ -377,6 +388,7 @@ export async function reviewPrd(
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
+  const reviewSkillConfig = await getSkillConfig(row.project);
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -385,6 +397,7 @@ export async function reviewPrd(
       validationScorecard: row.validationScorecard as ValidationScorecard | null,
     },
     await getTestCases(id),
+    reviewSkillConfig?.prdValidationScoreThreshold ?? undefined,
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
