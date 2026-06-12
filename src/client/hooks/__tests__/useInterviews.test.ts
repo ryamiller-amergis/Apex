@@ -6,6 +6,7 @@ import {
   useInterview,
   usePrdList,
   usePrd,
+  usePrdTestCases,
   useCreateInterview,
   useUpdateInterviewStatus,
   useUpdateInterviewTitle,
@@ -29,6 +30,14 @@ import {
   useGenerateDesignDoc,
   useReopenPrd,
   useActiveUsers,
+  usePrdValidationReport,
+  useCreatePrdValidationThread,
+  useCancelPrdValidation,
+  useRefreshPrdValidation,
+  useMarkPrdValidationReady,
+  useFixPrdValidation,
+  useAcceptFixPrdValidation,
+  useRevertPrdSection,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -253,6 +262,58 @@ describe('usePrd', () => {
     const { wrapper } = createWrapper();
 
     renderHook(() => usePrd(null), { wrapper });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ── usePrdTestCases ───────────────────────────────────────────────────────────
+
+describe('usePrdTestCases', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/interviews/prds/:prdId/test-cases and returns the latest record', async () => {
+    const testCaseRecord = {
+      id: 'tc-1',
+      prdId: 'prd-1',
+      chatThreadId: 'thread-tc',
+      status: 'ready',
+      testCasesJson: { suites: [] },
+      testCasesMd: '# Test Cases',
+      coverageSummary: {
+        totalCases: 3,
+        pbisCovered: 1,
+        acCovered: '2/2',
+        brCovered: '1/1',
+        gaps: 0,
+      },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    };
+    mockFetchOk(testCaseRecord);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => usePrdTestCases('prd-1'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({
+      id: 'tc-1',
+      coverageSummary: expect.objectContaining({ totalCases: 3 }),
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/test-cases',
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch test cases when prdId is null', async () => {
+    mockFetchOk(null);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => usePrdTestCases(null), { wrapper });
 
     await new Promise((r) => setTimeout(r, 50));
 
@@ -624,6 +685,167 @@ describe('useReopenPrd', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/interviews/prds/prd-1/reopen',
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+});
+
+// ── PRD validation hooks ──────────────────────────────────────────────────────
+
+describe('PRD validation hooks', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches the PRD validation report while validation is running', async () => {
+    mockFetchOk({ markdown: '# Validation Report' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => usePrdValidationReport('prd-1', 'validation-thread-1', 'validating'),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({ markdown: '# Validation Report' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/report',
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch the PRD validation report outside validating status', async () => {
+    mockFetchOk({ markdown: '# Validation Report' });
+    const { wrapper } = createWrapper();
+
+    renderHook(
+      () => usePrdValidationReport('prd-1', 'validation-thread-1', 'draft'),
+      { wrapper },
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('POSTs to create a PRD validation thread', async () => {
+    mockFetchOk({ threadId: 'validation-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCreatePrdValidationThread(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation-thread',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to cancel PRD validation', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCancelPrdValidation(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to refresh PRD validation results', async () => {
+    mockFetchOk({ ok: true, score: 92, is_ready: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRefreshPrdValidation(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({ score: 92, is_ready: true });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/refresh',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to mark PRD validation ready', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useMarkPrdValidationReady(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/mark-ready',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to start and accept PRD validation fixes', async () => {
+    mockFetchOk({ threadId: 'fix-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result: fixResult } = renderHook(() => useFixPrdValidation(), { wrapper });
+
+    await act(async () => {
+      fixResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(fixResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/fix-validation',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    mockFetchOk({ ok: true });
+    const { result: acceptResult } = renderHook(() => useAcceptFixPrdValidation(), { wrapper });
+
+    await act(async () => {
+      acceptResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(acceptResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      '/api/interviews/prds/prd-1/fix-validation/accept',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('PATCHes to revert the PRD validation baseline', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRevertPrdSection(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/revert-section',
+      expect.objectContaining({ method: 'PATCH' }),
     );
   });
 });

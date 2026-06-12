@@ -28,7 +28,7 @@ export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
 }
 
-export type PrdStatus = 'generating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface PrdSummary {
   id: string;
@@ -47,6 +47,7 @@ export interface PrdSummary {
   reviewedAt?: string;
   createdAt: string;
   updatedAt: string;
+  latestTestCase?: TestCaseSummary | null;
 }
 
 export interface Prd extends PrdSummary {
@@ -57,6 +58,51 @@ export interface Prd extends PrdSummary {
   proposedBacklogJson?: unknown;
   /** Design doc approver user OIDs stored on the PRD; used to pre-assign reviewers when design docs are submitted. */
   designDocApproverIds?: string[];
+  validationThreadId?: string | null;
+  validationScore?: number | null;
+  validationScorecard?: ValidationScorecard | null;
+  validationReportMd?: string | null;
+  validationPhase?: string | null;
+  fixBaseline?: PrdValidationBaseline | null;
+  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
+  prdValidationEnabled?: boolean;
+  /** Set while a single-comment Apex fix is in progress or awaiting review. */
+  fixCommentId?: string | null;
+}
+
+export type TestCaseStatus = 'generating' | 'ready' | 'failed';
+
+export interface TestCaseCoverageSummary {
+  totalCases: number;
+  pbisCovered: number;
+  acCovered: string;
+  brCovered: string;
+  gaps: number;
+}
+
+export type TestCaseValidationStatus = 'pending' | 'validating' | 'passed' | 'failed' | 'not_available';
+
+export interface TestCaseValidationSummary {
+  status: TestCaseValidationStatus;
+  failures?: string[];
+  checkedAt?: string;
+}
+
+export interface TestCaseSummary {
+  id: string;
+  prdId: string;
+  chatThreadId: string | null;
+  status: TestCaseStatus;
+  coverageSummary?: TestCaseCoverageSummary | null;
+  validationStatus?: TestCaseValidationStatus;
+  validationSummary?: TestCaseValidationSummary | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestCaseRecord extends TestCaseSummary {
+  testCasesJson?: unknown;
+  testCasesMd?: string | null;
 }
 
 export interface CreateInterviewRequest {
@@ -102,6 +148,7 @@ export function prdStatusLabel(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'Generating';
     case 'draft': return 'Draft';
+    case 'validating': return 'Validating';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
@@ -112,6 +159,7 @@ export function prdBadgeClass(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'generating';
     case 'draft': return 'draft';
+    case 'validating': return 'validating';
     case 'pending_review': return 'pending-review';
     case 'approved': return 'approved';
     case 'revision_requested': return 'revision-requested';
@@ -141,6 +189,14 @@ export interface ValidationScorecardFeature {
   gaps: ValidationScorecardGap[];
 }
 
+export interface ValidationScorecardFile {
+  file: string;
+  filename?: string;
+  score: number;
+  verdict: string;
+  gaps: ValidationScorecardGap[];
+}
+
 export interface ValidationScorecard {
   slug: string;
   generated_at: string;
@@ -149,16 +205,25 @@ export interface ValidationScorecard {
   ready_threshold: number;
   is_ready: boolean;
   verdict: 'ready' | 'gaps' | 'significant_gaps';
-  features: ValidationScorecardFeature[];
-  cross_cutting_checks: Record<string, string>;
-  accepted_gaps: string[];
-  deferred_gaps: string[];
+  features?: ValidationScorecardFeature[];
+  /** PRD validation uses `files` array instead of `features`. */
+  files?: ValidationScorecardFile[];
+  cross_cutting_checks?: Record<string, string>;
+  accepted_gaps?: string[];
+  deferred_gaps?: string[];
 }
 
 export interface ContentSnapshot {
   design: string;
   techSpec: string;
   assumptions: string;
+  capturedAt: string;
+  fixThreadId?: string;
+}
+
+export interface PrdValidationBaseline {
+  content: string;
+  backlogJson?: unknown;
   capturedAt: string;
   fixThreadId?: string;
 }
@@ -200,6 +265,7 @@ export interface DesignDoc extends DesignDocSummary {
   proposedDesignContent?: string | null;
   proposedTechSpecContent?: string | null;
   proposedAssumptionsContent?: string | null;
+  fixCommentId?: string | null;
 }
 
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };
@@ -246,6 +312,7 @@ export interface SelectedBacklogPBI {
   definitionOfDone?: string[];
   outOfScope?: string[];
   dependsOn?: string[];
+  testCaseCount?: number;
 }
 
 export interface SelectedBacklogFeature {

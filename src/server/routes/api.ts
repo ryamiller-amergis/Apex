@@ -3765,9 +3765,11 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       interviewSkillPath: config.interviewSkillPath ?? null,
       prdSkillPath: config.prdSkillPath ?? null,
       designDocSkillPath: config.designDocSkillPath ?? null,
+      testCaseSkillPath: config.testCaseSkillPath ?? null,
       interviewModel: config.interviewModel ?? null,
       prdModel: config.prdModel ?? null,
       designDocModel: config.designDocModel ?? null,
+      testCaseModel: config.testCaseModel ?? null,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });

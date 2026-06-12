@@ -9,6 +9,7 @@ jest.mock('../db/drizzle', () => {
   const makeInsertChain = () => ({
     values: jest.fn().mockReturnThis(),
     onConflictDoUpdate: jest.fn().mockReturnThis(),
+    onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
     returning: jest.fn().mockResolvedValue([]),
   });
 
@@ -135,7 +136,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configRow]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
@@ -159,7 +160,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([{ ...configRow, updatedBy: undefined }]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig('proj-beta', 'org/repo', 'develop');
 
@@ -176,7 +177,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithModels]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -219,7 +220,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithDefault]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -265,7 +266,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configNoModels]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
@@ -287,7 +288,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithValidation]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -335,7 +336,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithMode]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -376,7 +377,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([{ ...configRow, approvalMode: 'any_one' }]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
@@ -394,7 +395,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithMcpPills]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -436,12 +437,83 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([{ ...configRow, quickMcpPills: null }]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ quickMcpPills: null }),
+    );
+  });
+
+  it('persists test-case and PRD validation skill/model settings when provided', async () => {
+    const configWithQaSettings = {
+      ...configRow,
+      testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+      testCaseModel: 'gpt-5.5-test',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+      prdValidationModel: 'gpt-5.5-validation',
+    };
+    const returningMock = jest.fn().mockResolvedValue([configWithQaSettings]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocQaSkillPath
+      undefined, // designDocQaModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      undefined, // approvalMode
+      undefined, // quickMcpPills
+      undefined, // prdAssistantSkillPath
+      undefined, // prdAssistantModel
+      undefined, // prdReviewBedrockModelId
+      undefined, // prdReviewBedrockMaxTokens
+      undefined, // designPrototypeBedrockModelId
+      undefined, // designPrototypeBedrockMaxTokens
+      undefined, // designPrototypeRegenBedrockModelId
+      undefined, // designPrototypeRegenBedrockMaxTokens
+      '.cursor/skills/test-cases/SKILL.md',
+      'gpt-5.5-test',
+      '.cursor/skills/prd-validation/SKILL.md',
+      'gpt-5.5-validation',
+    );
+
+    expect(result).toMatchObject(configWithQaSettings);
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+        testCaseModel: 'gpt-5.5-test',
+        prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+        prdValidationModel: 'gpt-5.5-validation',
+      }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({
+          testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+          testCaseModel: 'gpt-5.5-test',
+          prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+          prdValidationModel: 'gpt-5.5-validation',
+        }),
+      }),
     );
   });
 });

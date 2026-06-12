@@ -52,8 +52,12 @@
   font-weight: 500;
 }
 
-.summaryTbi .summaryCount { color: #7c3aed; }
-.summaryPbi .summaryCount { color: #0891b2; }
+.summaryTbi .summaryCount {
+  color: #7c3aed;
+}
+.summaryPbi .summaryCount {
+  color: #0891b2;
+}
 
 .summaryDivider {
   width: 1px;
@@ -68,6 +72,21 @@
   gap: 6px;
   align-items: center;
   margin-left: 4px;
+}
+
+.testCaseStatusBanner {
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.testCaseStatusError {
+  border-color: color-mix(in srgb, var(--error-color) 35%, transparent);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
 }
 
 /* ── Section ──────────────────────────────────────────────────────────────── */
@@ -171,9 +190,15 @@
 .adoLink {
   color: var(--accent-color);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent-color) 40%, transparent);
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--accent-color) 40%,
+    transparent
+  );
   text-underline-offset: 2px;
-  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    text-decoration-color 0.15s ease;
 }
 
 .adoLink:hover {
@@ -196,11 +221,43 @@
   flex-shrink: 0;
 }
 
-.priorityMust  { background: rgba(239, 68, 68, 0.12);  color: #dc2626; }
-.priorityShould { background: rgba(245, 158, 11, 0.15); color: #d97706; }
-.priorityCould  { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
-.priorityWont   { background: rgba(107, 114, 128, 0.12); color: var(--text-muted); }
-.priorityDefault { background: rgba(107, 114, 128, 0.12); color: var(--text-muted); }
+.priorityMust {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+.priorityShould {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+.priorityCould {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.priorityWont {
+  background: rgba(107, 114, 128, 0.12);
+  color: var(--text-muted);
+}
+.priorityDefault {
+  background: rgba(107, 114, 128, 0.12);
+  color: var(--text-muted);
+}
+
+/* ── Test case count badge ───────────────────────────────────────────────── */
+
+.testCaseCountBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  color: var(--accent-color);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
 
 /* ── Persona tag ──────────────────────────────────────────────────────────── */
 
@@ -558,6 +615,150 @@
   font-style: normal;
 }
 
+/* ── Generated test cases ────────────────────────────────────────────────── */
+
+.testCaseList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.testCaseCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.testCaseHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.testCaseId {
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
+.testCaseTitle {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 220px;
+}
+
+.testCaseMetaBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+}
+
+.testCaseMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.testCaseBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.testCaseBlockLabel {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.testCaseBulletList,
+.testCaseSteps {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.testCaseSteps li {
+  padding-left: 4px;
+}
+
+.testCaseStepAction {
+  display: block;
+  color: var(--text-primary);
+}
+
+.testCaseStepExpected {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.testCaseExpectedResult {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--success-color);
+}
+
+.testCaseExpectedResult span {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.testCaseTraceability {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.testCaseTraceability span {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+
 /* ── Bullet list ──────────────────────────────────────────────────────────── */
 
 .bulletList {
@@ -573,6 +774,69 @@
 
 .bulletList li {
   padding-left: 2px;
+}
+
+.brListItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.brListItemRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brInfoBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.brInfoBtn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.brInfoBtn:hover,
+.brInfoBtn:focus-visible {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.1);
+  outline: none;
+}
+
+.brDetailTooltip {
+  margin-left: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid #dc2626;
+  background: var(--bg-secondary);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.brDetailTooltipRule {
+  color: var(--text-primary);
+}
+
+.brDetailTooltipApplies {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* ── NFR grid ─────────────────────────────────────────────────────────────── */
@@ -651,6 +915,15 @@
   font-size: 0.68rem;
   color: var(--text-muted);
   font-weight: 600;
+}
+
+.acTestCases {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color-light);
 }
 
 .acRow {
@@ -797,7 +1070,10 @@
   opacity: 0;
   z-index: 1;
   padding: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .cardEditBtn svg {
