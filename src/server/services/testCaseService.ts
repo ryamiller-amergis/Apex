@@ -17,6 +17,7 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { getSkillConfig } from './projectSettingsService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
@@ -532,7 +533,7 @@ export async function syncTestCaseOutput(
     }),
     db.query.prds.findFirst({
       where: eq(prds.id, prdId),
-      columns: { chatThreadId: true, backlogJson: true },
+      columns: { title: true, chatThreadId: true, backlogJson: true },
     }),
   ]);
   if (currentRow?.chatThreadId !== chatThreadId) {
@@ -573,6 +574,11 @@ export async function syncTestCaseOutput(
   await cleanupWorkspace(prdRow?.chatThreadId);
   console.log(
     `[testCase] Synced output to DB (testCaseId=${testCaseId}, prdId=${prdId})`
+  );
+
+  const prdTitle = prdRow?.title ?? 'Untitled PRD';
+  notifyAiCompletion('test_cases_generated', testCaseId, { title: prdTitle }).catch(err =>
+    console.error(`[testCase] AI notification failed for test_cases_generated (id=${testCaseId}):`, err),
   );
 
   // Test cases are the final artifact — check if PRD validation can now start

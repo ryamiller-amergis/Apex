@@ -271,7 +271,7 @@ describe('createGroup', () => {
 describe('seedDefaultGroupsForProject', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('inserts exactly 5 default groups for the given project', async () => {
+  it('inserts exactly 6 default groups for the given project', async () => {
     const insertChain = makeInsertChain();
     mockDb.insert.mockReturnValue(insertChain);
 
@@ -279,9 +279,9 @@ describe('seedDefaultGroupsForProject', () => {
 
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
     const valuesArg: any[] = insertChain.values.mock.calls[0][0];
-    expect(valuesArg).toHaveLength(5);
+    expect(valuesArg).toHaveLength(6);
     expect(valuesArg.map((v: any) => v.name)).toEqual(
-      expect.arrayContaining(['Product-Owner', 'BA', 'UI/UX', 'Manager', 'Developer']),
+      expect.arrayContaining(['Product-Owner', 'BA', 'UI/UX', 'Manager', 'Developer', 'QA']),
     );
   });
 

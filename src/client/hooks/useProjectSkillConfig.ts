@@ -188,7 +188,10 @@ export function useSetProjectApprovers() {
       designDocApproverGroups,
       prdApproverGroups,
       designPrototypeApprovers,
-      designPrototypeApproverGroups }: SetApproversRequest) => {
+      designPrototypeApproverGroups,
+      testCaseApprovers,
+      testCaseApproverGroups,
+    }: SetApproversRequest) => {
       const res = await fetch(
         `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
         {
@@ -201,7 +204,10 @@ export function useSetProjectApprovers() {
             designDocApproverGroups,
             prdApproverGroups,
             designPrototypeApprovers,
-            designPrototypeApproverGroups }),
+            designPrototypeApproverGroups,
+            testCaseApprovers,
+            testCaseApproverGroups,
+          }),
         },
       );
       if (!res.ok) throw new Error('Failed to save approvers');

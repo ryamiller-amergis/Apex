@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { SectionOwnerModal } from '../SectionOwnerModal';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
@@ -22,17 +22,12 @@ const activeUsers = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-interface RenderResult {
-  onConfirm: jest.Mock;
-  onCancel: jest.Mock;
-}
-
 function renderModal(
   overrides: Partial<React.ComponentProps<typeof SectionOwnerModal>> = {},
-): RenderResult {
+) {
   const onConfirm = jest.fn();
   const onCancel = jest.fn();
-  render(
+  const view = render(
     <SectionOwnerModal
       project="proj-alpha"
       onConfirm={onConfirm}
@@ -40,7 +35,22 @@ function renderModal(
       {...overrides}
     />,
   );
-  return { onConfirm, onCancel };
+  return { onConfirm, onCancel, ...view };
+}
+
+function selectOwner(labelPattern: RegExp, userName: string) {
+  const field = screen.getByText(labelPattern).parentElement!;
+  const input = within(field).getByRole('combobox');
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: userName.split(' ')[0] } });
+  fireEvent.mouseDown(within(field).getByRole('option', { name: new RegExp(userName) }));
+}
+
+function selectAllOwners() {
+  selectOwner(/PRD Owner/, 'Alice Smith');
+  selectOwner(/Design Doc Owner/, 'Bob Jones');
+  selectOwner(/Design Prototype Owner/, 'Alice Smith');
+  selectOwner(/Test Case Owner/, 'Bob Jones');
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -65,19 +75,20 @@ describe('SectionOwnerModal', () => {
     expect(screen.getByText(/PRD Owner.*\*/)).toBeInTheDocument();
     expect(screen.getByText(/Design Doc Owner.*\*/)).toBeInTheDocument();
     expect(screen.getByText(/Design Prototype Owner.*\*/)).toBeInTheDocument();
+    expect(screen.getByText(/Test Case Owner.*\*/)).toBeInTheDocument();
   });
 
   it('shows loading text for owner fields while users are being fetched', () => {
     mockUseActiveUsers.mockReturnValue({ data: [], isLoading: true });
     renderModal();
     const loadingEls = screen.getAllByText('Loading users…');
-    expect(loadingEls).toHaveLength(3);
+    expect(loadingEls).toHaveLength(4);
   });
 
   it('renders combobox inputs when users have loaded', () => {
     renderModal();
     const comboboxes = screen.getAllByRole('combobox');
-    expect(comboboxes).toHaveLength(3);
+    expect(comboboxes).toHaveLength(4);
   });
 
   it('clicking the close button calls onCancel', () => {
@@ -99,9 +110,9 @@ describe('SectionOwnerModal', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('confirm button is disabled when no owners are selected', () => {
+  it('Next button is disabled when no owners are selected', () => {
     renderModal();
-    expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /next/i })).toBeDisabled();
   });
 
   it('clicking Cancel calls onCancel', () => {
@@ -116,7 +127,16 @@ describe('SectionOwnerModal', () => {
   });
 
   it('shows "Creating…" label on the confirm button when isSubmitting=true', () => {
-    renderModal({ isSubmitting: true });
+    const onConfirm = jest.fn();
+    const onCancel = jest.fn();
+    const { rerender } = render(
+      <SectionOwnerModal project="proj-alpha" onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    selectAllOwners();
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    rerender(
+      <SectionOwnerModal project="proj-alpha" onConfirm={onConfirm} onCancel={onCancel} isSubmitting />,
+    );
     expect(screen.getByText('Creating…')).toBeInTheDocument();
   });
 

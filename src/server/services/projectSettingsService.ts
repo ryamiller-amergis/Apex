@@ -175,7 +175,7 @@ export async function listApprovers(project: string): Promise<ProjectApprover[]>
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   }));
 }
 
@@ -198,7 +198,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
   for (const r of rows) {
     const approver: ProjectApprover = {
       ...r,
-      documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
+      documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
     };
     if (!grouped[r.project]) grouped[r.project] = [];
     grouped[r.project].push(approver);
@@ -208,7 +208,7 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
 
 export async function setApprovers(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   userIds: string[],
   assignedBy?: string,
 ): Promise<ProjectApprover[]> {
@@ -234,7 +234,7 @@ export async function setApprovers(
 
 export async function getApproversForDocument(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
 ): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
@@ -253,13 +253,13 @@ export async function getApproversForDocument(
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype',
+    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   }));
 }
 
 export async function setApproverGroups(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   groupIds: string[],
   assignedBy?: string,
 ): Promise<void> {
@@ -283,7 +283,7 @@ export async function setApproverGroups(
 
 export async function getApproverPool(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
 ): Promise<ApproverPoolResponse> {
   const individuals = await getApproversForDocument(project, documentType);
 
@@ -306,7 +306,7 @@ export async function getApproverPool(
     .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
     .where(and(eq(projectApproverGroups.project, project), eq(projectApproverGroups.documentType, documentType)));
 
-  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }> = [];
+  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case' }> = [];
   for (const ref of groupRefs) {
     const memberRows = await db
       .select({
@@ -329,7 +329,7 @@ export async function getApproverPool(
       isDefault: ref.groupIsDefault,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
-      documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype',
+      documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
       members: memberRows,
     });
   }
@@ -339,7 +339,7 @@ export async function getApproverPool(
 
 export async function getApproverUserIds(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
 ): Promise<string[]> {
   const pool = await getApproverPool(project, documentType);
   const userIds = new Set<string>();
@@ -367,4 +367,29 @@ export async function listApproverGroupsForProject(
     .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
     .where(eq(projectApproverGroups.project, project));
   return rows;
+}
+
+export async function listApproverGroupsForAllProjects(): Promise<
+  Record<string, Array<{ groupId: string; groupName: string; documentType: string }>>
+> {
+  const rows = await db
+    .select({
+      project: projectApproverGroups.project,
+      groupId: projectApproverGroups.groupId,
+      groupName: appGroups.name,
+      documentType: projectApproverGroups.documentType,
+    })
+    .from(projectApproverGroups)
+    .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id));
+
+  const grouped: Record<string, Array<{ groupId: string; groupName: string; documentType: string }>> = {};
+  for (const r of rows) {
+    if (!grouped[r.project]) grouped[r.project] = [];
+    grouped[r.project].push({
+      groupId: r.groupId,
+      groupName: r.groupName,
+      documentType: r.documentType,
+    });
+  }
+  return grouped;
 }

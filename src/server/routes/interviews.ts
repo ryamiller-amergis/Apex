@@ -63,12 +63,12 @@ import {
   syncPerFeatureDesignDocs,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
-import { getSkillConfig } from '../services/projectSettingsService';
+import { getApproverPool, getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
-import { getTestCases } from '../services/testCaseService';
+import { getTestCases, triggerTestCaseGeneration } from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
@@ -92,7 +92,7 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds } = req.body as {
+    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
       project: string;
       repo: string;
       title?: string;
@@ -100,9 +100,11 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
+      testCaseOwnerId?: string;
       prdApproverIds?: string[];
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
+      testCaseApproverIds?: string[];
     };
 
     if (!project || !repo || !chatThreadId) {
@@ -110,9 +112,10 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
     res.status(201).json(result);
   } catch (err) {
+    console.error('[interviews] POST / failed:', err);
     next(err);
   }
 });
@@ -176,6 +179,29 @@ router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), asyn
     }
     const testCaseRecord = await getTestCases(req.params.prdId);
     res.json(testCaseRecord);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { prdId } = req.params;
+    const prdRow = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, prdId),
+      columns: { id: true, chatThreadId: true, content: true, backlogJson: true },
+    });
+    if (!prdRow) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    if (!prdRow.content) {
+      res.status(422).json({ error: 'PRD content must exist before generating test cases' });
+      return;
+    }
+    const sourceThreadId = prdRow.chatThreadId ?? '';
+    const started = await triggerTestCaseGeneration(prdId, sourceThreadId);
+    res.json({ started });
   } catch (err) {
     next(err);
   }
@@ -1736,6 +1762,38 @@ router.get('/available-approvers/:project/:documentType', requirePermission('int
     const approvers = await getAvailableApprovers(project, documentType, excludeSelf ? userId : undefined);
     res.json(approvers);
   } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/approver-pool/:project/:documentType', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const { project, documentType } = req.params;
+    if (
+      documentType !== 'prd'
+      && documentType !== 'design_doc'
+      && documentType !== 'design_prototype'
+      && documentType !== 'test_case'
+    ) {
+      res.status(400).json({ error: 'documentType must be prd, design_doc, design_prototype, or test_case' });
+      return;
+    }
+    const excludeSelf = req.query.excludeSelf === 'true';
+    const userId = excludeSelf ? getUserId(req) : undefined;
+    const pool = await getApproverPool(
+      project,
+      documentType as 'prd' | 'design_doc' | 'design_prototype' | 'test_case',
+    );
+    if (userId) {
+      pool.individuals = pool.individuals.filter((a) => a.userId !== userId);
+      pool.groups = pool.groups.map((g) => ({
+        ...g,
+        members: g.members.filter((m) => m.userId !== userId),
+      }));
+    }
+    res.json(pool);
+  } catch (err) {
+    console.error('[interviews] GET approver-pool failed:', err);
     next(err);
   }
 });

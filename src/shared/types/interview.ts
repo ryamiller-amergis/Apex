@@ -16,10 +16,13 @@ export interface InterviewSummary {
   designDocOwnerName?: string;
   designPrototypeOwnerId?: string;
   designPrototypeOwnerName?: string;
+  testCaseOwnerId?: string;
+  testCaseOwnerName?: string;
   /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
   prdApproverIds?: string[];
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
+  testCaseApproverIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -113,10 +116,12 @@ export interface CreateInterviewRequest {
   prdOwnerId?: string;
   designDocOwnerId?: string;
   designPrototypeOwnerId?: string;
+  testCaseOwnerId?: string;
   /** Kick-off approver selections (user OIDs); persisted and inherited at submit. */
   prdApproverIds?: string[];
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
+  testCaseApproverIds?: string[];
 }
 
 export interface CreateInterviewResponse {

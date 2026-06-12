@@ -6,6 +6,7 @@ import type { DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -301,6 +302,10 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
         updatedAt: now,
       })
       .where(eq(designPrototypes.id, prototypeId));
+
+    notifyAiCompletion('design_prototype_generated', prototypeId, { title: feature.title }).catch(err =>
+      console.error(`[designPrototype] AI notification failed (id=${prototypeId}):`, err),
+    );
   } catch (err: any) {
     console.error(`[designPrototypeService] Generation error for ${prototypeId}:`, err);
     await db

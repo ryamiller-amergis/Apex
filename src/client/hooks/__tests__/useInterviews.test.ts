@@ -38,6 +38,7 @@ import {
   useFixPrdValidation,
   useAcceptFixPrdValidation,
   useRevertPrdSection,
+  useGenerateTestCases,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -1152,5 +1153,57 @@ describe('useGenerateDesignDoc', () => {
       '/api/interviews/design-docs/dd-1/generate',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+});
+
+// ── useGenerateTestCases ──────────────────────────────────────────────────────
+
+describe('useGenerateTestCases', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POSTs to /api/interviews/prds/:prdId/test-cases/generate', async () => {
+    mockFetchOk({ started: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/test-cases/generate',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('exposes started:true in mutation data', async () => {
+    mockFetchOk({ started: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual({ started: true });
+  });
+
+  it('enters error state on HTTP failure', async () => {
+    mockFetchError(422, { error: 'PRD content and backlog must exist' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
   });
 });

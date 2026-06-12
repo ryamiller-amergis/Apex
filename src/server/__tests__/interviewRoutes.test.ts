@@ -42,6 +42,19 @@ jest.mock('../services/rbacService', () => ({
   getActiveUsers: jest.fn(),
 }));
 
+jest.mock('../services/testCaseService', () => ({
+  getTestCases: jest.fn(),
+  triggerTestCaseGeneration: jest.fn(),
+}));
+
+jest.mock('../db/drizzle', () => ({
+  db: {
+    query: {
+      prds: { findFirst: jest.fn() },
+    },
+  },
+}));
+
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
@@ -121,6 +134,18 @@ const {
 
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
 mockAutoStartValidation.mockResolvedValue(undefined);
+
+const {
+  getTestCases: mockGetTestCases,
+  triggerTestCaseGeneration: mockTriggerTestCaseGeneration,
+} = jest.requireMock('../services/testCaseService') as {
+  getTestCases: jest.Mock;
+  triggerTestCaseGeneration: jest.Mock;
+};
+
+const { db: mockDb } = jest.requireMock('../db/drizzle') as {
+  db: { query: { prds: { findFirst: jest.Mock } } };
+};
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -1338,6 +1363,102 @@ describe('POST /api/interviews — owner field forwarding', () => {
     expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-test', project: 'proj' }),
     );
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/test-cases/generate ─────────────────────
+
+describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
+  const prdRowWithContent = {
+    id: 'prd-1',
+    chatThreadId: 'thread-2',
+    content: 'PRD content',
+    backlogJson: { features: [] },
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with started:true when generation succeeds', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ started: true });
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+  });
+
+  it('returns 200 with started:false when skill is not configured', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(false);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ started: false });
+  });
+
+  it('returns 404 when PRD does not exist', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/nonexistent/test-cases/generate');
+
+    expect(res.status).toBe(404);
+    expect(mockTriggerTestCaseGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when PRD has no content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      content: '',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(422);
+    expect(mockTriggerTestCaseGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 when PRD has no backlog (backlog is optional)', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      backlogJson: null,
+    });
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+  });
+
+  it('passes empty string as sourceThreadId when PRD has no chatThreadId', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      chatThreadId: null,
+    });
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', '');
+  });
+
+  it('returns 500 when the service throws', async () => {
+    mockDb.query.prds.findFirst.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(500);
   });
 });
 

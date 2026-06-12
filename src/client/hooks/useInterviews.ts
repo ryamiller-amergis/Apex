@@ -130,6 +130,20 @@ export function usePrdTestCases(prdId: string | null) {
   });
 }
 
+export function useGenerateTestCases() {
+  const qc = useQueryClient();
+  return useMutation<{ started: boolean }, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/test-cases/generate`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, prdId) => {
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
 // ── Design Doc queries ────────────────────────────────────────────────────────
 
 export function useDesignDocList(filters?: {
@@ -206,7 +220,7 @@ export function useActiveUsers() {
 
 export function useAvailableApproverPool(
   project: string,
-  documentType: 'prd' | 'design_doc' | 'design_prototype',
+  documentType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case',
   excludeSelf = true
 ) {
   const qs = excludeSelf ? '?excludeSelf=true' : '';
@@ -214,7 +228,7 @@ export function useAvailableApproverPool(
     queryKey: ['available-approver-pool', project, documentType, excludeSelf],
     queryFn: () =>
       apiFetch(
-        `/api/admin/project-settings/${encodeURIComponent(project)}/approver-pool/${documentType}${qs}`
+        `/api/interviews/approver-pool/${encodeURIComponent(project)}/${documentType}${qs}`
       ),
     enabled: !!project,
     staleTime: 30_000,
@@ -312,9 +326,11 @@ export function useCreateInterview() {
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
+      testCaseOwnerId?: string;
       prdApproverIds?: string[];
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
+      testCaseApproverIds?: string[];
     }
   >({
     mutationFn: (body) =>

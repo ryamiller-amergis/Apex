@@ -9,6 +9,7 @@ const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -946,6 +947,13 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           updatedAt: new Date().toISOString(),
         })
         .where(eq(prds.id, prd.id));
+      notifyAiCompletion('prd_validation_complete', prd.id, {
+        title: prd.title,
+        score: Math.round(scorecard.overall_score),
+        passed: scorecard.is_ready,
+      }).catch(err =>
+        console.error(`[prdValidation] AI notification failed (prdId=${prd.id}):`, err),
+      );
       if (newStatus === 'pending_review') {
         notifyApproversDocumentReady(prd.id, 'prd').catch((err) =>
           console.error(`[prdValidation] Failed to notify approvers (prdId=${prd.id})`, err),
@@ -1154,6 +1162,10 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
   await db.update(prds)
     .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
     .where(eq(prds.id, prdId));
+
+  notifyAiCompletion('prd_fix_complete', prdId, { title: row.title }).catch(err =>
+    console.error(`[prdFix] AI notification failed (prdId=${prdId}):`, err),
+  );
 
   await autoStartPrdValidation(prdId);
 }

@@ -443,6 +443,8 @@ describe('useSetProjectApprovers', () => {
         designDocApprovers: ['user-1'],
         prdApprovers: [],
         designPrototypeApprovers: [],
+        testCaseApprovers: ['user-2'],
+        testCaseApproverGroups: ['group-qa'],
       });
     });
 
@@ -454,6 +456,8 @@ describe('useSetProjectApprovers', () => {
       designDocApprovers: ['user-1'],
       prdApprovers: [],
       designPrototypeApprovers: [],
+      testCaseApprovers: ['user-2'],
+      testCaseApproverGroups: ['group-qa'],
     });
   });
 });

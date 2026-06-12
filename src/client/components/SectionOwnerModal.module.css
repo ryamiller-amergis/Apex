@@ -19,7 +19,7 @@
   border: 1px solid var(--border-color);
   border-radius: 14px;
   box-shadow: var(--shadow-md);
-  width: 480px;
+  width: 540px;
   max-width: calc(100vw - 32px);
   padding: 28px;
   display: flex;
@@ -284,6 +284,66 @@
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+}
+
+/* ── Wizard stepper ──────────────────────────────────────────────── */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 4px;
+}
+
+.stepDot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.stepActive {
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.stepComplete {
+  border-color: var(--success-color);
+  background: var(--success-color);
+  color: #fff;
+}
+
+.stepLine {
+  flex: 1;
+  height: 2px;
+  background: var(--border-color);
+  margin: 0 8px;
+}
+
+.stepLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.navRow {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .btnSkip {

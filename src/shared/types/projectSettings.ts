@@ -97,6 +97,7 @@ export interface ProjectSkillConfig {
   designDocApproverCount?: number;
   prdApproverCount?: number;
   designPrototypeApproverCount?: number;
+  testCaseApproverCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -142,7 +143,7 @@ export interface ProjectApprover {
   id: string;
   project: string;
   userId: string;
-  documentType: 'design_doc' | 'prd' | 'design_prototype';
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
   displayName: string | null;
   email: string | null;
   assignedBy: string | null;
@@ -159,11 +160,13 @@ export interface SetApproversRequest {
   prdApproverGroups?: string[];
   designPrototypeApprovers: string[];
   designPrototypeApproverGroups?: string[];
+  testCaseApprovers: string[];
+  testCaseApproverGroups?: string[];
 }
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' }>;
+  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case' }>;
 }
 
 export interface ProjectSkillConfigResponse {
