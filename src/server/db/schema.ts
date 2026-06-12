@@ -1,7 +1,7 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
-import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
@@ -50,6 +50,7 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   messages: many(chatMessages),
   interviews: many(interviews),
   prds: many(prds),
+  testCases: many(testCases),
   designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
   designDocsAsQa: many(designDocs, { relationName: 'designDocQaChatThread' }),
 }));
@@ -211,9 +212,29 @@ export const prds = pgTable('prds', {
   proposedContent: text('proposed_content'),
   proposedBacklogJson: jsonb('proposed_backlog_json'),
   fixCommentId: uuid('fix_comment_id'),
+  validationThreadId: uuid('validation_thread_id'),
+  validationScore: integer('validation_score'),
+  validationScorecard: jsonb('validation_scorecard').$type<ValidationScorecard>(),
+  validationReportMd: text('validation_report_md'),
+  validationPhase: text('validation_phase'),
+  fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+export const testCases = pgTable('test_cases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  status: text('status').notNull().default('generating'),
+  testCasesJson: jsonb('test_cases_json'),
+  testCasesMd: text('test_cases_md'),
+  coverageSummary: jsonb('coverage_summary').$type<TestCaseCoverageSummary>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  prdIdx: index('test_cases_prd_id_idx').on(t.prdId),
+}));
 
 export const designDocs = pgTable('design_docs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -279,8 +300,20 @@ export const prdsRelations = relations(prds, ({ one, many }) => ({
     fields: [prds.chatThreadId],
     references: [chatThreads.id],
   }),
+  testCases: many(testCases),
   designDocs: many(designDocs),
   designPrototypes: many(designPrototypes),
+}));
+
+export const testCasesRelations = relations(testCases, ({ one }) => ({
+  prd: one(prds, {
+    fields: [testCases.prdId],
+    references: [prds.id],
+  }),
+  chatThread: one(chatThreads, {
+    fields: [testCases.chatThreadId],
+    references: [chatThreads.id],
+  }),
 }));
 
 export const designDocsRelations = relations(designDocs, ({ one }) => ({
@@ -319,16 +352,20 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designDocQaSkillPath: text('design_doc_qa_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   designPrototypeSkillPath: text('design_prototype_skill_path'),
+  testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
   designDocModel: text('design_doc_model'),
   designDocQaModel: text('design_doc_qa_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
   designPrototypeModel: text('design_prototype_model'),
+  testCaseModel: text('test_case_model'),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
   prdAssistantSkillPath: text('prd_assistant_skill_path'),
   prdAssistantModel: text('prd_assistant_model'),
+  prdValidationSkillPath: text('prd_validation_skill_path'),
+  prdValidationModel: text('prd_validation_model'),
   defaultModel: text('default_model'),
   prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
   prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),

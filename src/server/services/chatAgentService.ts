@@ -24,9 +24,10 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs } from '../db/schema';
+import { interviews, prds, designDocs, testCases } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
+import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
@@ -865,6 +866,19 @@ function logAgentError(threadId: string, err: unknown): void {
 async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<void> {
   let fullySynced = false;
 
+  // Check if this thread belongs to a test-case generation run
+  const testCaseRow = await db.query.testCases.findFirst({
+    where: eq(testCases.chatThreadId, threadId),
+  });
+  if (testCaseRow) {
+    const synced = await syncTestCaseOutput(testCaseRow.id, testCaseRow.prdId, threadId);
+    if (!synced && testCaseRow.status === 'generating') {
+      await markTestCaseFailed(testCaseRow.id, testCaseRow.prdId, threadId);
+      console.warn(`[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`);
+    }
+    return;
+  }
+
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
@@ -882,7 +896,23 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
         .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
       console.warn(`[chat] post-run: agent produced no PRD output — reset to draft (prdId=${prdRow.id})`);
     }
-    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
+    if (fullySynced) {
+      try {
+        const testCaseStarted = await triggerTestCaseGeneration(prdRow.id, threadId);
+        if (!testCaseStarted) {
+          // If no test case skill, check if PRD validation can start
+          try {
+            const { arePrdValidationArtifactsReady, autoStartPrdValidation } = await import('./prdService');
+            const ready = await arePrdValidationArtifactsReady(prdRow.id);
+            if (ready) await autoStartPrdValidation(prdRow.id);
+          } catch { /* non-fatal */ }
+          cleanupWorkspaceDir(workspaceDir);
+        }
+      } catch (err) {
+        console.error(`[chat] post-run: auto test-case generation failed (prdId=${prdRow.id})`, err);
+        cleanupWorkspaceDir(workspaceDir);
+      }
+    }
     return;
   }
 
@@ -979,6 +1009,60 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
     return;
   }
 
+  // Check if this thread is a PRD validation thread
+  const prdValRow = await db.query.prds.findFirst({
+    where: eq(prds.validationThreadId, threadId),
+  });
+  if (prdValRow) {
+    const scorecardRaw = readOutputValidationScorecard(threadId);
+    if (scorecardRaw) {
+      try {
+        const freshPrd = await db.query.prds.findFirst({
+          where: eq(prds.id, prdValRow.id),
+          columns: { validationThreadId: true },
+        });
+        if (freshPrd?.validationThreadId !== threadId) {
+          console.log(`[chat] post-run: discarded stale PRD validation scorecard — thread ${threadId} no longer active (prdId=${prdValRow.id})`);
+          cleanupWorkspaceDir(workspaceDir);
+          return;
+        }
+        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        const { generateFallbackReport } = await import('./documentValidationService');
+        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
+        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+        await db.update(prds)
+          .set({
+            validationScore: Math.round(scorecard.overall_score),
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: effectiveReportMd,
+            status: newStatus,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prdValRow.id));
+        console.log(`[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`);
+        fullySynced = true;
+      } catch (err) {
+        console.error(`[chat] post-run: failed to parse PRD validation scorecard`, err);
+      }
+    } else {
+      const freshPrd = await db.query.prds.findFirst({
+        where: eq(prds.id, prdValRow.id),
+        columns: { validationThreadId: true, status: true },
+      });
+      if (freshPrd?.validationThreadId === threadId && freshPrd?.status === 'validating') {
+        await db.update(prds)
+          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .where(eq(prds.id, prdValRow.id));
+        console.warn(`[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`);
+      }
+      fullySynced = true;
+    }
+    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
+    return;
+  }
+
   // Check if this thread is a Q&A thread
   const ddQaRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.qaChatThreadId, threadId),
@@ -1039,6 +1123,15 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
 
   if (ddResult) {
     console.warn(`[chat] failGeneratingDocuments: reset design doc to draft (designDocId=${ddResult.id}, threadId=${threadId})`);
+  }
+
+  const [testCaseResult] = await db.update(testCases)
+    .set({ status: 'failed', updatedAt: new Date().toISOString() })
+    .where(and(eq(testCases.chatThreadId, threadId), eq(testCases.status, 'generating')))
+    .returning({ id: testCases.id });
+
+  if (testCaseResult) {
+    console.warn(`[chat] failGeneratingDocuments: marked test cases failed (testCaseId=${testCaseResult.id}, threadId=${threadId})`);
   }
 }
 

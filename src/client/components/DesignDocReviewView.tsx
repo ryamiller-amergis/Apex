@@ -35,8 +35,19 @@ import { ApproverSelectModal } from './ApproverSelectModal';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
+import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap } from '../../shared/types/interview';
+import {
+  designDocHasProposedChanges,
+  isDesignDocSingleCommentFixPending,
+} from '../utils/apexFixHelpers';
+import {
+  clearApexFixInProgress,
+  fetchChatThreadStatus,
+  markApexFixInProgress,
+  readApexFixInProgress,
+} from '../utils/apexFixSession';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import {
@@ -1118,6 +1129,7 @@ export const DesignDocReviewView: React.FC = () => {
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
   const { can, userId, isAdmin } = useAppShell();
+  const qc = useQueryClient();
 
   const { data: doc, isLoading, isError } = useDesignDoc(id);
   const { data: sourcePrd } = usePrd(doc?.prdId ?? null);
@@ -1139,6 +1151,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
+  const [bulkCommentFixRunning, setBulkCommentFixRunning] = useState(false);
 
   const { data: reviewComments = [] } = useReviewComments(id, 'design_doc');
   const { data: unresolvedData } = useUnresolvedCommentCount(id, 'design_doc');
@@ -1152,13 +1165,8 @@ export const DesignDocReviewView: React.FC = () => {
   const [pendingSelector, setPendingSelector] = useState<{ sectionKey: ReviewSectionKey; selector: TextSelector } | null>(null);
   const [newCommentBody, setNewCommentBody] = useState('');
 
-  // Restore fix review state from server's fixBaseline on page load.
-  // If the doc has a fixBaseline stored (fix was done but not yet accepted/reverted),
-  // fetch the assistant thread to recover gap changes and enter reviewing phase.
-  // Prefer fixBaseline.fixThreadId (stable) over docAssistantThreadId (can be overwritten by discuss).
-  const fixRecoveryAttemptedRef = useRef(false);
+  // Restore validation fix flow from server fixBaseline after navigation.
   useEffect(() => {
-    if (fixRecoveryAttemptedRef.current) return;
     if (!doc || fixFlow.phase !== 'idle') return;
     if (!doc.fixBaseline) return;
 
@@ -1166,28 +1174,41 @@ export const DesignDocReviewView: React.FC = () => {
     const threadId = baseline.fixThreadId ?? doc.docAssistantThreadId;
     if (!threadId) return;
 
-    fixRecoveryAttemptedRef.current = true;
+    let cancelled = false;
 
     (async () => {
-      try {
-        const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
-        if (!res.ok) {
-          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-          return;
-        }
-        const thread = await res.json();
-        if (thread.status === 'idle' || thread.status === 'error') {
-          const gapChanges = parseGapChangesFromMessages(thread.messages ?? []);
-          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-          fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges });
-        } else {
-          fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-        }
-      } catch {
-        fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      if (!readApexFixInProgress('design-doc-validation', doc.id)) {
+        markApexFixInProgress('design-doc-validation', doc.id, { threadId });
       }
+      const thread = await fetchChatThreadStatus(threadId);
+      if (cancelled) return;
+      if (thread && thread.status !== 'idle' && thread.status !== 'error') {
+        fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+        return;
+      }
+      if (thread && (thread.status === 'idle' || thread.status === 'error')) {
+        await qc.refetchQueries({ queryKey: ['design-doc', doc.id] });
+        if (cancelled) return;
+        const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
+        const fullThread = res.ok ? await res.json() : null;
+        const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
+        fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+        fixFlowDispatch({
+          type: 'FIX_COMPLETE',
+          gapChanges,
+          agentError: thread.status === 'error'
+            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
+            : undefined,
+        });
+        return;
+      }
+      fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
     })();
-  }, [doc, fixFlow.phase]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [doc?.id, doc?.fixBaseline, doc?.docAssistantThreadId, fixFlow.phase, qc]);
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
@@ -1362,17 +1383,19 @@ export const DesignDocReviewView: React.FC = () => {
       assumptions: doc.assumptionsContent,
       capturedAt: new Date().toISOString(),
     };
+    markApexFixInProgress('design-doc-validation', id);
     try {
       const result = await fixValidation.mutateAsync(id);
+      markApexFixInProgress('design-doc-validation', id, { threadId: result.threadId });
       fixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
     } catch {
+      if (id) clearApexFixInProgress('design-doc-validation', id);
       fixFlowDispatch({ type: 'RESET' });
     }
   }, [id, doc, fixValidation]);
 
   // Poll the assistant thread status during the fixing phase.
   // Only transition to reviewing once the agent is idle (done with all MCP calls).
-  const qc = useQueryClient();
   useEffect(() => {
     if (fixFlow.phase !== 'fixing' || !id) return;
     const { threadId } = fixFlow;
@@ -1380,35 +1403,31 @@ export const DesignDocReviewView: React.FC = () => {
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
-        if (!res.ok) return;
-        const thread = await res.json();
-        if (cancelled) return;
+        const thread = await fetchChatThreadStatus(threadId);
+        if (cancelled || !thread) return;
         if (thread.status === 'idle' || thread.status === 'error') {
           await qc.refetchQueries({ queryKey: ['design-doc', id] });
-          const gapChanges = parseGapChangesFromMessages(thread.messages ?? []);
+          const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
+          const fullThread = res.ok ? await res.json() : null;
+          const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
           const agentError = thread.status === 'error'
             ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
             : undefined;
           if (!cancelled) {
+            clearApexFixInProgress('design-doc-validation', id);
             fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges, agentError });
           }
         }
       } catch { /* keep polling */ }
     };
 
-    // Initial delay to let the agent start, then poll every 5s
-    const timeout = window.setTimeout(() => {
-      if (cancelled) return;
-      void poll();
-    }, 5_000);
+    void poll();
     const interval = window.setInterval(() => {
       if (!cancelled) void poll();
     }, 5_000);
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timeout);
       window.clearInterval(interval);
     };
   }, [fixFlow, id, qc]);
@@ -1460,6 +1479,7 @@ export const DesignDocReviewView: React.FC = () => {
     try {
       await acceptFixValidation.mutateAsync(id);
     } finally {
+      if (id) clearApexFixInProgress('design-doc-validation', id);
       fixFlowDispatch({ type: 'RESET' });
     }
   }, [id, acceptFixValidation]);
@@ -1473,12 +1493,14 @@ export const DesignDocReviewView: React.FC = () => {
       techSpecContent: bl.techSpec,
       assumptionsContent: bl.assumptions,
     });
+    clearApexFixInProgress('design-doc-validation', id);
     fixFlowDispatch({ type: 'RESET' });
   }, [id, fixFlow, revertSection]);
 
   const handleFixCancel = useCallback(() => {
+    if (id) clearApexFixInProgress('design-doc-validation', id);
     fixFlowDispatch({ type: 'RESET' });
-  }, []);
+  }, [id]);
 
   // When the assistant panel closes during discuss phase, return to reviewing
   const handleAssistantClose = useCallback(() => {
@@ -1562,6 +1584,59 @@ export const DesignDocReviewView: React.FC = () => {
     }
   }, [id, fixDesignDocCommentWithAi]);
 
+  const handleFixAllCommentsWithAi = useCallback(async () => {
+    if (!id) return;
+    markApexFixInProgress('design-doc-comments-bulk', id);
+    setBulkCommentFixRunning(true);
+    try {
+      await fixDesignDocWithAi.mutateAsync();
+    } catch {
+      clearApexFixInProgress('design-doc-comments-bulk', id);
+      setBulkCommentFixRunning(false);
+    }
+  }, [id, fixDesignDocWithAi]);
+
+  // Recover in-progress comment fixes after navigation.
+  useEffect(() => {
+    if (!doc || !id) return;
+    if (isDesignDocSingleCommentFixPending(doc)) {
+      setFixingCommentId(doc.fixCommentId ?? null);
+    }
+    const bulkSession = readApexFixInProgress('design-doc-comments-bulk', id);
+    if (bulkSession && !designDocHasProposedChanges(doc)) {
+      setBulkCommentFixRunning(true);
+    } else if (bulkSession && designDocHasProposedChanges(doc)) {
+      clearApexFixInProgress('design-doc-comments-bulk', id);
+      setBulkCommentFixRunning(false);
+    }
+  }, [doc, id]);
+
+  useEffect(() => {
+    if (!doc || !id || !bulkCommentFixRunning) return;
+    if (designDocHasProposedChanges(doc)) {
+      clearApexFixInProgress('design-doc-comments-bulk', id);
+      setBulkCommentFixRunning(false);
+    }
+  }, [doc, id, bulkCommentFixRunning]);
+
+  useEffect(() => {
+    if (!id || !bulkCommentFixRunning) return;
+    const interval = window.setInterval(() => {
+      void qc.refetchQueries({ queryKey: ['design-doc', id] });
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [id, bulkCommentFixRunning, qc]);
+
+  useEffect(() => {
+    if (!id || fixFlow.phase !== 'idle') return;
+    const session = readApexFixInProgress('design-doc-validation', id);
+    if (!session || doc?.fixBaseline) return;
+    const interval = window.setInterval(() => {
+      void qc.refetchQueries({ queryKey: ['design-doc', id] });
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [id, doc?.fixBaseline, fixFlow.phase, qc]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
@@ -1575,6 +1650,30 @@ export const DesignDocReviewView: React.FC = () => {
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
   const canUseAssistant = (isReviewer || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+
+  const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
+  const apexFixRunningBanner = (() => {
+    if (fixFlow.phase === 'fixing' || (validationFixSession && fixFlow.phase === 'idle')) {
+      return {
+        title: 'Apex is fixing validation gaps…',
+        subtitle: 'You can leave this page — progress will resume when you return.',
+      };
+    }
+    if (bulkCommentFixRunning || fixDesignDocWithAi.isPending) {
+      return {
+        title: 'Apex is applying review comment fixes…',
+        subtitle: 'Proposed changes will appear here when complete.',
+      };
+    }
+    if (fixingCommentId || isDesignDocSingleCommentFixPending(doc)) {
+      return {
+        title: 'Apex is fixing a review comment…',
+        subtitle: 'The proposed edit will appear when complete.',
+      };
+    }
+    return null;
+  })();
+  const isBulkCommentFixing = bulkCommentFixRunning || fixDesignDocWithAi.isPending;
   const canWriteAssistant = canEdit || canPerformReview;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
@@ -1839,6 +1938,13 @@ export const DesignDocReviewView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {apexFixRunningBanner && (
+        <ApexFixRunningBanner
+          title={apexFixRunningBanner.title}
+          subtitle={apexFixRunningBanner.subtitle}
+        />
+      )}
 
       {isInterviewing ? (
         /* ── Q&A interviewing phase ───────────────────────────────── */
@@ -2166,8 +2272,8 @@ export const DesignDocReviewView: React.FC = () => {
                         onResolve={(commentId) => resolveComment.mutate(commentId)}
                         onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
                         onDelete={(commentId) => deleteComment.mutate(commentId)}
-                        onFixWithAi={canEdit ? () => fixDesignDocWithAi.mutate() : undefined}
-                        isFixingWithAi={fixDesignDocWithAi.isPending}
+                        onFixWithAi={canEdit ? () => void handleFixAllCommentsWithAi() : undefined}
+                        isFixingWithAi={isBulkCommentFixing}
                         fixAiError={fixDesignDocWithAi.error?.message}
                         onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
                         fixingCommentId={fixingCommentId}

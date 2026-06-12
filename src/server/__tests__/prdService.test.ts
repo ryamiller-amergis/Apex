@@ -33,6 +33,7 @@ jest.mock('../db/drizzle', () => {
       query: {
         prds: { findFirst: jest.fn() },
         interviews: { findFirst: jest.fn() },
+        testCases: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -45,6 +46,10 @@ jest.mock('../db/drizzle', () => {
 jest.mock('../services/chatAgentService', () => ({
   readOutputPrd: jest.fn().mockReturnValue(null),
   readOutputBacklog: jest.fn().mockReturnValue(null),
+  readOutputValidationScorecard: jest.fn().mockReturnValue(null),
+  readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
+  createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -56,10 +61,50 @@ jest.mock('../services/documentApprovalService', () => ({
   recordApproverResponse: jest.fn().mockResolvedValue(undefined),
   isAssignedApprover: jest.fn().mockResolvedValue(true),
   isApprovalComplete: jest.fn().mockResolvedValue({ complete: true, mode: 'any_one' }),
+  notifyApproversDocumentReady: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/reviewCommentService', () => ({
   getUnresolvedCount: jest.fn().mockResolvedValue(0),
+}));
+
+jest.mock('../services/projectSettingsService', () => ({
+  getSkillConfig: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: jest.fn().mockResolvedValue('default-model'),
+}));
+
+jest.mock('../services/documentValidationService', () => ({
+  autoStartDocumentValidation: jest.fn().mockResolvedValue(undefined),
+  cancelDocumentValidation: jest.fn().mockResolvedValue(undefined),
+  generateFallbackReport: jest.fn().mockReturnValue('# Fallback validation report'),
+  isDocumentValidationWatcherActive: jest.fn().mockReturnValue(false),
+  startDocumentValidationWatcher: jest.fn(),
+  stopDocumentValidationWatcher: jest.fn(),
+}));
+
+jest.mock('../services/testCaseService', () => ({
+  getTestCases: jest.fn().mockResolvedValue({
+    id: 'tc-1',
+    prdId: 'prd-1',
+    chatThreadId: null,
+    status: 'ready',
+    coverageSummary: {
+      totalCases: 2,
+      pbisCovered: 1,
+      acCovered: '2/2',
+      brCovered: '1/1',
+      gaps: 0,
+    },
+    validationStatus: 'passed',
+    validationSummary: { status: 'passed' },
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }),
+  listLatestTestCaseSummariesForPrds: jest.fn().mockResolvedValue(new Map()),
+  triggerTestCaseGeneration: jest.fn().mockResolvedValue(true),
 }));
 
 import {
@@ -75,6 +120,14 @@ import {
   deletePrd,
   syncPrdContent,
   startPrdWatcher,
+  arePrdValidationArtifactsReady,
+  autoStartPrdValidation,
+  cancelPrdValidation,
+  syncPrdValidationResult,
+  markPrdValidationReady,
+  triggerFixPrdValidation,
+  acceptFixPrdValidation,
+  revertPrdSection,
 } from '../services/prdService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -82,9 +135,17 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const {
   readOutputPrd: mockReadOutputPrd,
   readOutputBacklog: mockReadOutputBacklog,
+  readOutputValidationScorecard: mockReadOutputValidationScorecard,
+  readOutputValidationScorecardMd: mockReadOutputValidationScorecardMd,
+  sendMessage: mockSendMessage,
+  createThread: mockCreateThread,
 } = jest.requireMock('../services/chatAgentService') as {
   readOutputPrd: jest.Mock;
   readOutputBacklog: jest.Mock;
+  readOutputValidationScorecard: jest.Mock;
+  readOutputValidationScorecardMd: jest.Mock;
+  sendMessage: jest.Mock;
+  createThread: jest.Mock;
 };
 
 const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
@@ -96,12 +157,70 @@ const {
   recordApproverResponse: mockRecordApproverResponse,
   isAssignedApprover: mockIsAssignedApprover,
   isApprovalComplete: mockIsApprovalComplete,
+  notifyApproversDocumentReady: mockNotifyApproversDocumentReady,
 } = jest.requireMock('../services/documentApprovalService') as {
   assignApprovers: jest.Mock;
   recordApproverResponse: jest.Mock;
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
+  notifyApproversDocumentReady: jest.Mock;
 };
+
+const {
+  getTestCases: mockGetTestCases,
+  listLatestTestCaseSummariesForPrds: mockListLatestTestCaseSummariesForPrds,
+  triggerTestCaseGeneration: mockTriggerTestCaseGeneration,
+} = jest.requireMock('../services/testCaseService') as {
+  getTestCases: jest.Mock;
+  listLatestTestCaseSummariesForPrds: jest.Mock;
+  triggerTestCaseGeneration: jest.Mock;
+};
+
+const { getSkillConfig: mockGetSkillConfig } = jest.requireMock('../services/projectSettingsService') as {
+  getSkillConfig: jest.Mock;
+};
+
+const { getDefaultModel: mockGetDefaultModel } = jest.requireMock('../services/appSettingsService') as {
+  getDefaultModel: jest.Mock;
+};
+
+const {
+  autoStartDocumentValidation: mockAutoStartDocumentValidation,
+  cancelDocumentValidation: mockCancelDocumentValidation,
+} = jest.requireMock('../services/documentValidationService') as {
+  autoStartDocumentValidation: jest.Mock;
+  cancelDocumentValidation: jest.Mock;
+};
+
+const readyTestCase = {
+  id: 'tc-1',
+  prdId: 'prd-1',
+  chatThreadId: null,
+  status: 'ready',
+  coverageSummary: {
+    totalCases: 2,
+    pbisCovered: 1,
+    acCovered: '2/2',
+    brCovered: '1/1',
+    gaps: 0,
+  },
+  validationStatus: 'passed',
+  validationSummary: { status: 'passed' },
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+};
+
+beforeEach(() => {
+  mockGetTestCases.mockResolvedValue(readyTestCase);
+  mockListLatestTestCaseSummariesForPrds.mockResolvedValue(new Map());
+  mockTriggerTestCaseGeneration.mockResolvedValue(true);
+  mockGetSkillConfig.mockResolvedValue(null);
+  mockGetDefaultModel.mockResolvedValue('default-model');
+  mockReadOutputValidationScorecard.mockReturnValue(null);
+  mockReadOutputValidationScorecardMd.mockReturnValue(null);
+  mockCreateThread.mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' });
+  mockSendMessage.mockResolvedValue(undefined);
+});
 
 // ── Select chain helper ────────────────────────────────────────────────────────
 // Services now issue multiple .leftJoin() calls before .where()/.orderBy()/.limit().
@@ -234,6 +353,20 @@ describe('listPrds', () => {
     expect(result.every((p) => p.interviewId === 'interview-1')).toBe(true);
     expect(result.every((p) => p.id !== 'prd-beta')).toBe(true);
   });
+
+  it('attaches the latest test-case summary to each PRD summary', async () => {
+    mockDb.select.mockReturnValue(makeSelectChain([{ prd: makePrdRow(), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null }], 'orderBy'));
+    mockListLatestTestCaseSummariesForPrds.mockResolvedValue(new Map([['prd-1', readyTestCase]]));
+
+    const result = await listPrds();
+
+    expect(mockListLatestTestCaseSummariesForPrds).toHaveBeenCalledWith(['prd-1']);
+    expect(result[0].latestTestCase).toMatchObject({
+      id: 'tc-1',
+      status: 'ready',
+      coverageSummary: expect.objectContaining({ totalCases: 2 }),
+    });
+  });
 });
 
 // ── getPrd ─────────────────────────────────────────────────────────────────────
@@ -259,6 +392,49 @@ describe('getPrd', () => {
     const result = await getPrd('prd-missing');
 
     expect(result).toBeNull();
+  });
+
+  it('returns validation metadata and whether PRD validation is configured', async () => {
+    const scorecard = {
+      slug: 'feature-prd',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: 92,
+      ready_threshold: 90,
+      is_ready: true,
+      verdict: 'ready',
+      files: [],
+    };
+    mockDb.select.mockReturnValue(makeSelectChain([{
+      prd: makePrdRow({
+        validationThreadId: 'validation-thread-1',
+        validationScore: 92,
+        validationScorecard: scorecard,
+        validationReportMd: '# Report',
+        validationPhase: 'final',
+        fixBaseline: { content: 'baseline', capturedAt: '2026-01-01T00:00:00Z' },
+        fixCommentId: 'comment-1',
+      }),
+      reviewerDisplayName: null,
+      authorDisplayName: null,
+      prdOwnerId: null,
+      prdOwnerDisplayName: null,
+    }]));
+    mockGetSkillConfig.mockResolvedValue({ prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md' });
+
+    const result = await getPrd('prd-1');
+
+    expect(result).toMatchObject({
+      validationThreadId: 'validation-thread-1',
+      validationScore: 92,
+      validationScorecard: scorecard,
+      validationReportMd: '# Report',
+      validationPhase: 'final',
+      prdValidationEnabled: true,
+      fixCommentId: 'comment-1',
+    });
+    expect(result!.fixBaseline).toMatchObject({ content: 'baseline' });
+    expect(result!.latestTestCase).toMatchObject({ id: 'tc-1' });
   });
 });
 
@@ -411,6 +587,17 @@ describe('submitForReview', () => {
     await submitForReview('prd-1', 'user-1', { prdApproverIds: ['a1'], designDocApproverIds: ['a2'] });
 
     expect(mockAssignApprovers).toHaveBeenCalledWith('prd-1', 'prd', ['a1'], 'user-1');
+  });
+
+  it('blocks submission until PRD QA readiness is complete', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    mockGetTestCases.mockResolvedValue(null);
+
+    await expect(submitForReview('prd-1', 'user-1')).rejects.toMatchObject({
+      message: 'Generate PRD test cases before submitting for review.',
+      status: 409,
+    });
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 
   it('stores designDocApproverIds on PRD row when provided', async () => {
@@ -633,6 +820,28 @@ describe('reviewPrd', () => {
       expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
     );
   });
+
+  it('blocks approval when readiness has coverage gaps', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({ ...pendingPrd, content: 'some content' });
+    mockGetTestCases.mockResolvedValue({
+      ...readyTestCase,
+      coverageSummary: {
+        totalCases: 2,
+        pbisCovered: 1,
+        acCovered: '1/2',
+        brCovered: '1/1',
+        gaps: 0,
+      },
+    });
+
+    await expect(
+      reviewPrd('prd-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: 'Resolve coverage gaps before review.',
+      status: 409,
+    });
+    expect(mockRecordApproverResponse).not.toHaveBeenCalled();
+  });
 });
 
 // ── deletePrd ──────────────────────────────────────────────────────────────────
@@ -686,7 +895,7 @@ describe('deletePrd', () => {
 describe('syncPrdContent', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('updates content and sets status to "pending_review" by default', async () => {
+  it('updates content and sets status to "draft" by default', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
@@ -694,7 +903,7 @@ describe('syncPrdContent', () => {
     await syncPrdContent('prd-1', 'Generated markdown content');
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ content: 'Generated markdown content', status: 'pending_review' }),
+      expect.objectContaining({ content: 'Generated markdown content', status: 'draft' }),
     );
   });
 
@@ -860,7 +1069,7 @@ describe('startPrdWatcher', () => {
     expect(mockReadOutputPrd).toHaveBeenCalledWith('thread-1');
     expect(mockReadOutputBacklog).toHaveBeenCalledWith('thread-1');
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '# Generated PRD', status: 'pending_review' }),
+      expect.objectContaining({ content: '# Generated PRD', status: 'draft' }),
     );
   });
 
@@ -902,6 +1111,216 @@ describe('startPrdWatcher', () => {
     // syncPrdContent should NOT have been called (requires both files)
     expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.any(String), status: 'pending_review' }),
+    );
+  });
+});
+
+// ── PRD validation lifecycle ───────────────────────────────────────────────────
+
+describe('PRD validation lifecycle', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockPrdSelectForGetPrd(overrides: Partial<Record<string, any>> = {}) {
+    mockDb.select.mockReturnValue(makeSelectChain([{
+      prd: makePrdRow({
+        status: 'draft',
+        content: '# PRD',
+        backlogJson: { items: [] },
+        validationThreadId: 'validation-thread-1',
+        validationScorecard: {
+          slug: 'feature-prd',
+          generated_at: '2026-01-01T00:00:00Z',
+          review_phase: 'initial',
+          overall_score: 82,
+          ready_threshold: 90,
+          is_ready: false,
+          verdict: 'gaps',
+          files: [{
+            file: 'prd',
+            score: 82,
+            verdict: 'gaps',
+            gaps: [{
+              id: 'gap-1',
+              file: 'prd',
+              section: 'Acceptance Criteria',
+              score: 2,
+              description: 'Clarify expected error handling.',
+              what_3_looks_like: 'Each error path has clear expected behavior.',
+              resolution: 'pending',
+            }],
+          }],
+        },
+        ...overrides,
+      }),
+      reviewerDisplayName: null,
+      authorDisplayName: null,
+      prdOwnerId: null,
+      prdOwnerDisplayName: null,
+    }]));
+  }
+
+  it('reports artifacts ready only when PRD content, backlog, and ready test cases exist', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: { items: [] } });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+
+    await expect(arePrdValidationArtifactsReady('prd-1')).resolves.toBe(true);
+
+    mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: null });
+    await expect(arePrdValidationArtifactsReady('prd-1')).resolves.toBe(false);
+  });
+
+  it('starts document validation only when a skill is configured and artifacts are ready', async () => {
+    mockPrdSelectForGetPrd();
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+      prdValidationModel: 'gpt-5.5',
+    });
+    mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: { items: [] } });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+
+    await autoStartPrdValidation('prd-1');
+
+    expect(mockAutoStartDocumentValidation).toHaveBeenCalledTimes(1);
+    const adapter = mockAutoStartDocumentValidation.mock.calls[0][0];
+    expect(adapter.getDocumentId()).toBe('prd-1');
+    expect(adapter.getSkillPath({ prdValidationSkillPath: 'skill.md' })).toBe('skill.md');
+    expect(adapter.getModel({ prdValidationModel: 'model-a' }, 'global-model')).toBe('model-a');
+    expect(adapter.buildValidationContext({})).toContain('## Backlog JSON');
+  });
+
+  it('cancels validation and resets status to draft', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(
+      makePrdRow({ status: 'validating', validationThreadId: 'validation-thread-1' }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await cancelPrdValidation('prd-1', 'user-1');
+
+    expect(mockCancelDocumentValidation).toHaveBeenCalledWith('prd-1', 'validation-thread-1');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
+  it('syncs a validation scorecard and moves ready PRDs to pending review', async () => {
+    mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    const scorecard = {
+      slug: 'feature-prd',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: 93.4,
+      ready_threshold: 90,
+      is_ready: true,
+      verdict: 'ready',
+      files: [],
+    };
+    mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify(scorecard));
+    mockReadOutputValidationScorecardMd.mockReturnValue('# Validation Report');
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await syncPrdValidationResult('prd-1');
+
+    expect(result).toEqual({ score: 93.4, is_ready: true });
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        validationScore: 93,
+        validationScorecard: scorecard,
+        validationReportMd: '# Validation Report',
+        status: 'pending_review',
+      }),
+    );
+  });
+
+  it('marks validation ready only when the stored score meets threshold', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ validationScore: 91 }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await markPrdValidationReady('prd-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
+    expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('starts a validation-fix assistant thread, stores a baseline, and sends gap instructions', async () => {
+    mockPrdSelectForGetPrd({ prdAssistantThreadId: null });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdAssistantSkillPath: '.cursor/skills/prd-assistant/SKILL.md',
+      prdAssistantModel: 'assistant-model',
+    });
+    mockCreateThread.mockResolvedValue({ id: 'thread-fix', workspaceDir: '/tmp/thread-fix' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await triggerFixPrdValidation('prd-1', 'user-1');
+
+    expect(result).toEqual({ threadId: 'thread-fix' });
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        skillPath: '.cursor/skills/prd-assistant/SKILL.md',
+        model: 'assistant-model',
+      }),
+      { skipAutoKickoff: true },
+    );
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fixBaseline: expect.objectContaining({
+          content: '# PRD',
+          backlogJson: { items: [] },
+          fixThreadId: 'thread-fix',
+        }),
+      }),
+    );
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-fix',
+      expect.stringContaining('Clarify expected error handling.'),
+    );
+  });
+
+  it('accepts a validation fix by clearing the baseline and restarting validation', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow());
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockPrdSelectForGetPrd();
+
+    await acceptFixPrdValidation('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ fixBaseline: null }));
+    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
+  });
+
+  it('reverts PRD content and backlog from the stored validation baseline', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(
+      makePrdRow({
+        fixBaseline: {
+          content: '# Baseline PRD',
+          backlogJson: { items: [{ id: 'pbi-1' }] },
+          capturedAt: '2026-01-01T00:00:00Z',
+        },
+      }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await revertPrdSection('prd-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '# Baseline PRD',
+        backlogJson: { items: [{ id: 'pbi-1' }] },
+        fixBaseline: null,
+      }),
     );
   });
 });
