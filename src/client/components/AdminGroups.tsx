@@ -9,6 +9,7 @@ import {
   useUpdateGroup,
   useDeleteGroup,
   useSetGroupMembers,
+  useSeedDefaultGroups,
 } from '../hooks/useGroups';
 import { useUsers } from '../hooks/useRbac';
 import type { AppGroup } from '../../shared/types/groups';
@@ -27,11 +28,12 @@ type GroupFormValues = z.infer<typeof groupSchema>;
 
 interface CreateEditGroupModalProps {
   group?: AppGroup;
+  project?: string;
   onClose: () => void;
 }
 
-const CreateEditGroupModal: React.FC<CreateEditGroupModalProps> = ({ group, onClose }) => {
-  const createGroup = useCreateGroup();
+const CreateEditGroupModal: React.FC<CreateEditGroupModalProps> = ({ group, project, onClose }) => {
+  const createGroup = useCreateGroup(project);
   const updateGroup = useUpdateGroup();
   const isEdit = !!group;
 
@@ -353,13 +355,20 @@ const GroupMembersModal: React.FC<GroupMembersModalProps> = ({ group, onClose })
 
 // ── AdminGroups (main) ────────────────────────────────────────────────────
 
-export const AdminGroups: React.FC = () => {
-  const { data: groups = [], isLoading } = useGroupsWithMembers();
+interface AdminGroupsProps {
+  selectedProject: string;
+  availableProjects: string[];
+}
 
+export const AdminGroups: React.FC<AdminGroupsProps> = ({ selectedProject, availableProjects }) => {
+  const [activeProject, setActiveProject] = useState<string>(selectedProject);
   const [showCreate, setShowCreate] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AppGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<AppGroup | null>(null);
   const [managingMembersGroup, setManagingMembersGroup] = useState<AppGroup | null>(null);
+
+  const { data: groups = [], isLoading } = useGroupsWithMembers(activeProject);
+  const seedDefaults = useSeedDefaultGroups();
 
   return (
     <div className={styles.page}>
@@ -369,16 +378,47 @@ export const AdminGroups: React.FC = () => {
             <h1 className={styles.pageTitle}>Groups</h1>
             <p className={styles.pageSubtitle}>Manage user groups for approvals and team organization.</p>
           </div>
-          <button className={styles.btnPrimary} onClick={() => setShowCreate(true)}>
-            + Create Group
-          </button>
+          <div className={styles.headerActions}>
+            <select
+              className={styles.projectSelect}
+              value={activeProject}
+              onChange={(e) => setActiveProject(e.target.value)}
+              aria-label="Select project"
+            >
+              {availableProjects.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <button
+              className={styles.btnSecondary}
+              onClick={() => seedDefaults.mutate(activeProject)}
+              disabled={seedDefaults.isPending}
+            >
+              {seedDefaults.isPending ? 'Restoring…' : 'Restore Defaults'}
+            </button>
+            <button className={styles.btnPrimary} onClick={() => setShowCreate(true)}>
+              + Create Group
+            </button>
+          </div>
         </div>
 
         {isLoading ? (
           <div className={styles.loading}>Loading groups…</div>
         ) : groups.length === 0 ? (
           <div className={styles.empty}>
-            <p>No groups found. Create one to get started.</p>
+            <p>No groups found for <strong>{activeProject}</strong>.</p>
+            <p style={{ marginTop: 8 }}>
+              Click <strong>Restore Defaults</strong> to add the standard groups (Product-Owner, BA, UI/UX, Manager, Developer),
+              or use <strong>+ Create Group</strong> to add a custom group.
+            </p>
+            <button
+              className={styles.btnSecondary}
+              style={{ marginTop: 16 }}
+              onClick={() => seedDefaults.mutate(activeProject)}
+              disabled={seedDefaults.isPending}
+            >
+              {seedDefaults.isPending ? 'Restoring…' : 'Restore Defaults'}
+            </button>
           </div>
         ) : (
           <div className={styles.tableWrapper}>
@@ -397,6 +437,7 @@ export const AdminGroups: React.FC = () => {
                   <tr key={group.id} className={styles.tr}>
                     <td className={styles.td}>
                       <span className={styles.nameCell}>{group.name}</span>
+                      {group.isDefault && <span className={styles.defaultBadge}>Default</span>}
                     </td>
                     <td className={styles.td}>
                       <span className={styles.descCell}>{group.description ?? '—'}</span>
@@ -416,20 +457,24 @@ export const AdminGroups: React.FC = () => {
                         >
                           Members
                         </button>
-                        <button
-                          className={styles.btnAction}
-                          onClick={() => setEditingGroup(group)}
-                          title="Edit group"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
-                          onClick={() => setDeletingGroup(group)}
-                          title="Delete group"
-                        >
-                          Delete
-                        </button>
+                        {!group.isDefault && (
+                          <>
+                            <button
+                              className={styles.btnAction}
+                              onClick={() => setEditingGroup(group)}
+                              title="Edit group"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                              onClick={() => setDeletingGroup(group)}
+                              title="Delete group"
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -440,9 +485,9 @@ export const AdminGroups: React.FC = () => {
         )}
       </div>
 
-      {showCreate && <CreateEditGroupModal onClose={() => setShowCreate(false)} />}
+      {showCreate && <CreateEditGroupModal project={activeProject} onClose={() => setShowCreate(false)} />}
       {editingGroup && (
-        <CreateEditGroupModal group={editingGroup} onClose={() => setEditingGroup(null)} />
+        <CreateEditGroupModal group={editingGroup} project={activeProject} onClose={() => setEditingGroup(null)} />
       )}
       {deletingGroup && (
         <DeleteConfirmModal group={deletingGroup} onClose={() => setDeletingGroup(null)} />

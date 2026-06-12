@@ -2,21 +2,34 @@ import fs from 'fs';
 import { and, desc, eq } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { prds, appUsers, chatThreads, interviews } from '../db/schema';
+import { prds, appUsers, chatThreads, interviews, testCases } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
-import type { Prd, PrdStatus, PrdSummary, ReviewPrdRequest } from '../../shared/types/interview';
+import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
-import { readOutputPrd, readOutputBacklog } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
-import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete } from './documentApprovalService';
+import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
+import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
+import { getTestCases, listLatestTestCaseSummariesForPrds } from './testCaseService';
+import { getSkillConfig } from './projectSettingsService';
+import { getDefaultModel } from './appSettingsService';
+import {
+  autoStartDocumentValidation,
+  cancelDocumentValidation,
+  generateFallbackReport,
+  isDocumentValidationWatcherActive,
+  startDocumentValidationWatcher,
+  stopDocumentValidationWatcher,
+  type DocumentValidationAdapter,
+} from './documentValidationService';
 
-const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'pending_review', 'approved', 'revision_requested'];
+const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -146,8 +159,19 @@ export async function listPrds(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(prds.updatedAt));
 
+  const latestTestCases = await listLatestTestCaseSummariesForPrds(
+    rows.map(({ prd }) => prd.id),
+  );
+
   return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) =>
-    rowToPrdSummary(prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
+    rowToPrdSummary(
+      prd,
+      reviewerDisplayName,
+      authorDisplayName,
+      prdOwnerId,
+      prdOwnerDisplayName,
+      latestTestCases.get(prd.id) ?? null,
+    ),
   );
 }
 
@@ -170,13 +194,26 @@ export async function getPrd(id: string): Promise<Prd | null> {
 
   if (rows.length === 0) return null;
   const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
+  const [latestTestCase, skillConfig] = await Promise.all([
+    getTestCases(id),
+    getSkillConfig(row.project),
+  ]);
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName),
+    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, latestTestCase),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
     proposedContent: row.proposedContent ?? null,
     proposedBacklogJson: row.proposedBacklogJson ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
+    validationThreadId: row.validationThreadId ?? null,
+    validationScore: row.validationScore ?? null,
+    validationScorecard: (row.validationScorecard as ValidationScorecard | null) ?? null,
+    validationReportMd: row.validationReportMd ?? null,
+    validationPhase: row.validationPhase ?? null,
+    fixBaseline: (row.fixBaseline as PrdValidationBaseline | null) ?? null,
+    prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    fixCommentId: row.fixCommentId ?? null,
   };
 }
 
@@ -241,6 +278,18 @@ export async function submitForReview(
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
+  const readiness = derivePrdReadiness(
+    {
+      status: row.status as PrdStatus,
+      content: row.content,
+      validationScore: row.validationScore,
+      validationScorecard: row.validationScorecard as ValidationScorecard | null,
+    },
+    await getTestCases(id),
+  );
+  if (!readiness.readyForReviewActions) {
+    throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
+  }
 
   let effectivePrdApproverIds = opts?.prdApproverIds;
   let effectiveDdApproverIds = opts?.designDocApproverIds;
@@ -327,6 +376,18 @@ export async function reviewPrd(
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
+  const readiness = derivePrdReadiness(
+    {
+      status: row.status as PrdStatus,
+      content: row.content,
+      validationScore: row.validationScore,
+      validationScorecard: row.validationScorecard as ValidationScorecard | null,
+    },
+    await getTestCases(id),
+  );
+  if (!readiness.readyForReviewActions) {
+    throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
+  }
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own PRD');
   }
@@ -377,7 +438,7 @@ export async function syncPrdContent(
   id: string,
   content: string,
   backlogJson?: unknown,
-  finalStatus: PrdStatus = 'pending_review',
+  finalStatus: PrdStatus = 'draft',
 ): Promise<void> {
   // Auto-infer an existing-page `route` per feature so the design-prototype generator
   // can run in EXTEND mode for features that modify existing MaxView pages. Best-effort:
@@ -472,8 +533,15 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
       console.log(`[prdWatcher] Both files ready — syncing to DB (prdId=${prdId})`);
       try {
         await syncPrdContent(prdId, content, backlog);
-        console.log(`[prdWatcher] Sync complete — PRD is now pending_review (prdId=${prdId})`);
-        cleanupWorkspace(chatThreadId);
+        console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
+        try {
+          const { triggerTestCaseGeneration } = await import('./testCaseService');
+          const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
+          if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+        } catch (err) {
+          console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
+          cleanupWorkspace(chatThreadId);
+        }
       } catch (err) {
         console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);
       }
@@ -489,6 +557,7 @@ function rowToPrdSummary(
   authorName?: string | null,
   prdOwnerId?: string | null,
   prdOwnerName?: string | null,
+  latestTestCase?: TestCaseSummary | null,
 ): PrdSummary {
   const effectiveOwnerId = prdOwnerId ?? row.authorId;
   const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
@@ -509,6 +578,7 @@ function rowToPrdSummary(
     reviewedAt: row.reviewedAt ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    latestTestCase: latestTestCase ?? null,
   };
 }
 
@@ -785,6 +855,13 @@ export async function syncPrdAdoStatus(prdId: string): Promise<{ cleared: number
   return { cleared: deletedIds.length, updatedBacklog: backlog };
 }
 
+export async function updatePrdDesignDocApprovers(id: string, designDocApproverIds: string[]): Promise<void> {
+  await db
+    .update(prds)
+    .set({ designDocApproverIds, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, id));
+}
+
 export async function deletePrd(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
@@ -798,3 +875,316 @@ export async function deletePrd(id: string, requestingUserId: string): Promise<v
 
 // Ensure assertValidPrdStatus is used (suppress unused warning)
 void assertValidPrdStatus;
+
+// ── PRD Validation ────────────────────────────────────────────────────────────
+
+const activePrdValidationWatchers = new Map<string, boolean>();
+
+export async function arePrdValidationArtifactsReady(prdId: string): Promise<boolean> {
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { content: true, backlogJson: true },
+  });
+  if (!prdRow || !prdRow.content || !prdRow.backlogJson) return false;
+
+  const tc = await db.query.testCases.findFirst({
+    where: and(eq(testCases.prdId, prdId), eq(testCases.status, 'ready')),
+    columns: { id: true },
+  });
+  return !!tc;
+}
+
+function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
+  return {
+    getDocumentId: () => prd.id,
+    getProject: () => prd.project,
+    getAuthorId: () => prd.authorId,
+    getValidationThreadId: () => prd.validationThreadId ?? null,
+    getStatus: () => prd.status,
+    getSkillPath: (skillConfig) => skillConfig.prdValidationSkillPath,
+    getModel: (skillConfig, globalModel) => skillConfig.prdValidationModel ?? globalModel,
+    buildValidationContext: (_skillConfig) => {
+      const testCaseInfo = prd.latestTestCase;
+      return [
+        '# PRD Spec Review Validation Context',
+        `prd_id: ${prd.id}`,
+        '',
+        '## PRD Content',
+        prd.content || '(empty)',
+        '',
+        '## Backlog JSON',
+        '```json',
+        JSON.stringify(prd.backlogJson ?? {}, null, 2),
+        '```',
+        '',
+        '## Test Cases',
+        testCaseInfo ? '(test cases available — referenced by PBI ID in backlog)' : '(no test cases)',
+      ].join('\n');
+    },
+    updateDbForValidationStart: async (threadId: string) => {
+      await db.update(prds)
+        .set({
+          validationThreadId: threadId,
+          validationScore: null,
+          validationScorecard: null,
+          validationReportMd: null,
+          validationPhase: null,
+          status: 'validating',
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(prds.id, prd.id));
+    },
+    updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
+      const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+      await db.update(prds)
+        .set({
+          validationScore: Math.round(scorecard.overall_score),
+          validationScorecard: scorecard,
+          validationPhase: scorecard.review_phase,
+          validationReportMd: reportMd,
+          status: newStatus,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(prds.id, prd.id));
+      if (newStatus === 'pending_review') {
+        notifyApproversDocumentReady(prd.id, 'prd').catch((err) =>
+          console.error(`[prdValidation] Failed to notify approvers (prdId=${prd.id})`, err),
+        );
+      }
+    },
+    updateDbForValidationTimeout: async () => {
+      await db.update(prds)
+        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+    },
+    updateDbForValidationError: async () => {
+      await db.update(prds)
+        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+    },
+    isCurrentValidationThread: async (threadId: string) => {
+      const current = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { validationThreadId: true },
+      });
+      return current?.validationThreadId === threadId;
+    },
+  };
+}
+
+export async function autoStartPrdValidation(prdId: string): Promise<void> {
+  const prd = await getPrd(prdId);
+  if (!prd) return;
+
+  const skillConfig = await getSkillConfig(prd.project);
+  if (!skillConfig?.prdValidationSkillPath) return;
+
+  const ready = await arePrdValidationArtifactsReady(prdId);
+  if (!ready) return;
+
+  const adapter = createPrdValidationAdapter(prd);
+  await autoStartDocumentValidation(adapter);
+}
+
+export async function cancelPrdValidation(prdId: string, requestingUserId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author can cancel validation');
+  }
+  if (row.status !== 'validating') throw conflict(`Cannot cancel validation from status '${row.status}'`);
+
+  await cancelDocumentValidation(prdId, row.validationThreadId ?? null);
+  await db.update(prds)
+    .set({ status: 'draft', updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+}
+
+export async function syncPrdValidationResult(prdId: string): Promise<{ score: number | null; is_ready: boolean } | null> {
+  const prd = await getPrd(prdId);
+  if (!prd || !prd.validationThreadId) return null;
+
+  const { readOutputValidationScorecard, readOutputValidationScorecardMd } = await import('./chatAgentService');
+  const scorecardRaw = readOutputValidationScorecard(prd.validationThreadId);
+  if (!scorecardRaw) {
+    if (prd.validationScorecard && prd.status !== 'validating') {
+      return { score: prd.validationScore ?? null, is_ready: prd.validationScorecard.is_ready };
+    }
+    return null;
+  }
+
+  const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+  const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(scorecard);
+  const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+
+  await db.update(prds)
+    .set({
+      validationScore: Math.round(scorecard.overall_score),
+      validationScorecard: scorecard,
+      validationPhase: scorecard.review_phase,
+      validationReportMd: reportMd,
+      status: newStatus,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+
+  return { score: scorecard.overall_score, is_ready: scorecard.is_ready };
+}
+
+export async function markPrdValidationReady(prdId: string, requestingUserId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author can mark validation as ready');
+  }
+  if (!row.validationScore || row.validationScore < 90) {
+    const err = new Error(`Validation score must be >= 90. Current: ${row.validationScore ?? 'not scored'}`);
+    (err as any).status = 409;
+    throw err;
+  }
+
+  await db.update(prds)
+    .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  notifyApproversDocumentReady(prdId, 'prd').catch((err) =>
+    console.error(`[markPrdValidationReady] Failed to notify approvers (prdId=${prdId})`, err),
+  );
+}
+
+export async function triggerFixPrdValidation(
+  prdId: string,
+  userId: string,
+): Promise<{ threadId: string }> {
+  const prd = await getPrd(prdId);
+  if (!prd) throw notFound('PRD not found');
+
+  if (prd.status !== 'draft' && prd.status !== 'revision_requested') {
+    throw conflict(`Cannot fix validation from status '${prd.status}'`);
+  }
+  if (!prd.validationScorecard) {
+    throw conflict('No validation scorecard available to fix');
+  }
+
+  const baseline: PrdValidationBaseline = {
+    content: prd.content || '',
+    backlogJson: prd.backlogJson,
+    capturedAt: new Date().toISOString(),
+  };
+
+  const skillConfig = await getSkillConfig(prd.project);
+  const globalModel = await getDefaultModel();
+  const model = skillConfig?.prdAssistantModel ?? globalModel;
+
+  let threadId = prd.prdAssistantThreadId ?? null;
+
+  if (!threadId) {
+    const context = [
+      '# PRD Assistant Context',
+      `prd_id: ${prdId}`,
+      '',
+      '> Use the `update_prd` MCP tool to apply edits back to the database.',
+      '',
+      '## PRD Content',
+      prd.content || '(empty)',
+      '',
+      '## Backlog JSON',
+      '```json',
+      JSON.stringify(prd.backlogJson ?? {}, null, 2),
+      '```',
+    ].join('\n');
+
+    const thread = await createChatThread(userId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
+      freeformContext: context,
+      model,
+    }, { skipAutoKickoff: true });
+
+    threadId = thread.id;
+    await db.update(prds)
+      .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(prds.id, prdId));
+  }
+
+  baseline.fixThreadId = threadId;
+  await db.update(prds)
+    .set({ fixBaseline: baseline, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  const scorecard = prd.validationScorecard;
+  const gapSources = (scorecard.files ?? scorecard.features ?? []) as Array<{ gaps?: Array<{ id: string; section: string; score: number; description: string; what_3_looks_like: string; resolution: string }> }>;
+  const pendingGaps = gapSources.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
+  const scoreDeficit = 90 - scorecard.overall_score;
+
+  const prompt = [
+    '# Fix PRD Validation Gaps',
+    '',
+    `The validation scorecard scored this PRD at **${scorecard.overall_score}%** (needs ≥90%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gap(s) that must be fixed.`,
+    '',
+    '## Your Task',
+    '',
+    'Fix all pending gaps in the PRD content to achieve a score >= 90%. Use the `update_prd` MCP tool to save your changes.',
+    '',
+    '## Gaps to Fix',
+    '',
+    ...pendingGaps.map((g, i) => [
+      `### Gap ${i + 1}: ${g.description}`,
+      `- **Gap ID:** ${g.id}`,
+      `- **Section:** ${g.section}`,
+      `- **Current Score:** ${g.score}/3`,
+      `- **Target (what a 3 looks like):** ${g.what_3_looks_like}`,
+      '',
+    ].join('\n')),
+  ].join('\n');
+
+  void sendMessage(threadId, prompt).catch((err) => {
+    console.error(`[prd] fix-validation sendMessage error for thread ${threadId}:`, err);
+  });
+
+  return { threadId };
+}
+
+export async function acceptFixPrdValidation(prdId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+
+  await db.update(prds)
+    .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  await autoStartPrdValidation(prdId);
+}
+
+export async function revertPrdSection(prdId: string, requestingUserId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author can revert sections');
+  }
+
+  const baseline = row.fixBaseline as PrdValidationBaseline | null;
+  if (!baseline) throw conflict('No baseline to revert to');
+
+  await db.update(prds)
+    .set({
+      content: baseline.content,
+      backlogJson: baseline.backlogJson as any,
+      fixBaseline: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+}
+
+export function isPrdValidationWatcherActive(prdId: string): boolean {
+  return isDocumentValidationWatcherActive(prdId);
+}
+
+export async function rehydratePrdValidationWatcher(prdId: string, validationThreadId: string): Promise<void> {
+  const prd = await getPrd(prdId);
+  if (!prd) return;
+  const adapter = createPrdValidationAdapter(prd);
+  startDocumentValidationWatcher(adapter, validationThreadId);
+}

@@ -1,6 +1,7 @@
 import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
+import * as groupService from './groupService';
 import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, ApproverPoolResponse } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
@@ -54,6 +55,10 @@ export async function upsertSkillConfig(
   designPrototypeBedrockMaxTokens?: number | null,
   designPrototypeRegenBedrockModelId?: string | null,
   designPrototypeRegenBedrockMaxTokens?: number | null,
+  testCaseSkillPath?: string | null,
+  testCaseModel?: string | null,
+  prdValidationSkillPath?: string | null,
+  prdValidationModel?: string | null,
   designPlanBedrockModelId?: string | null,
   designPlanBedrockMaxTokens?: number | null,
 ): Promise<ProjectSkillConfig> {
@@ -72,6 +77,7 @@ export async function upsertSkillConfig(
       designDocQaSkillPath: designDocQaSkillPath ?? null,
       designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
       designPrototypeSkillPath: designPrototypeSkillPath ?? null,
+      testCaseSkillPath: testCaseSkillPath ?? null,
       designDocValidationSkillPath: designDocValidationSkillPath ?? null,
       prdAssistantSkillPath: prdAssistantSkillPath ?? null,
       interviewModel: interviewModel ?? null,
@@ -80,8 +86,11 @@ export async function upsertSkillConfig(
       designDocQaModel: designDocQaModel ?? null,
       designDocAssistantModel: designDocAssistantModel ?? null,
       designPrototypeModel: designPrototypeModel ?? null,
+      testCaseModel: testCaseModel ?? null,
       designDocValidationModel: designDocValidationModel ?? null,
       prdAssistantModel: prdAssistantModel ?? null,
+      prdValidationSkillPath: prdValidationSkillPath ?? null,
+      prdValidationModel: prdValidationModel ?? null,
       prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
       prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
       designPrototypeBedrockModelId: designPrototypeBedrockModelId ?? null,
@@ -108,6 +117,7 @@ export async function upsertSkillConfig(
         designDocQaSkillPath: designDocQaSkillPath ?? null,
         designDocAssistantSkillPath: designDocAssistantSkillPath ?? null,
         designPrototypeSkillPath: designPrototypeSkillPath ?? null,
+        testCaseSkillPath: testCaseSkillPath ?? null,
         designDocValidationSkillPath: designDocValidationSkillPath ?? null,
         prdAssistantSkillPath: prdAssistantSkillPath ?? null,
         interviewModel: interviewModel ?? null,
@@ -116,8 +126,11 @@ export async function upsertSkillConfig(
         designDocQaModel: designDocQaModel ?? null,
         designDocAssistantModel: designDocAssistantModel ?? null,
         designPrototypeModel: designPrototypeModel ?? null,
+        testCaseModel: testCaseModel ?? null,
         designDocValidationModel: designDocValidationModel ?? null,
         prdAssistantModel: prdAssistantModel ?? null,
+        prdValidationSkillPath: prdValidationSkillPath ?? null,
+        prdValidationModel: prdValidationModel ?? null,
         prdReviewBedrockModelId: prdReviewBedrockModelId ?? null,
         prdReviewBedrockMaxTokens: prdReviewBedrockMaxTokens ?? null,
         designPrototypeBedrockModelId: designPrototypeBedrockModelId ?? null,
@@ -134,6 +147,7 @@ export async function upsertSkillConfig(
       },
     })
     .returning();
+  await groupService.seedDefaultGroupsForProject(project, updatedBy);
   return toSkillConfig(rows[0]);
 }
 
@@ -283,6 +297,8 @@ export async function getApproverPool(
       assignedAt: projectApproverGroups.assignedAt,
       groupName: appGroups.name,
       groupDescription: appGroups.description,
+      groupProject: appGroups.project,
+      groupIsDefault: appGroups.isDefault,
       groupCreatedBy: appGroups.createdBy,
       groupCreatedAt: appGroups.createdAt,
     })
@@ -309,6 +325,8 @@ export async function getApproverPool(
       id: ref.groupId,
       name: ref.groupName,
       description: ref.groupDescription,
+      project: ref.groupProject,
+      isDefault: ref.groupIsDefault,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
       documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype',

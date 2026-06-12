@@ -32,7 +32,15 @@ import {
   syncPrdContent,
   updatePrdBacklog,
   updatePrdContent,
+  updatePrdDesignDocApprovers,
   withdrawFromReview,
+  autoStartPrdValidation,
+  cancelPrdValidation,
+  syncPrdValidationResult,
+  markPrdValidationReady,
+  triggerFixPrdValidation,
+  acceptFixPrdValidation,
+  revertPrdSection,
 } from '../services/prdService';
 import {
   acceptFixValidation,
@@ -60,6 +68,8 @@ import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
+import { getTestCases } from '../services/testCaseService';
+import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
@@ -152,6 +162,20 @@ router.get('/prds/:prdId', requirePermission('interviews:view'), async (req, res
       return;
     }
     res.json(prd);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    const testCaseRecord = await getTestCases(req.params.prdId);
+    res.json(testCaseRecord);
   } catch (err) {
     next(err);
   }
@@ -669,39 +693,179 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: commentId };
 
-    if (comment.sectionKey === 'prd') {
-      updates['proposedContent'] = await fixPrdContentWithBedrock(
-        prd.content ?? '',
-        [mapped],
-        bedrockModelId,
-        bedrockMaxTokens,
-      );
-    } else if (comment.sectionKey === 'backlog') {
-      const fixedBacklog = await fixPrdBacklogWithBedrock(
-        prd.backlogJson,
-        [mapped],
-        bedrockModelId,
-        bedrockMaxTokens,
-      );
-      if (fixedBacklog != null) {
-        updates['proposedBacklogJson'] = fixedBacklog;
-      }
-    } else {
-      res.status(400).json({ error: `Unknown PRD section key: ${comment.sectionKey}` });
-      return;
-    }
+    await db
+      .update(prdsTable)
+      .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
+      .where(eq(prdsTable.id, req.params.prdId));
 
     await db
       .update(prdsTable)
-      .set(updates as any)
+      .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    res.json({ ok: true });
+    try {
+      if (comment.sectionKey === 'prd') {
+        updates['proposedContent'] = await fixPrdContentWithBedrock(
+          prd.content ?? '',
+          [mapped],
+          bedrockModelId,
+          bedrockMaxTokens,
+        );
+      } else if (comment.sectionKey === 'backlog') {
+        const fixedBacklog = await fixPrdBacklogWithBedrock(
+          prd.backlogJson,
+          [mapped],
+          bedrockModelId,
+          bedrockMaxTokens,
+        );
+        if (fixedBacklog != null) {
+          updates['proposedBacklogJson'] = fixedBacklog;
+        }
+      } else {
+        await db
+          .update(prdsTable)
+          .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+          .where(eq(prdsTable.id, req.params.prdId));
+        res.status(400).json({ error: `Unknown PRD section key: ${comment.sectionKey}` });
+        return;
+      }
+
+      await db
+        .update(prdsTable)
+        .set(updates as any)
+        .where(eq(prdsTable.id, req.params.prdId));
+
+      res.json({ ok: true });
+    } catch (innerErr) {
+      await db
+        .update(prdsTable)
+        .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+        .where(eq(prdsTable.id, req.params.prdId));
+      throw innerErr;
+    }
   } catch (err) {
     if (err instanceof BedrockModelTruncatedError) {
       res.status(422).json({ error: err.message });
       return;
     }
+    next(err);
+  }
+});
+
+// ── PRD Validation ────────────────────────────────────────────────────────────
+
+// POST /prds/:prdId/validation-thread — start (or re-run) PRD validation
+router.post('/prds/:prdId/validation-thread', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
+
+    await autoStartPrdValidation(req.params.prdId);
+    const updated = await getPrd(req.params.prdId);
+    res.json({ threadId: updated?.validationThreadId ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/validation/cancel — cancel PRD validation
+router.post('/prds/:prdId/validation/cancel', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await cancelPrdValidation(req.params.prdId, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/validation/refresh — sync PRD validation scorecard
+router.post('/prds/:prdId/validation/refresh', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
+
+    const result = await syncPrdValidationResult(req.params.prdId);
+    if (result) {
+      res.json({ ok: true, score: result.score, is_ready: result.is_ready });
+      return;
+    }
+
+    if (prd.status === 'validating') {
+      res.json({ ok: true, still_validating: true, score: null, is_ready: false });
+      return;
+    }
+
+    res.status(404).json({ error: 'Scorecard not yet available' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /prds/:prdId/validation/report — get PRD validation report markdown
+router.get('/prds/:prdId/validation/report', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
+
+    let md = prd.validationReportMd;
+    if (!md && prd.validationScorecard) {
+      md = generateFallbackValidationReport(prd.validationScorecard);
+    }
+    if (!md) {
+      if (prd.status === 'validating') {
+        res.json({ markdown: null, still_validating: true });
+        return;
+      }
+      res.status(404).json({ error: 'Validation report not yet available' });
+      return;
+    }
+
+    res.json({ markdown: md });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/validation/mark-ready — mark PRD as ready (score >= 90)
+router.post('/prds/:prdId/validation/mark-ready', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await markPrdValidationReady(req.params.prdId, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-validation — trigger AI fix for PRD validation gaps
+router.post('/prds/:prdId/fix-validation', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const result = await triggerFixPrdValidation(req.params.prdId, userId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-validation/accept — accept fix + re-validate
+router.post('/prds/:prdId/fix-validation/accept', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await acceptFixPrdValidation(req.params.prdId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /prds/:prdId/revert-section — revert to baseline
+router.patch('/prds/:prdId/revert-section', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await revertPrdSection(req.params.prdId, userId);
+    res.json({ ok: true });
+  } catch (err) {
     next(err);
   }
 });
@@ -1258,7 +1422,7 @@ router.get('/design-docs/:id/assignments', requirePermission('interviews:view'),
 
 router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    const { approverUserIds } = req.body as { approverUserIds?: string[] };
+    const { approverUserIds, designDocApproverIds } = req.body as { approverUserIds?: string[]; designDocApproverIds?: string[] };
     if (!approverUserIds || !Array.isArray(approverUserIds)) {
       res.status(400).json({ error: 'approverUserIds is required and must be an array' });
       return;
@@ -1273,6 +1437,9 @@ router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), a
     if (!isOwnerOrAuthor && !(await isAdminUser(userId))) {
       res.status(403).json({ error: 'Only the document owner, author, or admin can reassign approvers' });
       return;
+    }
+    if (Array.isArray(designDocApproverIds)) {
+      await updatePrdDesignDocApprovers(req.params.prdId, designDocApproverIds);
     }
     const assignments = await reassignApprovers(req.params.prdId, 'prd', approverUserIds, userId);
     res.json(assignments);
@@ -1418,41 +1585,58 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
     const sectionKey = comment.sectionKey;
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: commentId };
 
-    if (sectionKey === 'design') {
-      updates['proposedDesignContent'] = await fixDesignDocSectionWithBedrock(
-        doc.designContent ?? '',
-        'Design',
-        [mapped],
-        bedrockModelId,
-        bedrockMaxTokens,
-      );
-    } else if (sectionKey === 'tech_spec') {
-      updates['proposedTechSpecContent'] = await fixDesignDocSectionWithBedrock(
-        doc.techSpecContent ?? '',
-        'Tech Spec',
-        [mapped],
-        bedrockModelId,
-        bedrockMaxTokens,
-      );
-    } else if (sectionKey === 'assumptions') {
-      updates['proposedAssumptionsContent'] = await fixDesignDocSectionWithBedrock(
-        doc.assumptionsContent ?? '',
-        'Assumptions',
-        [mapped],
-        bedrockModelId,
-        bedrockMaxTokens,
-      );
-    } else {
-      res.status(400).json({ error: `Unknown section key: ${sectionKey}` });
-      return;
-    }
-
     await db
       .update(designDocsTable)
-      .set(updates as any)
+      .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    res.json({ ok: true });
+    try {
+      if (sectionKey === 'design') {
+        updates['proposedDesignContent'] = await fixDesignDocSectionWithBedrock(
+          doc.designContent ?? '',
+          'Design',
+          [mapped],
+          bedrockModelId,
+          bedrockMaxTokens,
+        );
+      } else if (sectionKey === 'tech_spec') {
+        updates['proposedTechSpecContent'] = await fixDesignDocSectionWithBedrock(
+          doc.techSpecContent ?? '',
+          'Tech Spec',
+          [mapped],
+          bedrockModelId,
+          bedrockMaxTokens,
+        );
+      } else if (sectionKey === 'assumptions') {
+        updates['proposedAssumptionsContent'] = await fixDesignDocSectionWithBedrock(
+          doc.assumptionsContent ?? '',
+          'Assumptions',
+          [mapped],
+          bedrockModelId,
+          bedrockMaxTokens,
+        );
+      } else {
+        await db
+          .update(designDocsTable)
+          .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+          .where(eq(designDocsTable.id, req.params.id));
+        res.status(400).json({ error: `Unknown section key: ${sectionKey}` });
+        return;
+      }
+
+      await db
+        .update(designDocsTable)
+        .set(updates as any)
+        .where(eq(designDocsTable.id, req.params.id));
+
+      res.json({ ok: true });
+    } catch (innerErr) {
+      await db
+        .update(designDocsTable)
+        .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+        .where(eq(designDocsTable.id, req.params.id));
+      throw innerErr;
+    }
   } catch (err) {
     if (err instanceof BedrockModelTruncatedError) {
       res.status(422).json({ error: err.message });

@@ -166,9 +166,10 @@ router.get('/available-bedrock-models', async (_req: Request, res: Response): Pr
 router.get('/groups', async (req: Request, res: Response): Promise<void> => {
   try {
     const withMembers = req.query.withMembers === 'true';
+    const project = req.query.project as string | undefined;
     const groups = withMembers
-      ? await groupService.listGroupsWithMembers()
-      : await groupService.listGroups();
+      ? await groupService.listGroupsWithMembers(project)
+      : await groupService.listGroups(project);
     res.json(groups);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -177,14 +178,26 @@ router.get('/groups', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/groups', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, description } = req.body as CreateGroupRequest;
+    const { name, description, project } = req.body as CreateGroupRequest;
     if (!name) {
       res.status(400).json({ error: 'name is required' });
       return;
     }
     const createdBy = (req.user as any)?.profile?.oid ?? undefined;
-    const group = await groupService.createGroup(name, description, createdBy);
+    const group = await groupService.createGroup(name, description, createdBy, project);
     res.status(201).json(group);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/groups/seed/:project', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { project } = req.params;
+    const createdBy = (req.user as any)?.profile?.oid ?? undefined;
+    await groupService.seedDefaultGroupsForProject(project, createdBy);
+    const groups = await groupService.listGroupsWithMembers(project);
+    res.json(groups);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -271,7 +284,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, designDocValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, designDocValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens, designPrototypeBedrockModelId, designPrototypeBedrockMaxTokens, designPrototypeRegenBedrockModelId, designPrototypeRegenBedrockMaxTokens, designPlanBedrockModelId, designPlanBedrockMaxTokens } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, testCaseSkillPath, designDocValidationSkillPath, prdValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, testCaseModel, designDocValidationModel, prdValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens, designPrototypeBedrockModelId, designPrototypeBedrockMaxTokens, designPrototypeRegenBedrockModelId, designPrototypeRegenBedrockMaxTokens, designPlanBedrockModelId, designPlanBedrockMaxTokens } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -308,6 +321,10 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       designPrototypeBedrockMaxTokens,
       designPrototypeRegenBedrockModelId,
       designPrototypeRegenBedrockMaxTokens,
+      testCaseSkillPath,
+      testCaseModel,
+      prdValidationSkillPath,
+      prdValidationModel,
       designPlanBedrockModelId,
       designPlanBedrockMaxTokens,
     );

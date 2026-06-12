@@ -56,6 +56,15 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
+jest.mock('../../hooks/useSpeechOutput', () => ({
+  useSpeechOutput: jest.fn(() => ({
+    speak: jest.fn(),
+    stop: jest.fn(),
+    isSpeaking: false,
+    isSpeechOutputSupported: true,
+  })),
+}));
+
 jest.mock('../PRDPreviewDrawer', () => ({
   PRDPreviewDrawer: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="prd-preview-drawer">
@@ -750,6 +759,19 @@ describe('AgentHome', () => {
       renderAgentHome({ selectedProject: "MaxView" });
       // "Begin." is the auto-kickoff message and must not appear in the UI
       expect(screen.queryByText('Begin.')).toBeNull();
+    });
+
+    it('shows a Read Aloud button on agent messages', () => {
+      sessionStorage.setItem('agentHomeThreadId', 'thread-123');
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [
+          { id: 'm1', role: 'agent' as const, text: 'Here is my response.', ts: '2026-01-01T00:01:00Z' },
+        ],
+      });
+
+      renderAgentHome({ selectedProject: 'MaxView' });
+      expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
     });
   });
 });

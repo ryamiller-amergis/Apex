@@ -7,7 +7,7 @@ import { designDocs, appUsers, chatThreads, prds, interviews } from '../db/schem
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
-import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
@@ -146,6 +146,7 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
     proposedDesignContent: row.proposedDesignContent ?? null,
     proposedTechSpecContent: row.proposedTechSpecContent ?? null,
     proposedAssumptionsContent: row.proposedAssumptionsContent ?? null,
+    fixCommentId: row.fixCommentId ?? null,
   };
 }
 
@@ -768,16 +769,16 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     '',
   ];
 
-  if (scorecard.features.length > 0) {
+  if ((scorecard.features ?? []).length > 0) {
     lines.push('## Feature Scores', '');
     lines.push('| Feature | Design | Tech Spec | Assumptions | Overall | Verdict |');
     lines.push('|---------|--------|-----------|-------------|---------|---------|');
-    for (const f of scorecard.features) {
+    for (const f of scorecard.features!) {
       lines.push(`| ${f.feature_title} | ${f.design_score}% | ${f.tech_spec_score}% | ${f.assumptions_score}% | ${f.overall_score}% | ${f.verdict} |`);
     }
     lines.push('');
 
-    const allGaps = scorecard.features.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
+    const allGaps = scorecard.features!.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
     if (allGaps.length > 0) {
       lines.push('## Open Gaps', '');
       for (const gap of allGaps) {
@@ -796,15 +797,15 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     lines.push('');
   }
 
-  if (scorecard.accepted_gaps.length > 0) {
+  if ((scorecard.accepted_gaps ?? []).length > 0) {
     lines.push('## Accepted Gaps', '');
-    for (const g of scorecard.accepted_gaps) lines.push(`- ${g}`);
+    for (const g of scorecard.accepted_gaps!) lines.push(`- ${g}`);
     lines.push('');
   }
 
-  if (scorecard.deferred_gaps.length > 0) {
+  if ((scorecard.deferred_gaps ?? []).length > 0) {
     lines.push('## Deferred Gaps', '');
-    for (const g of scorecard.deferred_gaps) lines.push(`- ${g}`);
+    for (const g of scorecard.deferred_gaps!) lines.push(`- ${g}`);
     lines.push('');
   }
 
@@ -1017,8 +1018,8 @@ export async function triggerFixValidation(
   const scorecard = doc.validationScorecard;
 
   // Group pending gaps by section so the AI can address each section systematically
-  const gapsBySection: Record<string, typeof scorecard.features[0]['gaps']> = {};
-  for (const f of scorecard.features) {
+  const gapsBySection: Record<string, ValidationScorecardGap[]> = {};
+  for (const f of (scorecard.features ?? [])) {
     for (const g of f.gaps) {
       if (g.resolution !== 'pending') continue;
       const sec = g.section.toLowerCase();
@@ -1037,7 +1038,7 @@ export async function triggerFixValidation(
     'assumptions': doc.assumptionsContent || '(empty)',
   };
 
-  for (const [sectionKey, gaps] of Object.entries(gapsBySection)) {
+  for (const [sectionKey, gaps] of Object.entries(gapsBySection) as [string, ValidationScorecardGap[]][]) {
     sectionBlocks.push([
       `### ${sectionNames[sectionKey] ?? sectionKey} Section`,
       '',

@@ -83,6 +83,15 @@ jest.mock('../../hooks/useSpeechInput', () => ({
   })),
 }));
 
+jest.mock('../../hooks/useSpeechOutput', () => ({
+  useSpeechOutput: jest.fn(() => ({
+    speak: jest.fn(),
+    stop: jest.fn(),
+    isSpeaking: false,
+    isSpeechOutputSupported: true,
+  })),
+}));
+
 jest.mock('react-markdown', () => ({
   __esModule: true,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -450,6 +459,26 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     renderExistingInterview();
     const btn = screen.getByTitle('Cannot reopen — a PRD has already been generated');
     expect(btn).toBeDisabled();
+  });
+});
+
+// ── Read Aloud on agent messages ───────────────────────────────────────────────
+
+describe('ExistingInterviewView — Read Aloud', () => {
+  it('shows a Read Aloud button on agent messages', () => {
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'agent' as const,
+          text: 'Here is the interview question.',
+          ts: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    renderExistingInterview();
+    expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
   });
 });
 

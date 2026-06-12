@@ -19,18 +19,28 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function useGroups() {
+export function useGroups(project?: string) {
   return useQuery<AppGroup[]>({
-    queryKey: ['admin', 'groups'],
-    queryFn: () => apiFetch<AppGroup[]>('/api/admin/groups'),
+    queryKey: ['admin', 'groups', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/admin/groups?project=${encodeURIComponent(project)}`
+        : '/api/admin/groups';
+      return apiFetch<AppGroup[]>(url);
+    },
     staleTime: 60_000,
   });
 }
 
-export function useGroupsWithMembers() {
+export function useGroupsWithMembers(project?: string) {
   return useQuery<GroupWithMembers[]>({
-    queryKey: ['admin', 'groups', 'withMembers'],
-    queryFn: () => apiFetch<GroupWithMembers[]>('/api/admin/groups?withMembers=true'),
+    queryKey: ['admin', 'groups', 'withMembers', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/admin/groups?withMembers=true&project=${encodeURIComponent(project)}`
+        : '/api/admin/groups?withMembers=true';
+      return apiFetch<GroupWithMembers[]>(url);
+    },
     staleTime: 60_000,
   });
 }
@@ -44,16 +54,31 @@ export function useGroupWithMembers(groupId: string | null) {
   });
 }
 
-export function useCreateGroup() {
+export function useCreateGroup(project?: string) {
   const qc = useQueryClient();
   return useMutation<AppGroup, Error, CreateGroupRequest>({
     mutationFn: (body) =>
       apiFetch<AppGroup>('/api/admin/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, project }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'groups'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'groups'] });
+    },
+  });
+}
+
+export function useSeedDefaultGroups() {
+  const qc = useQueryClient();
+  return useMutation<GroupWithMembers[], Error, string>({
+    mutationFn: (project) =>
+      apiFetch<GroupWithMembers[]>(`/api/admin/groups/seed/${encodeURIComponent(project)}`, {
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'groups'] });
+    },
   });
 }
 

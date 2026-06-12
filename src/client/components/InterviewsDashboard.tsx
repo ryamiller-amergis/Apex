@@ -19,6 +19,10 @@ import type {
   DesignDocSummary,
 } from '../../shared/types/interview';
 import type { DesignPrototypeSummary, DesignPrototypeStatus } from '../../shared/types/designPrototype';
+import {
+  derivePrdReadiness,
+  type PrdReadinessSeverity,
+} from '../../shared/utils/prdReadiness';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import styles from './InterviewsDashboard.module.css';
 
@@ -64,23 +68,24 @@ function interviewStatusLabel(status: InterviewStatus): string {
   }
 }
 
-function prdBadgeClass(status: PrdStatus): string {
-  switch (status) {
-    case 'generating': return styles.badgeGenerating;
-    case 'draft': return styles.badgeDraft;
-    case 'pending_review': return styles.badgePendingReview;
-    case 'approved': return styles.badgeApproved;
-    case 'revision_requested': return styles.badgeRevisionRequested;
-  }
-}
-
 function prdStatusLabel(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'Generating…';
+    case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
+  }
+}
+
+function prdReadinessBadgeClass(severity: PrdReadinessSeverity): string {
+  switch (severity) {
+    case 'info': return styles.badgeGenerating;
+    case 'warning': return styles.badgePendingReview;
+    case 'error': return styles.badgeRevisionRequested;
+    case 'success': return styles.badgeApproved;
+    case 'neutral': return styles.badgeDraft;
   }
 }
 
@@ -196,6 +201,8 @@ interface PrdCardProps {
 
 const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
   const navigate = useNavigate();
+  const readiness = derivePrdReadiness(prd, prd.latestTestCase);
+  const coverage = prd.latestTestCase?.coverageSummary;
   return (
     <div className={styles.card} onClick={() => navigate(`/backlog/prd/${prd.id}`)}>
       <div className={styles.cardHeader}>
@@ -218,13 +225,27 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
         )}
       </div>
       <div className={styles.cardFooter}>
-        <span className={`${styles.badge} ${prdBadgeClass(prd.status)}`}>
-          {prdStatusLabel(prd.status)}
+        <span
+          className={`${styles.badge} ${prdReadinessBadgeClass(readiness.severity)}`}
+          title={readiness.description}
+        >
+          {readiness.label}
         </span>
         <div className={styles.cardFooterRight}>
+          {coverage && (
+            <span
+              className={styles.cardPrdBadge}
+              title={`AC ${coverage.acCovered}, BR ${coverage.brCovered}`}
+            >
+              {coverage.totalCases} QA
+            </span>
+          )}
           {prd.reviewerId && (
             <span className={styles.cardPrdBadge}>Reviewer assigned</span>
           )}
+          <span className={styles.cardPrdBadge} title="Human review lifecycle">
+            PRD: {prdStatusLabel(prd.status)}
+          </span>
           <span className={styles.cardDate}>{formatDate(prd.createdAt)}</span>
         </div>
       </div>

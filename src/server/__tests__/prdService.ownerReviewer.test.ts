@@ -78,7 +78,7 @@ function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit
   const chain: Record<string, jest.Mock> = {};
   chain.leftJoin = jest.fn().mockReturnValue(chain);
   chain.where = jest.fn().mockReturnValue(chain);
-  chain.orderBy = terminal === 'orderBy' ? resolved : jest.fn().mockResolvedValue(data);
+  chain.orderBy = terminal === 'orderBy' ? resolved : jest.fn().mockReturnValue(chain);
   chain.limit = terminal === 'limit' ? resolved : jest.fn().mockResolvedValue(data);
   return { from: jest.fn().mockReturnValue(chain) };
 }
