@@ -13,10 +13,21 @@ export interface DesignPrototypeHistoryEntry {
   createdAt: string;
 }
 
+export interface PersonaBehavior {
+  /** User-type slugs (e.g. S/I/C/E/CO) this behavior applies to. */
+  userTypes: string[];
+  /** What the control does for this persona group. */
+  behavior: string;
+}
+
 export interface PbiRequirement {
   title: string;
   description?: string;
   acceptanceCriteria?: string;
+  /** User-type slugs (e.g. S/I/C/E/CO) this requirement applies to. */
+  userTypes?: string[];
+  /** Same control, different behavior per persona group. */
+  personaBehaviors?: PersonaBehavior[];
 }
 
 export interface DesignPrototypeSummary {
@@ -63,8 +74,24 @@ export interface ReviewDesignPrototypeRequest {
   comment?: string;
 }
 
+/** The four UI state sections rendered in every prototype document. */
+export type DesignPrototypeStateName = 'default' | 'empty' | 'error' | 'loading';
+
+export const DESIGN_PROTOTYPE_STATE_NAMES: DesignPrototypeStateName[] = [
+  'default',
+  'empty',
+  'error',
+  'loading',
+];
+
 export interface RegeneratePrototypeRequest {
   feedback: string;
+  /**
+   * Optional explicit override of which state sections to regenerate.
+   * Omit (or send empty) for auto mode: regenerate Default + Error and reuse
+   * Empty + Loading verbatim (with content-driven opt-in for empty/loading).
+   */
+  targetStates?: DesignPrototypeStateName[];
 }
 
 export interface AddPrototypeCommentRequest {

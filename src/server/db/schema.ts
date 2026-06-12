@@ -3,6 +3,7 @@ import { relations } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
+import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
@@ -334,6 +335,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPrototypeBedrockMaxTokens: integer('design_prototype_bedrock_max_tokens'),
   designPrototypeRegenBedrockModelId: text('design_prototype_regen_bedrock_model_id'),
   designPrototypeRegenBedrockMaxTokens: integer('design_prototype_regen_bedrock_max_tokens'),
+  designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
+  designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
@@ -581,5 +584,27 @@ export const designPrototypeCommentsRelations = relations(designPrototypeComment
   prototype: one(designPrototypes, {
     fields: [designPrototypeComments.prototypeId],
     references: [designPrototypes.id],
+  }),
+}));
+
+// ── Design Plan Table ─────────────────────────────────────────────────────────
+
+export const designPlans = pgTable('design_plans', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prdId: uuid('prd_id').notNull().unique().references(() => prds.id, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('generating'),
+  version: integer('version').notNull().default(1),
+  features: jsonb('features').$type<DesignPlanFeature[]>().notNull().default([]),
+  backlogHash: text('backlog_hash'),
+  history: jsonb('history').$type<DesignPlanHistoryEntry[]>().notNull().default([]),
+  generationError: text('generation_error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const designPlansRelations = relations(designPlans, ({ one }) => ({
+  prd: one(prds, {
+    fields: [designPlans.prdId],
+    references: [prds.id],
   }),
 }));

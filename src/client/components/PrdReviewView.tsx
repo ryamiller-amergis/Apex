@@ -22,6 +22,7 @@ import {
   useReassignApprovers,
   useFixPrdWithAi,
   useFixPrdCommentWithAi,
+  useScreenInventoryRoutes,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -33,6 +34,7 @@ import {
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
 import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
+import { useDesignPlan } from '../hooks/useDesignPlan';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -145,6 +147,7 @@ export const PrdReviewView: React.FC = () => {
   const { data: prd, isLoading, isError } = usePrd(id);
   const { data: relatedDesignDocs } = useDesignDocsByPrd(prd?.status === 'approved' ? id : undefined);
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(prd?.status === 'approved' ? id : null);
+  const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
 
   const updateContent = useUpdatePrdContent();
@@ -197,6 +200,7 @@ export const PrdReviewView: React.FC = () => {
   const [showAllLinks, setShowAllLinks] = useState(false);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
+  const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
 
   const isGenerating = !!prd && prd.status === 'generating' && prd.content === '';
   const generationFailed = !!prd && prd.status === 'draft' && prd.content === '';
@@ -265,7 +269,7 @@ export const PrdReviewView: React.FC = () => {
     if (!id) return;
     const result = await reviewPrd.mutateAsync({ prdId: id, action: 'approve' });
     if (result?.approved) {
-      navigate(`/backlog/design-prototypes/${id}`);
+      navigate(`/backlog/design-plan/${id}`);
     }
   }, [id, reviewPrd, navigate]);
 
@@ -663,6 +667,26 @@ export const PrdReviewView: React.FC = () => {
 
   
 
+      {prd.status === 'approved' && designPlanResponse?.plan && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            {designPlanResponse.plan.status === 'generating'
+              ? 'A design plan is being generated for this PRD.'
+              : designPlanResponse.plan.status === 'consumed'
+                ? 'The design plan has been used to generate prototypes.'
+                : 'A design plan is ready. Review and edit it, then generate the designs.'}
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => navigate(`/backlog/design-plan/${id}`)}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            View Design Plan →
+          </button>
+        </div>
+      )}
+
       {prd.status === 'approved' && relatedPrototypes.length > 0 && (
         <div className={styles.designDocBanner}>
           <span className={styles.designDocBannerText}>
@@ -873,6 +897,7 @@ export const PrdReviewView: React.FC = () => {
                         <BacklogViewer
                           data={prd.backlogJson}
                           editable={canEditContent}
+                          routeOptions={routeOptions}
                           onSaveBacklog={(updatedData) => {
                             if (id) void updateBacklog.mutateAsync({ prdId: id, backlogData: updatedData });
                           }}
@@ -882,6 +907,7 @@ export const PrdReviewView: React.FC = () => {
                       <BacklogViewer
                         data={prd.backlogJson}
                         editable={canEditContent}
+                        routeOptions={routeOptions}
                         onSaveBacklog={(updatedData) => {
                           if (id) void updateBacklog.mutateAsync({ prdId: id, backlogData: updatedData });
                         }}

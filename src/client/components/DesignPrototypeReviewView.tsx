@@ -16,9 +16,11 @@ import { UiMockPreview } from './UiMockPreview';
 import { ReviewReasonModal } from './ReviewReasonModal';
 import {
   designPrototypeStatusLabel,
+  DESIGN_PROTOTYPE_STATE_NAMES,
 } from '../../shared/types/designPrototype';
-import type { DesignPrototypeSummary } from '../../shared/types/designPrototype';
+import type { DesignPrototypeSummary, DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import type { UiMock } from '../../shared/types/backlog';
+import DesignTokenInspector from './DesignTokenInspector';
 import styles from './DesignPrototypeReviewView.module.css';
 
 function badgeClass(status: DesignPrototypeSummary['status']): string {
@@ -51,6 +53,16 @@ const DesignPrototypeReviewView: React.FC = () => {
   const [commentText, setCommentText] = useState('');
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [pendingRegeneration, setPendingRegeneration] = useState(false);
+  // Optional override of which state sections to regenerate. Empty = Auto
+  // (server regenerates Default + Error and reuses Empty + Loading verbatim).
+  const [overrideStates, setOverrideStates] = useState<DesignPrototypeStateName[]>([]);
+  const [viewSource, setViewSource] = useState(false);
+
+  const toggleOverrideState = useCallback((state: DesignPrototypeStateName) => {
+    setOverrideStates(prev =>
+      prev.includes(state) ? prev.filter(s => s !== state) : [...prev, state],
+    );
+  }, []);
 
   useEffect(() => {
     if (pendingRegeneration && selectedProto?.status === 'regenerating') {
@@ -74,11 +86,15 @@ const DesignPrototypeReviewView: React.FC = () => {
     if (!selectedProto || !feedback.trim()) return;
     setPendingRegeneration(true);
     regenerate.mutate(
-      { id: selectedProto.id, feedback: feedback.trim() },
+      {
+        id: selectedProto.id,
+        feedback: feedback.trim(),
+        targetStates: overrideStates.length > 0 ? overrideStates : undefined,
+      },
       { onError: () => setPendingRegeneration(false) },
     );
     setFeedback('');
-  }, [selectedProto, feedback, regenerate]);
+  }, [selectedProto, feedback, overrideStates, regenerate]);
 
   const handleRetry = useCallback(() => {
     if (!selectedProto) return;
@@ -186,13 +202,33 @@ const DesignPrototypeReviewView: React.FC = () => {
     if (mockForPreview) {
       return (
         <div className={styles.previewArea}>
-          <UiMockPreview
-            mock={mockForPreview}
-            feedback={feedback}
-            onFeedbackChange={setFeedback}
-            onRegenerate={handleRegenerate}
-            isBusy={isBusy}
-          />
+          <div className={styles.viewToggleBar}>
+            <button
+              type="button"
+              className={`${styles.viewToggleBtn}${!viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
+              onClick={() => setViewSource(false)}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewToggleBtn}${viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
+              onClick={() => setViewSource(true)}
+            >
+              View Source
+            </button>
+          </div>
+          {viewSource ? (
+            <pre className={styles.sourceView}><code>{fullPrototype?.mockHtml ?? ''}</code></pre>
+          ) : (
+            <UiMockPreview
+              mock={mockForPreview}
+              feedback={feedback}
+              onFeedbackChange={setFeedback}
+              onRegenerate={handleRegenerate}
+              isBusy={isBusy}
+            />
+          )}
         </div>
       );
     }
@@ -249,19 +285,41 @@ const DesignPrototypeReviewView: React.FC = () => {
         <div className={styles.headerRight}>
           {(pendingRegeneration || selectedProto?.status === 'regenerating' || selectedProto?.status === 'generating') ? (
             <span className={`${styles.badge} ${styles.badgeGenerating}`}>
-              <span className={styles.headerSpinner} /> Regenerating…
+              <span className={styles.headerSpinner} />{' '}
+              {selectedProto?.status === 'generating' && !pendingRegeneration ? 'Generating…' : 'Regenerating…'}
             </span>
           ) : (
             <>
               {selectedProto?.status === 'revision_requested' && can('interviews:manage') && (
-                <button
-                  className={styles.btnPrimary}
-                  onClick={handleRegenerate}
-                  disabled={isBusy || !feedback.trim()}
-                  title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
-                >
-                  Regenerate
-                </button>
+                <div className={styles.regenGroup}>
+                  <div
+                    className={styles.statePicker}
+                    title="Choose which UI states to regenerate. Leave all off for Auto (Default + Error; Empty + Loading reused)."
+                  >
+                    <span className={styles.statePickerLabel}>
+                      {overrideStates.length === 0 ? 'States: Auto' : 'States:'}
+                    </span>
+                    {DESIGN_PROTOTYPE_STATE_NAMES.map(state => (
+                      <button
+                        key={state}
+                        type="button"
+                        className={`${styles.stateChip}${overrideStates.includes(state) ? ` ${styles.stateChipActive}` : ''}`}
+                        onClick={() => toggleOverrideState(state)}
+                        disabled={isBusy}
+                      >
+                        {state}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    className={styles.btnPrimary}
+                    onClick={handleRegenerate}
+                    disabled={isBusy || !feedback.trim()}
+                    title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
+                  >
+                    Regenerate
+                  </button>
+                </div>
               )}
               {isReviewable && canReview && (
                 <>
@@ -311,87 +369,102 @@ const DesignPrototypeReviewView: React.FC = () => {
           </div>
 
           <div className={styles.pbiList}>
-            <div className={styles.pbiListTitle}>PBI Requirements</div>
-            {fullPrototype?.pbiRequirements?.length ? (
-              fullPrototype.pbiRequirements.map((pbi, idx) => (
-                <div key={idx} className={styles.pbiCard}>
+            <div className={styles.pbiListTitle}>
+              PBIs for this feature
+              {fullPrototype?.pbiRequirements?.length
+                ? ` (${fullPrototype.pbiRequirements.length})`
+                : ''}
+            </div>
+            {!fullPrototype ? (
+              <div className={styles.pbiCardDesc}>Loading requirements…</div>
+            ) : fullPrototype.pbiRequirements.length === 0 ? (
+              <div className={styles.pbiCardDesc}>No PBIs are linked to this feature.</div>
+            ) : (
+              fullPrototype.pbiRequirements.map((pbi) => (
+                <div key={pbi.title} className={styles.pbiCard}>
                   <div className={styles.pbiCardTitle}>{pbi.title}</div>
                   {pbi.description && (
                     <div className={styles.pbiCardDesc}>{pbi.description}</div>
                   )}
-                  {pbi.acceptanceCriteria && (
+                  {pbi.acceptanceCriteria ? (
                     <div className={styles.pbiCardAc}>
-                      <span className={styles.pbiCardAcLabel}>AC: </span>
-                      {pbi.acceptanceCriteria}
+                      <div className={styles.pbiCardAcLabel}>Acceptance criteria</div>
+                      <div className={styles.pbiCardAcBody}>{pbi.acceptanceCriteria}</div>
                     </div>
+                  ) : (
+                    <div className={styles.pbiCardAcMissing}>No acceptance criteria defined</div>
                   )}
                 </div>
               ))
-            ) : (
-              <div className={styles.pbiCardDesc}>Loading requirements...</div>
             )}
           </div>
         </div>
 
-        {/* Right: Preview + actions */}
+        {/* Right: Preview + actions + token inspector */}
         <div className={styles.rightPanel}>
-          {renderPreviewContent()}
+          <div className={styles.rightPanelInner}>
+            <div className={styles.previewColumn}>
+              {renderPreviewContent()}
 
-          {/* Comments */}
-          {comments.length > 0 && (
-            <div className={styles.commentsSection}>
-              <div className={styles.commentsSectionTitle}>
-                Comments ({comments.filter(c => !c.resolved).length} open)
-              </div>
-              {comments.map((c, idx) => (
-                <div key={c.id} className={styles.commentItem}>
-                  <div className={`${styles.commentPin}${c.pinX == null ? ` ${styles.commentPinGeneral}` : ''}`}>
-                    {idx + 1}
+              {/* Comments */}
+              {comments.length > 0 && (
+                <div className={styles.commentsSection}>
+                  <div className={styles.commentsSectionTitle}>
+                    Comments ({comments.filter(c => !c.resolved).length} open)
                   </div>
-                  <span className={`${styles.commentText}${c.resolved ? ` ${styles.commentResolved}` : ''}`}>
-                    {c.text}
-                  </span>
-                  {!c.resolved && can('interviews:manage') && (
-                    <button
-                      className={styles.commentResolveBtn}
-                      onClick={() => handleResolveComment(c.id)}
-                    >
-                      Resolve
-                    </button>
-                  )}
+                  {comments.map((c, idx) => (
+                    <div key={c.id} className={styles.commentItem}>
+                      <div className={`${styles.commentPin}${c.pinX == null ? ` ${styles.commentPinGeneral}` : ''}`}>
+                        {idx + 1}
+                      </div>
+                      <span className={`${styles.commentText}${c.resolved ? ` ${styles.commentResolved}` : ''}`}>
+                        {c.text}
+                      </span>
+                      {!c.resolved && can('interviews:manage') && (
+                        <button
+                          className={styles.commentResolveBtn}
+                          onClick={() => handleResolveComment(c.id)}
+                        >
+                          Resolve
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {/* Error toast */}
-          {mutationError && (
-            <div className={styles.errorBanner}>
-              {(mutationError as Error).message}
-            </div>
-          )}
+              {/* Error toast */}
+              {mutationError && (
+                <div className={styles.errorBanner}>
+                  {(mutationError as Error).message}
+                </div>
+              )}
 
-          {/* Comment bar */}
-          {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && can('interviews:manage') && (
-            <div className={styles.actionsBar}>
-              <div className={styles.actionsLeft}>
-                <input
-                  className={styles.feedbackInput}
-                  placeholder="Add a comment..."
-                  value={commentText}
-                  onChange={e => setCommentText(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleAddComment(); }}
-                />
-                <button
-                  className={styles.btnSecondary}
-                  onClick={handleAddComment}
-                  disabled={!commentText.trim()}
-                >
-                  Comment
-                </button>
-              </div>
+              {/* Comment bar */}
+              {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && can('interviews:manage') && (
+                <div className={styles.actionsBar}>
+                  <div className={styles.actionsLeft}>
+                    <input
+                      className={styles.feedbackInput}
+                      placeholder="Add a comment..."
+                      value={commentText}
+                      onChange={e => setCommentText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAddComment(); }}
+                    />
+                    <button
+                      className={styles.btnSecondary}
+                      onClick={handleAddComment}
+                      disabled={!commentText.trim()}
+                    >
+                      Comment
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+
+            <DesignTokenInspector html={fullPrototype?.mockHtml ?? null} />
+          </div>
         </div>
       </div>
 

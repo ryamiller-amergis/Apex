@@ -4,6 +4,7 @@ import type {
   DesignPrototypeComment,
   DesignPrototypeSummary,
   DesignPrototypeStatus,
+  DesignPrototypeStateName,
 } from '../../shared/types/designPrototype';
 import type { DocumentApproverAssignment } from '../../shared/types/approvals';
 
@@ -97,11 +98,11 @@ export function usePrototypeComments(prototypeId: string | null) {
 export function useRegeneratePrototype() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, feedback }: { id: string; feedback: string }) =>
+    mutationFn: ({ id, feedback, targetStates }: { id: string; feedback: string; targetStates?: DesignPrototypeStateName[] }) =>
       apiFetch(`/api/design-prototypes/${id}/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback }),
+        body: JSON.stringify({ feedback, targetStates }),
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['design-prototype', variables.id] });

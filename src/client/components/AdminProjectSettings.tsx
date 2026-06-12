@@ -442,6 +442,8 @@ interface EditState {
   designPrototypeBedrockMaxTokens: number;
   designPrototypeRegenBedrockModelId: string;
   designPrototypeRegenBedrockMaxTokens: number;
+  designPlanBedrockModelId: string;
+  designPlanBedrockMaxTokens: number;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -461,6 +463,8 @@ const emptyEdit = (): EditState => ({
   designPrototypeBedrockMaxTokens: 16000,
   designPrototypeRegenBedrockModelId: '',
   designPrototypeRegenBedrockMaxTokens: 16000,
+  designPlanBedrockModelId: '',
+  designPlanBedrockMaxTokens: 4000,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
@@ -595,6 +599,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designPrototypeBedrockMaxTokens: config.designPrototypeBedrockMaxTokens ?? 16000,
       designPrototypeRegenBedrockModelId: config.designPrototypeRegenBedrockModelId ?? '',
       designPrototypeRegenBedrockMaxTokens: config.designPrototypeRegenBedrockMaxTokens ?? 16000,
+      designPlanBedrockModelId: config.designPlanBedrockModelId ?? '',
+      designPlanBedrockMaxTokens: config.designPlanBedrockMaxTokens ?? 4000,
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
@@ -649,6 +655,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
           designPrototypeRegenBedrockModelId: edit.designPrototypeRegenBedrockModelId || null,
           designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
+          designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
+          designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
           quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
           quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
           approvalMode: edit.approvalMode,
@@ -898,10 +906,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <AccordionSection
               title="Apex Bedrock Models"
               hint={
-                edit.prdReviewBedrockModelId || edit.designPrototypeBedrockModelId || edit.designPrototypeRegenBedrockModelId
+                edit.prdReviewBedrockModelId || edit.designPrototypeBedrockModelId || edit.designPrototypeRegenBedrockModelId || edit.designPlanBedrockModelId
                   ? [
                       edit.prdReviewBedrockModelId
                         ? `PRD: ${bedrockModels.find((m) => m.id === edit.prdReviewBedrockModelId)?.label ?? edit.prdReviewBedrockModelId}`
+                        : null,
+                      edit.designPlanBedrockModelId
+                        ? `Plan: ${bedrockModels.find((m) => m.id === edit.designPlanBedrockModelId)?.label ?? edit.designPlanBedrockModelId}`
                         : null,
                       edit.designPrototypeBedrockModelId
                         ? `Prototype: ${bedrockModels.find((m) => m.id === edit.designPrototypeBedrockModelId)?.label ?? edit.designPrototypeBedrockModelId}`
@@ -953,6 +964,44 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000 (large PRDs)</option>
                     <option value="64000">64 000 (very large PRDs)</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>Design Plan Generation</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used for the cheap, structured design plan generated from the PRD before HTML prototypes.
+                This is a small JSON call — keep max tokens low.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-plan-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-plan-bedrock-model"
+                    className={styles.select}
+                    value={edit.designPlanBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPlanBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Use service default</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-plan-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-plan-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.designPlanBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPlanBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="2000">2 000</option>
+                    <option value="4000">4 000 (default)</option>
+                    <option value="8000">8 000</option>
+                    <option value="16000">16 000 (many features)</option>
                   </select>
                 </div>
               </div>

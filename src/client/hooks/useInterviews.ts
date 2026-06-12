@@ -25,6 +25,7 @@ import type {
   SubmitForReviewRequest,
 } from '../../shared/types/approvals';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
+import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -70,6 +71,15 @@ export function usePrdList(filters?: { status?: PrdStatus; project?: string; aut
     queryKey: ['prds', filters],
     queryFn: () => apiFetch(`/api/interviews/prds${qs}`),
     staleTime: 30_000,
+  });
+}
+
+export function useScreenInventoryRoutes(enabled = true) {
+  return useQuery<ScreenInventoryRoute[]>({
+    queryKey: ['screen-inventory-routes'],
+    queryFn: () => apiFetch('/api/interviews/screen-inventory'),
+    enabled,
+    staleTime: 10 * 60_000,
   });
 }
 

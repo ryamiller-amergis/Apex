@@ -85,6 +85,8 @@ export interface ProjectSkillConfig {
   designPrototypeBedrockMaxTokens?: number | null;
   designPrototypeRegenBedrockModelId?: string | null;
   designPrototypeRegenBedrockMaxTokens?: number | null;
+  designPlanBedrockModelId?: string | null;
+  designPlanBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -121,6 +123,8 @@ export interface UpsertProjectSkillConfigRequest {
   designPrototypeBedrockMaxTokens?: number | null;
   designPrototypeRegenBedrockModelId?: string | null;
   designPrototypeRegenBedrockMaxTokens?: number | null;
+  designPlanBedrockModelId?: string | null;
+  designPlanBedrockMaxTokens?: number | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
