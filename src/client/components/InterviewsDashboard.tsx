@@ -71,6 +71,7 @@ function interviewStatusLabel(status: InterviewStatus): string {
 function prdStatusLabel(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'Generating…';
+    case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
