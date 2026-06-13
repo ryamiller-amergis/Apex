@@ -12,6 +12,19 @@ import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
+import { getAssignmentsForUser, hasAnyAssignments } from '../services/userProjectAssignmentService';
+import {
+  filterProjectCatalogByNames,
+  listLegacyAllowedProjectsForUser,
+  listProjectCatalog,
+} from '../services/projectCatalogService';
+import {
+  createProjectAccessRequests,
+  listCurrentUserAccessRequests,
+  listRequestableProjectsForUser,
+} from '../services/projectAccessRequestService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 
 const router = express.Router();
 
@@ -26,45 +39,110 @@ router.get('/available-models', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/projects - List ADO projects accessible to the configured PAT,
-// filtered to the allowlist in ADO_ALLOWED_PROJECTS (comma-separated).
-// Users in APEX_ALLOWED_EMAILS also see the virtual "Apex" project (no ADO backing).
-const APEX_ALLOWED_EMAILS = new Set(['ryamiller@amergis.com', 'anedunur@amergis.com']);
+function getProfileEmail(req: Request): string | undefined {
+  const profile = (req.user as any)?.profile;
+  return (
+    profile?.upn ??
+    profile?.email ??
+    profile?._json?.preferred_username ??
+    profile?._json?.email
+  );
+}
 
+function getProfileOid(req: Request): string | null {
+  return (req.user as any)?.profile?.oid ?? null;
+}
+
+function requireAuthenticatedUserId(req: Request, res: Response): string | null {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+
+  const userId = getProfileOid(req);
+  if (!userId) {
+    res.status(400).json({ error: 'Authenticated user is missing an oid' });
+    return null;
+  }
+
+  return userId;
+}
+
+function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
+}
+
+// GET /api/projects - List projects available to the current user.
+// Once project assignments are configured, regular users are restricted to
+// assigned projects; before migration setup, retain the legacy ADO allowlist.
 router.get('/projects', async (req: Request, res: Response) => {
   try {
-    const adoService = new AzureDevOpsService();
-    let projects = await adoService.getProjects();
-
-    const allowList = (process.env.ADO_ALLOWED_PROJECTS || 'MaxView,MatterWorx')
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
-
-    if (allowList.length > 0) {
-      const allowed = new Set(allowList.map((p) => p.toLowerCase()));
-      projects = projects.filter((p) => allowed.has(p.name.toLowerCase()));
-      // Preserve the order defined in ADO_ALLOWED_PROJECTS
-      projects.sort((a, b) => allowList.findIndex((p) => p.toLowerCase() === a.name.toLowerCase()) - allowList.findIndex((p) => p.toLowerCase() === b.name.toLowerCase()));
+    if (isSuperAdminRequest(req)) {
+      res.json(await listProjectCatalog());
+      return;
     }
 
-    const profile = (req.user as any)?.profile;
-    const userEmail: string | undefined =
-      profile?.upn ??
-      profile?.email ??
-      profile?._json?.preferred_username ??
-      profile?._json?.email;
-    if (userEmail && APEX_ALLOWED_EMAILS.has(userEmail.toLowerCase())) {
-      projects = [
-        ...projects,
-        { id: 'apex-virtual', name: 'Apex', description: 'AI Pilot self-development — requirement flows & orchestration' },
-      ];
+    const userId: string | undefined = (req.user as any)?.profile?.oid;
+    const assignedProjects = userId ? await getAssignmentsForUser(userId) : [];
+    const assignmentsConfigured = assignedProjects.length > 0 || (await hasAnyAssignments());
+
+    if (!assignmentsConfigured) {
+      res.json(await listLegacyAllowedProjectsForUser(getProfileEmail(req)));
+      return;
     }
 
-    res.json(projects);
+    if (assignedProjects.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const catalog = await listProjectCatalog();
+    res.json(filterProjectCatalogByNames(catalog, assignedProjects));
   } catch (error: any) {
     console.error('Error fetching ADO projects:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });
+  }
+});
+
+router.get('/project-access-requests/me', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    const requests = await listCurrentUserAccessRequests(userId);
+    res.json({ requests });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch project access requests' });
+  }
+});
+
+router.get('/project-access-requests/catalog', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    const projects = await listRequestableProjectsForUser(userId);
+    res.json({ projects });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch requestable projects' });
+  }
+});
+
+router.post('/project-access-requests', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  const { projects } = req.body as CreateProjectAccessRequestsRequest;
+  if (!isStringArrayOfNonEmptyItems(projects)) {
+    res.status(400).json({ error: 'projects must be an array of non-empty strings' });
+    return;
+  }
+
+  try {
+    const requests = await createProjectAccessRequests(userId, projects);
+    res.status(201).json({ requests });
+  } catch {
+    res.status(500).json({ error: 'Failed to create project access requests' });
   }
 });
 
@@ -3671,7 +3749,6 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 import fs from 'fs';
 import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
-import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import type { MenuItemKey } from '../../shared/types/menuSettings';

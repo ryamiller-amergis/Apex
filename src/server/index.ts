@@ -34,6 +34,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
+import platformAdminRouter from './routes/platformAdmin';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -124,6 +125,7 @@ app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
 app.use('/api/workitems', ensureAuthenticated, workitemsFromPrdRoutes);
 app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
 app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
+app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 
