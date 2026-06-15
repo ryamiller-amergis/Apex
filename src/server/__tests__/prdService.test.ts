@@ -70,6 +70,15 @@ jest.mock('../services/reviewCommentService', () => ({
 
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn().mockResolvedValue(null),
+  getApproverUserIds: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../services/designSystemService', () => ({
+  inferRoutesForBacklog: jest.fn().mockImplementation((backlog: unknown) => Promise.resolve({ backlog })),
+}));
+
+jest.mock('../services/bedrockService', () => ({
+  enrichBacklogPersonasWithBedrock: jest.fn().mockImplementation((backlog: unknown) => Promise.resolve(backlog)),
 }));
 
 jest.mock('../services/appSettingsService', () => ({
@@ -1063,8 +1072,9 @@ describe('startPrdWatcher', () => {
 
     // Advance past one interval tick
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
+    // Flush microtasks for the async operations in syncPrdContent
+    // (dynamic imports of designSystemService, bedrockService, and DB updates)
+    for (let i = 0; i < 20; i++) await Promise.resolve();
 
     expect(mockReadOutputPrd).toHaveBeenCalledWith('thread-1');
     expect(mockReadOutputBacklog).toHaveBeenCalledWith('thread-1');
