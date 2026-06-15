@@ -14,6 +14,7 @@ jest.mock('../services/projectSettingsService', () => ({
 }));
 
 jest.mock('../services/userProjectAssignmentService', () => ({
+  ensureUserProjectAssignment: jest.fn(),
   getAssignmentsForUser: jest.fn(),
 }));
 
@@ -179,6 +180,54 @@ describe('API Routes', () => {
 
       expect(response.body).toEqual({ error: 'Unauthorized' });
       expect(mockProjectAccessRequestService.listCurrentUserAccessRequests).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/projects/:project/select', () => {
+    const profile = { oid: 'user-1', upn: 'user@example.com' };
+
+    it('records the project selection and returns 204', async () => {
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser(profile))
+        .post('/api/projects/MaxView/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'user-1',
+        'MaxView',
+        'auto-select',
+      );
+    });
+
+    it('handles URL-encoded project names', async () => {
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser(profile))
+        .post('/api/projects/Support%20Ops/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'user-1',
+        'Support Ops',
+        'auto-select',
+      );
+    });
+
+    it('returns 401 when unauthenticated', async () => {
+      await request(app)
+        .post('/api/projects/MaxView/select')
+        .expect(401);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 when the service throws', async () => {
+      mockAssignmentService.ensureUserProjectAssignment.mockRejectedValue(new Error('DB error'));
+
+      await request(buildAppWithUser(profile))
+        .post('/api/projects/MaxView/select')
+        .expect(500);
     });
   });
 

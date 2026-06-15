@@ -12,7 +12,7 @@ import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
-import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
+import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -166,6 +166,21 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
   } catch (error: any) {
     console.error('Error fetching ADO area paths:', error);
     res.status(500).json({ error: 'Failed to fetch area paths' });
+  }
+});
+
+// POST /api/projects/:project/select - Record that the user selected this project.
+// Inserts into user_project_assignments if no row exists yet (idempotent).
+router.post('/projects/:project/select', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    await ensureUserProjectAssignment(userId, req.params.project, 'auto-select');
+    res.status(204).end();
+  } catch (error: any) {
+    console.error('[api] project auto-assign failed:', error);
+    res.status(500).json({ error: 'Failed to record project selection' });
   }
 });
 

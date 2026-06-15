@@ -204,6 +204,10 @@ function App() {
             changeProject(project);
             changeAreaPath(project);
             navigate('/home');
+            fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
+              method: 'POST',
+              credentials: 'include',
+            }).catch(() => {});
           }}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
