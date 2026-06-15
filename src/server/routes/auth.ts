@@ -2,6 +2,7 @@ import express from 'express';
 import passport from 'passport';
 import { OIDCStrategy } from 'passport-azure-ad';
 import { upsertAppUser } from '../services/rbacService';
+import { resolvePendingAssignments } from '../services/pendingAssignmentService';
 
 const router = express.Router();
 
@@ -88,6 +89,10 @@ router.get(
           user.profile?.displayName ?? '',
           user.profile?.upn ?? user.profile?.email ?? ''
         ).catch((err) => console.error('upsertAppUser failed:', err));
+        resolvePendingAssignments(
+          user.profile?.oid ?? '',
+          user.profile?.upn ?? user.profile?.email ?? ''
+        ).catch((err) => console.error('resolvePendingAssignments failed:', err));
         // Redirect to the Vite dev server (or root in production)
         const redirectUrl = process.env.NODE_ENV === 'production' 
           ? '/' 
@@ -174,5 +179,40 @@ router.get('/status', (req, res) => {
     res.json({ authenticated: false });
   }
 });
+
+// Dev-only: mock login for local development without Azure AD
+if (process.env.NODE_ENV !== 'production') {
+  router.get('/dev-login-available', (_req, res) => {
+    res.json({ available: true });
+  });
+
+  router.post('/dev-login', (req, res) => {
+    const mockUser = {
+      profile: {
+        oid: 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
+        sub: 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
+        displayName: 'Dev User',
+        upn: 'dev@localhost',
+        email: 'dev@localhost',
+      },
+      accessToken: 'mock-access-token',
+      refreshToken: 'mock-refresh-token',
+    };
+
+    req.logIn(mockUser, (err) => {
+      if (err) {
+        console.error('Dev login error:', err);
+        return res.status(500).json({ error: 'Dev login failed' });
+      }
+      console.log('[dev-login] Mock user logged in');
+      upsertAppUser(
+        mockUser.profile.oid,
+        mockUser.profile.displayName,
+        mockUser.profile.upn
+      ).catch((e) => console.error('upsertAppUser failed:', e));
+      res.json({ ok: true });
+    });
+  });
+}
 
 export default router;

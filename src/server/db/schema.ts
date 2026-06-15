@@ -7,6 +7,7 @@ import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/typ
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
+import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -118,6 +119,8 @@ export const appUserRoles = pgTable('app_user_roles', {
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
   groupMemberships: many(appGroupMembers),
+  projectAssignments: many(userProjectAssignments),
+  projectAccessRequests: many(projectAccessRequests),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -137,6 +140,59 @@ export const appRolePermissionsRelations = relations(appRolePermissions, ({ one 
 export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   user: one(appUsers, { fields: [appUserRoles.userId], references: [appUsers.oid] }),
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
+}));
+
+// ── User Project Assignments ──────────────────────────────────────────────────
+
+export const userProjectAssignments = pgTable('user_project_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.userId, t.project),
+}));
+
+export const userProjectAssignmentsRelations = relations(userProjectAssignments, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [userProjectAssignments.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Pending Project Assignments ───────────────────────────────────────────────
+
+export const pendingProjectAssignments = pgTable('pending_project_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  project: text('project').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.email, t.project),
+}));
+
+export const projectAccessRequests = pgTable('project_access_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  status: text('status').$type<ProjectAccessRequestStatus>().notNull().default('pending'),
+  requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  reviewedBy: text('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  reviewNote: text('review_note'),
+}, (t) => ({
+  userIdx: index('idx_project_access_requests_user_id').on(t.userId),
+  statusIdx: index('idx_project_access_requests_status').on(t.status),
+  projectIdx: index('idx_project_access_requests_project').on(t.project),
+}));
+
+export const projectAccessRequestsRelations = relations(projectAccessRequests, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [projectAccessRequests.userId],
+    references: [appUsers.oid],
+  }),
 }));
 
 // ── Groups Tables ─────────────────────────────────────────────────────────────

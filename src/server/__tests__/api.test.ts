@@ -2,6 +2,9 @@ import request from 'supertest';
 import express from 'express';
 import apiRouter from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
+import * as projectCatalogService from '../services/projectCatalogService';
+import * as projectAccessRequestService from '../services/projectAccessRequestService';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
@@ -9,6 +12,28 @@ jest.mock('../services/azureDevOps');
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn(),
 }));
+
+jest.mock('../services/userProjectAssignmentService', () => ({
+  getAssignmentsForUser: jest.fn(),
+}));
+
+jest.mock('../services/projectCatalogService', () => ({
+  filterProjectCatalogByNames: jest.fn((catalog, projectNames) => {
+    const requested = new Set(projectNames.map((project: string) => project.toLowerCase()));
+    return catalog.filter((project: { name: string }) => requested.has(project.name.toLowerCase()));
+  }),
+  listProjectCatalog: jest.fn(),
+}));
+
+jest.mock('../services/projectAccessRequestService', () => ({
+  createProjectAccessRequests: jest.fn(),
+  listCurrentUserAccessRequests: jest.fn(),
+  listRequestableProjectsForUser: jest.fn(),
+}));
+
+const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof userProjectAssignmentService>;
+const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
+const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
 
 describe('API Routes', () => {
   let app: express.Application;
@@ -24,6 +49,7 @@ describe('API Routes', () => {
 
     // Create mock service instance
     mockAdoService = {
+      getProjects: jest.fn(),
       getWorkItems: jest.fn(),
       updateDueDate: jest.fn(),
       updateWorkItemField: jest.fn(),
@@ -33,6 +59,127 @@ describe('API Routes', () => {
 
     // Mock the constructor to return our mock instance
     (AzureDevOpsService as jest.MockedClass<typeof AzureDevOpsService>).mockImplementation(() => mockAdoService);
+  });
+
+  function buildAppWithUser(profile: Record<string, unknown>) {
+    const userApp = express();
+    userApp.use(express.json());
+    userApp.use((req: any, _res: any, next: any) => {
+      req.user = { profile };
+      next();
+    });
+    userApp.use('/api', apiRouter);
+    return userApp;
+  }
+
+  describe('GET /api/projects', () => {
+    const fullCatalog = [
+      { id: 'apex-virtual', name: 'Apex', description: 'Virtual project' },
+      { id: '2', name: 'MatterWorx', description: 'MatterWorx project' },
+      { id: '1', name: 'MaxView', description: 'MaxView project' },
+      { id: '3', name: 'Other', description: 'ADO project beyond legacy allowlist' },
+      { id: 'project-support-ops', name: 'Support Ops', description: '' },
+    ];
+
+    beforeEach(() => {
+      mockProjectCatalogService.listProjectCatalog.mockResolvedValue(fullCatalog);
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+    });
+
+    it('returns the full project catalog for super admins', async () => {
+      const response = await request(buildAppWithUser({ oid: 'admin-oid', upn: 'ryamiller@amergis.com' }))
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body).toEqual(fullCatalog);
+      expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
+      expect(mockAssignmentService.getAssignmentsForUser).not.toHaveBeenCalled();
+    });
+
+    it('filters non-super-admin projects by DB assignments', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['MatterWorx']);
+
+      const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'user@example.com' }))
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.map((project: any) => project.name)).toEqual(['MatterWorx']);
+      expect(mockAssignmentService.getAssignmentsForUser).toHaveBeenCalledWith('user-1');
+      expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
+    });
+
+    it('includes assigned non-ADO projects for regular users', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Support Ops', 'Apex']);
+
+      const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'user@example.com' }))
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.map((project: any) => project.name)).toEqual(['Apex', 'Support Ops']);
+      expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns no projects for unassigned users', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+
+      const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'user@example.com' }))
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body).toEqual([]);
+      expect(mockProjectCatalogService.listProjectCatalog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('project access request routes', () => {
+    const profile = { oid: 'user-1', upn: 'user@example.com' };
+
+    it('returns requestable projects for the current user', async () => {
+      mockProjectAccessRequestService.listRequestableProjectsForUser.mockResolvedValue([
+        { id: 'project-apex', name: 'Apex', description: 'Non-ADO project' },
+      ]);
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/project-access-requests/catalog')
+        .expect(200);
+
+      expect(response.body).toEqual({
+        projects: [{ id: 'project-apex', name: 'Apex', description: 'Non-ADO project' }],
+      });
+      expect(mockProjectAccessRequestService.listRequestableProjectsForUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('creates project access requests for multiple projects', async () => {
+      mockProjectAccessRequestService.createProjectAccessRequests.mockResolvedValue([
+        {
+          id: 'request-1',
+          userId: 'user-1',
+          project: 'MaxView',
+          status: 'pending',
+          requestedAt: '2026-06-12T12:00:00Z',
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        },
+      ]);
+
+      const response = await request(buildAppWithUser(profile))
+        .post('/api/project-access-requests')
+        .send({ projects: ['MaxView', 'Apex'] })
+        .expect(201);
+
+      expect(response.body.requests).toHaveLength(1);
+      expect(mockProjectAccessRequestService.createProjectAccessRequests).toHaveBeenCalledWith('user-1', ['MaxView', 'Apex']);
+    });
+
+    it('returns 401 when access request routes are called without authentication', async () => {
+      const response = await request(app)
+        .get('/api/project-access-requests/me')
+        .expect(401);
+
+      expect(response.body).toEqual({ error: 'Unauthorized' });
+      expect(mockProjectAccessRequestService.listCurrentUserAccessRequests).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/workitems', () => {

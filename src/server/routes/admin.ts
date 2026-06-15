@@ -1,9 +1,8 @@
 import { Router, type Request, type Response } from 'express';
-import { requirePermission, requireSuperAdmin } from '../middleware/rbac';
+import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
 import * as groupService from '../services/groupService';
-import * as menuSettingsService from '../services/menuSettingsService';
 import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { listAvailableBedrockModels } from '../services/bedrockService';
@@ -15,7 +14,6 @@ import type {
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
-import type { UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 
 const router = Router();
 
@@ -440,46 +438,6 @@ router.put('/app-settings/defaultModel', async (req: Request, res: Response): Pr
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
     await setAppSetting('defaultModel', value, updatedBy);
     res.json({ value });
-  } catch {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// ── Project Menu Settings (super-admin only) ─────────────────────────────────
-
-router.get('/project-menu-settings', requireSuperAdmin, async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const configs = await menuSettingsService.listMenuConfigs();
-    res.json(configs);
-  } catch {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.get('/project-menu-settings/:project', requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const config = await menuSettingsService.getMenuConfig(req.params.project);
-    if (!config) {
-      res.status(404).json({ error: 'No menu config found for this project' });
-      return;
-    }
-    res.json(config);
-  } catch {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.put('/project-menu-settings/:project', requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { project } = req.params;
-    const { enabledViews } = req.body as UpsertProjectMenuConfigRequest;
-    if (!Array.isArray(enabledViews)) {
-      res.status(400).json({ error: 'enabledViews must be an array' });
-      return;
-    }
-    const userId = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? 'unknown';
-    const config = await menuSettingsService.upsertMenuConfig(project, enabledViews, userId);
-    res.json(config);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
