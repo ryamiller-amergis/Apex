@@ -69,36 +69,49 @@ If the build fails:
 - Re-run `npm run build` until it succeeds before proceeding.
 - **Do not proceed to tests if the build is broken.**
 
-## Step 3 — Determine which tests to run
+## Step 3 — Ensure unit tests exist for changed files
 
-Using the changed files from Step 1, determine test scope:
+For each **source file** in the changed list (from Step 1), check whether a corresponding test file already exists. Use these conventions:
 
-| Changed path prefix | Test suite to run |
+| Source file | Expected test file |
 |---|---|
-| `src/server/**` | `--selectProjects server` |
-| `src/client/**` | `--selectProjects client` |
-| Both server and client | run full `npm test` |
-| Only config / non-src files | run full `npm test` (safe default) |
+| `src/server/<path>/<file>.ts` | `src/server/__tests__/<file>.test.ts` |
+| `src/client/components/<file>.tsx` | `src/client/components/__tests__/<file>.test.tsx` |
+| `src/client/hooks/<file>.ts` | `src/client/hooks/__tests__/<file>.test.ts` |
+| `src/client/utils/<file>.ts` | `src/client/utils/__tests__/<file>.test.ts` |
 
-Also include tests for files that **import** any changed file (one level of dependency). Use:
+For each changed source file **without** a matching test file:
+
+1. Read the source file to understand its exports and logic.
+2. Create a new test file at the expected path with:
+   - Imports of the module under test.
+   - Mocks for external dependencies (ADO client, fetch, fs, etc.) using `jest.mock(...)`.
+   - At minimum: one `describe` block per exported function/class, with tests covering the happy path and one error/edge case.
+   - Use the existing test files in the same `__tests__` directory as style reference.
+3. Run the new test in isolation to confirm it passes before proceeding:
 
 ```bash
-npx jest --listTests
+npx jest <path-to-new-test-file> --passWithNoTests
 ```
 
-to enumerate test files, then check if any test file imports a changed file by scanning for its basename.
+If the new test fails, fix it (source or test) before continuing. This ensures newly created tests start green.
 
-Run the scoped command, e.g.:
+**Skip test creation for:**
+- Type-only files (`.d.ts`, files exporting only interfaces/types).
+- Config/constant files with no logic.
+- Files already covered by an existing test (even if the name doesn't match exactly — check with `rg "import.*<module-name>" src/**/\__tests__/`).
+
+## Step 4 — Run the full test suite
+
+Always run the **entire** test suite — do not scope tests to changed files only:
 
 ```bash
-npx jest --selectProjects server --passWithNoTests
-# or
-npx jest --selectProjects client --passWithNoTests
-# or
 npm test
 ```
 
-## Step 4 — Fix test failures (loop until green)
+This ensures no regressions anywhere in the codebase, including indirect breakage in unrelated modules.
+
+## Step 5 — Fix test failures (loop until green)
 
 If tests fail:
 
@@ -107,7 +120,7 @@ If tests fail:
    - Source fix: logic regression, missing export, wrong type — fix the source.
    - Test fix: test expectation is stale due to an intentional change — update the test.
 3. Apply the fix.
-4. Re-run the same scoped jest command from Step 3.
+4. Re-run the full test suite (`npm test`).
 5. Repeat until all tests pass.
 
 **Stop and report** (do not commit) if:
@@ -115,7 +128,7 @@ If tests fail:
 - The fix would require changing a protected file (see scope-discipline rule).
 - The failure is caused by a missing environment variable or external dependency.
 
-## Step 5 — Commit and push
+## Step 6 — Commit and push
 
 Once build and tests are green:
 
@@ -145,7 +158,7 @@ git push
 
 If `git push` is rejected (non-fast-forward), run `git pull --rebase` then push again.
 
-## Step 6 — Create a Pull Request
+## Step 7 — Create a Pull Request
 
 After a successful push, offer to open a PR. If the user confirms (or already asked for it), run:
 
