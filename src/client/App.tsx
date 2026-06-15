@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -41,7 +41,7 @@ const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ def
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
-const AdminMenuSettings = lazy(() => import('./components/AdminMenuSettings').then(m => ({ default: m.AdminMenuSettings })));
+const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -70,25 +70,27 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
-      : location.pathname === '/home'
-        ? 'home'
-        : location.pathname === '/calendar'
-          ? 'calendar'
-          : location.pathname.startsWith('/planning')
-            ? 'planning'
-            : location.pathname === '/cloud-cost'
-              ? 'cloudcost'
-              : location.pathname.startsWith('/backlog')
-                ? 'backlog'
-                : location.pathname === '/notifications'
-                  ? 'notifications'
-                  : location.pathname.startsWith('/admin')
-                  ? 'admin'
-                  : 'calendar';
+      : location.pathname === '/platform-admin'
+        ? 'platform-admin'
+        : location.pathname === '/home'
+          ? 'home'
+          : location.pathname === '/calendar'
+            ? 'calendar'
+            : location.pathname.startsWith('/planning')
+              ? 'planning'
+              : location.pathname === '/cloud-cost'
+                ? 'cloudcost'
+                : location.pathname.startsWith('/backlog')
+                  ? 'backlog'
+                  : location.pathname === '/notifications'
+                    ? 'notifications'
+                    : location.pathname.startsWith('/admin')
+                    ? 'admin'
+                    : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
@@ -142,10 +144,11 @@ function App() {
 
   const { enabledViews } = useProjectMenuConfig(selectedProject);
 
-  // Guard all gated routes: redirect to /home if the user lacks the required permission.
+  // Guard all gated routes: redirect if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
   useEffect(() => {
     if (!permissionsLoaded) return;
+    if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
     if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
     if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
@@ -161,15 +164,6 @@ function App() {
     }
   }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
 
-  // Auto-show changelog once per session when the user lands on /home with an
-  // unread version, unless they've opted out via showChangelogOnLogin.
-  const hasAutoShownChangelog = useRef(false);
-  useEffect(() => {
-    if (currentView === 'home' && hasUnreadChangelog && showChangelogOnLogin && !hasAutoShownChangelog.current) {
-      hasAutoShownChangelog.current = true;
-      setShowChangelog(true);
-    }
-  }, [currentView, hasUnreadChangelog, showChangelogOnLogin, setShowChangelog]);
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
@@ -210,7 +204,33 @@ function App() {
             changeAreaPath(project);
             navigate('/home');
           }}
+          isSuperAdmin={isSuperAdmin}
+          onOpenPlatformAdmin={() => navigate('/platform-admin')}
+          hasUnreadChangelog={hasUnreadChangelog}
+          showChangelogOnLogin={showChangelogOnLogin}
+          showChangelog={showChangelog}
+          onSetShowChangelog={setShowChangelog}
+          onMarkChangelogAsRead={handleMarkChangelogAsRead}
+          onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
         />
+        <Changelog
+          isOpen={showChangelog}
+          onClose={() => setShowChangelog(false)}
+          onMarkAsRead={handleMarkChangelogAsRead}
+          showOnLogin={showChangelogOnLogin}
+          onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+        />
+      </ErrorBoundary>
+    );
+  }
+
+  if (currentView === 'platform-admin') {
+    if (!permissionsLoaded || !isSuperAdmin) return null;
+    return (
+      <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+        <Suspense fallback={<ViewSkeleton />}>
+          <PlatformAdmin onBackToProjects={() => navigate('/')} />
+        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -378,15 +398,6 @@ function App() {
                     >
                       Project Settings
                     </button>
-                    {isSuperAdmin && (
-                      <button
-                        className={`admin-tab${location.pathname === '/admin/menu-settings' ? ' admin-tab-active' : ''}`}
-                        onClick={() => navigate('/admin/menu-settings')}
-                        type="button"
-                      >
-                        Menu Visibility
-                      </button>
-                    )}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
@@ -394,8 +405,6 @@ function App() {
                     <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
-                  ) : location.pathname === '/admin/menu-settings' && isSuperAdmin ? (
-                    <AdminMenuSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : (
                     <AdminRoles />
                   )}

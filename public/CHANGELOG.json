@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.26.0",
+    "date": "2026-06-15",
+    "title": "Project Access & Release Banner",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added project access requests on the project selector so users can request access to ADO and non-ADO projects before entering the app"
+      },
+      {
+        "type": "feature",
+        "description": "Platform admins can now review project access requests and manage project assignments, including pending email assignments for users who have not logged in yet"
+      },
+      {
+        "type": "improvement",
+        "description": "What's New updates now appear as a non-blocking banner on the project selector page instead of interrupting users after they choose a project"
+      },
+      {
+        "type": "improvement",
+        "description": "Release announcement tracking now syncs through a server-side setting so the latest changelog version can be updated without relying only on startup file reads"
+      }
+    ]
+  },
+  {
     "version": "1.25.0",
     "date": "2026-06-05",
     "title": "PRD Apex Assistant & Inline Editing",

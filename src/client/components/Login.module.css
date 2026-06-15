@@ -80,6 +80,50 @@
   font-size: 4.2rem;
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 1.5rem 0;
+  color: color-mix(in srgb, var(--brand-text-inverse) 45%, transparent);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--brand-primary-light) 22%, transparent);
+}
+
+.dev-login-button {
+  background: transparent;
+  color: color-mix(in srgb, var(--brand-text-inverse) 78%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--brand-primary-light) 40%, transparent);
+  padding: 12px 36px;
+  font-size: 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.dev-login-button:hover {
+  background: color-mix(in srgb, var(--brand-primary-light) 10%, transparent);
+  border-color: color-mix(in srgb, var(--brand-primary-light) 60%, transparent);
+  color: var(--brand-text-inverse);
+}
+
+.dev-login-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Mobile responsive ────────────────────────────────────── */
 
 @media (max-width: 768px) {
