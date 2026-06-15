@@ -1,6 +1,10 @@
 import type { Request } from 'express';
+import { getUserEmail } from './requestUser';
 
-export const SUPER_ADMIN_EMAILS = ['ryamiller@amergis.com'];
+export const SUPER_ADMIN_EMAILS = [
+  'ryamiller@amergis.com',
+  'anedunur@amergis.com',
+];
 
 export function isSuperAdminEmail(email: string): boolean {
   const lower = email.toLowerCase();
@@ -8,12 +12,7 @@ export function isSuperAdminEmail(email: string): boolean {
 }
 
 export function isSuperAdminRequest(req: Request): boolean {
-  const profile = (req.user as any)?.profile;
-  const email: string | undefined =
-    profile?.upn ??
-    profile?.email ??
-    profile?._json?.preferred_username ??
-    profile?._json?.email;
+  const email = getUserEmail(req);
   if (!email) return false;
   return isSuperAdminEmail(email);
 }

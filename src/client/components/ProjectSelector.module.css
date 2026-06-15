@@ -6,6 +6,13 @@
   min-height: 100vh;
   padding: 48px 24px;
   background: var(--bg-primary);
+  position: relative;
+}
+
+.userMenuCorner {
+  position: absolute;
+  top: 16px;
+  right: 24px;
 }
 
 .header {

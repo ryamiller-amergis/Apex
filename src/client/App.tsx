@@ -213,6 +213,10 @@ function App() {
           onSetShowChangelog={setShowChangelog}
           onMarkChangelogAsRead={handleMarkChangelogAsRead}
           onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
+          user={authenticatedUser}
+          theme={theme}
+          onThemeChange={setThemeMode}
+          onLogout={handleLogout}
         />
         <Changelog
           isOpen={showChangelog}
@@ -230,7 +234,15 @@ function App() {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <Suspense fallback={<ViewSkeleton />}>
-          <PlatformAdmin onBackToProjects={() => navigate('/')} />
+          <PlatformAdmin
+            onBackToProjects={() => navigate('/')}
+            user={authenticatedUser}
+            theme={theme}
+            hasUnreadChangelog={hasUnreadChangelog}
+            onThemeChange={setThemeMode}
+            onOpenChangelog={() => setShowChangelog(true)}
+            onLogout={handleLogout}
+          />
         </Suspense>
       </ErrorBoundary>
     );

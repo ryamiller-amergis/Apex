@@ -10,6 +10,8 @@ import {
 } from '../hooks/usePlatformAdmin';
 import { BrandLogo } from './BrandLogo';
 import { ChangelogBanner } from './ChangelogBanner';
+import { UserMenu } from './UserMenu';
+import type { ThemeMode } from '../hooks/useAppShell';
 import styles from './ProjectSelector.module.css';
 
 const requestAccessSchema = z.object({
@@ -29,6 +31,10 @@ interface ProjectSelectorProps {
   onSetShowChangelog?: (show: boolean) => void;
   onMarkChangelogAsRead?: () => void;
   onToggleShowChangelogOnLogin?: (show: boolean) => void;
+  user?: { name: string; email?: string } | null;
+  theme?: ThemeMode;
+  onThemeChange?: (theme: ThemeMode) => void;
+  onLogout?: () => void;
 }
 
 export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -41,12 +47,28 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onSetShowChangelog,
   onMarkChangelogAsRead,
   onToggleShowChangelogOnLogin,
+  user,
+  theme = 'dark',
+  onThemeChange,
+  onLogout,
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const { data: projects = [], isLoading, isError } = useProjects();
 
   return (
     <div className={styles.page}>
+      {onLogout && onThemeChange && (
+        <div className={styles.userMenuCorner}>
+          <UserMenu
+            onOpenChangelog={() => onSetShowChangelog?.(true)}
+            onThemeChange={onThemeChange}
+            onLogout={onLogout}
+            theme={theme}
+            user={user ?? null}
+            hasUnreadChangelog={hasUnreadChangelog ?? false}
+          />
+        </div>
+      )}
       <div className={styles.header}>
         <div className={styles.logoMark}>
           <BrandLogo />

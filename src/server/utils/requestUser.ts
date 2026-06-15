@@ -29,3 +29,19 @@ export function getDisplayName(req: Request): string {
   const profile = (req as any).user?.profile;
   return profile?.displayName ?? profile?.upn ?? 'Unknown User';
 }
+
+/**
+ * Return the authenticated user's email address, or undefined.
+ *
+ * Checks the same fields that Azure AD populates via passport-azure-ad,
+ * in order of reliability.
+ */
+export function getUserEmail(req: Request): string | undefined {
+  const profile = (req as any).user?.profile;
+  return (
+    profile?.upn ??
+    profile?.email ??
+    profile?._json?.preferred_username ??
+    profile?._json?.email
+  );
+}
