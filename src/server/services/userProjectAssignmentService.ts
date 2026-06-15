@@ -1,4 +1,4 @@
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { appUsers, userProjectAssignments } from '../db/schema';
 import type { PlatformAdminUser, ProjectAssignmentGroup, UserProjectAssignment } from '../../shared/types/platformAdmin';
@@ -103,11 +103,6 @@ export async function getAllAssignments(): Promise<UserProjectAssignment[]> {
     .orderBy(asc(userProjectAssignments.project), asc(appUsers.displayName), asc(appUsers.email));
 
   return rows.map(toAssignment);
-}
-
-export async function hasAnyAssignments(): Promise<boolean> {
-  const [result] = await db.select({ value: count() }).from(userProjectAssignments);
-  return (result?.value ?? 0) > 0;
 }
 
 export async function assignUserToProject(

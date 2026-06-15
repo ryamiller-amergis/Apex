@@ -51,6 +51,7 @@ export interface CreateProjectAccessRequestsRequest {
 
 export interface SetProjectAssignmentsRequest {
   userIds: string[];
+  pendingEmails?: string[];
 }
 
 export interface PlatformAdminAssignmentsResponse {
@@ -83,4 +84,16 @@ export interface PlatformAdminMenuConfigResponse {
     enabledViews: MenuItemKey[];
     updatedBy?: string | null;
   }>;
+}
+
+export interface PendingProjectAssignment {
+  id: string;
+  email: string;
+  project: string;
+  assignedBy?: string | null;
+  assignedAt: string;
+}
+
+export interface PendingProjectAssignmentsResponse {
+  pending: PendingProjectAssignment[];
 }

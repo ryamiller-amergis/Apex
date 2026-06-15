@@ -15,7 +15,6 @@ import {
   getAssignmentsForProject,
   getAssignmentsForUser,
   groupAssignmentsByProject,
-  hasAnyAssignments,
   listKnownApplicationUsers,
   removeUserFromProject,
 } from '../services/userProjectAssignmentService';
@@ -110,22 +109,6 @@ describe('userProjectAssignmentService', () => {
       const result = await getAllAssignments();
 
       expect(result[0]).toMatchObject({ displayName: 'user-1', email: '' });
-    });
-  });
-
-  describe('hasAnyAssignments', () => {
-    it('returns true when the assignment table has rows', async () => {
-      const fromMock = jest.fn().mockResolvedValue([{ value: 2 }]);
-      mockDb.select.mockReturnValue({ from: fromMock });
-
-      await expect(hasAnyAssignments()).resolves.toBe(true);
-    });
-
-    it('returns false when the assignment table is empty', async () => {
-      const fromMock = jest.fn().mockResolvedValue([{ value: 0 }]);
-      mockDb.select.mockReturnValue({ from: fromMock });
-
-      await expect(hasAnyAssignments()).resolves.toBe(false);
     });
   });
 

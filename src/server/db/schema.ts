@@ -160,6 +160,18 @@ export const userProjectAssignmentsRelations = relations(userProjectAssignments,
   }),
 }));
 
+// ── Pending Project Assignments ───────────────────────────────────────────────
+
+export const pendingProjectAssignments = pgTable('pending_project_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  project: text('project').notNull(),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.email, t.project),
+}));
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),

@@ -9,6 +9,7 @@ import {
   useRequestableProjectCatalog,
 } from '../hooks/usePlatformAdmin';
 import { BrandLogo } from './BrandLogo';
+import { ChangelogBanner } from './ChangelogBanner';
 import styles from './ProjectSelector.module.css';
 
 const requestAccessSchema = z.object({
@@ -22,6 +23,12 @@ interface ProjectSelectorProps {
   onSelect: (project: string) => void;
   isSuperAdmin?: boolean;
   onOpenPlatformAdmin?: () => void;
+  hasUnreadChangelog?: boolean;
+  showChangelogOnLogin?: boolean;
+  showChangelog?: boolean;
+  onSetShowChangelog?: (show: boolean) => void;
+  onMarkChangelogAsRead?: () => void;
+  onToggleShowChangelogOnLogin?: (show: boolean) => void;
 }
 
 export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -29,6 +36,11 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onSelect,
   isSuperAdmin = false,
   onOpenPlatformAdmin,
+  hasUnreadChangelog,
+  showChangelogOnLogin,
+  onSetShowChangelog,
+  onMarkChangelogAsRead,
+  onToggleShowChangelogOnLogin,
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const { data: projects = [], isLoading, isError } = useProjects();
@@ -61,6 +73,14 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           )}
         </div>
       </div>
+
+      {hasUnreadChangelog && showChangelogOnLogin && onSetShowChangelog && onMarkChangelogAsRead && onToggleShowChangelogOnLogin && (
+        <ChangelogBanner
+          onOpenChangelog={() => onSetShowChangelog(true)}
+          onMarkAsRead={onMarkChangelogAsRead}
+          onToggleShowOnLogin={onToggleShowChangelogOnLogin}
+        />
+      )}
 
       {isLoading ? (
         <div className={styles.loadingState}>

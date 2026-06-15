@@ -4,18 +4,25 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
   useApproveProjectAccessRequest,
+  usePlatformAdminPendingAssignments,
   usePlatformAdminAccessRequests,
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
   usePlatformAdminProjects,
   usePlatformAdminUsers,
+  useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
 } from '../hooks/usePlatformAdmin';
 import { CONFIGURABLE_MENU_ITEMS } from '../../shared/types/menuSettings';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
-import type { PlatformAdminAccessRequest, PlatformAdminUser, ProjectAssignmentGroup } from '../../shared/types/platformAdmin';
+import type {
+  PendingProjectAssignment,
+  PlatformAdminAccessRequest,
+  PlatformAdminUser,
+  ProjectAssignmentGroup,
+} from '../../shared/types/platformAdmin';
 import styles from './PlatformAdmin.module.css';
 
 const menuSchema = z.object({
@@ -91,6 +98,17 @@ function readTextFile(file: File): Promise<string> {
   });
 }
 
+function isEmailEntry(entry: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry.trim());
+}
+
+function formatImportMessage(importedCount: number, pendingCount: number): string {
+  const importedLabel = `${importedCount} user${importedCount === 1 ? '' : 's'}`;
+  if (pendingCount === 0) return `Imported ${importedLabel}.`;
+
+  return `Imported ${importedLabel}, ${pendingCount} pending first login.`;
+}
+
 interface PlatformAdminProps {
   onBackToProjects: () => void;
 }
@@ -156,9 +174,9 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({ onBackToProjects }
   const isLoading = projectsLoading || assignmentsLoading || menuConfigsLoading || usersLoading || accessRequestsLoading;
   const hasLoadError = projectsIsError || assignmentsIsError || menuConfigsIsError || usersIsError || accessRequestsIsError;
 
-  const handleSaveAssignments = useCallback(async (project: string, userIds: string[]) => {
+  const handleSaveAssignments = useCallback(async (project: string, userIds: string[], pendingEmails?: string[]) => {
     setAssignmentSavedProject(null);
-    await setAssignments.mutateAsync({ project, userIds });
+    await setAssignments.mutateAsync({ project, userIds, pendingEmails });
     setAssignmentSavedProject(project);
   }, [setAssignments]);
 
@@ -343,7 +361,7 @@ interface AssignmentCardProps {
   availableUsers: PlatformAdminUser[];
   isSaving: boolean;
   wasSaved: boolean;
-  onSave: (project: string, userIds: string[]) => Promise<void>;
+  onSave: (project: string, userIds: string[], pendingEmails?: string[]) => Promise<void>;
 }
 
 const AssignmentCard: React.FC<AssignmentCardProps> = ({
@@ -356,6 +374,14 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importedPendingEmails, setImportedPendingEmails] = useState<string[]>([]);
+  const {
+    data: pendingAssignments = [],
+    isLoading: pendingAssignmentsLoading,
+    isError: pendingAssignmentsIsError,
+    error: pendingAssignmentsError,
+  } = usePlatformAdminPendingAssignments(group.project);
+  const removePendingAssignment = useRemovePlatformAdminPendingAssignment();
   const currentUserIds = useMemo(() => group.users.map((user) => user.userId), [group.users]);
   const usersById = useMemo(() => {
     const lookup = new Map<string, PlatformAdminUser>();
@@ -388,12 +414,17 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
       })
       .slice(0, 8);
   }, [availableUsers, searchQuery, selectedUserIds]);
+  const savedPendingEmailSet = useMemo(() => {
+    return new Set(pendingAssignments.map((assignment) => assignment.email.toLowerCase()));
+  }, [pendingAssignments]);
+  const pendingDisplayCount = pendingAssignments.length + importedPendingEmails.length;
 
   useEffect(() => {
     setSelectedUserIds(currentUserIds);
     setSearchQuery('');
     setImportMessage(null);
-  }, [currentUserIds]);
+    setImportedPendingEmails([]);
+  }, [currentUserIds, group.project]);
 
   const handleAddUser = (userId: string) => {
     setSelectedUserIds((prev) => (prev.includes(userId) ? prev : [...prev, userId]));
@@ -403,6 +434,15 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
 
   const handleRemoveUser = (userId: string) => {
     setSelectedUserIds((prev) => prev.filter((id) => id !== userId));
+    setImportMessage(null);
+  };
+
+  const handleRemoveSavedPending = async (email: string) => {
+    await removePendingAssignment.mutateAsync({ project: group.project, email });
+  };
+
+  const handleRemoveImportedPending = (email: string) => {
+    setImportedPendingEmails((prev) => prev.filter((pendingEmail) => pendingEmail !== email));
     setImportMessage(null);
   };
 
@@ -418,8 +458,12 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
     }
 
     const matchedIds: string[] = [];
-    let unmatchedCount = 0;
+    const pendingEmailsToAdd: string[] = [];
     const seenEntries = new Set<string>();
+    const knownPendingEmails = new Set([
+      ...Array.from(savedPendingEmailSet),
+      ...importedPendingEmails.map((email) => email.toLowerCase()),
+    ]);
 
     entries.forEach((entry) => {
       const token = entry.trim();
@@ -431,25 +475,28 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
       const matchedUser = usersById.get(token) ?? usersByEmail.get(normalizedToken);
       if (matchedUser) {
         matchedIds.push(matchedUser.userId);
-      } else {
-        unmatchedCount += 1;
+      } else if (isEmailEntry(token) && !knownPendingEmails.has(normalizedToken)) {
+        pendingEmailsToAdd.push(normalizedToken);
+        knownPendingEmails.add(normalizedToken);
       }
     });
 
     const selected = new Set(selectedUserIds);
     const addedIds = matchedIds.filter((userId) => !selected.has(userId));
     setSelectedUserIds([...selectedUserIds, ...addedIds]);
-    setImportMessage(
-      `Imported ${addedIds.length} user${addedIds.length === 1 ? '' : 's'}${unmatchedCount > 0 ? `; ${unmatchedCount} unmatched` : ''}.`,
-    );
+    setImportedPendingEmails((prev) => [...prev, ...pendingEmailsToAdd]);
+    setImportMessage(formatImportMessage(addedIds.length, pendingEmailsToAdd.length));
   };
 
   const handleSubmitAssignments = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    await onSave(group.project, selectedUserIds);
+    const pendingEmails = importedPendingEmails.length > 0 ? importedPendingEmails : undefined;
+    await onSave(group.project, selectedUserIds, pendingEmails);
+    setImportedPendingEmails([]);
+    setImportMessage(null);
   };
 
-  const pending = isSaving;
+  const pending = isSaving || removePendingAssignment.isPending;
   const hasSuggestions = filteredUsers.length > 0;
 
   return (
@@ -472,6 +519,63 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
               <code className={styles.userId}>{user.userId}</code>
             </div>
           ))
+        )}
+      </div>
+
+      <div className={styles.pendingSection} aria-label={`${group.project} pending first-login users`}>
+        <div className={styles.pendingHeader}>
+          <h4 className={styles.pendingTitle}>Pending first login</h4>
+          <span className={styles.countBadge}>{pendingDisplayCount} pending</span>
+        </div>
+        {pendingAssignmentsLoading ? (
+          <p className={styles.muted}>Loading pending assignments...</p>
+        ) : pendingAssignmentsIsError ? (
+          <p className={styles.fieldError}>{formatError(pendingAssignmentsError)}</p>
+        ) : pendingDisplayCount === 0 ? (
+          <p className={styles.muted}>No pending first-login assignments.</p>
+        ) : (
+          <div className={styles.pendingList}>
+            {pendingAssignments.map((assignment: PendingProjectAssignment) => (
+              <div key={assignment.id} className={styles.pendingRow}>
+                <div>
+                  <span className={styles.userName}>{assignment.email}</span>
+                  <span className={styles.userEmail}>Awaiting first login</span>
+                </div>
+                <div className={styles.pendingActions}>
+                  <span className={styles.pendingBadge}>Pending</span>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    disabled={pending}
+                    onClick={() => void handleRemoveSavedPending(assignment.email)}
+                    aria-label={`Remove pending ${assignment.email}`}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+            {importedPendingEmails.map((email) => (
+              <div key={`imported-${email}`} className={styles.pendingRow}>
+                <div>
+                  <span className={styles.userName}>{email}</span>
+                  <span className={styles.userEmail}>Will be pending after save</span>
+                </div>
+                <div className={styles.pendingActions}>
+                  <span className={styles.pendingBadge}>Unsaved</span>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    disabled={pending}
+                    onClick={() => handleRemoveImportedPending(email)}
+                    aria-label={`Remove pending ${email}`}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -541,7 +645,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
             className={styles.fileInput}
             type="file"
             accept=".csv,.txt,text/csv,text/plain"
-            disabled={pending || availableUsers.length === 0}
+            disabled={pending}
             onChange={(event) => void handleImportFile(event)}
           />
           <span className={styles.importHint}>One email or user ID per line, or CSV with email/userId column.</span>

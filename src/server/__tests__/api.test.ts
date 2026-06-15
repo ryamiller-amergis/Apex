@@ -15,7 +15,6 @@ jest.mock('../services/projectSettingsService', () => ({
 
 jest.mock('../services/userProjectAssignmentService', () => ({
   getAssignmentsForUser: jest.fn(),
-  hasAnyAssignments: jest.fn(),
 }));
 
 jest.mock('../services/projectCatalogService', () => ({
@@ -23,7 +22,6 @@ jest.mock('../services/projectCatalogService', () => ({
     const requested = new Set(projectNames.map((project: string) => project.toLowerCase()));
     return catalog.filter((project: { name: string }) => requested.has(project.name.toLowerCase()));
   }),
-  listLegacyAllowedProjectsForUser: jest.fn(),
   listProjectCatalog: jest.fn(),
 }));
 
@@ -82,17 +80,10 @@ describe('API Routes', () => {
       { id: '3', name: 'Other', description: 'ADO project beyond legacy allowlist' },
       { id: 'project-support-ops', name: 'Support Ops', description: '' },
     ];
-    const legacyProjects = [
-      { id: '1', name: 'MaxView', description: 'MaxView project' },
-      { id: '2', name: 'MatterWorx', description: 'MatterWorx project' },
-    ];
 
     beforeEach(() => {
-      process.env.ADO_ALLOWED_PROJECTS = 'MaxView,MatterWorx';
       mockProjectCatalogService.listProjectCatalog.mockResolvedValue(fullCatalog);
-      mockProjectCatalogService.listLegacyAllowedProjectsForUser.mockResolvedValue(legacyProjects);
       mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
-      mockAssignmentService.hasAnyAssignments.mockResolvedValue(false);
     });
 
     it('returns the full project catalog for super admins', async () => {
@@ -103,7 +94,6 @@ describe('API Routes', () => {
       expect(response.body).toEqual(fullCatalog);
       expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
       expect(mockAssignmentService.getAssignmentsForUser).not.toHaveBeenCalled();
-      expect(mockAssignmentService.hasAnyAssignments).not.toHaveBeenCalled();
     });
 
     it('filters non-super-admin projects by DB assignments', async () => {
@@ -115,7 +105,6 @@ describe('API Routes', () => {
 
       expect(response.body.map((project: any) => project.name)).toEqual(['MatterWorx']);
       expect(mockAssignmentService.getAssignmentsForUser).toHaveBeenCalledWith('user-1');
-      expect(mockAssignmentService.hasAnyAssignments).not.toHaveBeenCalled();
       expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
     });
 
@@ -130,22 +119,8 @@ describe('API Routes', () => {
       expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
     });
 
-    it('falls back to the legacy ADO-allowed list when the assignment table is empty', async () => {
+    it('returns no projects for unassigned users', async () => {
       mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
-      mockAssignmentService.hasAnyAssignments.mockResolvedValue(false);
-
-      const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'user@example.com' }))
-        .get('/api/projects')
-        .expect(200);
-
-      expect(response.body.map((project: any) => project.name)).toEqual(['MaxView', 'MatterWorx']);
-      expect(mockProjectCatalogService.listLegacyAllowedProjectsForUser).toHaveBeenCalledWith('user@example.com');
-      expect(mockProjectCatalogService.listProjectCatalog).not.toHaveBeenCalled();
-    });
-
-    it('returns no projects for unassigned users after assignments are configured', async () => {
-      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
-      mockAssignmentService.hasAnyAssignments.mockResolvedValue(true);
 
       const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'user@example.com' }))
         .get('/api/projects')
@@ -153,22 +128,6 @@ describe('API Routes', () => {
 
       expect(response.body).toEqual([]);
       expect(mockProjectCatalogService.listProjectCatalog).not.toHaveBeenCalled();
-    });
-
-    it('keeps the Apex virtual project override for allowlisted emails before assignments are configured', async () => {
-      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
-      mockAssignmentService.hasAnyAssignments.mockResolvedValue(false);
-      mockProjectCatalogService.listLegacyAllowedProjectsForUser.mockResolvedValue([
-        ...legacyProjects,
-        { id: 'apex-virtual', name: 'Apex', description: 'Virtual project' },
-      ]);
-
-      const response = await request(buildAppWithUser({ oid: 'user-1', upn: 'anedunur@amergis.com' }))
-        .get('/api/projects')
-        .expect(200);
-
-      expect(response.body.map((project: any) => project.name)).toEqual(['MaxView', 'MatterWorx', 'Apex']);
-      expect(mockProjectCatalogService.listLegacyAllowedProjectsForUser).toHaveBeenCalledWith('anedunur@amergis.com');
     });
   });
 

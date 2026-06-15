@@ -6,8 +6,10 @@ import {
   usePlatformAdminAccessRequests,
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
+  usePlatformAdminPendingAssignments,
   usePlatformAdminProjects,
   usePlatformAdminUsers,
+  useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
@@ -18,8 +20,10 @@ jest.mock('../../hooks/usePlatformAdmin', () => ({
   usePlatformAdminAccessRequests: jest.fn(),
   usePlatformAdminAssignments: jest.fn(),
   usePlatformAdminMenuConfigs: jest.fn(),
+  usePlatformAdminPendingAssignments: jest.fn(),
   usePlatformAdminProjects: jest.fn(),
   usePlatformAdminUsers: jest.fn(),
+  useRemovePlatformAdminPendingAssignment: jest.fn(),
   useRejectProjectAccessRequest: jest.fn(),
   useSetPlatformAdminAssignments: jest.fn(),
   useSetPlatformAdminMenuConfig: jest.fn(),
@@ -29,8 +33,10 @@ const mockUseApproveProjectAccessRequest = useApproveProjectAccessRequest as jes
 const mockUsePlatformAdminAccessRequests = usePlatformAdminAccessRequests as jest.Mock;
 const mockUsePlatformAdminAssignments = usePlatformAdminAssignments as jest.Mock;
 const mockUsePlatformAdminMenuConfigs = usePlatformAdminMenuConfigs as jest.Mock;
+const mockUsePlatformAdminPendingAssignments = usePlatformAdminPendingAssignments as jest.Mock;
 const mockUsePlatformAdminProjects = usePlatformAdminProjects as jest.Mock;
 const mockUsePlatformAdminUsers = usePlatformAdminUsers as jest.Mock;
+const mockUseRemovePlatformAdminPendingAssignment = useRemovePlatformAdminPendingAssignment as jest.Mock;
 const mockUseRejectProjectAccessRequest = useRejectProjectAccessRequest as jest.Mock;
 const mockUseSetPlatformAdminAssignments = useSetPlatformAdminAssignments as jest.Mock;
 const mockUseSetPlatformAdminMenuConfig = useSetPlatformAdminMenuConfig as jest.Mock;
@@ -38,9 +44,11 @@ const mockUseSetPlatformAdminMenuConfig = useSetPlatformAdminMenuConfig as jest.
 function setupPlatformAdmin(
   projects = [{ id: 'project-1', name: 'MaxView', description: 'Delivery planning' }],
   accessRequests: any[] = [],
+  pendingAssignmentsByProject: Record<string, any[]> = {},
 ) {
   const saveAssignments = jest.fn().mockResolvedValue(undefined);
   const approveRequest = jest.fn().mockResolvedValue(undefined);
+  const removePending = jest.fn().mockResolvedValue(undefined);
   const rejectRequest = jest.fn().mockResolvedValue(undefined);
 
   mockUsePlatformAdminProjects.mockReturnValue({
@@ -76,8 +84,19 @@ function setupPlatformAdmin(
     isError: false,
     error: null,
   });
+  mockUsePlatformAdminPendingAssignments.mockImplementation((project: string) => ({
+    data: pendingAssignmentsByProject[project] ?? [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }));
   mockUseSetPlatformAdminAssignments.mockReturnValue({
     mutateAsync: saveAssignments,
+    isPending: false,
+    error: null,
+  });
+  mockUseRemovePlatformAdminPendingAssignment.mockReturnValue({
+    mutateAsync: removePending,
     isPending: false,
     error: null,
   });
@@ -99,7 +118,7 @@ function setupPlatformAdmin(
 
   render(<PlatformAdmin onBackToProjects={jest.fn()} />);
 
-  return { saveAssignments, approveRequest, rejectRequest };
+  return { saveAssignments, approveRequest, rejectRequest, removePending };
 }
 
 describe('PlatformAdmin user-project access', () => {
@@ -120,7 +139,7 @@ describe('PlatformAdmin user-project access', () => {
     });
   });
 
-  it('imports CSV users by email and reports unmatched rows without saving automatically', async () => {
+  it('imports CSV users by email and saves unmatched emails as pending first-login assignments', async () => {
     const user = userEvent.setup();
     const { saveAssignments } = setupPlatformAdmin();
     const file = new File(['email\nADA@example.com\nmissing@example.com\n'], 'users.csv', {
@@ -129,13 +148,44 @@ describe('PlatformAdmin user-project access', () => {
 
     await user.upload(screen.getByLabelText(/import csv\/txt/i), file);
 
-    expect(await screen.findByText('Imported 1 user; 1 unmatched.')).toBeInTheDocument();
+    expect(await screen.findByText('Imported 1 user, 1 pending first login.')).toBeInTheDocument();
+    expect(screen.getByText('missing@example.com')).toBeInTheDocument();
+    expect(screen.getByText('Will be pending after save')).toBeInTheDocument();
     expect(saveAssignments).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: /save assignments/i }));
 
     await waitFor(() => {
-      expect(saveAssignments).toHaveBeenCalledWith({ project: 'MaxView', userIds: ['user-1'] });
+      expect(saveAssignments).toHaveBeenCalledWith({
+        project: 'MaxView',
+        userIds: ['user-1'],
+        pendingEmails: ['missing@example.com'],
+      });
+    });
+  });
+
+  it('renders pending first-login assignments and allows removal', async () => {
+    const user = userEvent.setup();
+    const { removePending } = setupPlatformAdmin(undefined, [], {
+      MaxView: [
+        {
+          id: 'pending-1',
+          email: 'missing@example.com',
+          project: 'MaxView',
+          assignedBy: 'super-admin',
+          assignedAt: '2026-06-14T12:00:00Z',
+        },
+      ],
+    });
+
+    expect(screen.getByLabelText('MaxView pending first-login users')).toBeInTheDocument();
+    expect(screen.getByText('missing@example.com')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting first login')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /remove pending missing@example\.com/i }));
+
+    await waitFor(() => {
+      expect(removePending).toHaveBeenCalledWith({ project: 'MaxView', email: 'missing@example.com' });
     });
   });
 

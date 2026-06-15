@@ -12,10 +12,9 @@ import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
-import { getAssignmentsForUser, hasAnyAssignments } from '../services/userProjectAssignmentService';
+import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import {
   filterProjectCatalogByNames,
-  listLegacyAllowedProjectsForUser,
   listProjectCatalog,
 } from '../services/projectCatalogService';
 import {
@@ -38,16 +37,6 @@ router.get('/available-models', async (_req: Request, res: Response) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-function getProfileEmail(req: Request): string | undefined {
-  const profile = (req.user as any)?.profile;
-  return (
-    profile?.upn ??
-    profile?.email ??
-    profile?._json?.preferred_username ??
-    profile?._json?.email
-  );
-}
 
 function getProfileOid(req: Request): string | null {
   return (req.user as any)?.profile?.oid ?? null;
@@ -73,8 +62,8 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
 }
 
 // GET /api/projects - List projects available to the current user.
-// Once project assignments are configured, regular users are restricted to
-// assigned projects; before migration setup, retain the legacy ADO allowlist.
+// Super admins see the full catalog; everyone else is restricted to their
+// assigned projects (via user_project_assignments). No legacy fallback.
 router.get('/projects', async (req: Request, res: Response) => {
   try {
     if (isSuperAdminRequest(req)) {
@@ -84,12 +73,6 @@ router.get('/projects', async (req: Request, res: Response) => {
 
     const userId: string | undefined = (req.user as any)?.profile?.oid;
     const assignedProjects = userId ? await getAssignmentsForUser(userId) : [];
-    const assignmentsConfigured = assignedProjects.length > 0 || (await hasAnyAssignments());
-
-    if (!assignmentsConfigured) {
-      res.json(await listLegacyAllowedProjectsForUser(getProfileEmail(req)));
-      return;
-    }
 
     if (assignedProjects.length === 0) {
       res.json([]);
@@ -3751,10 +3734,13 @@ import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getMenuConfig } from '../services/menuSettingsService';
+import { getAppSetting } from '../services/appSettingsService';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 const ALL_MENU_VIEWS: MenuItemKey[] = ['calendar', 'planning', 'cloudcost', 'backlog'];
 
-function readCurrentChangelogVersion(): string {
+async function getCurrentChangelogVersion(): Promise<string> {
+  const dbValue = await getAppSetting('current_changelog_version');
+  if (dbValue) return dbValue;
   try {
     const raw = fs.readFileSync(path.resolve(process.cwd(), 'public/CHANGELOG.json'), 'utf8');
     const entries = JSON.parse(raw) as Array<{ version: string }>;
@@ -3764,10 +3750,6 @@ function readCurrentChangelogVersion(): string {
   }
 }
 
-// Cached at startup — the version only changes on deployment so a module-level
-// read is sufficient and avoids a file-system hit on every permissions request.
-const CURRENT_CHANGELOG_VERSION = readCurrentChangelogVersion();
-
 router.get('/me/permissions', attachPermissions, async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req.user as any)?.profile?.oid;
@@ -3776,10 +3758,11 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
-    const [permSet, roles, changelogPrefs] = await Promise.all([
+    const [permSet, roles, changelogPrefs, currentVersion] = await Promise.all([
       getUserPermissions(userId),
       getUserRoleNames(userId),
       getChangelogPrefs(userId),
+      getCurrentChangelogVersion(),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -3789,7 +3772,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       roles,
       userId,
       isSuperAdmin: superAdmin,
-      changelogUnread: changelogPrefs.lastSeenVersion !== CURRENT_CHANGELOG_VERSION,
+      changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
     });
   } catch {
@@ -3813,7 +3796,7 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       showChangelogOnLogin?: boolean;
     };
     const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
-    if (markChangelogRead === true) updates.lastSeenChangelogVersion = CURRENT_CHANGELOG_VERSION;
+    if (markChangelogRead === true) updates.lastSeenChangelogVersion = await getCurrentChangelogVersion();
     if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
     await updateChangelogPrefs(userId, updates);
     res.json({ ok: true });

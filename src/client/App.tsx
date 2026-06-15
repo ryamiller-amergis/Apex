@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -164,15 +164,6 @@ function App() {
     }
   }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
 
-  // Auto-show changelog once per session when the user lands on /home with an
-  // unread version, unless they've opted out via showChangelogOnLogin.
-  const hasAutoShownChangelog = useRef(false);
-  useEffect(() => {
-    if (currentView === 'home' && hasUnreadChangelog && showChangelogOnLogin && !hasAutoShownChangelog.current) {
-      hasAutoShownChangelog.current = true;
-      setShowChangelog(true);
-    }
-  }, [currentView, hasUnreadChangelog, showChangelogOnLogin, setShowChangelog]);
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
@@ -215,6 +206,19 @@ function App() {
           }}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
+          hasUnreadChangelog={hasUnreadChangelog}
+          showChangelogOnLogin={showChangelogOnLogin}
+          showChangelog={showChangelog}
+          onSetShowChangelog={setShowChangelog}
+          onMarkChangelogAsRead={handleMarkChangelogAsRead}
+          onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
+        />
+        <Changelog
+          isOpen={showChangelog}
+          onClose={() => setShowChangelog(false)}
+          onMarkAsRead={handleMarkChangelogAsRead}
+          showOnLogin={showChangelogOnLogin}
+          onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
         />
       </ErrorBoundary>
     );

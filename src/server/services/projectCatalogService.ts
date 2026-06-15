@@ -19,18 +19,9 @@ export const APEX_VIRTUAL_PROJECT: ProjectCatalogItem = {
   description: 'AI Pilot self-development - requirement flows & orchestration',
 };
 
-const APEX_ALLOWED_EMAILS = new Set(['ryamiller@amergis.com', 'anedunur@amergis.com']);
-
 type ProjectRefRow = {
   project: string | null;
 };
-
-function parseAllowedProjects(): string[] {
-  return (process.env.ADO_ALLOWED_PROJECTS || 'MaxView,MatterWorx')
-    .split(',')
-    .map((project) => project.trim())
-    .filter(Boolean);
-}
 
 function stableProjectId(name: string): string {
   const slug = name
@@ -140,29 +131,4 @@ export async function listProjectCatalog(): Promise<ProjectCatalogItem[]> {
     APEX_VIRTUAL_PROJECT,
     ...databaseProjectNames.map(fromProjectName),
   ]);
-}
-
-export async function listLegacyAllowedProjectsForUser(userEmail?: string): Promise<ProjectCatalogItem[]> {
-  const adoService = new AzureDevOpsService();
-  let projects = await adoService.getProjects();
-  const allowList = parseAllowedProjects();
-
-  if (allowList.length > 0) {
-    const allowed = new Set(allowList.map((project) => project.toLowerCase()));
-    projects = projects.filter((project) => allowed.has(project.name.toLowerCase()));
-    projects.sort((a, b) => (
-      allowList.findIndex((project) => project.toLowerCase() === a.name.toLowerCase())
-      - allowList.findIndex((project) => project.toLowerCase() === b.name.toLowerCase())
-    ));
-  }
-
-  if (userEmail && APEX_ALLOWED_EMAILS.has(userEmail.toLowerCase())) {
-    projects = [...projects, APEX_VIRTUAL_PROJECT];
-  }
-
-  return projects.map((project) => ({
-    id: project.id || stableProjectId(project.name),
-    name: project.name,
-    description: project.description ?? '',
-  }));
 }

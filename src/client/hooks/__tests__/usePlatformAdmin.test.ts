@@ -4,7 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
+  usePlatformAdminPendingAssignments,
   usePlatformAdminUsers,
+  useRemovePlatformAdminPendingAssignment,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
 } from '../usePlatformAdmin';
@@ -86,6 +88,42 @@ describe('usePlatformAdminUsers', () => {
   });
 });
 
+describe('usePlatformAdminPendingAssignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches pending project assignments for a project', async () => {
+    mockFetchOk({
+      pending: [
+        {
+          id: 'pending-1',
+          email: 'missing@example.com',
+          project: 'MaxView',
+          assignedBy: 'super-admin',
+          assignedAt: '2026-06-14T12:00:00Z',
+        },
+      ],
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => usePlatformAdminPendingAssignments('MaxView'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([
+      {
+        id: 'pending-1',
+        email: 'missing@example.com',
+        project: 'MaxView',
+        assignedBy: 'super-admin',
+        assignedAt: '2026-06-14T12:00:00Z',
+      },
+    ]);
+    expect(global.fetch).toHaveBeenCalledWith('/api/platform-admin/pending-assignments/MaxView', {
+      credentials: 'include',
+    });
+  });
+});
+
 describe('usePlatformAdminMenuConfigs', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -107,7 +145,7 @@ describe('usePlatformAdminMenuConfigs', () => {
 describe('platform admin mutations', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('updates project assignments and invalidates assignment queries', async () => {
+  it('updates project assignments with pending emails and invalidates assignment queries', async () => {
     mockFetchOk(undefined, 204);
     const { queryClient, wrapper } = createWrapper();
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
@@ -115,7 +153,11 @@ describe('platform admin mutations', () => {
     const { result } = renderHook(() => useSetPlatformAdminAssignments(), { wrapper });
 
     await act(async () => {
-      await result.current.mutateAsync({ project: 'MaxView', userIds: ['user-1', 'user-2'] });
+      await result.current.mutateAsync({
+        project: 'MaxView',
+        userIds: ['user-1', 'user-2'],
+        pendingEmails: ['missing@example.com'],
+      });
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
@@ -123,10 +165,35 @@ describe('platform admin mutations', () => {
       expect.objectContaining({
         method: 'PUT',
         credentials: 'include',
-        body: JSON.stringify({ userIds: ['user-1', 'user-2'] }),
+        body: JSON.stringify({
+          userIds: ['user-1', 'user-2'],
+          pendingEmails: ['missing@example.com'],
+        }),
       }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['platform-admin', 'assignments'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['platform-admin', 'pending-assignments', 'MaxView'] });
+  });
+
+  it('removes a pending assignment and invalidates pending assignments', async () => {
+    mockFetchOk(undefined, 204);
+    const { queryClient, wrapper } = createWrapper();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useRemovePlatformAdminPendingAssignment(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ project: 'MaxView', email: 'missing@example.com' });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/platform-admin/pending-assignments/MaxView/missing%40example.com',
+      expect.objectContaining({
+        method: 'DELETE',
+        credentials: 'include',
+      }),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['platform-admin', 'pending-assignments', 'MaxView'] });
   });
 
   it('updates menu settings and invalidates platform and app menu config queries', async () => {

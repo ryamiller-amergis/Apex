@@ -28,7 +28,6 @@ function mockProjectReferenceRows(...rowSets: Array<Array<{ project: string | nu
 describe('projectCatalogService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.ADO_ALLOWED_PROJECTS = 'MaxView,MatterWorx';
     (AzureDevOpsService as jest.Mock).mockImplementation(() => ({
       getProjects: mockGetProjects,
     }));

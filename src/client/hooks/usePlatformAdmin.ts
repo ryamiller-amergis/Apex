@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MenuItemKey, ProjectMenuConfig } from '../../shared/types/menuSettings';
 import type {
   CreateProjectAccessRequestsRequest,
+  PendingProjectAssignment,
+  PendingProjectAssignmentsResponse,
   PlatformAdminAccessRequest,
   PlatformAdminAccessRequestsResponse,
   PlatformAdminAssignmentsResponse,
@@ -22,6 +24,7 @@ export const platformAdminQueryKeys = {
   projects: ['platform-admin', 'projects'] as const,
   assignments: ['platform-admin', 'assignments'] as const,
   assignment: (project: string | null) => ['platform-admin', 'assignments', project] as const,
+  pendingAssignments: (project: string | null) => ['platform-admin', 'pending-assignments', project] as const,
   users: ['platform-admin', 'users'] as const,
   accessRequests: (status: ProjectAccessRequestStatus | 'all' = 'pending') => ['platform-admin', 'access-requests', status] as const,
   menuSettings: ['platform-admin', 'menu-settings'] as const,
@@ -87,20 +90,49 @@ export function usePlatformAdminUsers() {
   });
 }
 
+export function usePlatformAdminPendingAssignments(project: string | null) {
+  return useQuery<PendingProjectAssignment[]>({
+    queryKey: platformAdminQueryKeys.pendingAssignments(project),
+    queryFn: async () => {
+      const data = await platformAdminFetch<PendingProjectAssignmentsResponse>(
+        `/api/platform-admin/pending-assignments/${encodeURIComponent(project!)}`,
+      );
+      return data.pending;
+    },
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+}
+
 export function useSetPlatformAdminAssignments() {
   const queryClient = useQueryClient();
   return useMutation<void, Error, { project: string } & SetProjectAssignmentsRequest>({
-    mutationFn: ({ project, userIds }) =>
+    mutationFn: ({ project, userIds, pendingEmails }) =>
       platformAdminFetch<void>(`/api/platform-admin/assignments/${encodeURIComponent(project)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userIds }),
+        body: JSON.stringify({ userIds, pendingEmails }),
       }),
     onSuccess: (_data, { project }) => {
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.projects });
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.assignments });
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.assignment(project) });
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.pendingAssignments(project) });
       queryClient.invalidateQueries({ queryKey: ['ado-projects'] });
+    },
+  });
+}
+
+export function useRemovePlatformAdminPendingAssignment() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { project: string; email: string }>({
+    mutationFn: ({ project, email }) =>
+      platformAdminFetch<void>(
+        `/api/platform-admin/pending-assignments/${encodeURIComponent(project)}/${encodeURIComponent(email)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: (_data, { project }) => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.pendingAssignments(project) });
     },
   });
 }
