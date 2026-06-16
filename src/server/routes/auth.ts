@@ -19,7 +19,7 @@ const azureAdConfig: any = {
   passReqToCallback: false,
   scope: ['profile', 'openid', 'email', 'User.Read'],
   loggingLevel: 'info' as const,
-  loggingNoPII: false,
+  loggingNoPII: true,
 };
 
 console.log('Azure AD Config:', {
@@ -34,7 +34,7 @@ passport.use(
   new OIDCStrategy(
     azureAdConfig,
     (iss: any, sub: any, profile: any, accessToken: any, refreshToken: any, done: any) => {
-      console.log('Authentication successful for user:', profile.displayName || profile.upn);
+      console.log('Authentication successful', { oid: profile?.oid ?? sub });
       // Store user profile and tokens
       const user = {
         profile,

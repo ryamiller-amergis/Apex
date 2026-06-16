@@ -65,14 +65,17 @@ function findOutputFile(dir: string, pattern: RegExp): string | null {
   return all.length > 0 ? all[0] : null;
 }
 
-async function resolveOutputDir(threadId: string): Promise<string | null> {
+async function resolveWorkspaceDir(threadId: string): Promise<string | null> {
   const row = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
     columns: { workspaceDir: true },
   });
-  return row?.workspaceDir
-    ? path.join(row.workspaceDir, '.ai-pilot', 'output')
-    : null;
+  return row?.workspaceDir ?? null;
+}
+
+async function resolveOutputDir(threadId: string): Promise<string | null> {
+  const ws = await resolveWorkspaceDir(threadId);
+  return ws ? path.join(ws, '.ai-pilot', 'output') : null;
 }
 
 async function cleanupWorkspace(
@@ -331,7 +334,21 @@ export async function readOutputTestCases(
 ): Promise<unknown | null> {
   const outputDir = await resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const file = findOutputFile(outputDir, /\.test-cases\.json$/i);
+
+  let file = findOutputFile(outputDir, /\.test-cases\.json$/i);
+
+  // Fallback: search the entire workspace in case the agent wrote the file
+  // outside the expected .ai-pilot/output/ directory
+  if (!file) {
+    const wsDir = await resolveWorkspaceDir(threadId);
+    if (wsDir) {
+      file = findOutputFile(wsDir, /\.test-cases\.json$/i);
+      if (file) {
+        console.warn(`[testCase] Found test-cases JSON outside output dir: ${file}`);
+      }
+    }
+  }
+
   if (!file) return null;
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -345,7 +362,19 @@ export async function readOutputTestCasesMd(
 ): Promise<string | null> {
   const outputDir = await resolveOutputDir(threadId);
   if (!outputDir) return null;
-  const file = findOutputFile(outputDir, /\.test-cases\.md$/i);
+
+  let file = findOutputFile(outputDir, /\.test-cases\.md$/i);
+
+  if (!file) {
+    const wsDir = await resolveWorkspaceDir(threadId);
+    if (wsDir) {
+      file = findOutputFile(wsDir, /\.test-cases\.md$/i);
+      if (file) {
+        console.warn(`[testCase] Found test-cases MD outside output dir: ${file}`);
+      }
+    }
+  }
+
   return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
@@ -386,8 +415,16 @@ export async function triggerTestCaseGeneration(
     `prd_id: ${prdId}`,
     `source_thread_id: ${sourceThreadId}`,
     '',
-    `Write outputs to \`.ai-pilot/output/${slug}.test-cases.json\` and \`.ai-pilot/output/${slug}.test-cases.md\`.`,
-    `Patch \`.ai-pilot/output/${slug}.backlog.json\` with \`testCaseCount\` for each PBI.`,
+    '## CRITICAL: Output File Instructions',
+    '',
+    `You MUST write the following output files using the built-in file writing tool (Write / create_file / edit_file).`,
+    `Do NOT use shell commands, Python scripts, or any other method to create these files.`,
+    `The file detection system looks for files matching these exact patterns — if you use shell/python to write them, the files may not be detected.`,
+    '',
+    `Required output files:`,
+    `1. \`.ai-pilot/output/${slug}.test-cases.json\` — the test cases in JSON format`,
+    `2. \`.ai-pilot/output/${slug}.test-cases.md\` — the test cases in markdown format`,
+    `3. Patch \`.ai-pilot/output/${slug}.backlog.json\` with \`testCaseCount\` for each PBI`,
     '',
     'The PRD and backlog are also available as files in `.ai-pilot/output/`.',
     '',

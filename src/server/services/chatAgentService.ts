@@ -447,6 +447,10 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `When the skill instructs you to write output files, write them to \`.ai-pilot/output/\``,
     `using the exact filenames the skill specifies.`,
     ``,
+    `IMPORTANT: Always use the built-in file writing tool (Write / create_file) to create output files.`,
+    `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
+    `File writes via shell/Python may silently fail in this environment.`,
+    ``,
     `# UI rendering note`,
     `When the skill asks the user questions with multiple-choice options, format each option`,
     `as \`a. text\`, \`b. text\`, etc. on its own line — the chat UI renders these as clickable`,
@@ -896,8 +900,8 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
     if (!synced && testCaseRow.status === 'generating') {
       logWorkspaceContents(workspaceDir, `test-case no-output (testCaseId=${testCaseRow.id})`);
       if (agentText) {
-        const preview = agentText.length > 2000 ? agentText.slice(0, 2000) + '…' : agentText;
-        console.warn(`[chat] test-case agent response preview (testCaseId=${testCaseRow.id}):\n${preview}`);
+        const preview = agentText.length > 5000 ? agentText.slice(0, 5000) + '…' : agentText;
+        console.warn(`[chat] test-case agent response (${agentText.length} chars) preview (testCaseId=${testCaseRow.id}):\n${preview}`);
       }
       await markTestCaseFailed(testCaseRow.id, testCaseRow.prdId, threadId);
       console.warn(`[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`);

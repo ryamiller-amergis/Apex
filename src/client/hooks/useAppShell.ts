@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
-import { azureCostService } from '../services/azureCostService';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
@@ -156,11 +155,6 @@ export function useAppShell() {
         queryFn: () => fetch(`/api/releases/epics?project=${enc(selectedProject)}&areaPath=${enc(selectedAreaPath)}`, { credentials: 'include' }).then(r => r.ok ? r.json() : []),
         staleTime: 5 * 60 * 1000,
       });
-      const stagger = window.setTimeout(() => {
-        queryClient.prefetchQuery({ queryKey: ['azureSubscriptions'], queryFn: () => azureCostService.getSubscriptionsWithResourceGroups(), staleTime: 10 * 60 * 1000 });
-        queryClient.prefetchQuery({ queryKey: ['azureDashboard'], queryFn: () => azureCostService.getDashboardData(5), staleTime: 5 * 60 * 1000 });
-      }, 600);
-      return () => window.clearTimeout(stagger);
     }, 2000);
     return () => window.clearTimeout(delay);
   }, [isAuthenticated, loading, selectedProject, selectedAreaPath, queryClient]);

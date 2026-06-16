@@ -56,6 +56,8 @@ jest.mock('../services/prdService', () => ({
 import {
   getTestCases,
   listLatestTestCaseSummariesForPrds,
+  readOutputTestCases,
+  readOutputTestCasesMd,
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
@@ -313,6 +315,82 @@ describe('testCaseService', () => {
         }),
       );
       expect(fs.existsSync(workspaceDir)).toBe(false);
+    });
+  });
+
+  describe('readOutputTestCases — fallback workspace search', () => {
+    it('finds test-cases JSON in the standard output dir', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-read-'));
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+      const payload = { suites: [{ pbiId: 'PBI-1', testCases: [] }] };
+      fs.writeFileSync(path.join(outputDir, 'slug.test-cases.json'), JSON.stringify(payload), 'utf-8');
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir });
+
+      try {
+        const result = await readOutputTestCases('thread-1');
+        expect(result).toEqual(payload);
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to workspace-wide search when file is outside output dir', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-fallback-'));
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+
+      // Write the file to .ai-pilot/ instead of .ai-pilot/output/
+      const payload = { suites: [{ pbiId: 'PBI-2', testCases: [{ id: 'TC-1' }] }] };
+      fs.writeFileSync(
+        path.join(workspaceDir, '.ai-pilot', 'slug.test-cases.json'),
+        JSON.stringify(payload),
+        'utf-8',
+      );
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir });
+
+      try {
+        const result = await readOutputTestCases('thread-2');
+        expect(result).toEqual(payload);
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns null when no test-cases JSON exists anywhere in the workspace', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-empty-'));
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir });
+
+      try {
+        const result = await readOutputTestCases('thread-3');
+        expect(result).toBeNull();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('readOutputTestCasesMd — fallback workspace search', () => {
+    it('falls back to workspace-wide search when md file is outside output dir', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-md-'));
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(workspaceDir, '.ai-pilot', 'slug.test-cases.md'),
+        '# Fallback Test Cases',
+        'utf-8',
+      );
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir });
+
+      try {
+        const result = await readOutputTestCasesMd('thread-4');
+        expect(result).toBe('# Fallback Test Cases');
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
     });
   });
 });
