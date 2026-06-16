@@ -9,9 +9,11 @@ import {
   useRegeneratePrototype,
   useRetryPrototype,
   useReviewPrototype,
+  useReopenPrototype,
   useAddPrototypeComment,
   useResolvePrototypeComment,
 } from '../hooks/useDesignPrototypes';
+import { useDesignDocsByPrd } from '../hooks/useInterviews';
 import { UiMockPreview } from './UiMockPreview';
 import { ReviewReasonModal } from './ReviewReasonModal';
 import {
@@ -43,6 +45,7 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   const { data: prototypes = [], isLoading: isLoadingList } = usePrototypesForPrd(prdId);
   const { data: prototypeAssignments = [] } = usePrototypeAssignments(prdId);
+  const { data: relatedDesignDocs = [] } = useDesignDocsByPrd(prdId);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const selectedProto = prototypes[selectedIndex] ?? null;
@@ -73,13 +76,15 @@ const DesignPrototypeReviewView: React.FC = () => {
   const regenerate = useRegeneratePrototype();
   const retry = useRetryPrototype();
   const review = useReviewPrototype();
+  const reopenPrototype = useReopenPrototype();
   const addComment = useAddPrototypeComment();
   const resolveComment = useResolvePrototypeComment();
 
   const approvedCount = prototypes.filter(p => p.status === 'approved').length;
   const totalCount = prototypes.length;
 
-  const isBusy = regenerate.isPending || retry.isPending || review.isPending;
+  const isBusy = regenerate.isPending || retry.isPending || review.isPending || reopenPrototype.isPending;
+  const hasDesignDocs = relatedDesignDocs.length > 0;
   const mutationError = review.error ?? regenerate.error ?? addComment.error;
 
   const handleRegenerate = useCallback(() => {
@@ -340,9 +345,26 @@ const DesignPrototypeReviewView: React.FC = () => {
                 </>
               )}
               {selectedProto?.status === 'approved' && (
-                <span className={`${styles.badge} ${styles.badgeApproved}`}>
-                  Approved
-                </span>
+                <>
+                  <span className={`${styles.badge} ${styles.badgeApproved}`}>
+                    Approved
+                  </span>
+                  {isAdmin && (
+                    <button
+                      className={styles.btnSecondary}
+                      onClick={() => selectedProto && reopenPrototype.mutate(selectedProto.id)}
+                      disabled={reopenPrototype.isPending || hasDesignDocs}
+                      type="button"
+                      title={
+                        hasDesignDocs
+                          ? 'Cannot reopen — design docs have already been created for this PRD'
+                          : 'Admin: force this prototype back to Pending Review'
+                      }
+                    >
+                      {reopenPrototype.isPending ? 'Reopening…' : 'Reopen for Review'}
+                    </button>
+                  )}
+                </>
               )}
             </>
           )}

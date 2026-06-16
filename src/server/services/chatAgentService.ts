@@ -348,6 +348,7 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
         `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
         `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
         `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
+        `- \`userTypes\` / \`personaBehaviors\` belong on Features and PBIs only (for design prototypes). TBIs must NOT have these fields — remove them if present; never add them to TBIs.`,
         `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
         ``,
         `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,

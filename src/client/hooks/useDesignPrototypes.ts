@@ -139,6 +139,18 @@ export function useReviewPrototype() {
   });
 }
 
+export function useReopenPrototype() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/api/design-prototypes/${id}/reopen`, { method: 'POST' }),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['design-prototype', id] });
+      qc.invalidateQueries({ queryKey: ['design-prototypes'] });
+    },
+  });
+}
+
 export function useAddPrototypeComment() {
   const qc = useQueryClient();
   return useMutation({

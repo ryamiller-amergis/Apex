@@ -1,6 +1,6 @@
 import { eq, and, asc, desc, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designPrototypes, designPrototypeComments, designPlans, prds } from '../db/schema';
+import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import type { DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
@@ -567,6 +567,45 @@ export async function reviewPrototype(
   if (action === 'approve') {
     await checkAllApprovedAndProceed(proto.prdId);
   }
+}
+
+export async function reopenPrototypeForReview(prototypeId: string): Promise<void> {
+  const proto = await db.query.designPrototypes.findFirst({
+    where: eq(designPrototypes.id, prototypeId),
+  });
+  if (!proto) {
+    throw Object.assign(new Error(`Prototype ${prototypeId} not found`), { status: 404 });
+  }
+  if (proto.status !== 'approved') {
+    throw Object.assign(
+      new Error(`Cannot reopen a prototype in status '${proto.status}'`),
+      { status: 409 },
+    );
+  }
+
+  const existingDocs = await db
+    .select({ id: designDocs.id })
+    .from(designDocs)
+    .where(eq(designDocs.prdId, proto.prdId))
+    .limit(1);
+
+  if (existingDocs.length > 0) {
+    throw Object.assign(
+      new Error('Cannot reopen — design docs have already been created for this PRD'),
+      { status: 409 },
+    );
+  }
+
+  await db
+    .update(designPrototypes)
+    .set({
+      status: 'pending_review',
+      reviewerId: null,
+      reviewComment: null,
+      reviewedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(designPrototypes.id, prototypeId));
 }
 
 export async function checkAllApprovedAndProceed(prdId: string): Promise<boolean> {

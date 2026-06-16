@@ -761,7 +761,9 @@ const ItemCard: React.FC<{
             </div>
           )}
 
-          <UserTypePersonas userTypes={item.userTypes} personaBehaviors={item.personaBehaviors} />
+          {isPbi && (
+            <UserTypePersonas userTypes={item.userTypes} personaBehaviors={item.personaBehaviors} />
+          )}
 
           {isPbi && item.businessRules && item.businessRules.length > 0 && (
             <div className={styles.itemSection}>

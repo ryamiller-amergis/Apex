@@ -173,6 +173,22 @@ const SKIP_FIELDS = new Set([
   'parallelGroup',
 ]);
 
+/** Persona fields on TBIs are intentionally absent — hide from fix diffs. */
+const TBI_PERSONA_FIELDS = new Set(['userTypes', 'personaBehaviors']);
+
+function isTbiItem(item: BacklogItem): boolean {
+  return item.type === 'TBI';
+}
+
+function filterTbiPersonaFieldChanges(
+  fields: FieldChange[],
+  oldItem: BacklogItem,
+  newItem: BacklogItem,
+): FieldChange[] {
+  if (!isTbiItem(oldItem) && !isTbiItem(newItem)) return fields;
+  return fields.filter((f) => !TBI_PERSONA_FIELDS.has(f.field));
+}
+
 const FIELD_LABELS: Record<string, string> = {
   title: 'Title',
   description: 'Description',
@@ -327,7 +343,11 @@ function diffItems(
     });
   }
   for (const [oldItem, newItem] of matched) {
-    const fields = diffFields(oldItem as Record<string, unknown>, newItem as Record<string, unknown>);
+    const fields = filterTbiPersonaFieldChanges(
+      diffFields(oldItem as Record<string, unknown>, newItem as Record<string, unknown>),
+      oldItem,
+      newItem,
+    );
     if (fields.length > 0) {
       changes.push({
         kind: 'modified',

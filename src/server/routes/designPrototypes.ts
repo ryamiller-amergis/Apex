@@ -9,6 +9,7 @@ import {
   regeneratePrototype,
   retryPrototype,
   reviewPrototype,
+  reopenPrototypeForReview,
   listComments,
   addComment,
   resolveComment,
@@ -114,6 +115,24 @@ router.post('/:id/retry', requirePermission('interviews:manage'), async (req, re
     await retryPrototype(req.params.id);
     res.json({ ok: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /:id/reopen — admin-only: force an approved prototype back to pending_review
+router.post('/:id/reopen', requirePermission('admin:roles'), async (req, res, next) => {
+  try {
+    await reopenPrototypeForReview(req.params.id);
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err.status === 404) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    if (err.status === 409) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
