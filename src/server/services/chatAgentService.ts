@@ -884,7 +884,7 @@ function logAgentError(threadId: string, err: unknown): void {
  * After an agent run completes, sync workspace output files directly to Postgres
  * by looking up which entity (PRD or design doc) owns this thread.
  */
-async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<void> {
+async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?: string): Promise<void> {
   let fullySynced = false;
 
   // Check if this thread belongs to a test-case generation run
@@ -895,6 +895,10 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
     const synced = await syncTestCaseOutput(testCaseRow.id, testCaseRow.prdId, threadId);
     if (!synced && testCaseRow.status === 'generating') {
       logWorkspaceContents(workspaceDir, `test-case no-output (testCaseId=${testCaseRow.id})`);
+      if (agentText) {
+        const preview = agentText.length > 2000 ? agentText.slice(0, 2000) + '…' : agentText;
+        console.warn(`[chat] test-case agent response preview (testCaseId=${testCaseRow.id}):\n${preview}`);
+      }
       await markTestCaseFailed(testCaseRow.id, testCaseRow.prdId, threadId);
       console.warn(`[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`);
     }
@@ -1397,7 +1401,7 @@ export async function sendMessage(
 
     // Sync output artifacts directly to Postgres
     try {
-      await syncOutputToDb(threadId, state.thread.workspaceDir);
+      await syncOutputToDb(threadId, state.thread.workspaceDir, agentTextBuffer);
     } catch (err) {
       console.error(`[chat] post-run DB sync failed for thread ${threadId}:`, err);
     }
