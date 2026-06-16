@@ -1202,7 +1202,14 @@ export const DesignDocReviewView: React.FC = () => {
         });
         return;
       }
+      // Thread not found — treat as completed with error so the UI doesn't get stuck
+      clearApexFixInProgress('design-doc-validation', doc.id);
       fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      fixFlowDispatch({
+        type: 'FIX_COMPLETE',
+        gapChanges: [],
+        agentError: 'The fix session is no longer available. You can try again.',
+      });
     })();
 
     return () => {
@@ -1401,10 +1408,24 @@ export const DesignDocReviewView: React.FC = () => {
     const { threadId } = fixFlow;
     let cancelled = false;
 
+    let notFoundCount = 0;
     const poll = async () => {
       try {
         const thread = await fetchChatThreadStatus(threadId);
-        if (cancelled || !thread) return;
+        if (cancelled) return;
+        if (!thread) {
+          notFoundCount++;
+          if (notFoundCount >= 3) {
+            clearApexFixInProgress('design-doc-validation', id);
+            fixFlowDispatch({
+              type: 'FIX_COMPLETE',
+              gapChanges: [],
+              agentError: 'The fix session is no longer available. You can try again.',
+            });
+          }
+          return;
+        }
+        notFoundCount = 0;
         if (thread.status === 'idle' || thread.status === 'error') {
           await qc.refetchQueries({ queryKey: ['design-doc', id] });
           const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });

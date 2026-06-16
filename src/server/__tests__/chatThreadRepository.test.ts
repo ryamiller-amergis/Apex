@@ -123,7 +123,7 @@ describe('upsertThread', () => {
     const chain = (db.insert as jest.Mock).mock.results[0].value;
     const valuesCall = chain.values.mock.calls[0][0];
     // '.cursor/skills/grill-with-docs/SKILL.md' → 'grill-with-docs' → 'Grill With Docs'
-    expect(valuesCall.title).toBe('Grill With Docs');
+    expect(valuesCall.title).toBe('Grill With Docs - Hello, agent!');
   });
 
   it('derives title from first user message when no skillPath', async () => {
@@ -296,6 +296,7 @@ describe('listThreadsByUser', () => {
       flaggedAt: '2026-01-01T12:00:00.000Z',
       createdAt: '2026-01-01T00:00:00.000Z',
       lastActivityAt: '2026-01-02T00:00:00.000Z',
+      firstUserMessage: null,
     },
     {
       id: 'thread-2',
@@ -307,6 +308,7 @@ describe('listThreadsByUser', () => {
       flaggedAt: null,
       createdAt: '2026-01-02T00:00:00.000Z',
       lastActivityAt: '2026-01-03T00:00:00.000Z',
+      firstUserMessage: null,
     },
   ];
 
@@ -329,6 +331,34 @@ describe('listThreadsByUser', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       lastActivityAt: '2026-01-02T00:00:00.000Z',
     });
+  });
+
+  it('maps firstUserMessage to messagePreview for history labels', async () => {
+    const rowWithPreview = {
+      id: 'thread-ak',
+      userId: 'user-1',
+      title: 'App Knowledge - How does auth work?',
+      status: 'idle',
+      kickoff: {
+        project: 'TestProject',
+        repo: 'TestRepo',
+        pillLabel: 'App Knowledge',
+        skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+      },
+      flagged: false,
+      flaggedAt: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastActivityAt: '2026-01-02T00:00:00.000Z',
+      firstUserMessage: 'How does auth work?',
+    };
+    const chain = buildSelectChain([rowWithPreview]);
+    (db.select as jest.Mock).mockReturnValue(chain);
+
+    const result = await listThreadsByUser('user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].messagePreview).toBe('How does auth work?');
+    expect(result[0].kickoff.pillLabel).toBe('App Knowledge');
   });
 
   it('substitutes "Untitled" for null title', async () => {

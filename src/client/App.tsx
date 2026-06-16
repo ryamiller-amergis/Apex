@@ -510,6 +510,7 @@ function App() {
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}
           onSelectThread={(id) => setActiveThreadId(id || null)}
+          selectedProject={selectedProject}
           canStartNewChat={!!defaultAgentRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}

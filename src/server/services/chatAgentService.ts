@@ -739,7 +739,7 @@ export const getThreadAsync = getThread;
 
 export async function listThreadSummaries(
   userId: string,
-  opts?: { limit?: number; offset?: number },
+  opts?: { limit?: number; offset?: number; project?: string },
 ): Promise<ChatThreadSummary[]> {
   return pgListThreadsByUser(userId, opts);
 }
@@ -1214,9 +1214,7 @@ export async function sendMessage(
   state.thread.messages.push(userMsg);
   state.thread.lastActivityAt = userMsg.ts;
   broadcast(state, { type: 'message', message: userMsg });
-  pgInsertMessage(threadId, userMsg).catch((err: Error) =>
-    console.error('[chat] pg insertMessage (user) failed:', err.message),
-  );
+  await pgInsertMessage(threadId, userMsg);
 
   // Update status
   state.thread.status = 'running';
@@ -1387,9 +1385,7 @@ export async function sendMessage(
         };
         state.thread.messages.push(agentMsg);
         broadcast(state, { type: 'message', message: agentMsg });
-        pgInsertMessage(threadId, agentMsg).catch((err: Error) =>
-          console.error('[chat] pg insertMessage (agent) failed:', err.message),
-        );
+        await pgInsertMessage(threadId, agentMsg);
       }
 
       state.thread.status = 'idle';
@@ -1506,31 +1502,41 @@ export async function closeThread(threadId: string): Promise<void> {
     state.agent = null;
   }
 
+  // Persist status=closed so history survives idle eviction and server restarts.
+  state.thread.status = 'closed';
+  await pgUpsertThread(state.thread);
+
   threads.delete(threadId);
 
   // Clean up workspace directory
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
   } catch { /* non-fatal */ }
+}
 
-  // Never delete the chat_threads row when another table references it via
-  // ON DELETE CASCADE — doing so silently wipes the parent document.
-  //   - interviews.chat_thread_id  → CASCADE (deletes the interview)
-  //   - prds.chat_thread_id        → CASCADE (deletes the PRD)
-  // Design-doc thread columns don't have CASCADE FKs today, but deleting the
-  // row would orphan the workspace reference and break recovery/sync. Guard
-  // them the same way so document data is never lost.
-  if (state.isInterviewThread) return;
+/**
+ * Permanently delete a thread from memory, workspace, AND PostgreSQL.
+ * Only used for explicit user-initiated deletion (DELETE route).
+ */
+export async function permanentlyDeleteThread(threadId: string): Promise<void> {
+  const state = await ensureThreadState(threadId);
 
-  const backsDocument = await threadBacksDocument(threadId);
-  if (backsDocument) {
-    console.log(`[chat] closeThread: skipping pg delete — thread ${threadId} backs a ${backsDocument}`);
-    return;
+  if (state) {
+    if (state.idleTimer) clearTimeout(state.idleTimer);
+
+    if (state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+
+    threads.delete(threadId);
+
+    try {
+      fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
+    } catch { /* non-fatal */ }
   }
 
-  pgDeleteThread(threadId).catch((err: Error) =>
-    console.error('[chat] pg deleteThread failed:', err.message),
-  );
+  await pgDeleteThread(threadId);
 }
 
 function resolveOutputDir(threadId: string): string | null {

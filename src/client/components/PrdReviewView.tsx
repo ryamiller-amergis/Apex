@@ -709,7 +709,13 @@ export const PrdReviewView: React.FC = () => {
         });
         return;
       }
+      // Thread not found — treat as completed with error so the UI doesn't get stuck
+      clearApexFixInProgress('prd-validation', prd.id);
       prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      prdFixFlowDispatch({
+        type: 'FIX_COMPLETE',
+        agentError: 'The fix session is no longer available. You can try again.',
+      });
     })();
 
     return () => {
@@ -723,10 +729,23 @@ export const PrdReviewView: React.FC = () => {
     const { threadId } = prdFixFlow;
     let cancelled = false;
 
+    let notFoundCount = 0;
     const poll = async () => {
       try {
         const thread = await fetchChatThreadStatus(threadId);
-        if (cancelled || !thread) return;
+        if (cancelled) return;
+        if (!thread) {
+          notFoundCount++;
+          if (notFoundCount >= 3) {
+            clearApexFixInProgress('prd-validation', id);
+            prdFixFlowDispatch({
+              type: 'FIX_COMPLETE',
+              agentError: 'The fix session is no longer available. You can try again.',
+            });
+          }
+          return;
+        }
+        notFoundCount = 0;
         if (thread.status === 'idle' || thread.status === 'error') {
           await queryClient.refetchQueries({ queryKey: ['prd', id] });
           if (!cancelled) {

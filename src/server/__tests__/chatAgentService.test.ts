@@ -85,10 +85,14 @@ jest.mock('../utils/retry', () => ({
 
 // ── Imports ───────────────────────────────────────────────────────────────────
 
-import { createThread, closeThread, markAsInterviewThread } from '../services/chatAgentService';
+import { createThread, closeThread, permanentlyDeleteThread, markAsInterviewThread } from '../services/chatAgentService';
 
-const { deleteThread: mockPgDeleteThread } = jest.requireMock('../services/chatThreadRepository') as {
+const {
+  deleteThread: mockPgDeleteThread,
+  upsertThread: mockPgUpsertThread,
+} = jest.requireMock('../services/chatThreadRepository') as {
   deleteThread: jest.Mock;
+  upsertThread: jest.Mock;
 };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -149,7 +153,7 @@ describe('closeThread — thread retention', () => {
     expect(mockPgDeleteThread).not.toHaveBeenCalled();
   });
 
-  it('deletes the chat_threads row for a standalone thread with no document backing', async () => {
+  it('upserts with status=closed for a standalone thread (never deletes)', async () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
@@ -158,13 +162,50 @@ describe('closeThread — thread retention', () => {
 
     await closeThread(thread.id);
 
-    expect(mockPgDeleteThread).toHaveBeenCalledWith(thread.id);
+    expect(mockPgDeleteThread).not.toHaveBeenCalled();
+    expect(mockPgUpsertThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: thread.id, status: 'closed' }),
+    );
   });
 
   it('is a no-op for a thread ID that no longer exists in memory or DB', async () => {
     await closeThread('nonexistent-thread-id');
 
     expect(mockPgDeleteThread).not.toHaveBeenCalled();
+  });
+});
+
+// ── permanentlyDeleteThread ───────────────────────────────────────────────────
+
+describe('permanentlyDeleteThread', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  it('calls pgDeleteThread for explicit user deletion', async () => {
+    const thread = await createThread(
+      'user-1',
+      { project: 'proj', repo: 'org/repo', branch: 'main' },
+      { skipAutoKickoff: true },
+    );
+
+    await permanentlyDeleteThread(thread.id);
+
+    expect(mockPgDeleteThread).toHaveBeenCalledWith(thread.id);
+  });
+
+  it('calls pgDeleteThread even for a thread not in memory', async () => {
+    await permanentlyDeleteThread('nonexistent-thread-id');
+
+    expect(mockPgDeleteThread).toHaveBeenCalledWith('nonexistent-thread-id');
   });
 });
 

@@ -18,6 +18,10 @@ jest.mock('../services/chatThreadRepository', () => ({
   loadFullThread: jest.fn(),
 }));
 
+jest.mock('../services/chatAgentService', () => ({
+  getThread: jest.fn(),
+}));
+
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: jest.fn(),
 }));
@@ -32,6 +36,7 @@ jest.mock('../services/documentApprovalService', () => ({
 
 import { db } from '../db/drizzle';
 import { loadFullThread } from '../services/chatThreadRepository';
+import { getThread } from '../services/chatAgentService';
 import { getUserPermissions } from '../services/rbacService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from '../services/documentApprovalService';
@@ -42,6 +47,7 @@ import {
 } from '../services/threadAccessService';
 
 const mockLoadFullThread = loadFullThread as jest.Mock;
+const mockGetThread = getThread as jest.Mock;
 const mockGetUserPermissions = getUserPermissions as jest.Mock;
 const mockIsAdminUser = isAdminUser as jest.Mock;
 const mockIsAssignedApprover = isAssignedApprover as jest.Mock;
@@ -68,6 +74,7 @@ const baseThread: ChatThread = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetThread.mockResolvedValue(baseThread);
   mockLoadFullThread.mockResolvedValue(baseThread);
   mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
   mockIsAdminUser.mockResolvedValue(false);
@@ -114,6 +121,7 @@ describe('resolveThreadAccess', () => {
   });
 
   it('returns null when the thread does not exist', async () => {
+    mockGetThread.mockResolvedValue(null);
     mockLoadFullThread.mockResolvedValue(null);
     const result = await resolveThreadAccess('viewer-1', 'missing');
     expect(result).toBeNull();
