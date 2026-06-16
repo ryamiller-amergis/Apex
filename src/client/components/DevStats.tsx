@@ -23,6 +23,40 @@ function parseStatDay(s: string): Date | null {
   return dt;
 }
 
+/** Local calendar date as YYYY-MM-DD (avoids UTC shift from toISOString). */
+function localDateString(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Local calendar date from an ADO ISO datetime (avoids UTC slice off-by-one). */
+function changedDateLocalKey(dateString: string): string | null {
+  if (!dateString) return null;
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return parseStatDay(dateString) ? localDateString(parseStatDay(dateString)!) : null;
+  return localDateString(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
+/** All Monday-start week keys from fromDate through toDate inclusive. */
+function weekKeysInRange(fromDate: string, toDate: string): string[] {
+  const start = parseStatDay(fromDate);
+  const end = parseStatDay(toDate);
+  if (!start || !end) return [];
+  const keys: string[] = [];
+  let cur = weekStartMondayKey(start);
+  const last = weekStartMondayKey(end);
+  while (cur <= last) {
+    keys.push(cur);
+    const next = parseStatDay(cur);
+    if (!next) break;
+    next.setDate(next.getDate() + 7);
+    cur = weekStartMondayKey(next);
+  }
+  return keys;
+}
+
 /** Monday-start week bucket id (YYYY-MM-DD of that Monday) */
 function weekStartMondayKey(d: Date): string {
   const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -68,6 +102,8 @@ const PR_FEEDBACK_DATA_KEY = 'devStatsPRFeedbackData';
 const PR_FEEDBACK_LOADING_STATE_KEY = 'devStatsPRFeedbackLoadingState';
 const PR_RESOLUTION_DATA_KEY = 'devStatsPrResolutionData';
 const PR_RESOLUTION_LOADING_STATE_KEY = 'devStatsPrResolutionLoadingState';
+const PR_REVIEW_TAG_DATA_KEY = 'devStatsPrReviewTagData';
+const PR_REVIEW_TAG_LOADING_STATE_KEY = 'devStatsPrReviewTagLoadingState';
 const SESSION_INITIALIZED_KEY = 'devStatsSessionInitialized';
 
 // Check for page refresh once - this runs before component render
@@ -93,6 +129,8 @@ const checkAndClearOnRefresh = () => {
     sessionStorage.removeItem(PR_FEEDBACK_LOADING_STATE_KEY);
     sessionStorage.removeItem(PR_RESOLUTION_DATA_KEY);
     sessionStorage.removeItem(PR_RESOLUTION_LOADING_STATE_KEY);
+    sessionStorage.removeItem(PR_REVIEW_TAG_DATA_KEY);
+    sessionStorage.removeItem(PR_REVIEW_TAG_LOADING_STATE_KEY);
     sessionStorage.setItem(SESSION_INITIALIZED_KEY, 'true');
     return true;
   }
@@ -327,6 +365,33 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     return savedLoading ? 'Loading PR resolution metrics in background...' : '';
   });
 
+  const [prReviewTagWorkItems, setPrReviewTagWorkItems] = useState<WorkItem[]>(() => {
+    if (isPageRefresh) return [];
+    const savedData = sessionStorage.getItem(PR_REVIEW_TAG_DATA_KEY);
+    return savedData ? JSON.parse(savedData).items : [];
+  });
+  const [prReviewTagLoading, setPrReviewTagLoading] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(PR_REVIEW_TAG_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [prReviewTagHasLoaded, setPrReviewTagHasLoaded] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedData = sessionStorage.getItem(PR_REVIEW_TAG_DATA_KEY);
+    return savedData ? JSON.parse(savedData).hasLoaded : false;
+  });
+  const [prReviewTagError, setPrReviewTagError] = useState<string | null>(null);
+  const [showPrReviewTagNotification, setShowPrReviewTagNotification] = useState(() => {
+    if (isPageRefresh) return false;
+    const savedLoading = sessionStorage.getItem(PR_REVIEW_TAG_LOADING_STATE_KEY);
+    return savedLoading ? JSON.parse(savedLoading).loading : false;
+  });
+  const [prReviewTagNotificationMessage, setPrReviewTagNotificationMessage] = useState(() => {
+    if (isPageRefresh) return '';
+    const savedLoading = sessionStorage.getItem(PR_REVIEW_TAG_LOADING_STATE_KEY);
+    return savedLoading ? 'Loading PR review tag trends in background...' : '';
+  });
+
   // Info tooltip state
   const [showChangesInfo, setShowChangesInfo] = useState(false);
   const [showHitRateInfo, setShowHitRateInfo] = useState(false);
@@ -339,11 +404,13 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   const [showAiAdoptionInfo, setShowAiAdoptionInfo] = useState(false);
   const [showPrCycleInfo, setShowPrCycleInfo] = useState(false);
   const [showAiCodeTagInfo, setShowAiCodeTagInfo] = useState(false);
+  const [showPrReviewTagInfo, setShowPrReviewTagInfo] = useState(false);
 
   // Collapse state for sections — all default to collapsed for better visibility
   const [isAiAdoptionCollapsed, setIsAiAdoptionCollapsed] = useState(true);
   const [isPrCycleCollapsed, setIsPrCycleCollapsed] = useState(true);
   const [isAiCodeTagCollapsed, setIsAiCodeTagCollapsed] = useState(true);
+  const [isPrReviewTagCollapsed, setIsPrReviewTagCollapsed] = useState(true);
   const [isChangesCollapsed, setIsChangesCollapsed] = useState(true);
   const [isHitRateCollapsed, setIsHitRateCollapsed] = useState(true);
   const [isPrTimeCollapsed, setIsPrTimeCollapsed] = useState(true);
@@ -682,6 +749,10 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
   useEffect(() => {
     sessionStorage.setItem(PR_RESOLUTION_DATA_KEY, JSON.stringify({ stats: prResolutionStats, hasLoaded: prResolutionHasLoaded }));
   }, [prResolutionStats, prResolutionHasLoaded]);
+
+  useEffect(() => {
+    sessionStorage.setItem(PR_REVIEW_TAG_DATA_KEY, JSON.stringify({ items: prReviewTagWorkItems, hasLoaded: prReviewTagHasLoaded }));
+  }, [prReviewTagWorkItems, prReviewTagHasLoaded]);
 
   const fetchDueDateStats = async () => {
     setLoading(true);
@@ -1215,6 +1286,53 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     ]);
   };
 
+  const fetchPrReviewTagTrends = async () => {
+    setPrReviewTagLoading(true);
+    setPrReviewTagError(null);
+    setShowPrReviewTagNotification(true);
+    setPrReviewTagNotificationMessage('Loading PR review tag trends in background...');
+    sessionStorage.setItem(PR_REVIEW_TAG_LOADING_STATE_KEY, JSON.stringify({ loading: true, timestamp: Date.now() }));
+
+    try {
+      let fromDate = '';
+      let toDate = localDateString(new Date());
+      if (timeFrame === 'custom') {
+        fromDate = customFromDate;
+        toDate = customToDate;
+      } else {
+        const from = new Date();
+        from.setDate(from.getDate() - parseInt(timeFrame || '30', 10));
+        fromDate = localDateString(from);
+      }
+
+      const params = new URLSearchParams();
+      if (fromDate) params.append('from', fromDate);
+      if (toDate) params.append('to', toDate);
+      const selectedTeamDef = teams.find(t => t.id === selectedTeam);
+      if (selectedTeamDef?.areaPath) params.append('areaPath', selectedTeamDef.areaPath);
+
+      const response = await fetch(`/api/pr-review-tag-trends?${params.toString()}`, { credentials: 'include' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string; details?: string };
+        throw new Error(body.details ?? body.error ?? 'Failed to fetch PR review tag trends');
+      }
+
+      const data: WorkItem[] = await response.json();
+      sessionStorage.setItem(PR_REVIEW_TAG_DATA_KEY, JSON.stringify({ items: data, hasLoaded: true }));
+      setPrReviewTagWorkItems(data);
+      setPrReviewTagHasLoaded(true);
+      setPrReviewTagNotificationMessage('PR review tag trends loaded successfully!');
+      setTimeout(() => setShowPrReviewTagNotification(false), 3000);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setPrReviewTagError(errorMsg);
+      setPrReviewTagNotificationMessage(`Error: ${errorMsg}`);
+    } finally {
+      setPrReviewTagLoading(false);
+      sessionStorage.setItem(PR_REVIEW_TAG_LOADING_STATE_KEY, JSON.stringify({ loading: false, timestamp: Date.now() }));
+    }
+  };
+
   // Active member allow-list: allTeamMembers for "all", teamMembers for a specific team.
   // null means the list is still loading — don't filter yet.
   const activeMemberSet = useMemo((): Set<string> | null => {
@@ -1223,6 +1341,21 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
     }
     return teamMembers.length > 0 ? new Set(teamMembers) : null;
   }, [selectedTeam, teamMembers, allTeamMembers]);
+
+  /** Date window for tag-trend queries — follows the DevStats time-frame filter (default last 30 days). */
+  const statsDateRange = useMemo(() => {
+    const fromDate = timeFrame === 'custom'
+      ? customFromDate
+      : (() => {
+        const from = new Date();
+        from.setDate(from.getDate() - parseInt(timeFrame || '30', 10));
+        return localDateString(from);
+      })();
+    const toDate = timeFrame === 'custom'
+      ? customToDate
+      : localDateString(new Date());
+    return { fromDate, toDate };
+  }, [timeFrame, customFromDate, customToDate]);
 
   // Filter the results by developer if needed, and by team if selected
   const filteredStats = useMemo(() => {
@@ -1524,6 +1657,62 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
         nonAiCodeCount: row.nonAiCodeCount,
       }));
   }, [activeMemberSet, customFromDate, customToDate, selectedDeveloper, selectedTeam, teams, timeFrame, workItems]);
+
+  /** Weekly work item counts for pr-reviewed vs pr-review-skipped tags. */
+  const prReviewTagChartData = useMemo(() => {
+    const selectedTeamDef = teams.find(t => t.id === selectedTeam);
+    const { fromDate, toDate } = statsDateRange;
+
+    const hasTag = (tags: string | undefined, tag: string) =>
+      (tags ?? '').split(';').map(t => t.trim().toLowerCase()).includes(tag);
+
+    const bucket = new Map<string, { weekKey: string; prReviewedCount: number; prReviewSkippedCount: number }>();
+    for (const weekKey of weekKeysInRange(fromDate, toDate)) {
+      bucket.set(weekKey, { weekKey, prReviewedCount: 0, prReviewSkippedCount: 0 });
+    }
+
+    for (const item of prReviewTagWorkItems) {
+      if (selectedDeveloper !== 'all' && item.assignedTo !== selectedDeveloper) continue;
+      if (selectedTeamDef?.areaPath && !item.areaPath.startsWith(selectedTeamDef.areaPath)) continue;
+
+      const isReviewed = hasTag(item.tags, 'pr-reviewed');
+      const isSkipped = hasTag(item.tags, 'pr-review-skipped');
+      if (!isReviewed && !isSkipped) continue;
+
+      const dayKey = changedDateLocalKey(item.changedDate || item.createdDate);
+      if (!dayKey) continue;
+      if (fromDate && dayKey < fromDate) continue;
+      if (toDate && dayKey > toDate) continue;
+
+      const weekKey = weekStartMondayKey(parseStatDay(dayKey)!);
+      const cur = bucket.get(weekKey) ?? { weekKey, prReviewedCount: 0, prReviewSkippedCount: 0 };
+      if (isReviewed) {
+        cur.prReviewedCount += 1;
+      } else if (isSkipped) {
+        cur.prReviewSkippedCount += 1;
+      }
+      bucket.set(weekKey, cur);
+    }
+
+    return Array.from(bucket.values())
+      .sort((a, b) => a.weekKey.localeCompare(b.weekKey))
+      .map(row => ({
+        weekKey: row.weekKey,
+        period: formatWeekLabel(row.weekKey),
+        prReviewedCount: row.prReviewedCount,
+        prReviewSkippedCount: row.prReviewSkippedCount,
+      }));
+  }, [prReviewTagWorkItems, selectedDeveloper, selectedTeam, statsDateRange, teams]);
+
+  const prReviewTagChartTotals = useMemo(() => {
+    let reviewed = 0;
+    let skipped = 0;
+    for (const row of prReviewTagChartData) {
+      reviewed += row.prReviewedCount;
+      skipped += row.prReviewSkippedCount;
+    }
+    return { reviewed, skipped, total: reviewed + skipped };
+  }, [prReviewTagChartData]);
 
   // Build a minimal WorkItem stub from stats data when the item isn't in the
   // currently loaded workItems array (e.g. different date range / area path).
@@ -2105,6 +2294,156 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
                 <Legend wrapperStyle={{ color: 'var(--text-primary)' }} />
                 <Line type="monotone" dataKey="aiCodeCount" name="ai-code tagged" stroke="var(--accent-color)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                 <Line type="monotone" dataKey="nonAiCodeCount" name="without ai-code" stroke="var(--text-secondary)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+      )}
+
+      {activeStatsTab === 'ai' && (
+      <div className="stats-section pr-review-tag-section">
+        <h3>
+          <button
+            type="button"
+            className="collapse-button"
+            onClick={() => setIsPrReviewTagCollapsed(!isPrReviewTagCollapsed)}
+            aria-label={isPrReviewTagCollapsed ? 'Expand section' : 'Collapse section'}
+          >
+            {isPrReviewTagCollapsed ? '▶' : '▼'}
+          </button>
+          PR Review Tag Trends
+          <div
+            className="info-icon"
+            onClick={() => setShowPrReviewTagInfo(!showPrReviewTagInfo)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setShowPrReviewTagInfo(!showPrReviewTagInfo);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Show information about this section"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" />
+              <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />
+            </svg>
+          </div>
+        </h3>
+
+        {showPrReviewTagInfo && (
+          <div className="info-tooltip">
+            <button type="button" className="info-close" onClick={() => setShowPrReviewTagInfo(false)} aria-label="Close information">
+              ×
+            </button>
+            <p>
+              <strong>What this section shows:</strong>
+              <br />
+              Weekly counts for work items tagged <code>pr-reviewed</code> or <code>pr-review-skipped</code>, using the same ADO WIQL logic as sprint health checks: tag present and <strong>ChangedDate</strong> in the selected window. Only the explicit <strong>Developer</strong> and <strong>Team</strong> filters apply — not the dev-team membership list used elsewhere on this page.
+            </p>
+            <p>
+              <strong>How to interpret:</strong>
+              <br />
+              Each point is the number of work items whose <strong>ChangedDate</strong> fell in that calendar week — not a running total. Hover a week to see that week&apos;s count; all weeks sum to the period total shown above the chart.
+            </p>
+            <p>
+              <strong>Note:</strong> Click <strong>Load PR Review Tag Trends</strong> to fetch data from ADO, same as AI Skill Usage Trends.
+            </p>
+          </div>
+        )}
+
+        {!isPrReviewTagCollapsed && (
+          <div className="filter-actions">
+            <button
+              type="button"
+              onClick={fetchPrReviewTagTrends}
+              disabled={prReviewTagLoading || (timeFrame === 'custom' && (!customFromDate || !customToDate))}
+              className="load-stats-button"
+            >
+              {prReviewTagLoading
+                ? 'Loading...'
+                : prReviewTagHasLoaded
+                  ? 'Refresh PR Review Tag Trends'
+                  : 'Load PR Review Tag Trends'}
+            </button>
+          </div>
+        )}
+
+        {!isPrReviewTagCollapsed && (prReviewTagLoading || showPrReviewTagNotification) && (
+          <div className={`background-notification ${prReviewTagLoading ? 'loading' : prReviewTagError ? 'error' : 'success'}`}>
+            {prReviewTagLoading && <div className="notification-spinner"></div>}
+            <span className="notification-text">
+              {prReviewTagNotificationMessage}
+            </span>
+            {!prReviewTagLoading && (
+              <button
+                className="notification-close"
+                onClick={() => setShowPrReviewTagNotification(false)}
+                aria-label="Close notification"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
+        {!isPrReviewTagCollapsed && !prReviewTagHasLoaded && !prReviewTagLoading && (
+          <p className="placeholder-text">
+            Click <strong>Load PR Review Tag Trends</strong> to fetch tagged work items from ADO for the selected time frame.
+          </p>
+        )}
+
+        {!isPrReviewTagCollapsed && prReviewTagHasLoaded && !prReviewTagLoading && prReviewTagChartData.length === 0 && prReviewTagWorkItems.length === 0 && (
+          <p className="placeholder-text">
+            No work items tagged <code>pr-reviewed</code> or <code>pr-review-skipped</code> were found in ADO for{' '}
+            {statsDateRange.fromDate} through {statsDateRange.toDate}. Tags must exist on work items and those items must have changed in that window.
+          </p>
+        )}
+
+        {!isPrReviewTagCollapsed && prReviewTagHasLoaded && !prReviewTagLoading && prReviewTagChartData.length === 0 && prReviewTagWorkItems.length > 0 && (
+          <p className="placeholder-text">
+            ADO returned {prReviewTagWorkItems.length} tagged work item{prReviewTagWorkItems.length !== 1 ? 's' : ''}, but none match the current team, developer, or state filters.
+          </p>
+        )}
+
+        {!isPrReviewTagCollapsed && prReviewTagHasLoaded && !prReviewTagLoading && prReviewTagChartData.length > 0 && prReviewTagWorkItems.length > 0 && (
+          <p className="placeholder-text" style={{ marginBottom: 8 }}>
+            {prReviewTagWorkItems.length} tagged work item{prReviewTagWorkItems.length !== 1 ? 's' : ''} in ADO for this period
+            ({prReviewTagChartTotals.reviewed} pr-reviewed, {prReviewTagChartTotals.skipped} pr-review-skipped).
+            The chart plots <strong>per-week</strong> counts (all weeks sum to {prReviewTagChartTotals.total}) — the latest week is not the period total.
+          </p>
+        )}
+
+        {!isPrReviewTagCollapsed && prReviewTagHasLoaded && !prReviewTagLoading && prReviewTagChartData.length > 0 && (
+          <div className="pr-review-tag-chart-container" aria-label="PR review tag weekly trend line chart">
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={prReviewTagChartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid stroke="var(--border-color)" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="weekKey"
+                  tickFormatter={wk => formatWeekLabel(wk)}
+                  tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                  interval="preserveStartEnd"
+                  angle={-30}
+                  textAnchor="end"
+                  height={56}
+                />
+                <YAxis allowDecimals={false} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} width={36} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 8,
+                    color: 'var(--text-primary)',
+                  }}
+                  labelFormatter={wk => `Week of ${formatWeekLabel(String(wk))} (items changed this week)`}
+                  formatter={(value, name) => [value != null ? `${value} this week` : '—', name]}
+                />
+                <Legend wrapperStyle={{ color: 'var(--text-primary)' }} />
+                <Line type="monotone" dataKey="prReviewedCount" name="pr-reviewed" stroke="var(--accent-color)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                <Line type="monotone" dataKey="prReviewSkippedCount" name="pr-review-skipped" stroke="var(--text-secondary)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>

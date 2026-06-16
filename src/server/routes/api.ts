@@ -198,6 +198,32 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/pr-review-tag-trends — work items tagged pr-reviewed / pr-review-skipped by ChangedDate
+router.get('/pr-review-tag-trends', async (req: Request, res: Response) => {
+  try {
+    const { from, to, areaPath: areaPathParam } = req.query as {
+      from?: string;
+      to?: string;
+      areaPath?: string;
+    };
+
+    if (!from || !to) {
+      return res.status(400).json({ error: 'from and to query parameters are required' });
+    }
+
+    console.log('=== API: /pr-review-tag-trends called ===', { from, to, areaPath: areaPathParam });
+
+    const adoService = new AzureDevOpsService('MaxView', areaPathParam || '');
+    const workItems = await adoService.getPrReviewTagTrendWorkItems(from, to);
+
+    console.log(`=== API: Returning ${workItems.length} PR review tag trend work items ===`);
+    res.json(workItems);
+  } catch (error: any) {
+    console.error('Error fetching PR review tag trend work items:', error);
+    res.status(500).json({ error: 'Failed to fetch PR review tag trend work items', details: error.message });
+  }
+});
+
 // GET /api/workitems/search - Search for work items by query
 router.get('/workitems/search', async (req: Request, res: Response) => {
   try {

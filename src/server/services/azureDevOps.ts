@@ -4165,6 +4165,73 @@ export class AzureDevOpsService {
     }
   }
 
+  /**
+   * Work items tagged pr-reviewed or pr-review-skipped with ChangedDate in [from, to].
+   * Polled by Developer Stats independently of the calendar work-item fetch.
+   */
+  async getPrReviewTagTrendWorkItems(from: string, to: string): Promise<WorkItem[]> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}'`;
+      wiql += ` AND ([System.Tags] CONTAINS 'pr-reviewed' OR [System.Tags] CONTAINS 'pr-review-skipped')`;
+
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] UNDER '${this.areaPath}'`;
+      }
+
+      wiql += ` AND [System.ChangedDate] >= '${from}'`;
+      if (to) {
+        wiql += ` AND [System.ChangedDate] <= '${to}'`;
+      }
+      wiql += ' ORDER BY [System.ChangedDate] DESC';
+
+      console.log('[getPrReviewTagTrendWorkItems] WIQL:', wiql);
+
+      const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      if (!queryResult.workItems?.length) {
+        console.log('[getPrReviewTagTrendWorkItems] No work items matched');
+        return [];
+      }
+
+      const ids = queryResult.workItems.map((wi) => wi.id!).filter(Boolean);
+      console.log(`[getPrReviewTagTrendWorkItems] ${ids.length} work item(s) matched`);
+      const fields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.AssignedTo',
+        'System.WorkItemType',
+        'System.ChangedDate',
+        'System.CreatedDate',
+        'System.AreaPath',
+        'System.IterationPath',
+        'System.Tags',
+      ];
+
+      const rawItems = await this.getWorkItemsInBatches(witApi, ids, fields);
+      const items: WorkItem[] = [];
+
+      for (const wi of rawItems) {
+        if (!wi?.id || !wi.fields) continue;
+        items.push({
+          id: wi.id,
+          title: wi.fields['System.Title'] || '',
+          state: wi.fields['System.State'] || '',
+          assignedTo: wi.fields['System.AssignedTo']?.displayName,
+          workItemType: wi.fields['System.WorkItemType'] || '',
+          changedDate: wi.fields['System.ChangedDate'] || '',
+          createdDate: wi.fields['System.CreatedDate'] || '',
+          areaPath: wi.fields['System.AreaPath'] || '',
+          iterationPath: wi.fields['System.IterationPath'] || '',
+          tags: wi.fields['System.Tags'] || '',
+        });
+      }
+
+      return items;
+    });
+  }
+
   async getAiCodeWorkItemAdoptionStats(
     from: string,
     to: string,

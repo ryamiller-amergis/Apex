@@ -1393,6 +1393,26 @@
   color: var(--text-primary);
 }
 
+/* PR Review Tag Trends (Recharts) */
+.pr-review-tag-section .pr-review-tag-chart-container {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 8px;
+  padding: 4px 0 12px;
+}
+
+.pr-review-tag-chart-container .recharts-default-legend {
+  color: var(--text-primary);
+}
+
+.pr-review-tag-chart-container .recharts-legend-item-text {
+  color: var(--text-primary);
+}
+
+.pr-review-tag-chart-container .recharts-tooltip-label {
+  color: var(--text-primary);
+}
+
 /* ── AI Capability Ladder ─────────────────────────────────────────────────── */
 
 .ladder-section {
@@ -1987,7 +2007,8 @@
 
   .ai-adoption-section .ai-adoption-chart-container,
   .pr-cycle-section .pr-cycle-chart-container,
-  .ai-code-tag-section .ai-code-tag-chart-container {
+  .ai-code-tag-section .ai-code-tag-chart-container,
+  .pr-review-tag-section .pr-review-tag-chart-container {
     width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
