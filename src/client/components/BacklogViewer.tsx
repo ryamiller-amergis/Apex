@@ -6,6 +6,7 @@ import React, {
   useMemo,
   createContext,
 } from 'react';
+import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import styles from './BacklogViewer.module.css';
 
 /* ── Local shape types (mirrors /to-prd output) ───────────────────────────── */
@@ -60,6 +61,15 @@ interface BacklogItem {
   acceptanceCriteria?: AcceptanceCriterion[];
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
+  /** Canonical user-type slugs (S/I/C/E/CO/Q/PA/SC) this item serves. */
+  userTypes?: string[];
+  /** Same control, different behavior per persona group. */
+  personaBehaviors?: PersonaBehavior[];
+}
+
+interface PersonaBehavior {
+  userTypes: string[];
+  behavior: string;
 }
 
 interface Feature {
@@ -73,6 +83,12 @@ interface Feature {
   items?: BacklogItem[];
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
+  /** Route of an existing MaxView page this feature extends (enables EXTEND-mode prototypes). */
+  route?: string;
+  /** Canonical user-type slugs (S/I/C/E/CO/Q/PA/SC) this feature serves. */
+  userTypes?: string[];
+  /** Same control, different behavior per persona group. */
+  personaBehaviors?: PersonaBehavior[];
 }
 
 interface Epic {
@@ -231,6 +247,7 @@ type EditTarget =
 
 interface BacklogEditContextValue {
   editable: boolean;
+  routeOptions: ScreenInventoryRoute[];
   onEditEpic: (epicIndex: number) => void;
   onEditFeature: (epicIndex: number, featureIndex: number) => void;
   onEditItem: (
@@ -482,6 +499,57 @@ const PencilIcon: React.FC = () => (
   </svg>
 );
 
+/* ── User-type personas ───────────────────────────────────────────────────── */
+
+const USER_TYPE_LABELS: Record<string, string> = {
+  S: 'System Admin',
+  I: 'Internal',
+  C: 'Contact',
+  E: 'External',
+  CO: 'Coder',
+  Q: 'QR Scanner',
+  PA: 'Portal Admin',
+  SC: 'Subcontractor',
+};
+
+const UserTypePersonas: React.FC<{
+  userTypes?: string[];
+  personaBehaviors?: PersonaBehavior[];
+}> = ({ userTypes, personaBehaviors }) => {
+  const hasTypes = !!userTypes && userTypes.length > 0;
+  const hasBehaviors = !!personaBehaviors && personaBehaviors.length > 0;
+  if (!hasTypes && !hasBehaviors) return null;
+
+  return (
+    <>
+      {hasTypes && (
+        <div className={styles.userTypesRow}>
+          <span className={styles.metaLabel}>User types:</span>
+          <span className={styles.personaTags}>
+            {userTypes!.map((ut) => (
+              <span key={ut} className={styles.userTypeBadge} title={USER_TYPE_LABELS[ut] ?? ut}>
+                {ut}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      {hasBehaviors && (
+        <div className={styles.itemSection}>
+          <div className={styles.subsectionLabel}>Per-Persona Behavior</div>
+          <ul className={styles.bulletList}>
+            {personaBehaviors!.map((pb, i) => (
+              <li key={i}>
+                <strong>{pb.userTypes.join(', ')}:</strong> {pb.behavior}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+};
+
 /* ── Collapsible section ──────────────────────────────────────────────────── */
 
 interface CollapsibleProps {
@@ -693,6 +761,8 @@ const ItemCard: React.FC<{
             </div>
           )}
 
+          <UserTypePersonas userTypes={item.userTypes} personaBehaviors={item.personaBehaviors} />
+
           {isPbi && item.businessRules && item.businessRules.length > 0 && (
             <div className={styles.itemSection}>
               <div className={styles.subsectionLabel}>Business Rules</div>
@@ -867,16 +937,8 @@ const FeatureCard: React.FC<{
               </span>
             )}
             <span className={styles.featureCounts}>
-              {tbis.length > 0 && (
-                <span className={styles.countTbi}>
-                  {tbis.length} TBI{tbis.length !== 1 ? 's' : ''}
-                </span>
-              )}
-              {pbis.length > 0 && (
-                <span className={styles.countPbi}>
-                  {pbis.length} PBI{pbis.length !== 1 ? 's' : ''}
-                </span>
-              )}
+              {tbis.length > 0 && <span className={styles.countTbi}>{tbis.length} TBI{tbis.length !== 1 ? 's' : ''}</span>}
+              {pbis.length > 0 && <span className={styles.countPbi}>{pbis.length} PBI{pbis.length !== 1 ? 's' : ''}</span>}
             </span>
           </div>
         }
@@ -895,6 +957,8 @@ const FeatureCard: React.FC<{
               ))}
             </div>
           )}
+
+          <UserTypePersonas userTypes={feature.userTypes} personaBehaviors={feature.personaBehaviors} />
 
           {feature.outOfScope && feature.outOfScope.length > 0 && (
             <div className={styles.featureMeta}>
@@ -1091,17 +1155,19 @@ const EpicCard: React.FC<{ epic: Epic; index: number }> = ({ epic, index }) => {
 interface EditFormProps {
   target: NonNullable<EditTarget>;
   backlog: BacklogData;
+  routeOptions: ScreenInventoryRoute[];
   onSave: (updated: {
     title: string;
     description: string;
     priority: string;
-  }) => void;
+     route?: string }) => void;
   onCancel: () => void;
 }
 
 const EditForm: React.FC<EditFormProps> = ({
   target,
   backlog,
+  routeOptions, 
   onSave,
   onCancel,
 }) => {
@@ -1112,7 +1178,7 @@ const EditForm: React.FC<EditFormProps> = ({
         title: e?.title ?? '',
         description: e?.description ?? '',
         priority: e?.priority ?? '',
-      };
+       route: '' };
     }
     if (target.type === 'feature') {
       const f =
@@ -1121,7 +1187,7 @@ const EditForm: React.FC<EditFormProps> = ({
         title: f?.title ?? '',
         description: f?.description ?? '',
         priority: f?.priority ?? '',
-      };
+        route: f?.route ?? '' };
     }
     // item
     const i =
@@ -1131,12 +1197,21 @@ const EditForm: React.FC<EditFormProps> = ({
       title: i?.title ?? '',
       description: i?.description ?? '',
       priority: i?.priority ?? '',
-    };
+      route: '' };
   })();
 
   const [title, setTitle] = useState(initial.title);
   const [description, setDescription] = useState(initial.description);
   const [priority, setPriority] = useState(initial.priority);
+  const [route, setRoute] = useState(initial.route);
+
+  const isFeature = target.type === 'feature';
+  // The inferred/saved route may not be in the inventory (e.g. inventory unavailable);
+  // surface it as an explicit option so it's not silently dropped.
+  const knownRoutes = routeOptions.map((r) => r.route);
+  const routeChoices = initial.route && !knownRoutes.includes(initial.route)
+    ? [initial.route, ...knownRoutes]
+    : knownRoutes;
 
   const entityLabel =
     target.type === 'epic'
@@ -1205,11 +1280,39 @@ const EditForm: React.FC<EditFormProps> = ({
           </div>
         )}
 
+        {isFeature && (
+          <div className={styles.editFormField}>
+            <label htmlFor="backlog-edit-route" className={styles.editFormLabel}>
+              Existing page (prototype target)
+            </label>
+            <select
+              id="backlog-edit-route"
+              className={styles.editFormInput}
+              value={route}
+              onChange={(e) => setRoute(e.target.value)}
+            >
+              <option value="">None — new page</option>
+              {routeChoices.map((r) => {
+                const meta = routeOptions.find((o) => o.route === r);
+                return (
+                  <option key={r} value={r}>
+                    {meta?.purpose ? `${r} — ${meta.purpose}` : r}
+                  </option>
+                );
+              })}
+            </select>
+            <p className={styles.editFormHint}>
+              When set, the design prototype extends this existing MaxView page. Leave as
+              “None” for a brand-new screen.
+            </p>
+          </div>
+        )}
+
         <div className={styles.editFormActions}>
           <button
             type="button"
             className={styles.editFormBtnPrimary}
-            onClick={() => onSave({ title, description, priority })}
+            onClick={() => onSave({ title, description, priority, route: isFeature ? route : undefined })}
           >
             Save
           </button>
@@ -1234,6 +1337,8 @@ interface BacklogViewerProps {
   testCaseStatus?: 'generating' | 'ready' | 'failed';
   editable?: boolean;
   onSaveBacklog?: (updatedData: unknown) => void;
+  /** Existing MaxView page routes used to populate the per-feature route picker. */
+  routeOptions?: ScreenInventoryRoute[];
 }
 
 export const BacklogViewer: React.FC<BacklogViewerProps> = ({
@@ -1241,7 +1346,8 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
   testCasesJson,
   testCaseStatus,
   editable = false,
-  onSaveBacklog,
+  onSaveBacklog, 
+  routeOptions = []
 }) => {
   const [editTarget, setEditTarget] = useState<EditTarget>(null);
   const testCasesByPbi = useMemo(
@@ -1258,6 +1364,7 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
 
   const editContextValue: BacklogEditContextValue = {
     editable,
+    routeOptions,
     onEditEpic: (epicIndex) => setEditTarget({ type: 'epic', epicIndex }),
     onEditFeature: (epicIndex, featureIndex) =>
       setEditTarget({ type: 'feature', epicIndex, featureIndex }),
@@ -1269,7 +1376,7 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
     title: string;
     description: string;
     priority: string;
-  }) => {
+  route?: string }) => {
     if (!isBacklogData(data) || !editTarget) return;
 
     const newBacklog: BacklogData = JSON.parse(
@@ -1292,6 +1399,12 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
         feature.title = updated.title;
         feature.description = updated.description || undefined;
         if (updated.priority) feature.priority = updated.priority;
+        const trimmedRoute = updated.route?.trim();
+        if (trimmedRoute) {
+          feature.route = trimmedRoute;
+        } else {
+          delete feature.route;
+        }
       }
     } else if (editTarget.type === 'item' && newBacklog.epics) {
       const item =
@@ -1484,7 +1597,8 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
           <EditForm
             target={editTarget}
             backlog={data}
-            onSave={handleSave}
+            routeOptions={routeOptions}
+          onSave={handleSave}
             onCancel={() => setEditTarget(null)}
           />
         )}

@@ -37,6 +37,7 @@ const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
 const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
 const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototypeReviewView'));
+const DesignPlanReviewView = lazy(() => import('./components/DesignPlanReviewView'));
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
@@ -203,6 +204,10 @@ function App() {
             changeProject(project);
             changeAreaPath(project);
             navigate('/home');
+            fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
+              method: 'POST',
+              credentials: 'include',
+            }).catch(() => {});
           }}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
@@ -212,6 +217,10 @@ function App() {
           onSetShowChangelog={setShowChangelog}
           onMarkChangelogAsRead={handleMarkChangelogAsRead}
           onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
+          user={authenticatedUser}
+          theme={theme}
+          onThemeChange={setThemeMode}
+          onLogout={handleLogout}
         />
         <Changelog
           isOpen={showChangelog}
@@ -229,7 +238,15 @@ function App() {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <Suspense fallback={<ViewSkeleton />}>
-          <PlatformAdmin onBackToProjects={() => navigate('/')} />
+          <PlatformAdmin
+            onBackToProjects={() => navigate('/')}
+            user={authenticatedUser}
+            theme={theme}
+            hasUnreadChangelog={hasUnreadChangelog}
+            onThemeChange={setThemeMode}
+            onOpenChangelog={() => setShowChangelog(true)}
+            onLogout={handleLogout}
+          />
         </Suspense>
       </ErrorBoundary>
     );
@@ -351,6 +368,8 @@ function App() {
                     <PrdReviewView />
                   ) : location.pathname.startsWith('/backlog/design-prototypes/') ? (
                     <DesignPrototypeReviewView />
+                  ) : location.pathname.startsWith('/backlog/design-plan/') ? (
+                    <DesignPlanReviewView />
                   ) : location.pathname.startsWith('/backlog/design-doc/') ? (
                     <DesignDocReviewView />
                   ) : (

@@ -31,6 +31,7 @@ import {
   useRevertPrdSection,
   usePrdValidationReport,
   useGenerateTestCases,
+  useScreenInventoryRoutes,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -42,6 +43,7 @@ import {
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
 import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
+import { useDesignPlan } from '../hooks/useDesignPlan';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -361,9 +363,10 @@ export const PrdReviewView: React.FC = () => {
     prd?.status === 'approved' ? id : null
   );
   const { data: testCaseRecord } = usePrdTestCases(id);
+  const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const readiness = prd ? derivePrdReadiness(prd, latestTestCase) : null;
+  const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
 
   const updateContent = useUpdatePrdContent();
   const updateBacklog = useUpdatePrdBacklog();
@@ -444,6 +447,7 @@ export const PrdReviewView: React.FC = () => {
   const [showAllLinks, setShowAllLinks] = useState(false);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
+  const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -544,7 +548,7 @@ export const PrdReviewView: React.FC = () => {
       action: 'approve',
     });
     if (result?.approved) {
-      navigate(`/backlog/design-prototypes/${id}`);
+      navigate(`/backlog/design-plan/${id}`);
     }
   }, [id, readiness?.readyForReviewActions, reviewPrd, navigate]);
 
@@ -965,7 +969,7 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
-                if (prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore >= 90) {
+                if (prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore >= (prd.validationScoreThreshold ?? 90)) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgePassed}`}>
                       ✓ Passed ({prd.validationScore}%)
@@ -1388,7 +1392,7 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {/* Validation Banner */}
-      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < 90 && prd.status === 'draft' && prd.validationScorecard && (
+      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < (prd.validationScoreThreshold ?? 90) && prd.status === 'draft' && prd.validationScorecard && (
         <div className={styles.validationPanel}>
           {prdFixFlow.phase === 'fixing' ? (
             <FixingProgressView onCancel={handleFixValidationCancel} />
@@ -1396,7 +1400,7 @@ export const PrdReviewView: React.FC = () => {
             <div className={styles.validationBanner}>
               <div className={styles.validationBannerLeft}>
                 <span className={styles.validationBannerText}>
-                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ 90%).
+                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
                   {prdFixFlow.phase === 'reviewing'
                     ? prdFixFlow.agentError
                       ? ` ${prdFixFlow.agentError}`
@@ -1457,6 +1461,26 @@ export const PrdReviewView: React.FC = () => {
         readiness={readiness}
         coverage={latestTestCase?.coverageSummary ?? null}
       />
+
+      {prd.status === 'approved' && designPlanResponse?.plan && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            {designPlanResponse.plan.status === 'generating'
+              ? 'A design plan is being generated for this PRD.'
+              : designPlanResponse.plan.status === 'consumed'
+                ? 'The design plan has been used to generate prototypes.'
+                : 'A design plan is ready. Review and edit it, then generate the designs.'}
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => navigate(`/backlog/design-plan/${id}`)}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            View Design Plan →
+          </button>
+        </div>
+      )}
 
       {prd.status === 'approved' && relatedPrototypes.length > 0 && (
         <div className={styles.designDocBanner}>
@@ -1727,6 +1751,7 @@ export const PrdReviewView: React.FC = () => {
                           testCasesJson={testCaseRecord?.testCasesJson}
                           testCaseStatus={latestTestCase?.status}
                           editable={canEditContent}
+                          routeOptions={routeOptions}
                           onSaveBacklog={(updatedData) => {
                             if (id)
                               void updateBacklog.mutateAsync({
@@ -1742,6 +1767,7 @@ export const PrdReviewView: React.FC = () => {
                         testCasesJson={testCaseRecord?.testCasesJson}
                         testCaseStatus={latestTestCase?.status}
                         editable={canEditContent}
+                        routeOptions={routeOptions}
                         onSaveBacklog={(updatedData) => {
                           if (id)
                             void updateBacklog.mutateAsync({
@@ -1796,7 +1822,8 @@ export const PrdReviewView: React.FC = () => {
                     const reportMarkdown = validationReport?.markdown ?? prd.validationReportMd ?? '';
                     const passingReasonsMarkdown = buildPassingValidationReasonsMarkdown(sc);
                     const reportAlreadyIncludesPassingReasons = /passing validation reasons|passing reasons|positive findings|strengths/i.test(reportMarkdown);
-                    const scoreColor = sc.overall_score >= 90 ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
+                    const effectiveThreshold = prd.validationScoreThreshold ?? 90;
+                    const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
                     const allGaps = files.length > 0

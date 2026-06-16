@@ -288,7 +288,7 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
 router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
   try {
     const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, testCaseSkillPath, designDocValidationSkillPath, prdValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, testCaseModel, designDocValidationModel, prdValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens, designPrototypeBedrockModelId, designPrototypeBedrockMaxTokens, designPrototypeRegenBedrockModelId, designPrototypeRegenBedrockMaxTokens } = req.body as UpsertProjectSkillConfigRequest;
+    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocQaSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, testCaseSkillPath, designDocValidationSkillPath, prdValidationSkillPath, interviewModel, prdModel, designDocModel, designDocQaModel, designDocAssistantModel, designPrototypeModel, testCaseModel, designDocValidationModel, prdValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens, designPrototypeBedrockModelId, designPrototypeBedrockMaxTokens, designPrototypeRegenBedrockModelId, designPrototypeRegenBedrockMaxTokens, designPlanBedrockModelId, designPlanBedrockMaxTokens, prdValidationScoreThreshold } = req.body as UpsertProjectSkillConfigRequest;
     if (!skillRepo || !skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
@@ -329,6 +329,9 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       testCaseModel,
       prdValidationSkillPath,
       prdValidationModel,
+      designPlanBedrockModelId,
+      designPlanBedrockMaxTokens,
+      prdValidationScoreThreshold,
     );
     res.json(config);
   } catch {

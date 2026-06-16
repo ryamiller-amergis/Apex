@@ -273,6 +273,31 @@
   cursor: default;
 }
 
+/* ── User-type slug badges (S/I/C/E/CO/Q/PA/SC) ───────────────────────────── */
+
+.userTypesRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.userTypeBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: 'Consolas', 'Monaco', monospace;
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid color-mix(in srgb, #059669 30%, transparent);
+  cursor: default;
+}
+
 /* ── Epic card ────────────────────────────────────────────────────────────── */
 
 .epicCard {
@@ -427,6 +452,26 @@
   padding: 2px 6px;
   border-radius: 4px;
   flex-shrink: 0;
+}
+
+.routeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-family: 'Consolas', 'Monaco', monospace;
+  background: rgba(25, 103, 210, 0.1);
+  color: var(--accent-color);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, transparent);
+  flex-shrink: 0;
+}
+
+.routeBadge svg {
+  width: 11px;
+  height: 11px;
 }
 
 .featureCounts {
@@ -1156,6 +1201,13 @@
 .editFormInput:focus {
   outline: none;
   border-color: var(--accent-color);
+}
+
+.editFormHint {
+  margin: 4px 0 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .editFormTextarea {

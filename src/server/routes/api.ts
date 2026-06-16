@@ -12,7 +12,7 @@ import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
-import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
+import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -22,7 +22,9 @@ import {
   listCurrentUserAccessRequests,
   listRequestableProjectsForUser,
 } from '../services/projectAccessRequestService';
+import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserEmail } from '../utils/requestUser';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 
 const router = express.Router();
@@ -62,8 +64,9 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
 }
 
 // GET /api/projects - List projects available to the current user.
-// Super admins see the full catalog; everyone else is restricted to their
-// assigned projects (via user_project_assignments). No legacy fallback.
+// Super admins see the full catalog; everyone else sees the union of:
+//   1. Manual assignments (via user_project_assignments, managed by admins)
+//   2. ADO team membership (auto-detected via Teams/Members API)
 router.get('/projects', async (req: Request, res: Response) => {
   try {
     if (isSuperAdminRequest(req)) {
@@ -72,15 +75,26 @@ router.get('/projects', async (req: Request, res: Response) => {
     }
 
     const userId: string | undefined = (req.user as any)?.profile?.oid;
-    const assignedProjects = userId ? await getAssignmentsForUser(userId) : [];
+    const email = getUserEmail(req);
 
-    if (assignedProjects.length === 0) {
+    const [assignedProjects, adoProjects] = await Promise.all([
+      userId ? getAssignmentsForUser(userId) : Promise.resolve([]),
+      email ? getUserProjects(email).catch((err) => {
+        console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
+        return [];
+      }) : Promise.resolve([]),
+    ]);
+
+    const adoProjectNames = adoProjects.map((p) => p.name);
+    const merged = [...new Set([...assignedProjects, ...adoProjectNames])];
+
+    if (merged.length === 0) {
       res.json([]);
       return;
     }
 
     const catalog = await listProjectCatalog();
-    res.json(filterProjectCatalogByNames(catalog, assignedProjects));
+    res.json(filterProjectCatalogByNames(catalog, merged));
   } catch (error: any) {
     console.error('Error fetching ADO projects:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });
@@ -152,6 +166,21 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
   } catch (error: any) {
     console.error('Error fetching ADO area paths:', error);
     res.status(500).json({ error: 'Failed to fetch area paths' });
+  }
+});
+
+// POST /api/projects/:project/select - Record that the user selected this project.
+// Inserts into user_project_assignments if no row exists yet (idempotent).
+router.post('/projects/:project/select', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    await ensureUserProjectAssignment(userId, req.params.project, 'auto-select');
+    res.status(204).end();
+  } catch (error: any) {
+    console.error('[api] project auto-assign failed:', error);
+    res.status(500).json({ error: 'Failed to record project selection' });
   }
 });
 

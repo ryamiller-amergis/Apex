@@ -116,7 +116,7 @@ function setupPlatformAdmin(
     error: null,
   });
 
-  render(<PlatformAdmin onBackToProjects={jest.fn()} />);
+  render(<PlatformAdmin onBackToProjects={jest.fn()} user={{ name: 'Test Admin', email: 'admin@test.com' }} theme="light" hasUnreadChangelog={false} onThemeChange={jest.fn()} onOpenChangelog={jest.fn()} onLogout={jest.fn()} />);
 
   return { saveAssignments, approveRequest, rejectRequest, removePending };
 }

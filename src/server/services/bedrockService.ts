@@ -4,7 +4,10 @@ import https from 'https';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
 import type { DesignSystemCatalog } from './designSystemService';
+import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
+import type { DesignPlanFeature } from '../../shared/types/designPlan';
+import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
 
 const client = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
@@ -1080,11 +1083,18 @@ export interface UiMockResult {
  * The catalog may add more from the live repo.
  */
 const DEFAULT_NAV_ITEMS = [
-  { label: 'Dashboard',         route: '/dashboard',         icon: 'grid_view' },
-  { label: 'Document Manager',  route: '/document-manager',  icon: 'folder_open' },
-  { label: 'Assignments',       route: '/assignments',        icon: 'assignment' },
-  { label: 'Shift Scheduler',   route: '/shift-scheduler',   icon: 'calendar_month' },
-  { label: 'Timecards',         route: '/timecards',         icon: 'timer' },
+  { label: 'Home',                route: '/home',              icon: 'grid_view' },
+  { label: 'Companies',           route: '/Companies',         icon: 'folder_open' },
+  { label: 'Worksites',           route: '/Worksites',         icon: 'assignment' },
+  { label: 'Users',               route: '/Users',             icon: 'assignment' },
+  { label: 'Shift Scheduler',     route: '/PerDiemShift',      icon: 'calendar_month' },
+  { label: 'RTO Management',      route: '/AbsenceManagement', icon: 'calendar_month' },
+  { label: 'Coder',               route: '/Coder',             icon: 'assignment' },
+  { label: 'Credentials',         route: '/Credentials',       icon: 'folder_open' },
+  { label: 'Document Management', route: '/DocumentManagement', icon: 'folder_open' },
+  { label: 'Timecards',           route: '/Timecard',          icon: 'timer' },
+  { label: 'Admin Portal',        route: '/AdminPortal/Landing', icon: 'grid_view' },
+  { label: 'Power BI',            route: '/PowerBI',           icon: 'dashboard' },
 ];
 
 /**
@@ -1562,6 +1572,37 @@ function buildCatalogSection(catalog: DesignSystemCatalog): string {
   }
 
   return `## MaxView Application Context\n\n${parts.join('\n\n')}\n\n---\n\n`;
+}
+
+/** Loosely normalise a route for matching (lowercase, drop query/anchor + trailing slash). */
+function normaliseRouteForMatch(route: string): string {
+  let r = (route ?? '').trim().split(/[?#]/)[0].toLowerCase();
+  if (r.length > 1 && r.endsWith('/')) r = r.slice(0, -1);
+  if (r && !r.startsWith('/')) r = `/${r}`;
+  return r;
+}
+
+/**
+ * Compact screens-context block derived from the clientapp-screens.md inventory.
+ * One line per screen: `route` — purpose [users: …] [states: …]. The user-types and
+ * states annotations are only appended when present. Returns '' when the inventory is empty.
+ */
+function buildScreensContextSection(inventory: ScreenInventoryRoute[]): string {
+  const lines = inventory
+    .filter(s => s.route)
+    .map(s => {
+      let line = `- \`${s.route}\``;
+      if (s.purpose) line += ` — ${s.purpose}`;
+      if (s.userTypes?.length) line += ` [users: ${s.userTypes.join(', ')}]`;
+      if (s.states) line += ` [states: ${s.states}]`;
+      return line;
+    });
+
+  if (lines.length === 0) return '';
+
+  return `### Existing MaxView screens — inventory (route — purpose — user types — states)\n\n` +
+    `Use this to understand which personas each screen serves and the UI states it supports.\n\n` +
+    lines.join('\n') + '\n\n---\n\n';
 }
 
 /* ── Prompt builders ──────────────────────────────────────── */
@@ -2509,6 +2550,235 @@ ${commentLines}
   }
 }
 
+/* ── Persona / user-type enrichment ───────────────────────────────────────── */
+
+/**
+ * Canonical user-type (persona) slug vocabulary. The Business Analyst speaks in
+ * persona names during the interview (e.g. "external employee", "coder"); this
+ * map is handed to the model so free-text persona names get normalised to the
+ * stable slugs the design-prototype generator consumes.
+ */
+const USER_TYPE_SLUG_VOCABULARY = [
+  'S = System Admin',
+  'I = Internal',
+  'C = Contact',
+  'E = External',
+  'CO = Coder',
+  'Q = QR Scanner',
+  'PA = Portal Admin',
+  'SC = Subcontractor',
+].join('\n');
+
+const VALID_USER_TYPE_SLUGS = new Set(['S', 'I', 'C', 'E', 'CO', 'Q', 'PA', 'SC']);
+
+interface PersonaBacklogItem {
+  title?: string;
+  description?: string;
+  affectedPersonas?: string[];
+  userStory?: { persona?: string; iWant?: string; soThat?: string };
+  items?: PersonaBacklogItem[];
+  pbis?: PersonaBacklogItem[];
+  userTypes?: string[];
+  personaBehaviors?: Array<{ userTypes: string[]; behavior: string }>;
+}
+
+interface PersonaBacklogShape {
+  features?: PersonaBacklogItem[];
+  epics?: Array<{ features?: PersonaBacklogItem[] }>;
+}
+
+interface PersonaNode {
+  ref: string;
+  kind: 'feature' | 'pbi';
+  title: string;
+  description?: string;
+  affectedPersonas?: string[];
+  userStory?: { persona?: string; iWant?: string; soThat?: string };
+  target: PersonaBacklogItem;
+}
+
+interface PersonaAnnotation {
+  userTypes?: unknown;
+  personaBehaviors?: unknown;
+}
+
+/**
+ * Walk a backlog (top-level `features` plus `epics[].features`) and return every
+ * feature and PBI in a stable, deterministic order with a positional `ref` key.
+ * The same order is produced for the original (prompt) and the clone (apply), so
+ * annotations map back precisely without fragile title matching.
+ */
+function collectPersonaNodes(backlogJson: unknown): PersonaNode[] {
+  const bj = backlogJson as PersonaBacklogShape | null;
+  if (!bj || typeof bj !== 'object') return [];
+
+  const features: PersonaBacklogItem[] = [];
+  if (Array.isArray(bj.features)) features.push(...bj.features);
+  if (Array.isArray(bj.epics)) {
+    for (const epic of bj.epics) {
+      if (Array.isArray(epic?.features)) features.push(...epic.features);
+    }
+  }
+
+  const nodes: PersonaNode[] = [];
+  features.forEach((feature, fi) => {
+    if (!feature || typeof feature !== 'object') return;
+    nodes.push({
+      ref: `f${fi}`,
+      kind: 'feature',
+      title: feature.title ?? `Feature ${fi + 1}`,
+      description: feature.description,
+      affectedPersonas: feature.affectedPersonas,
+      target: feature,
+    });
+    const items = feature.items ?? feature.pbis ?? [];
+    items.forEach((item, pi) => {
+      if (!item || typeof item !== 'object') return;
+      nodes.push({
+        ref: `f${fi}_p${pi}`,
+        kind: 'pbi',
+        title: item.title ?? `Item ${pi + 1}`,
+        description: item.description,
+        userStory: item.userStory,
+        target: item,
+      });
+    });
+  });
+  return nodes;
+}
+
+function sanitiseSlugList(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const slug = raw.trim().toUpperCase();
+    if (VALID_USER_TYPE_SLUGS.has(slug) && !out.includes(slug)) out.push(slug);
+  }
+  return out;
+}
+
+function sanitisePersonaBehaviors(input: unknown): Array<{ userTypes: string[]; behavior: string }> {
+  if (!Array.isArray(input)) return [];
+  const out: Array<{ userTypes: string[]; behavior: string }> = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as { userTypes?: unknown; behavior?: unknown };
+    const slugs = sanitiseSlugList(r.userTypes);
+    const behavior = typeof r.behavior === 'string' ? r.behavior.trim() : '';
+    if (slugs.length > 0 && behavior) out.push({ userTypes: slugs, behavior });
+  }
+  return out;
+}
+
+/**
+ * Populate `userTypes` and `personaBehaviors` on every feature and PBI of a
+ * synthesised backlog. The Business Analyst knows which personas each feature
+ * serves (and any "same control, different behaviour per persona group"
+ * divergences); this pass maps that persona knowledge — surfaced in the backlog's
+ * user stories, affected-personas, and descriptions, plus the optional interview
+ * transcript — onto the canonical slug vocabulary the prototype generator reads.
+ *
+ * Routes are intentionally NOT touched here (handled by route inference). The
+ * merge is non-destructive: annotations are applied to a deep clone, leaving the
+ * backlog structure and all existing fields intact. Best-effort — returns the
+ * original backlog unchanged on any failure, mirroring route inference.
+ */
+export async function enrichBacklogPersonasWithBedrock(
+  backlogJson: unknown,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  interviewTranscript?: string | null,
+): Promise<unknown> {
+  if (!backlogJson || typeof backlogJson !== 'object') return backlogJson;
+
+  const nodes = collectPersonaNodes(backlogJson);
+  if (nodes.length === 0) return backlogJson;
+
+  const itemsForPrompt = nodes.map(n => ({
+    ref: n.ref,
+    kind: n.kind,
+    title: n.title,
+    description: n.description || undefined,
+    affectedPersonas: n.affectedPersonas?.length ? n.affectedPersonas : undefined,
+    userStoryPersona: n.userStory?.persona || undefined,
+  }));
+
+  const transcriptSection = interviewTranscript?.trim()
+    ? `\n## Interview transcript (the BA's own words about who each feature is for and any per-persona behaviour differences)\n\n${interviewTranscript.trim().slice(0, 24000)}\n`
+    : '';
+
+  const prompt = `You are a senior product owner mapping each backlog item to the user types (personas) it serves.
+
+## Canonical user-type slugs (map every persona name to one of these EXACT slugs)
+
+${USER_TYPE_SLUG_VOCABULARY}
+
+Map free-text persona names the team uses to the closest slug — e.g. "external employee" → E, "coder" → CO, "system administrator" → S, "internal staff" → I, "subcontractor" → SC, "portal admin" → PA, "QR scanner" → Q, "contact" → C.
+
+## Backlog items to annotate
+
+\`\`\`json
+${JSON.stringify(itemsForPrompt, null, 2)}
+\`\`\`
+${transcriptSection}
+## Instructions
+
+- For EACH item "ref", decide which user types it serves and return them as "userTypes": an array of the canonical slugs above. Infer from the user-story persona, affectedPersonas, description, and the interview transcript.
+- When the SAME control/screen behaves DIFFERENTLY for different persona groups (e.g. a Timecards button that does action A for S/I/C but action B for E/CO), capture each divergent group in "personaBehaviors": an array of { "userTypes": [...slugs], "behavior": "what the control does for this group" }. Omit "personaBehaviors" entirely when behaviour does not diverge by persona.
+- Only include slugs you have real evidence for. If an item's audience is genuinely unclear, return an empty "userTypes" array for it.
+- Do NOT invent routes or any other fields. Routes are handled separately.
+- Output ONLY a JSON object keyed by each item "ref" — no markdown fences, no preamble, no explanation:
+
+{
+  "f0": { "userTypes": ["S", "I"], "personaBehaviors": [{ "userTypes": ["E", "CO"], "behavior": "..." }] },
+  "f0_p0": { "userTypes": ["S"] }
+}`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+
+  let text: string;
+  try {
+    text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+  } catch (err) {
+    console.warn('[bedrockService] enrichBacklogPersonas: model call failed — leaving backlog unchanged', err);
+    return backlogJson;
+  }
+
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const cleaned = fenced ? fenced[1].trim() : text.trim();
+
+  let annotations: Record<string, PersonaAnnotation>;
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return backlogJson;
+    annotations = parsed as Record<string, PersonaAnnotation>;
+  } catch {
+    console.warn('[bedrockService] enrichBacklogPersonas: could not parse model output — leaving backlog unchanged');
+    return backlogJson;
+  }
+
+  // Apply annotations onto a deep clone so the original is never mutated.
+  const enriched = JSON.parse(JSON.stringify(backlogJson));
+  const enrichedNodes = collectPersonaNodes(enriched);
+  let annotated = 0;
+  for (const node of enrichedNodes) {
+    const ann = annotations[node.ref];
+    if (!ann) continue;
+    const slugs = sanitiseSlugList(ann.userTypes);
+    if (slugs.length > 0) node.target.userTypes = slugs;
+    const behaviors = sanitisePersonaBehaviors(ann.personaBehaviors);
+    if (behaviors.length > 0) node.target.personaBehaviors = behaviors;
+    if (slugs.length > 0 || behaviors.length > 0) annotated += 1;
+  }
+
+  if (annotated > 0) {
+    console.log(`[bedrockService] enrichBacklogPersonas: annotated ${annotated} item(s) with user types`);
+  }
+  return enriched;
+}
+
 /**
  * Apply open review comments to a single design-doc section and return the revised markdown.
  * Calls Bedrock once — returns the full updated section content as a string.
@@ -2550,6 +2820,176 @@ ${commentLines}
 }
 
 /* ════════════════════════════════════════════════════════════
+   DESIGN PLAN GENERATION (cheap structured plan, edited before HTML)
+   ════════════════════════════════════════════════════════════ */
+
+/** Default max tokens for the cheap JSON design-plan call when no project setting is configured. */
+const DESIGN_PLAN_MAX_TOKENS = 4000;
+
+export interface DesignPlanGenerationPbi {
+  title: string;
+  description?: string;
+  acceptanceCriteria?: string;
+  userTypes?: string[];
+}
+
+export interface DesignPlanGenerationFeature {
+  featureIndex: number;
+  featureName: string;
+  featureDescription?: string;
+  /** Existing MaxView route this feature extends, if inferred at PRD sync. */
+  targetRoute?: string;
+  pbis: DesignPlanGenerationPbi[];
+}
+
+export interface GenerateDesignPlanInput {
+  prdTitle?: string;
+  features: DesignPlanGenerationFeature[];
+}
+
+function buildDesignPlanPrompt(input: GenerateDesignPlanInput, catalogSection: string, screensContextSection: string): string {
+  const featuresSection = input.features.map((f) => {
+    const pbis = f.pbis.length > 0
+      ? f.pbis.map((p) => {
+          const parts = [`  - **${p.title}**`];
+          if (p.userTypes?.length) parts.push(`    Applies to user types: ${p.userTypes.join(', ')}`);
+          if (p.description) parts.push(`    ${p.description}`);
+          if (p.acceptanceCriteria) parts.push(`    Acceptance criteria: ${p.acceptanceCriteria}`);
+          return parts.join('\n');
+        }).join('\n')
+      : '  (no PBIs listed)';
+    return `### Feature ${f.featureIndex}: ${f.featureName}\n${f.featureDescription ? `${f.featureDescription}\n` : ''}${f.targetRoute ? `Suggested existing route to extend: \`${f.targetRoute}\`\n` : ''}PBIs:\n${pbis}`;
+  }).join('\n\n');
+
+  return `You are a senior UI/UX designer producing a **design plan** for a MaxView application PRD. This plan will be reviewed and edited by a UI/UX designer before any high-fidelity HTML prototype is generated. Write the plan in clear, plain English that a designer can understand and modify — not in developer jargon.
+
+${catalogSection}${screensContextSection}
+## PRD${input.prdTitle ? `: ${input.prdTitle}` : ''}
+
+Produce one plan entry per feature below.
+
+${featuresSection}
+
+## Output (JSON only)
+
+Respond with ONLY a JSON fenced block containing an array with one object per feature, in the same order, using the exact \`featureIndex\` values given above:
+
+\`\`\`json
+[
+  {
+    "featureIndex": 0,
+    "featureName": "<echo the feature name>",
+    "designBrief": "<MOST IMPORTANT — see instructions below>",
+    "decision": "new-page" | "update-page" | "no-ui",
+    "targetRoute": "/existing-route" | null,
+    "targetPageTitle": "Human-readable page title" | null,
+    "layoutPattern": "table" | "calendar" | "dashboard" | "form" | "detail-page" | "wizard" | "modal" | "drawer" | "widget" | null,
+    "primaryComponents": ["ComponentName", ...],
+    "states": ["default", "empty", "error", "loading"],
+    "pbiContributions": [
+      { "pbiTitle": "<title>", "contribution": "<one sentence on how this PBI appears in the UI>" }
+    ],
+    "rationale": "Two or three sentences explaining the design decisions.",
+    "notes": ""
+  }
+]
+\`\`\`
+
+### designBrief — CRITICAL FIELD
+
+The \`designBrief\` is the primary content of the plan. It is a multi-paragraph, plain-English description of the screen that a UI/UX designer will read, edit, and approve before prototypes are generated. The prototype generator will follow this brief as its authoritative source. Write it as if you are briefing a designer colleague:
+
+1. **What the user sees:** Describe the page layout, the main content area, and every visible element — headers, tables, forms, cards, filters, buttons, empty states, etc. Be specific about placement (e.g. "a search bar at the top of the content area, followed by a data grid").
+2. **Key interactions:** Explain what happens when the user clicks, types, selects, or submits. Describe modals, drawers, inline edits, or navigation that occurs.
+3. **User flow:** Walk through the primary happy path and any important alternate flows (error handling, empty state, loading).
+4. **Design decisions:** Explain which layout pattern you chose and why. Reference specific design system components by name where possible.
+5. **Per-PBI mapping:** For each PBI, briefly explain how it manifests in the UI — which part of the screen, which interaction.
+
+Use newlines (\\n) to separate paragraphs for readability. Aim for 150–300 words per feature. Do NOT use markdown headings — just plain text with paragraph breaks.
+
+### Other rules
+- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be one of the existing routes listed above.
+- \`primaryComponents\` should reference MWx Design System component names from the catalog where possible.
+- \`states\` should list the UI states worth designing (default/empty/error/loading is a good baseline).
+- Every PBI of a feature must have exactly one entry in \`pbiContributions\`.
+- Leave \`notes\` as an empty string.
+- Respond ONLY with the JSON fenced block — no other text.`;
+}
+
+function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): DesignPlanFeature[] {
+  const parsed = JSON.parse(extractJson(text, 'DesignPlan')) as unknown;
+  const arr: any[] = Array.isArray(parsed) ? parsed : [];
+
+  const validDecisions = ['new-page', 'update-page', 'no-ui'];
+  const validLayouts: UiLayoutPattern[] = ['table', 'calendar', 'dashboard', 'form', 'detail-page', 'wizard', 'modal', 'drawer', 'widget'];
+
+  return input.features.map((feature) => {
+    const match = arr.find((e) => Number(e?.featureIndex) === feature.featureIndex)
+      ?? arr[input.features.indexOf(feature)]
+      ?? {};
+
+    const decision = validDecisions.includes(match.decision) ? match.decision : 'new-page';
+    const layoutPattern = validLayouts.includes(match.layoutPattern) ? match.layoutPattern as UiLayoutPattern : undefined;
+
+    const pbiContributions = Array.isArray(match.pbiContributions) && match.pbiContributions.length > 0
+      ? match.pbiContributions.map((c: any) => ({
+          pbiTitle: typeof c?.pbiTitle === 'string' ? c.pbiTitle : '',
+          contribution: typeof c?.contribution === 'string' ? c.contribution : '',
+        }))
+      : feature.pbis.map((p) => ({ pbiTitle: p.title, contribution: '' }));
+
+    const states = Array.isArray(match.states) && match.states.length > 0
+      ? (match.states as unknown[]).filter((s): s is string => typeof s === 'string')
+      : ['default', 'empty', 'error', 'loading'];
+
+    return {
+      featureIndex: feature.featureIndex,
+      featureName: feature.featureName,
+      designBrief: typeof match.designBrief === 'string' ? match.designBrief : '',
+      decision,
+      targetRoute: typeof match.targetRoute === 'string' && match.targetRoute.trim() ? match.targetRoute : undefined,
+      targetPageTitle: typeof match.targetPageTitle === 'string' && match.targetPageTitle.trim() ? match.targetPageTitle : undefined,
+      layoutPattern,
+      primaryComponents: Array.isArray(match.primaryComponents)
+        ? (match.primaryComponents as unknown[]).filter((c): c is string => typeof c === 'string')
+        : [],
+      states,
+      pbiContributions,
+      rationale: typeof match.rationale === 'string' ? match.rationale : '',
+      notes: typeof match.notes === 'string' ? match.notes : '',
+    };
+  });
+}
+
+/**
+ * Generate a cheap, structured design plan (one entry per feature) from PRD backlog features.
+ * Output is JSON, not HTML — model/token budget come from the caller (project settings).
+ */
+export async function generateDesignPlanForPrd(
+  input: GenerateDesignPlanInput,
+  modelId?: string,
+  maxTokens?: number,
+): Promise<DesignPlanFeature[]> {
+  const designSystemService = await import('./designSystemService');
+  const catalog = await designSystemService.getDesignSystemCatalog();
+  const catalogSection = buildCatalogSection(catalog);
+
+  let screenInventory: ScreenInventoryRoute[] = [];
+  try {
+    screenInventory = await designSystemService.getScreenInventory();
+  } catch (err) {
+    console.warn('[bedrockService] getScreenInventory failed for design plan:', err);
+  }
+  const screensContextSection = buildScreensContextSection(screenInventory);
+
+  const prompt = buildDesignPlanPrompt(input, catalogSection, screensContextSection);
+  const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
+  const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : DESIGN_PLAN_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, effectiveModel, effectiveMaxTokens);
+  return parseDesignPlanResult(text, input);
+}
+
+/* ════════════════════════════════════════════════════════════
    DESIGN PROTOTYPE GENERATION (Claude Design POC)
    ════════════════════════════════════════════════════════════ */
 
@@ -2560,7 +3000,30 @@ export interface DesignPrototypeInput {
     title: string;
     description?: string;
     acceptanceCriteria?: string;
+    /** User-type slugs (e.g. S/I/C/E/CO) this PBI applies to. */
+    userTypes?: string[];
+    /** Same control, different behavior per persona group. */
+    personaBehaviors?: Array<{ userTypes: string[]; behavior: string }>;
   }>;
+  /** Route of an existing MaxView page this feature extends. When set, EXTEND mode is used. */
+  targetRoute?: string;
+  /** Pre-fetched existing page code/structure text. When omitted in EXTEND mode it is fetched. */
+  existingPageContext?: string;
+  /**
+   * Authoritative design-plan decisions for this feature (from the reviewed/edited design plan).
+   * When present, these override the model's own inference for layout/components/states.
+   */
+  plan?: {
+    designBrief?: string;
+    decision?: string;
+    layoutPattern?: string;
+    targetPageTitle?: string;
+    primaryComponents?: string[];
+    states?: string[];
+    pbiContributions?: Array<{ pbiTitle: string; contribution: string }>;
+    rationale?: string;
+    notes?: string;
+  };
 }
 
 export async function generateDesignPrototypeHtml(
@@ -2568,8 +3031,19 @@ export async function generateDesignPrototypeHtml(
   modelId?: string,
   maxTokens?: number,
 ): Promise<string> {
-  const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
+  const designSystemService = await import('./designSystemService');
+  const catalog = await designSystemService.getDesignSystemCatalog();
   const catalogSection = buildCatalogSection(catalog);
+
+  // Pull the screen inventory (route → purpose → user types → states) so the model has
+  // persona/state context for the existing pages. Non-fatal: empty when unavailable.
+  let screenInventory: ScreenInventoryRoute[] = [];
+  try {
+    screenInventory = await designSystemService.getScreenInventory();
+  } catch (err) {
+    console.warn('[bedrockService] getScreenInventory failed for design prototype:', err);
+  }
+  const screensContextSection = buildScreensContextSection(screenInventory);
 
   const ref = getFigmaReference();
   const image: ImageInput | undefined = ref.tablePageBase64
@@ -2578,21 +3052,111 @@ export async function generateDesignPrototypeHtml(
 
   const pbiSection = input.pbis.map((pbi, i) => {
     const parts = [`### PBI ${i + 1}: ${pbi.title}`];
+    if (pbi.userTypes?.length) parts.push(`**Applies to user types:** ${pbi.userTypes.join(', ')}`);
     if (pbi.description) parts.push(pbi.description);
     if (pbi.acceptanceCriteria) parts.push(`**Acceptance Criteria:**\n${pbi.acceptanceCriteria}`);
+    if (pbi.personaBehaviors?.length) {
+      const behaviors = pbi.personaBehaviors
+        .map(pb => `- For user types ${pb.userTypes.join(', ')}: ${pb.behavior}`)
+        .join('\n');
+      parts.push(`**Per-persona behavior:** (same control, different behavior per persona group — render one variant per group; do not collapse)\n${behaviors}`);
+    }
     return parts.join('\n');
   }).join('\n\n');
 
+  // EXTEND mode: when the feature targets an existing page, fetch that page's actual
+  // code (unless supplied) and reproduce it faithfully instead of using a generic shell.
+  // The feature text guides the resolver's deep import traversal toward the relevant
+  // sub-views (e.g. an in-page snapshot/modal) rather than just the top-level page.
+  let existingPageContext = input.existingPageContext;
+  if (input.targetRoute && !existingPageContext) {
+    try {
+      const { fetchExistingPageContext } = await import('./designSystemService');
+      const featureText = [
+        input.featureName,
+        input.featureDescription,
+        ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
+      ].filter(Boolean).join(' ');
+      existingPageContext = await fetchExistingPageContext(input.targetRoute, featureText);
+    } catch (err) {
+      console.warn(`[bedrockService] fetchExistingPageContext failed for ${input.targetRoute}:`, err);
+    }
+  }
+  const extendMode = Boolean(input.targetRoute && existingPageContext?.trim());
+
+  // EXTEND mode: surface the target screen's personas/states from the inventory (when known).
+  const targetScreen = input.targetRoute
+    ? screenInventory.find(s => normaliseRouteForMatch(s.route) === normaliseRouteForMatch(input.targetRoute!))
+    : undefined;
+  const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
+    ? `\n\n**Existing page context from inventory:**` +
+      (targetScreen?.userTypes?.length ? `\n- Serves user types: ${targetScreen.userTypes.join(', ')}` : '') +
+      (targetScreen?.states ? `\n- Known UI states: ${targetScreen.states}` : '')
+    : '';
+
+  const scopingSection = extendMode
+    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; reproduce it faithfully, then add the new feature
+${targetScreenHint}
+Below this section is the **ACTUAL code of the existing MaxView page** at \`${input.targetRoute}\`. You must:
+1. **Faithfully reproduce that existing page** — its layout, structure, sections, components, toolbars, tables/grids, and styling — as rendered HTML/CSS. Do NOT strip, omit, or simplify existing page elements.
+2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the real page** (e.g. the toolbar, the data grid, the relevant panel/section where it logically belongs).
+3. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code nor described in the PBI Requirements.
+4. **The four state sections (default / empty / error / loading) apply to the NEW feature within the real page** — the rest of the existing page remains the same across all sections.
+
+## Existing Page Code (route: ${input.targetRoute})
+
+${existingPageContext}`
+    : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
+
+You must follow these rules with zero exceptions:
+1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly mentioned in the PBI Requirements or the feature description above. If a card, widget, table, chart, or section is not described in the requirements, it MUST NOT appear.
+2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard role-gated nav items: Home, Companies, Worksites, Users, Shift Scheduler, RTO Management, Coder, Credentials, Document Management, Timecards, Admin Portal, Power BI — only those visible to the relevant persona) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render.
+3. **The content area must contain ONLY the new feature component** described in the PBI Requirements. Do not add other cards, widgets, summaries, charts, schedules, or any content that is not part of this feature.
+4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.`;
+
+  const plan = input.plan;
+  const hasPlan = Boolean(
+    plan && (plan.designBrief || plan.decision || plan.layoutPattern || plan.primaryComponents?.length || plan.states?.length || plan.rationale || plan.notes || plan.pbiContributions?.length),
+  );
+
+  let planSection = '';
+  if (hasPlan) {
+    const parts: string[] = [];
+    parts.push('## Approved Design Brief (AUTHORITATIVE — follow exactly)');
+    parts.push('');
+    parts.push('A designer has reviewed and approved the following design brief for this feature. This brief is authoritative and **overrides any inference you would otherwise make**. Honor it precisely.');
+    parts.push('');
+
+    if (plan!.designBrief?.trim()) {
+      parts.push(plan!.designBrief.trim());
+      parts.push('');
+    }
+
+    const meta: string[] = [];
+    if (plan!.decision) meta.push(`- **Decision:** ${plan!.decision}${plan!.decision === 'update-page' && input.targetRoute ? ` (extend the existing page at \`${input.targetRoute}\`)` : ''}`);
+    if (plan!.targetPageTitle) meta.push(`- **Page title:** ${plan!.targetPageTitle}`);
+    if (plan!.layoutPattern) meta.push(`- **Layout pattern:** ${plan!.layoutPattern}`);
+    if (plan!.primaryComponents?.length) meta.push(`- **Primary components to use:** ${plan!.primaryComponents.join(', ')}`);
+    if (plan!.states?.length) meta.push(`- **States to render:** ${plan!.states.join(', ')}`);
+    if (plan!.rationale) meta.push(`- **Rationale:** ${plan!.rationale}`);
+    if (plan!.notes?.trim()) meta.push(`- **Reviewer notes (must honor):** ${plan!.notes.trim()}`);
+    if (meta.length) {
+      parts.push('### Technical details');
+      parts.push(...meta);
+      parts.push('');
+    }
+    planSection = parts.join('\n');
+  }
+
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
 
-${catalogSection}
-
+${catalogSection}${screensContextSection}
 ## Feature to Design
 
 **Feature:** ${input.featureName}
 ${input.featureDescription ? `**Description:** ${input.featureDescription}` : ''}
 
-## PBI Requirements
+${planSection}## PBI Requirements
 
 ${pbiSection}
 
@@ -2600,17 +3164,19 @@ ${pbiSection}
 
 Generate a single, self-contained HTML document with inline CSS and inline JavaScript (no external dependencies). The document must show **four state sections** stacked vertically, each clearly separated.
 
-### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
+### Color usage — STRICT (the MaxView Design Tokens are the ONLY color source)
 
-You must follow these rules with zero exceptions:
-1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly mentioned in the PBI Requirements or the feature description above. If a card, widget, table, chart, or section is not described in the requirements, it MUST NOT appear.
-2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard nav items: Dashboard, Document Manager, Assignments, Shift Scheduler, Timecards) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render.
-3. **The content area must contain ONLY the new feature component** described in the PBI Requirements. Do not add other cards, widgets, summaries, charts, schedules, or any content that is not part of this feature.
-4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.
+- Use ONLY the colors from the "MaxView Design Tokens — colors" section above, chosen by **semantic role** (e.g. \`primary.main\` for primary actions, \`error.main\` for errors, \`success.main\` for success, \`warning.main\` for warnings, \`info.main\` for info, \`text.primary\`/\`text.secondary\` for text, \`background.paper\` for cards, \`ui.divider\` for borders/dividers).
+- **NEVER invent, approximate, or sample** any hex/rgba value that is not listed in those tokens.
+- The reference screenshot is provided for **layout and structure only** — do NOT pick colors from it. If its colors differ from the tokens, the tokens win.
+- When reproducing existing page code that contains literal color values, **map each one to the nearest semantic token** instead of copying the raw value.
+- The single exception is the dashed "NEW" annotation marker described below, which intentionally uses \`tertiary.main\` (#a46bff) so it stands out as a review-only overlay.
+
+${scopingSection}
 
 ### Visual annotation of the new feature
 
-Wrap the new feature area in a **2px dashed #1967d2 border** with 8px padding. Add a small floating label at the top-left corner reading "NEW: ${input.featureName}" styled with background #1967d2, white text, 10px bold font, 2px 6px padding, positioned so it overlaps the top border edge.
+Wrap the new feature area in a **2px dashed #a46bff border** (MaxView \`tertiary.main\`) with 8px padding. Add a small floating label at the top-left corner reading "NEW: ${input.featureName}" styled with background #a46bff, white text, 10px bold font, 2px 6px padding, positioned so it overlaps the top border edge.
 
 ### State sections
 
@@ -2621,6 +3187,10 @@ Wrap the new feature area in a **2px dashed #1967d2 border** with 8px padding. A
 3. **ERROR STATE** — Page shell + the annotated new feature area showing error states: inline validation errors, field-level red borders, and/or error banners with realistic messages derived from the acceptance criteria. No other content.
 
 4. **LOADING STATE** — Page shell + the annotated new feature area showing CSS-only animated skeleton placeholders (pulse animation) matching the default layout. No other content.
+
+### Per-persona behavior variants
+
+When a PBI lists a **Per-persona behavior** block (a control that behaves differently per persona group, e.g. Timecards button: S/I/C → behavior A; E/CO → behavior B), render that control **once per behavior group** within the annotated new feature area — each variant clearly labeled with the user types it applies to (e.g. a small role chip or persona tab such as "S, I, C" / "E, CO" next to or above each variant). Do NOT collapse divergent behaviors into a single control. Apply this within the DEFAULT state at minimum; the other states can show a single representative variant.
 
 ### Interactivity — lightweight inline JavaScript
 
@@ -2654,15 +3224,25 @@ The prototype must be fully self-contained. Follow these rules strictly:
   - Search: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>\`
   - Person: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>\`
   - Notification: \`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>\`
-- For user avatars, use a simple colored circle with initials (e.g. \`<div style="width:32px;height:32px;border-radius:50%;background:#1967d2;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">RT</div>\`).
+- For user avatars, use a simple colored circle with initials, tinted with a MaxView token (e.g. \`<div style="width:32px;height:32px;border-radius:50%;background:#323695;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">RT</div>\` — \`primary.main\` on \`primary.contrast\`).
 - For section state headers, use a text label only with a colored dot or small inline SVG — NOT emoji.
 
 ### Section formatting
 
 Each section must have:
-- A sticky-positioned section header with label and a small colored indicator (NOT emoji): "Default State" (green dot), "Empty State" (gray dot), "Error State" (red dot), "Loading State" (blue dot)
+- A sticky-positioned section header with label and a small colored indicator (NOT emoji), each using a MaxView token: "Default State" (\`success.main\` #39c164 dot), "Empty State" (\`ui.outlineBorder\` #919aa5 dot), "Error State" (\`error.main\` #e43443 dot), "Loading State" (\`info.main\` #3363f5 dot)
 - A subtle background tint difference to separate sections visually
 - Full MaxView design system styling throughout (sidebar, topbar, colors, typography)
+
+### State section markers — REQUIRED (enables cheap per-state regeneration)
+
+Wrap EACH of the four state sections with HTML comment delimiters EXACTLY as shown, so a single state can later be revised in isolation without re-emitting the whole document:
+- \`<!-- STATE:default:START -->\` … the entire Default State section … \`<!-- STATE:default:END -->\`
+- \`<!-- STATE:empty:START -->\` … the entire Empty State section … \`<!-- STATE:empty:END -->\`
+- \`<!-- STATE:error:START -->\` … the entire Error State section … \`<!-- STATE:error:END -->\`
+- \`<!-- STATE:loading:START -->\` … the entire Loading State section … \`<!-- STATE:loading:END -->\`
+
+The START marker must be the first thing inside each state block and the END marker the last. Use the exact lowercase keys above. These markers must never be omitted or renamed.
 
 Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 
@@ -2678,15 +3258,78 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
   return html;
 }
 
+// ── Per-state regeneration helpers ──────────────────────────────────────────
+// Prototypes wrap each state section in HTML comment markers
+// (<!-- STATE:default:START -->…<!-- STATE:default:END -->). When present, we can
+// regenerate just the affected sections and splice them back into the stored
+// document — dramatically cutting OUTPUT tokens (the dominant Bedrock cost).
+
+function stateSectionRegex(state: DesignPrototypeStateName): RegExp {
+  return new RegExp(String.raw`<!--\s*STATE:${state}:START\s*-->([\s\S]*?)<!--\s*STATE:${state}:END\s*-->`, 'i');
+}
+
+/** True only when ALL four state markers are present (so a splice is safe). */
+function hasStateMarkers(html: string): boolean {
+  return DESIGN_PROTOTYPE_STATE_NAMES.every(s => stateSectionRegex(s).test(html));
+}
+
+/** Pull the inner body for a given state from a doc or model output. */
+function extractStateInner(html: string, state: DesignPrototypeStateName): string | null {
+  const m = stateSectionRegex(state).exec(html);
+  return m ? m[1] : null;
+}
+
+/** Replace one state section's inner body in place, keeping its markers. */
+function spliceStateSection(html: string, state: DesignPrototypeStateName, newInner: string): string {
+  const re = stateSectionRegex(state);
+  if (!re.test(html)) return html;
+  return html.replace(re, `<!-- STATE:${state}:START -->${newInner}<!-- STATE:${state}:END -->`);
+}
+
+/**
+ * Auto-resolve which states to regenerate when no explicit override is given.
+ * Default + Error carry the content/feedback; Empty + Loading are static
+ * skeletons reused verbatim unless the feedback explicitly references them.
+ */
+function resolveAutoStates(feedback: string, comments: string[]): DesignPrototypeStateName[] {
+  const states: DesignPrototypeStateName[] = ['default', 'error'];
+  const text = [feedback, ...comments].join(' ').toLowerCase();
+  if (/\bempty\b|no\s+(?:data|results|items)/.test(text)) states.push('empty');
+  if (/\bloading\b|\bskeleton\b|\bspinner\b/.test(text)) states.push('loading');
+  return states;
+}
+
+function stripHtmlFences(raw: string): string {
+  let out = raw.trim();
+  if (out.startsWith('```')) {
+    out = out.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  return out.trim();
+}
+
 export async function regenerateDesignPrototypeHtml(
   priorHtml: string,
   feedback: string,
   unresolvedComments: string[],
   modelId?: string,
   maxTokens?: number,
+  targetRoute?: string,
+  existingPageContext?: string,
+  targetStates?: DesignPrototypeStateName[],
 ): Promise<string> {
-  const catalog = await (await import('./designSystemService')).getDesignSystemCatalog();
+  const designSystemService = await import('./designSystemService');
+  const catalog = await designSystemService.getDesignSystemCatalog();
   const catalogSection = buildCatalogSection(catalog);
+
+  // Mirror the generate path: pull the screen inventory (route → purpose → user types →
+  // states) so the model has the same persona/state context when revising. Non-fatal.
+  let screenInventory: ScreenInventoryRoute[] = [];
+  try {
+    screenInventory = await designSystemService.getScreenInventory();
+  } catch (err) {
+    console.warn('[bedrockService] getScreenInventory (regen) failed for design prototype:', err);
+  }
+  const screensContextSection = buildScreensContextSection(screenInventory);
 
   const ref = getFigmaReference();
   const image: ImageInput | undefined = ref.tablePageBase64
@@ -2697,10 +3340,53 @@ export async function regenerateDesignPrototypeHtml(
     ? `\n## Unresolved Review Comments\n\n${unresolvedComments.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n`
     : '';
 
+  // Stay in EXTEND mode on regeneration when the original targeted an existing page.
+  // Use the feedback + unresolved comments as feature text so deep traversal keeps
+  // resolving the same relevant sub-views the original generation targeted.
+  let resolvedPageContext = existingPageContext;
+  if (targetRoute && !resolvedPageContext) {
+    try {
+      const { fetchExistingPageContext } = await import('./designSystemService');
+      const featureText = [feedback, ...unresolvedComments].filter(Boolean).join(' ');
+      resolvedPageContext = await fetchExistingPageContext(targetRoute, featureText);
+    } catch (err) {
+      console.warn(`[bedrockService] fetchExistingPageContext (regen) failed for ${targetRoute}:`, err);
+    }
+  }
+  const extendMode = Boolean(targetRoute && resolvedPageContext?.trim());
+
+  // EXTEND mode: surface the target screen's personas/states from the inventory (when known),
+  // mirroring the generate path's targetScreenHint.
+  const targetScreen = targetRoute
+    ? screenInventory.find(s => normaliseRouteForMatch(s.route) === normaliseRouteForMatch(targetRoute))
+    : undefined;
+  const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
+    ? `\n\n**Existing page context from inventory:**` +
+      (targetScreen?.userTypes?.length ? `\n- Serves user types: ${targetScreen.userTypes.join(', ')}` : '') +
+      (targetScreen?.states ? `\n- Known UI states: ${targetScreen.states}` : '')
+    : '';
+
+  const scopingSection = extendMode
+    ? `### CRITICAL SCOPING RULE — preserve EXTEND mode in all revisions
+${targetScreenHint}
+- This prototype extends the EXISTING MaxView page at \`${targetRoute}\` (its actual code is provided below). Keep faithfully reproducing that existing page — do NOT strip or simplify its existing elements.
+- The dashed annotation border (2px dashed #a46bff, MaxView \`tertiary.main\`) with the "NEW: ..." label must remain around the new feature area in every section.
+- Do NOT invent or fabricate UI elements that are neither in the existing page code nor described in the feature requirements.
+- Empty, Error, and Loading states must ONLY affect the annotated new feature area — the rest of the existing page remains unchanged.
+
+## Existing Page Code (route: ${targetRoute})
+
+${resolvedPageContext}`
+    : `### CRITICAL SCOPING RULE — preserve in all revisions
+
+- The dashed annotation border (2px dashed #a46bff, MaxView \`tertiary.main\`) with the "NEW: ..." label must remain around the new feature area in every section.
+- The page must contain ONLY the sidebar nav, header bar, and the annotated new feature component. Do NOT add any cards, widgets, summaries, charts, schedules, or content that is not part of this feature.
+- Do NOT invent or fabricate any UI elements not described in the feature requirements.
+- Empty, Error, and Loading states must ONLY affect the annotated new feature area — the sidebar and header remain unchanged.`;
+
   const prompt = `You are revising an existing MaxView UI prototype based on reviewer feedback.
 
-${catalogSection}
-
+${catalogSection}${screensContextSection}
 ## Current Prototype HTML
 
 ${priorHtml}
@@ -2712,14 +3398,25 @@ ${commentsSection}
 
 ## Instructions
 
-Revise the HTML prototype to address the feedback and unresolved comments above. Maintain all four state sections (Default, Empty, Error, Loading). Keep the MaxView design system styling. Preserve sections that were not mentioned in the feedback. Maintain all inline JavaScript interactivity (dropdowns, tabs, modals, date pickers, checkboxes, accordion toggles).
+Revise the HTML prototype to address the feedback and unresolved comments above. Maintain all four state sections (Default, Empty, Error, Loading). Keep the MaxView design system styling. Preserve sections that were not mentioned in the feedback. Maintain all inline JavaScript interactivity (dropdowns, tabs, modals, date pickers, checkboxes, accordion toggles). Keep each state section wrapped in its HTML comment markers (\`<!-- STATE:default:START -->\`…\`<!-- STATE:default:END -->\` and likewise for empty, error, loading) — preserve them exactly if present, or add them if missing.
 
-### CRITICAL SCOPING RULE — preserve in all revisions
+### Color usage — STRICT (the MaxView Design Tokens are the ONLY color source)
 
-- The dashed blue annotation border (2px dashed #1967d2) with the "NEW: ..." label must remain around the new feature area in every section.
-- The page must contain ONLY the sidebar nav, header bar, and the annotated new feature component. Do NOT add any cards, widgets, summaries, charts, schedules, or content that is not part of this feature.
-- Do NOT invent or fabricate any UI elements not described in the feature requirements.
-- Empty, Error, and Loading states must ONLY affect the annotated new feature area — the sidebar and header remain unchanged.
+- Use ONLY the colors from the "MaxView Design Tokens — colors" section above, chosen by **semantic role**. NEVER invent, approximate, or sample any hex/rgba value that is not listed in those tokens.
+- The reference screenshot is for **layout and structure only** — do NOT pick colors from it; the tokens win on any conflict.
+- If the current prototype or existing page code contains off-palette color values, **map them to the nearest semantic token** (this is an allowed change even under the surgical-edit rule).
+- The single exception is the dashed "NEW" annotation marker, which intentionally uses \`tertiary.main\` (#a46bff).
+
+### SURGICAL EDIT RULE — make minimal, targeted changes only
+
+This is a REVISION, not a redesign. Treat the **Current Prototype HTML above as the source of truth** and follow these rules with zero exceptions:
+1. **PRESERVE the existing prototype as-is** — keep all markup, layout, copy, styling, and states **byte-for-byte intact EXCEPT** where the feedback/comments explicitly require a change.
+2. **Localize the change** — decide which specific region(s), component(s), or state(s) the feedback actually affects, and modify ONLY those. Everything the feedback did not mention must remain exactly as it was.
+3. **DO NOT restructure, re-theme, re-order, or regenerate unrelated sections.** Do not rename classes, reformat unchanged markup, swap layouts, or "improve" parts that nobody asked about.
+4. **DO NOT drop existing content or states** — all four state sections (Default, Empty, Error, Loading) and any existing content/copy the feedback didn't mention must survive unchanged.
+5. **Return the COMPLETE HTML document** (full output, not a diff), but it should differ from the current prototype by the **minimal set of edits** needed to satisfy the feedback.
+
+${scopingSection}
 
 ### Interactivity — preserve and enhance
 
@@ -2737,12 +3434,82 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
 
-  let html = text.trim();
-  if (html.startsWith('```')) {
-    html = html.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  // ── Decide scope: which state sections actually need regeneration ──────────
+  const allStates = DESIGN_PROTOTYPE_STATE_NAMES;
+  const requested = (targetStates && targetStates.length > 0)
+    ? allStates.filter(s => targetStates.includes(s))
+    : resolveAutoStates(feedback, unresolvedComments);
+  const markersPresent = hasStateMarkers(priorHtml);
+  // Scope only when markers exist AND we're regenerating a strict subset.
+  const scoped = markersPresent && requested.length > 0 && requested.length < allStates.length;
+
+  if (!scoped) {
+    const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
+    return stripHtmlFences(text);
   }
 
-  return html;
+  // ── Scoped path: regenerate only the requested sections, splice the rest ──
+  const targetLabels = requested.map(s => s.toUpperCase()).join(', ');
+  const currentSections = requested
+    .map(s => `<!-- STATE:${s}:START -->${extractStateInner(priorHtml, s) ?? ''}<!-- STATE:${s}:END -->`)
+    .join('\n\n');
+
+  const scopedPrompt = `You are revising ONLY specific state sections of an existing MaxView UI prototype based on reviewer feedback.
+
+${catalogSection}${screensContextSection}## Full Current Prototype HTML (CONTEXT ONLY — do NOT re-output this whole document)
+
+${priorHtml}
+
+## Reviewer Feedback
+
+${feedback}
+${commentsSection}
+## State sections to revise: ${targetLabels}
+
+Below are the CURRENT versions of ONLY the sections you must revise. Apply the feedback to them and return their revised versions:
+
+${currentSections}
+
+## Instructions — STRICT OUTPUT CONTRACT
+
+- Return ONLY the revised state section(s) listed above (${targetLabels}). Do NOT return any other state section, the \`<head>\`, the document shell, the sidebar/header chrome, or the trailing \`<script>\` block.
+- Each returned section MUST be wrapped in its exact markers — e.g. \`<!-- STATE:default:START -->\` … \`<!-- STATE:default:END -->\`. Output the requested sections back-to-back with nothing else around them.
+- The state sections NOT listed above are preserved automatically — do not include or mention them.
+- SURGICAL revision: keep all markup, layout, copy, and styling byte-for-byte intact EXCEPT where the feedback explicitly requires a change.
+
+### Color usage — STRICT
+- Use ONLY the MaxView Design Tokens colors above, chosen by semantic role. Never invent or sample hex values. The dashed "NEW" annotation marker keeps \`tertiary.main\` (#a46bff).
+
+${scopingSection}
+
+### Interactivity & icons
+- Preserve the inline JavaScript hooks (class names / ids) the revised sections rely on. No external scripts, no fetch/network calls, no navigation.
+- NO emoji and NO external \`<img>\` tags — use inline SVGs. Section state headers use colored dots or small inline SVGs.
+
+Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
+
+  const text = stripHtmlFences(await invokeModel(scopedPrompt, image, effectiveModel, effectiveMaxTokens));
+
+  // Graceful fallback: if the model ignored the contract and returned a full
+  // document, just use it directly.
+  if (/<!DOCTYPE html|<html[\s>]/i.test(text)) {
+    return text;
+  }
+
+  let merged = priorHtml;
+  let appliedCount = 0;
+  for (const s of requested) {
+    const inner = extractStateInner(text, s);
+    if (inner != null) {
+      merged = spliceStateSection(merged, s, inner);
+      appliedCount++;
+    } else {
+      console.warn(`[bedrockService] scoped regen: state "${s}" missing from model output — keeping prior section`);
+    }
+  }
+  if (appliedCount === 0) {
+    throw new Error('Scoped regeneration returned no recognizable state sections');
+  }
+  return merged;
 }

@@ -67,7 +67,7 @@ import { getApproverPool, getSkillConfig } from '../services/projectSettingsServ
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
-import { generatePrototypesForPrd } from '../services/designPrototypeService';
+import { generateDesignPlan } from '../services/designPlanService';
 import { getTestCases, triggerTestCaseGeneration } from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
@@ -124,6 +124,19 @@ router.get('/active-users', requirePermission('interviews:manage'), async (req, 
   try {
     const users = await getActiveUsers();
     res.json(users);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Design-system screen inventory (for route confirm/override picker) ─────────
+
+// GET /screen-inventory — existing MaxView page routes (+ purpose) for the route picker
+router.get('/screen-inventory', requirePermission('interviews:view'), async (_req, res, next) => {
+  try {
+    const { getScreenInventory } = await import('../services/designSystemService');
+    const routes = await getScreenInventory();
+    res.json(routes);
   } catch (err) {
     next(err);
   }
@@ -279,8 +292,8 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
     const { approved } = await reviewPrd(req.params.prdId, userId, body);
 
     if (approved) {
-      generatePrototypesForPrd(req.params.prdId).catch(err => {
-        console.error('[interviews] Design prototype generation failed:', err);
+      generateDesignPlan(req.params.prdId).catch(err => {
+        console.error('[interviews] Design plan generation failed:', err);
       });
     }
 
@@ -705,11 +718,6 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
     };
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString(), fixCommentId: commentId };
-
-    await db
-      .update(prdsTable)
-      .set({ fixCommentId: commentId, updatedAt: new Date().toISOString() })
-      .where(eq(prdsTable.id, req.params.prdId));
 
     await db
       .update(prdsTable)

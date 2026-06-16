@@ -11,6 +11,7 @@ import {
   assignUserToProject,
   bulkAssignUsersToProject,
   bulkSetProjectAssignments,
+  ensureUserProjectAssignment,
   getAllAssignments,
   getAssignmentsForProject,
   getAssignmentsForUser,
@@ -126,6 +127,35 @@ describe('userProjectAssignmentService', () => {
         assignedBy: 'super-admin',
       }));
       expect(onConflictMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('ensureUserProjectAssignment', () => {
+    it('inserts with onConflictDoNothing to preserve existing rows', async () => {
+      const onConflictMock = jest.fn().mockResolvedValue(undefined);
+      const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+      mockDb.insert.mockReturnValue({ values: valuesMock });
+
+      await ensureUserProjectAssignment('user-1', 'MaxView', 'auto-select');
+
+      expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        project: 'MaxView',
+        assignedBy: 'auto-select',
+      }));
+      expect(onConflictMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('defaults assignedBy to null when omitted', async () => {
+      const onConflictMock = jest.fn().mockResolvedValue(undefined);
+      const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+      mockDb.insert.mockReturnValue({ values: valuesMock });
+
+      await ensureUserProjectAssignment('user-1', 'MaxView');
+
+      expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+        assignedBy: null,
+      }));
     });
   });
 

@@ -201,7 +201,7 @@ interface PrdCardProps {
 
 const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
   const navigate = useNavigate();
-  const readiness = derivePrdReadiness(prd, prd.latestTestCase);
+  const readiness = derivePrdReadiness(prd, prd.latestTestCase, prd.validationScoreThreshold ?? undefined);
   const coverage = prd.latestTestCase?.coverageSummary;
   return (
     <div className={styles.card} onClick={() => navigate(`/backlog/prd/${prd.id}`)}>

@@ -15,6 +15,8 @@ import {
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
 } from '../hooks/usePlatformAdmin';
+import { UserMenu } from './UserMenu';
+import type { ThemeMode } from '../hooks/useAppShell';
 import { CONFIGURABLE_MENU_ITEMS } from '../../shared/types/menuSettings';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type {
@@ -111,9 +113,23 @@ function formatImportMessage(importedCount: number, pendingCount: number): strin
 
 interface PlatformAdminProps {
   onBackToProjects: () => void;
+  user: { name: string; email?: string } | null;
+  theme: ThemeMode;
+  hasUnreadChangelog: boolean;
+  onThemeChange: (theme: ThemeMode) => void;
+  onOpenChangelog: () => void;
+  onLogout: () => void;
 }
 
-export const PlatformAdmin: React.FC<PlatformAdminProps> = ({ onBackToProjects }) => {
+export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
+  onBackToProjects,
+  user,
+  theme,
+  hasUnreadChangelog,
+  onThemeChange,
+  onOpenChangelog,
+  onLogout,
+}) => {
   const [selectedMenuProject, setSelectedMenuProject] = useState<string>('');
   const [assignmentSavedProject, setAssignmentSavedProject] = useState<string | null>(null);
   const [menuSavedProject, setMenuSavedProject] = useState<string | null>(null);
@@ -211,6 +227,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({ onBackToProjects }
           <p className={styles.subtitle}>
             Manage project access and per-project navigation without selecting an in-project context.
           </p>
+        </div>
+        <div className={styles.headerActions}>
+          <UserMenu
+            onOpenChangelog={onOpenChangelog}
+            onThemeChange={onThemeChange}
+            onLogout={onLogout}
+            theme={theme}
+            user={user}
+            hasUnreadChangelog={hasUnreadChangelog}
+          />
         </div>
       </header>
 

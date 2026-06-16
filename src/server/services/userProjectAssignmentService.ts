@@ -128,6 +128,30 @@ export async function assignUserToProject(
     });
 }
 
+/**
+ * Inserts a user–project assignment only if one does not already exist.
+ * Unlike {@link assignUserToProject}, this preserves existing rows untouched
+ * (no overwrite of assignedBy / assignedAt) so admin-set assignments are safe.
+ */
+export async function ensureUserProjectAssignment(
+  userId: string,
+  project: string,
+  assignedBy?: string | null,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .insert(userProjectAssignments)
+    .values({
+      userId,
+      project,
+      assignedBy: assignedBy ?? null,
+      assignedAt: now,
+    })
+    .onConflictDoNothing({
+      target: [userProjectAssignments.userId, userProjectAssignments.project],
+    });
+}
+
 export async function bulkAssignUsersToProject(
   userIds: string[],
   project: string,

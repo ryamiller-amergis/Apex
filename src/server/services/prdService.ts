@@ -81,6 +81,37 @@ async function getPrdOwnerId(interviewId: string | null): Promise<string | null>
   return rows[0]?.prdOwnerId ?? null;
 }
 
+/**
+ * Best-effort read of an interview's conversation as a plain-text transcript,
+ * used to ground persona/user-type enrichment in the BA's own words. Returns
+ * null when the interview, its thread, or any messages are unavailable.
+ */
+async function readInterviewTranscript(interviewId: string): Promise<string | null> {
+  try {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, interviewId),
+      columns: { chatThreadId: true },
+    });
+    if (!interview?.chatThreadId) return null;
+
+    const { getThreadAsync } = await import('./chatAgentService');
+    const thread = await getThreadAsync(interview.chatThreadId);
+    if (!thread) return null;
+
+    const lines: string[] = [];
+    for (const msg of thread.messages) {
+      if (msg.role === 'user' && msg.text && msg.text !== 'Begin.') {
+        lines.push(`BA: ${msg.text}`);
+      } else if (msg.role === 'agent' && msg.text) {
+        lines.push(`Interviewer: ${msg.text}`);
+      }
+    }
+    return lines.length > 0 ? lines.join('\n\n') : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createPrd(opts: {
   interviewId: string;
   project: string;
@@ -133,8 +164,15 @@ export async function listPrds(
     rows.map(({ prd }) => prd.id),
   );
 
-  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) =>
-    rowToPrdSummary(
+  const projects = [...new Set(rows.map(({ prd }) => prd.project))];
+  const thresholdByProject = new Map<string, number | null>();
+  await Promise.all(projects.map(async (p) => {
+    const cfg = await getSkillConfig(p);
+    thresholdByProject.set(p, cfg?.prdValidationScoreThreshold ?? null);
+  }));
+
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) => ({
+    ...rowToPrdSummary(
       prd,
       reviewerDisplayName,
       authorDisplayName,
@@ -142,7 +180,8 @@ export async function listPrds(
       prdOwnerDisplayName,
       latestTestCases.get(prd.id) ?? null,
     ),
-  );
+    validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+  }));
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
@@ -183,6 +222,7 @@ export async function getPrd(id: string): Promise<Prd | null> {
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as PrdValidationBaseline | null) ?? null,
     prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    validationScoreThreshold: skillConfig?.prdValidationScoreThreshold ?? null,
     fixCommentId: row.fixCommentId ?? null,
   };
 }
@@ -248,6 +288,7 @@ export async function submitForReview(
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
+  const skillConfig = await getSkillConfig(row.project);
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -256,6 +297,7 @@ export async function submitForReview(
       validationScorecard: row.validationScorecard as ValidationScorecard | null,
     },
     await getTestCases(id),
+    skillConfig?.prdValidationScoreThreshold ?? undefined,
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
@@ -346,6 +388,7 @@ export async function reviewPrd(
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
+  const reviewSkillConfig = await getSkillConfig(row.project);
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -354,6 +397,7 @@ export async function reviewPrd(
       validationScorecard: row.validationScorecard as ValidationScorecard | null,
     },
     await getTestCases(id),
+    reviewSkillConfig?.prdValidationScoreThreshold ?? undefined,
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
@@ -410,12 +454,49 @@ export async function syncPrdContent(
   backlogJson?: unknown,
   finalStatus: PrdStatus = 'draft',
 ): Promise<void> {
+  // Auto-infer an existing-page `route` per feature so the design-prototype generator
+  // can run in EXTEND mode for features that modify existing MaxView pages. Best-effort:
+  // inference failures or a missing inventory leave the backlog unchanged.
+  let resolvedBacklog = backlogJson;
+  if (backlogJson !== undefined && backlogJson !== null) {
+    try {
+      const { inferRoutesForBacklog } = await import('./designSystemService');
+      const { backlog } = await inferRoutesForBacklog(backlogJson);
+      resolvedBacklog = backlog;
+    } catch (err) {
+      console.warn(`[prdService] Route inference skipped for PRD ${id}:`, err);
+    }
+
+    // Populate per-feature / per-PBI userTypes + personaBehaviors from the persona
+    // knowledge captured in the interview, so the design-prototype generator can
+    // render role-aware UI. Best-effort: failures leave the (route-inferred)
+    // backlog unchanged. Routes are handled by the inference pass above.
+    try {
+      const prdRow = await db.query.prds.findFirst({
+        where: eq(prds.id, id),
+        columns: { project: true, interviewId: true },
+      });
+      const { getSkillConfig } = await import('./projectSettingsService');
+      const skillConfig = prdRow?.project ? await getSkillConfig(prdRow.project) : null;
+      const transcript = prdRow?.interviewId ? await readInterviewTranscript(prdRow.interviewId) : null;
+      const { enrichBacklogPersonasWithBedrock } = await import('./bedrockService');
+      resolvedBacklog = await enrichBacklogPersonasWithBedrock(
+        resolvedBacklog,
+        skillConfig?.prdReviewBedrockModelId ?? null,
+        skillConfig?.prdReviewBedrockMaxTokens ?? null,
+        transcript,
+      );
+    } catch (err) {
+      console.warn(`[prdService] Persona enrichment skipped for PRD ${id}:`, err);
+    }
+  }
+
   await db
     .update(prds)
     .set({
       content,
       status: finalStatus,
-      ...(backlogJson !== undefined ? { backlogJson: backlogJson as any } : {}),
+      ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, id));

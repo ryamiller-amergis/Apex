@@ -18,7 +18,9 @@ import type {
   ReviewDesignPrototypeRequest,
   RegeneratePrototypeRequest,
   AddPrototypeCommentRequest,
+  DesignPrototypeStateName,
 } from '../../shared/types/designPrototype';
+import { DESIGN_PROTOTYPE_STATE_NAMES } from '../../shared/types/designPrototype';
 
 const router = Router();
 
@@ -90,7 +92,16 @@ router.post('/:id/regenerate', requirePermission('interviews:manage'), async (re
       res.status(400).json({ error: 'Feedback is required for regeneration' });
       return;
     }
-    await regeneratePrototype(req.params.id, body.feedback.trim());
+    const targetStates = Array.isArray(body.targetStates)
+      ? (body.targetStates.filter(s =>
+          DESIGN_PROTOTYPE_STATE_NAMES.includes(s as DesignPrototypeStateName),
+        ) as DesignPrototypeStateName[])
+      : undefined;
+    await regeneratePrototype(
+      req.params.id,
+      body.feedback.trim(),
+      targetStates && targetStates.length > 0 ? targetStates : undefined,
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);

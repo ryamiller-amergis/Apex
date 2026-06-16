@@ -80,6 +80,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   })),
   useAcceptFixPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertPrdSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useScreenInventoryRoutes: jest.fn(() => ({ data: [] })),
   usePrdValidationReport: jest.fn(() => ({ data: null })),
   useDocumentAssignments: jest.fn(() => ({ data: [] })),
   useGenerateTestCases: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),

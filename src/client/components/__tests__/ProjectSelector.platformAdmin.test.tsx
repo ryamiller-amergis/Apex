@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+
 import { ProjectSelector } from '../ProjectSelector';
 import { useProjects } from '../../hooks/useProjects';
 import {
@@ -85,7 +85,6 @@ describe('ProjectSelector platform admin action', () => {
   });
 
   it('shows Request Access for regular users and submits selected projects', async () => {
-    const user = userEvent.setup();
     const createRequests = jest.fn().mockResolvedValue([
       {
         id: 'request-1',
@@ -110,11 +109,11 @@ describe('ProjectSelector platform admin action', () => {
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: /request access/i }));
+    fireEvent.click(screen.getByRole('button', { name: /request access/i }));
     expect(screen.getByRole('dialog', { name: /request project access/i })).toBeInTheDocument();
 
-    await user.click(screen.getByLabelText(/matterworx/i));
-    await user.click(screen.getByRole('button', { name: /submit request/i }));
+    fireEvent.click(screen.getByLabelText(/matterworx/i));
+    fireEvent.click(screen.getByRole('button', { name: /submit request/i }));
 
     await waitFor(() => {
       expect(createRequests).toHaveBeenCalledWith({ projects: ['MatterWorx'] });
