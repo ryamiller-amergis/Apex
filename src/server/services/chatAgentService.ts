@@ -120,6 +120,26 @@ async function loadThread(threadId: string): Promise<ChatThread | null> {
  * Remove workspace dirs whose session.json is older than 2 hours.
  * Called at startup to clean up after server restarts mid-session.
  */
+function logWorkspaceContents(workspaceDir: string, context: string): void {
+  try {
+    if (!fs.existsSync(workspaceDir)) {
+      console.warn(`[chat] ${context}: workspace does not exist (${workspaceDir})`);
+      return;
+    }
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    if (!fs.existsSync(outputDir)) {
+      console.warn(`[chat] ${context}: output dir does not exist (${outputDir})`);
+      const topLevel = fs.readdirSync(workspaceDir, { recursive: true }) as string[];
+      console.warn(`[chat] ${context}: workspace files: ${topLevel.slice(0, 30).join(', ')}`);
+      return;
+    }
+    const outputFiles = fs.readdirSync(outputDir, { recursive: true }) as string[];
+    console.warn(`[chat] ${context}: output dir files (${outputFiles.length}): ${outputFiles.slice(0, 30).join(', ')}`);
+  } catch {
+    console.warn(`[chat] ${context}: failed to list workspace contents`);
+  }
+}
+
 function cleanupStaleWorkspaces() {
   if (!fs.existsSync(WORKSPACE_BASE)) return;
   const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
@@ -874,6 +894,7 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
   if (testCaseRow) {
     const synced = await syncTestCaseOutput(testCaseRow.id, testCaseRow.prdId, threadId);
     if (!synced && testCaseRow.status === 'generating') {
+      logWorkspaceContents(workspaceDir, `test-case no-output (testCaseId=${testCaseRow.id})`);
       await markTestCaseFailed(testCaseRow.id, testCaseRow.prdId, threadId);
       console.warn(`[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`);
     }
@@ -895,6 +916,7 @@ async function syncOutputToDb(threadId: string, workspaceDir: string): Promise<v
       );
       fullySynced = content !== null && backlog !== null;
     } else if (prdRow.status === 'generating') {
+      logWorkspaceContents(workspaceDir, `PRD no-output (prdId=${prdRow.id})`);
       await db.update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));

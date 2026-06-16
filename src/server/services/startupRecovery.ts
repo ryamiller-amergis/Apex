@@ -9,7 +9,7 @@ import {
   startValidationWatcher,
   isValidationWatcherActive,
 } from './designDocService';
-import { startTestCaseWatcher } from './testCaseService';
+import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -153,6 +153,7 @@ export async function recoverInFlightWork(): Promise<void> {
 
   for (const testCase of generatingTestCases) {
     if (!testCase.chatThreadId) continue;
+    if (isTestCaseWatcherActive(testCase.id)) continue;
     const ok = await hydrateThread(testCase.chatThreadId);
     if (ok) {
       startTestCaseWatcher(testCase.id, testCase.chatThreadId);

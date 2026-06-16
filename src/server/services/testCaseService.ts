@@ -468,6 +468,10 @@ export async function triggerTestCaseGeneration(
   return true;
 }
 
+export function isTestCaseWatcherActive(testCaseId: string): boolean {
+  return activeTestCaseWatchers.has(testCaseId);
+}
+
 export function startTestCaseWatcher(
   testCaseId: string,
   chatThreadId: string
