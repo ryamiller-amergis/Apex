@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { designDocs, interviews, prds } from '../db/schema';
 import type { ChatThread } from '../../shared/types/chat';
 import { loadFullThread } from './chatThreadRepository';
+import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
@@ -78,7 +79,9 @@ export async function resolveThreadAccess(
   userId: string,
   threadId: string,
 ): Promise<ThreadAccessResult | null> {
-  const thread = await loadFullThread(threadId);
+  // Prefer in-memory thread (has the latest messages even before Postgres
+  // inserts complete), fall back to Postgres for cold / restarted threads.
+  const thread = (await getThread(threadId)) ?? (await loadFullThread(threadId));
   if (!thread) return null;
 
   if (thread.userId === userId) {

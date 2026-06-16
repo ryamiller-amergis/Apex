@@ -6,6 +6,12 @@ import type {
   ChatThread,
   ChatThreadSummary,
 } from '../../shared/types/chat';
+import {
+  formatProcessDescription,
+  firstUserMessagePreview,
+  normalizeMessagePreview,
+  skillPathToProcessLabel,
+} from '../../shared/utils/threadHistoryLabel';
 
 // ── upsertThread ──────────────────────────────────────────────────────────────
 
@@ -83,10 +89,20 @@ export async function insertMessage(
 
 export async function listThreadsByUser(
   userId: string,
-  opts?: { limit?: number; offset?: number },
+  opts?: { limit?: number; offset?: number; project?: string },
 ): Promise<ChatThreadSummary[]> {
   const limit = opts?.limit ?? 50;
   const offset = opts?.offset ?? 0;
+
+  const conditions = [
+    eq(chatThreads.userId, userId),
+    sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
+    sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
+  ];
+
+  if (opts?.project) {
+    conditions.push(sql`${chatThreads.kickoff}->>'project' = ${opts.project}`);
+  }
 
   const rows = await db
     .select({
@@ -99,13 +115,17 @@ export async function listThreadsByUser(
       flaggedAt: chatThreads.flaggedAt,
       createdAt: chatThreads.createdAt,
       lastActivityAt: chatThreads.lastActivityAt,
+      firstUserMessage: sql<string | null>`(
+        SELECT m.text FROM chat_messages m
+        WHERE m.thread_id = ${chatThreads.id}
+          AND m.role = 'user'
+          AND m.text <> 'Begin.'
+        ORDER BY m.ts ASC
+        LIMIT 1
+      )`.as('first_user_message'),
     })
     .from(chatThreads)
-    .where(and(
-      eq(chatThreads.userId, userId),
-      sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
-      sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
-    ))
+    .where(and(...conditions))
     .orderBy(desc(chatThreads.lastActivityAt))
     .limit(limit)
     .offset(offset);
@@ -119,9 +139,12 @@ export async function listThreadsByUser(
       project: row.kickoff?.project ?? '',
       repo: row.kickoff?.repo ?? '',
       skillPath: row.kickoff?.skillPath,
+      pillLabel: row.kickoff?.pillLabel,
+      pillDescription: row.kickoff?.pillDescription,
     },
     flagged: row.flagged,
     flaggedAt: row.flaggedAt ?? undefined,
+    messagePreview: normalizeMessagePreview(row.firstUserMessage) ?? undefined,
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   }));
@@ -242,26 +265,22 @@ export async function clearStaleRun(threadId: string): Promise<void> {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function deriveTitle(thread: ChatThread): string {
-  // 1. Prefer explicit pill label from kickoff
+  const promptPreview = firstUserMessagePreview(thread.messages);
+
+  // 1. Pill label + pill description or first user prompt
   if (thread.kickoff.pillLabel) {
-    const desc = thread.kickoff.pillDescription;
-    return desc
-      ? `${thread.kickoff.pillLabel} — ${desc}`.slice(0, 120)
-      : thread.kickoff.pillLabel;
+    const desc = promptPreview || thread.kickoff.pillDescription?.trim();
+    return formatProcessDescription(thread.kickoff.pillLabel, desc || undefined);
   }
 
-  // 2. Fall back to skill folder name
+  // 2. Skill folder name + first user prompt
   if (thread.kickoff.skillPath) {
-    const parts = thread.kickoff.skillPath.split('/');
-    const skillFolder = parts[parts.length - 2] ?? parts[parts.length - 1] ?? 'Skill';
-    return skillFolder.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    const process = skillPathToProcessLabel(thread.kickoff.skillPath);
+    return formatProcessDescription(process, promptPreview);
   }
 
   // 3. Fall back to first user message
-  const firstUserMsg = thread.messages.find((m) => m.role === 'user');
-  if (firstUserMsg?.text) {
-    return firstUserMsg.text.slice(0, 80).replace(/\n/g, ' ').trim();
-  }
+  if (promptPreview) return promptPreview;
 
   return 'Free chat';
 }

@@ -274,6 +274,7 @@ interface ChatAgentPanelProps {
   canStartNewChat?: boolean;
   isStartingNewChat?: boolean;
   newChatError?: string;
+  selectedProject?: string;
 }
 
 export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
@@ -285,6 +286,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   canStartNewChat = true,
   isStartingNewChat = false,
   newChatError,
+  selectedProject,
 }) => {
   const [input, setInput] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -579,6 +581,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           onSelectThread={(id) => { onSelectThread(id); setShowHistory(false); }}
           onDeleteThread={(id) => { if (id === thread?.id) onSelectThread(''); }}
           onClose={() => setShowHistory(false)}
+          project={selectedProject}
           className={styles.historySidebarInPanel}
         />
       ) : !thread ? (

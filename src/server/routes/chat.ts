@@ -5,7 +5,7 @@ import {
   sendMessage,
   subscribeToThread,
   cancelRun,
-  closeThread,
+  permanentlyDeleteThread,
   readOutputPrd,
   readOutputBacklog,
   isPrdReady,
@@ -127,8 +127,9 @@ function readAttachments(raw: unknown): ChatAttachment[] {
 router.get('/threads', async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
+  const project = typeof req.query.project === 'string' ? req.query.project : undefined;
   try {
-    const summaries = await listThreadSummaries(getUserId(req), { limit, offset });
+    const summaries = await listThreadSummaries(getUserId(req), { limit, offset, project });
     res.json(summaries);
   } catch (err: any) {
     console.error('[chat] listThreadSummaries error:', err.message);
@@ -195,7 +196,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
 
   // Replay all existing messages so late-joining subscribers (including
   // the very first connect right after thread creation) never miss events.
-  for (const msg of thread.messages) {
+  // Prefer the hydrated in-memory messages (may include writes not yet
+  // flushed to Postgres) over the stale middleware snapshot.
+  const replayMessages = hydrated?.messages ?? thread.messages;
+  for (const msg of replayMessages) {
     sendEvent({ type: 'message', message: msg });
   }
 
@@ -319,14 +323,14 @@ router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: 
 
 /**
  * DELETE /api/chat/threads/:id
- * Close the thread, dispose the agent, and remove the workspace.
+ * Permanently delete the thread from memory, workspace, and database.
  */
 router.delete('/threads/:id', requireThreadWrite, async (req: Request, res: Response) => {
   try {
-    await closeThread(req.params.id);
+    await permanentlyDeleteThread(req.params.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to close thread' });
+    res.status(500).json({ error: err.message ?? 'Failed to delete thread' });
   }
 });
 

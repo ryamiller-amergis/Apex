@@ -35,7 +35,7 @@ jest.mock('../services/chatAgentService', () => ({
   sendMessage: jest.fn(),
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
-  closeThread: jest.fn(),
+  permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
   readOutputBacklog: jest.fn().mockReturnValue(null),
@@ -51,6 +51,14 @@ jest.mock('../services/chatThreadRepository', () => ({
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
+}));
+
+const mockResolveThreadAccess = jest.fn();
+const mockCanWriteThread = jest.fn();
+
+jest.mock('../services/threadAccessService', () => ({
+  resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
+  canWriteThread: (...args: unknown[]) => mockCanWriteThread(...args),
 }));
 
 import chatRouter from '../routes/chat';
@@ -133,6 +141,83 @@ describe('GET /api/chat/threads', () => {
   });
 });
 
+describe('GET /api/chat/threads — messagePreview for history labels', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('returns messagePreview so the client can render "PillLabel - description" labels', async () => {
+    mockChatService.listThreadSummaries.mockResolvedValue([
+      {
+        id: 't1',
+        userId: 'user-1',
+        title: 'App Knowledge - what does auth look like',
+        status: 'idle',
+        kickoff: { project: 'P', repo: 'R', pillLabel: 'App Knowledge' },
+        messagePreview: 'what does auth look like',
+        flagged: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-01-01T00:00:00.000Z',
+      },
+    ] as any);
+
+    const res = await request(buildApp()).get('/api/chat/threads');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].messagePreview).toBe('what does auth look like');
+    expect(res.body[0].kickoff.pillLabel).toBe('App Knowledge');
+  });
+
+  it('includes title fallback when messagePreview is absent', async () => {
+    mockChatService.listThreadSummaries.mockResolvedValue([
+      {
+        id: 't2',
+        userId: 'user-1',
+        title: 'App Knowledge - describe the login flow',
+        status: 'idle',
+        kickoff: { project: 'P', repo: 'R', pillLabel: 'App Knowledge' },
+        flagged: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-01-01T00:00:00.000Z',
+      },
+    ] as any);
+
+    const res = await request(buildApp()).get('/api/chat/threads');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].title).toBe('App Knowledge - describe the login flow');
+    expect(res.body[0].messagePreview).toBeUndefined();
+  });
+});
+
+describe('GET /api/chat/threads — project filter', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockChatService.listThreadSummaries.mockResolvedValue([]);
+  });
+
+  it('passes project query param to listThreadSummaries', async () => {
+    await request(buildApp()).get('/api/chat/threads?project=MyProject');
+
+    expect(mockChatService.listThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ project: 'MyProject' }),
+    );
+  });
+
+  it('does not pass project when query param is absent', async () => {
+    await request(buildApp()).get('/api/chat/threads');
+
+    expect(mockChatService.listThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ project: undefined }),
+    );
+  });
+});
+
 describe('POST /api/chat/threads', () => {
   beforeEach(() => {
     mockPermissionGranted = true;
@@ -155,5 +240,127 @@ describe('POST /api/chat/threads', () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'kickoff.repo is required' });
+  });
+});
+
+describe('POST /api/chat/threads — happy path', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('creates a thread and returns threadId', async () => {
+    mockChatService.createThread.mockResolvedValue({
+      id: 'new-thread-id',
+      userId: 'user-1',
+      kickoff: { project: 'MaxView', repo: 'MaxView', pillLabel: 'App Knowledge' },
+      messages: [],
+      status: 'idle',
+      workspaceDir: '/tmp/ws',
+      flagged: false,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastActivityAt: '2026-01-01T00:00:00.000Z',
+    } as any);
+
+    const kickoff = {
+      project: 'MaxView',
+      repo: 'MaxView',
+      pillLabel: 'App Knowledge',
+      skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+    };
+
+    const res = await request(buildApp())
+      .post('/api/chat/threads')
+      .send({ kickoff, skipAutoKickoff: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ threadId: 'new-thread-id' });
+    expect(mockChatService.createThread).toHaveBeenCalledWith(
+      'user-1',
+      kickoff,
+      { skipAutoKickoff: true },
+    );
+  });
+});
+
+describe('chat thread lifecycle', () => {
+  const threadId = 'lifecycle-thread-id';
+  const kickoff = {
+    project: 'MaxView',
+    repo: 'MaxView',
+    pillLabel: 'App Knowledge',
+    skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+  };
+
+  const createdThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff,
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const listedSummary = {
+    id: threadId,
+    userId: 'user-1',
+    title: 'App Knowledge - How does auth work?',
+    status: 'idle',
+    kickoff,
+    messagePreview: 'How does auth work?',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: createdThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  it('create -> list -> delete -> list empty', async () => {
+    const app = buildApp();
+
+    mockChatService.createThread.mockResolvedValue(createdThread as any);
+
+    const createRes = await request(app)
+      .post('/api/chat/threads')
+      .send({ kickoff, skipAutoKickoff: true });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body).toEqual({ threadId });
+
+    mockChatService.listThreadSummaries.mockResolvedValue([listedSummary] as any);
+
+    const listRes = await request(app).get('/api/chat/threads?project=MaxView');
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body).toHaveLength(1);
+    expect(listRes.body[0].id).toBe(threadId);
+    expect(listRes.body[0].kickoff.pillLabel).toBe('App Knowledge');
+    expect(listRes.body[0].messagePreview).toBe('How does auth work?');
+
+    mockChatService.permanentlyDeleteThread.mockResolvedValue(undefined);
+
+    const deleteRes = await request(app).delete(`/api/chat/threads/${threadId}`);
+
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body).toEqual({ ok: true });
+    expect(mockChatService.permanentlyDeleteThread).toHaveBeenCalledWith(threadId);
+
+    mockChatService.listThreadSummaries.mockResolvedValue([]);
+
+    const listAfterDeleteRes = await request(app).get('/api/chat/threads?project=MaxView');
+
+    expect(listAfterDeleteRes.status).toBe(200);
+    expect(listAfterDeleteRes.body).toEqual([]);
   });
 });

@@ -1,11 +1,11 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  width: 260px;
   height: 100%;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   flex-shrink: 0;
+  position: relative;
 }
 
 .header {
@@ -273,7 +273,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
 }
 
 .row-meta {
@@ -293,6 +292,25 @@
 
 .row-time {
   flex-shrink: 0;
+}
+
+/* ── Resize handle ──────────────────────────────────────── */
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--accent-color);
+  opacity: 0.5;
 }
 
 /* ── Mobile: full-screen overlay ─────────────────────────── */

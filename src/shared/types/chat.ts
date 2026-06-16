@@ -151,7 +151,9 @@ export interface ChatThreadSummary {
   userId: string;
   title: string;
   status: ChatThreadStatus;
-  kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath'>;
+  kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath' | 'pillLabel' | 'pillDescription'>;
+  /** First user prompt snippet for `{process} - {description}` history labels */
+  messagePreview?: string;
   flagged: boolean;
   flaggedAt?: string;
   createdAt: string;

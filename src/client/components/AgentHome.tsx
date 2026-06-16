@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -435,11 +436,13 @@ function MessageBubble({
 
 export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const [input, setInput] = useState('');
   // Prefer the URL param (direct links) then sessionStorage (survives SPA
   // navigation where App.tsx resets the URL to /home without query params).
+  const sessionStorageKey = `agentHomeThreadId:${selectedProject}`;
   const [threadId, setThreadId] = useState<string | null>(
-    () => searchParams.get('thread') ?? sessionStorage.getItem('agentHomeThreadId') ?? null,
+    () => searchParams.get('thread') ?? sessionStorage.getItem(sessionStorageKey) ?? null,
   );
   const [showHistory, setShowHistory] = useState(false);
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
@@ -538,6 +541,16 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
       setModel(globalDefaultModel.value);
     }
   }, [globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear thread when the project changes and the loaded thread belongs to a different project
+  const prevProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    if (prevProjectRef.current !== selectedProject) {
+      prevProjectRef.current = selectedProject;
+      setThreadId(sessionStorage.getItem(sessionStorageKey) ?? null);
+      setSeedMessages([]);
+    }
+  }, [selectedProject, sessionStorageKey]);
 
   // Scroll messages to bottom
   useEffect(() => {
@@ -646,11 +659,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   useEffect(() => {
     setSearchParams(threadId ? { thread: threadId } : {}, { replace: true });
     if (threadId) {
-      sessionStorage.setItem('agentHomeThreadId', threadId);
+      sessionStorage.setItem(sessionStorageKey, threadId);
     } else {
-      sessionStorage.removeItem('agentHomeThreadId');
+      sessionStorage.removeItem(sessionStorageKey);
     }
-  }, [threadId, setSearchParams]);
+  }, [threadId, setSearchParams, sessionStorageKey]);
 
   // On first mount, if a ?thread=<id> param was present, reload that thread's
   // message history so the UI is immediately usable without re-fetching.
@@ -844,11 +857,12 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         const errorBody = await response.json().catch(() => ({}));
         throw new Error((errorBody as { error?: string }).error ?? `HTTP ${response.status}`);
       }
+      void queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
       clearAttachments();
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -1094,6 +1108,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
           onSelectThread={handleSelectThread}
           onDeleteThread={(id) => { if (id === threadId) { setSeedMessages([]); setThreadId(null); } }}
           onClose={() => setShowHistory(false)}
+          project={selectedProject}
         />
       )}
       {isCompose ? (
