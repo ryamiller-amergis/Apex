@@ -2572,6 +2572,8 @@ const USER_TYPE_SLUG_VOCABULARY = [
 const VALID_USER_TYPE_SLUGS = new Set(['S', 'I', 'C', 'E', 'CO', 'Q', 'PA', 'SC']);
 
 interface PersonaBacklogItem {
+  type?: string;
+  workItemType?: string;
   title?: string;
   description?: string;
   affectedPersonas?: string[];
@@ -2580,6 +2582,10 @@ interface PersonaBacklogItem {
   pbis?: PersonaBacklogItem[];
   userTypes?: string[];
   personaBehaviors?: Array<{ userTypes: string[]; behavior: string }>;
+}
+
+function isTbiBacklogItem(item: PersonaBacklogItem): boolean {
+  return item.type === 'TBI' || item.workItemType === 'TBI';
 }
 
 interface PersonaBacklogShape {
@@ -2634,6 +2640,7 @@ function collectPersonaNodes(backlogJson: unknown): PersonaNode[] {
     const items = feature.items ?? feature.pbis ?? [];
     items.forEach((item, pi) => {
       if (!item || typeof item !== 'object') return;
+      if (isTbiBacklogItem(item)) return;
       nodes.push({
         ref: `f${fi}_p${pi}`,
         kind: 'pbi',
@@ -2645,6 +2652,29 @@ function collectPersonaNodes(backlogJson: unknown): PersonaNode[] {
     });
   });
   return nodes;
+}
+
+/** Remove persona annotations from TBIs — only PBIs feed design prototypes. */
+function stripTbiPersonaAnnotations(backlogJson: unknown): void {
+  const bj = backlogJson as PersonaBacklogShape | null;
+  if (!bj || typeof bj !== 'object') return;
+
+  const features: PersonaBacklogItem[] = [];
+  if (Array.isArray(bj.features)) features.push(...bj.features);
+  if (Array.isArray(bj.epics)) {
+    for (const epic of bj.epics) {
+      if (Array.isArray(epic?.features)) features.push(...epic.features);
+    }
+  }
+
+  for (const feature of features) {
+    const items = feature.items ?? feature.pbis ?? [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || !isTbiBacklogItem(item)) continue;
+      delete item.userTypes;
+      delete item.personaBehaviors;
+    }
+  }
 }
 
 function sanitiseSlugList(input: unknown): string[] {
@@ -2673,7 +2703,8 @@ function sanitisePersonaBehaviors(input: unknown): Array<{ userTypes: string[]; 
 
 /**
  * Populate `userTypes` and `personaBehaviors` on every feature and PBI of a
- * synthesised backlog. The Business Analyst knows which personas each feature
+ * synthesised backlog (TBIs are excluded — they do not feed design prototypes).
+ * The Business Analyst knows which personas each feature
  * serves (and any "same control, different behaviour per persona group"
  * divergences); this pass maps that persona knowledge — surfaced in the backlog's
  * user stories, affected-personas, and descriptions, plus the optional interview
@@ -2776,6 +2807,7 @@ ${transcriptSection}
   if (annotated > 0) {
     console.log(`[bedrockService] enrichBacklogPersonas: annotated ${annotated} item(s) with user types`);
   }
+  stripTbiPersonaAnnotations(enriched);
   return enriched;
 }
 

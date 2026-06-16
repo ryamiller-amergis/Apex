@@ -17,6 +17,7 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
+import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import { getTestCases, listLatestTestCaseSummariesForPrds } from './testCaseService';
 import { getSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -931,6 +932,8 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         JSON.stringify(prd.backlogJson ?? {}, null, 2),
         '```',
         '',
+        BACKLOG_USER_TYPE_CONVENTIONS_MD,
+        '',
         '## Test Cases',
         testCaseInfo ? '(test cases available — referenced by PBI ID in backlog)' : '(no test cases)',
       ].join('\n');
@@ -1148,6 +1151,8 @@ export async function triggerFixPrdValidation(
     '## Your Task',
     '',
     'Fix all pending gaps in the PRD content to achieve a score >= 90%. Use the `update_prd` MCP tool to save your changes.',
+    '',
+    BACKLOG_USER_TYPE_CONVENTIONS_MD,
     '',
     '## Gaps to Fix',
     '',

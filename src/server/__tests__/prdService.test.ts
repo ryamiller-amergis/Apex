@@ -1198,6 +1198,8 @@ describe('PRD validation lifecycle', () => {
     expect(adapter.getSkillPath({ prdValidationSkillPath: 'skill.md' })).toBe('skill.md');
     expect(adapter.getModel({ prdValidationModel: 'model-a' }, 'global-model')).toBe('model-a');
     expect(adapter.buildValidationContext({})).toContain('## Backlog JSON');
+    expect(adapter.buildValidationContext({})).toContain('TBIs');
+    expect(adapter.buildValidationContext({})).toContain('must **NOT** have `userTypes`');
   });
 
   it('cancels validation and resets status to draft', async () => {
