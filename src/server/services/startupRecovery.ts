@@ -20,10 +20,10 @@ const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 /**
  * How long a design prototype may sit in `generating`/`regenerating` before the
- * recovery loop treats it as orphaned. Set well above normal generation time
- * (~2-3 min) so a slow-but-live generation is never reset out from under itself.
+ * recovery loop treats it as orphaned. Set well above the maximum configurable Bedrock timeout
+ * (20 min) so a slow-but-live generation is never reset out from under itself.
  */
-const STALE_PROTOTYPE_MS = 15 * 60_000;
+const STALE_PROTOTYPE_MS = 25 * 60_000;
 
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 
