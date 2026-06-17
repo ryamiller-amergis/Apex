@@ -38,6 +38,7 @@ export function useDesignPrototypeList(opts: {
     queryFn: () => apiFetch(`/api/design-prototypes${qs ? `?${qs}` : ''}`),
     staleTime: 15_000,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const data = query.state.data;
       if (!data) return false;
       const hasGenerating = data.some(p => GENERATING_STATUSES.includes(p.status));
@@ -62,6 +63,7 @@ export function usePrototypesForPrd(prdId: string | null) {
     enabled: !!prdId,
     staleTime: 15_000,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const data = query.state.data;
       if (!data) return false;
       const hasGenerating = data.some(p => GENERATING_STATUSES.includes(p.status));
@@ -77,6 +79,7 @@ export function usePrototype(id: string | null) {
     enabled: !!id,
     staleTime: 10_000,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const status = query.state.data?.status;
       if (!status) return false;
       return GENERATING_STATUSES.includes(status) ? 5_000 : false;
