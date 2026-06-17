@@ -4,10 +4,12 @@ import { getUserId } from '../utils/requestUser';
 import {
   listPrototypes,
   listPrototypesForPrd,
+  generatePrototypesForPrd,
   getPrototype,
   deletePrototype,
   regeneratePrototype,
   retryPrototype,
+  resetStuckPrototype,
   reviewPrototype,
   reopenPrototypeForReview,
   listComments,
@@ -56,6 +58,18 @@ router.get('/prd/:prdId/assignments', requirePermission('interviews:view'), asyn
   try {
     const assignments = await getAssignments(req.params.prdId, 'design_prototype');
     res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prd/:prdId/generate — (re)generate any prototypes missing for the PRD.
+// Idempotent: features that already have a prototype are left untouched, so this
+// recreates only the ones that were deleted.
+router.post('/prd/:prdId/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prototypeIds = await generatePrototypesForPrd(req.params.prdId);
+    res.json({ ok: true, prototypeIds });
   } catch (err) {
     next(err);
   }
@@ -115,6 +129,24 @@ router.post('/:id/retry', requirePermission('interviews:manage'), async (req, re
     await retryPrototype(req.params.id);
     res.json({ ok: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /:id/reset — force a stuck generating/regenerating prototype to failed
+router.post('/:id/reset', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await resetStuckPrototype(req.params.id);
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err.status === 404) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    if (err.status === 409) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });

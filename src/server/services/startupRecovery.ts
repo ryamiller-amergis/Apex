@@ -10,6 +10,7 @@ import {
   isValidationWatcherActive,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
+import { failStalePrototypes } from './designPrototypeService';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -17,6 +18,12 @@ import {
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
+/**
+ * How long a design prototype may sit in `generating`/`regenerating` before the
+ * recovery loop treats it as orphaned. Set well above normal generation time
+ * (~2-3 min) so a slow-but-live generation is never reset out from under itself.
+ */
+const STALE_PROTOTYPE_MS = 15 * 60_000;
 
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -208,6 +215,23 @@ export async function recoverInFlightWork(): Promise<void> {
           ` (threadId=${row.threadId}, interviewId=${row.interviewId})`
       );
     }
+  }
+
+  // ── Design prototypes stuck in generating/regenerating ────────────────────
+  // Prototypes are one-shot Bedrock calls (no chat thread to rehydrate), so a
+  // server restart or a hung model call leaves the row orphaned. Flip rows that
+  // have been transient for too long to generation_failed so the UI's existing
+  // "Retry Generation" affordance unblocks the user.
+  try {
+    const failedPrototypes = await failStalePrototypes(STALE_PROTOTYPE_MS);
+    if (failedPrototypes > 0) {
+      recovered += failedPrototypes;
+      console.log(
+        `[recovery] Reset ${failedPrototypes} stale design prototype(s) to generation_failed`,
+      );
+    }
+  } catch (err) {
+    console.error('[recovery] Failed to reset stale design prototypes:', err);
   }
 
   if (recovered > 0) {
