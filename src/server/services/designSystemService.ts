@@ -141,8 +141,10 @@ function fetchAdoTree(
   return new Promise((resolve, reject) => {
     const token = Buffer.from(`:${pat}`).toString('base64');
     const encodedPath = encodeURIComponent(folderPath);
+    // ADO's items API rejects folder recursion via `path=` with a 400; folder listings
+    // must use `scopePath=` for recursionLevel to take effect.
     const apiUrl = new URL(
-      `${orgUrl}/${DS_PROJECT}/_apis/git/repositories/${DS_REPO}/items?path=${encodedPath}&recursionLevel=${recursionLevel}&api-version=7.1`
+      `${orgUrl}/${DS_PROJECT}/_apis/git/repositories/${DS_REPO}/items?scopePath=${encodedPath}&recursionLevel=${recursionLevel}&api-version=7.1`
     );
     const options: https.RequestOptions = {
       hostname: apiUrl.hostname,
@@ -532,14 +534,22 @@ function normaliseRoute(route: string): string {
   return r;
 }
 
-function routesEqual(a: string, b: string): boolean {
-  const na = normaliseRoute(a);
-  const nb = normaliseRoute(b);
+function singleRouteEqual(na: string, nb: string): boolean {
   if (na === nb) return true;
-  // Tolerate param segments: "/document/:id" vs "/document/123" → compare base.
   const baseA = na.split('/:')[0];
   const baseB = nb.split('/:')[0];
   return baseA.length > 1 && baseA === baseB;
+}
+
+function routesEqual(a: string, b: string): boolean {
+  const subA = a.split(',').map(s => normaliseRoute(s));
+  const subB = b.split(',').map(s => normaliseRoute(s));
+  for (const sa of subA) {
+    for (const sb of subB) {
+      if (singleRouteEqual(sa, sb)) return true;
+    }
+  }
+  return false;
 }
 
 interface ParsedScreenRow {

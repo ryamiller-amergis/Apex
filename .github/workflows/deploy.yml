@@ -143,6 +143,9 @@ jobs:
               BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}" \
               BEDROCK_UI_MOCK_MODEL_ID="${{ secrets.BEDROCK_UI_MOCK_MODEL_ID }}" \
               BEDROCK_UI_MOCK_MAX_TOKENS="32000" \
+              MAXVIEW_DS_PROJECT="MaxView" \
+              MAXVIEW_DS_REPO="MaxView" \
+              MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
