@@ -435,6 +435,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
   designPrototypeBedrockModelId: text('design_prototype_bedrock_model_id'),
   designPrototypeBedrockMaxTokens: integer('design_prototype_bedrock_max_tokens'),
+  designPrototypeBedrockTimeoutMs: integer('design_prototype_bedrock_timeout_ms'),
   designPrototypeRegenBedrockModelId: text('design_prototype_regen_bedrock_model_id'),
   designPrototypeRegenBedrockMaxTokens: integer('design_prototype_regen_bedrock_max_tokens'),
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),

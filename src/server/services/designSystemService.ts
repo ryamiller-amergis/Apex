@@ -38,7 +38,7 @@ const UI_KNOWLEDGE_BASE_PATH = '/.cursor/skills/figma-ui-knowledge-base/SKILL.md
 const SCREENS_INVENTORY_PATH = '/.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md';
 
 /** Combined byte cap for an extracted existing-page context block (page + child components). */
-const MAX_PAGE_CONTEXT_BYTES = 48 * 1024;
+const MAX_PAGE_CONTEXT_BYTES = 24 * 1024;
 
 /**
  * Maximum import depth followed when extracting existing-page context. Depth 0 is the page

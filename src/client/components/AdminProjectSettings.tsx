@@ -448,6 +448,7 @@ interface EditState {
   prdReviewBedrockMaxTokens: number;
   designPrototypeBedrockModelId: string;
   designPrototypeBedrockMaxTokens: number;
+  designPrototypeBedrockTimeoutMs: number;
   designPrototypeRegenBedrockModelId: string;
   designPrototypeRegenBedrockMaxTokens: number;
   designPlanBedrockModelId: string;
@@ -470,6 +471,7 @@ const emptyEdit = (): EditState => ({
   prdReviewBedrockMaxTokens: 16000,
   designPrototypeBedrockModelId: '',
   designPrototypeBedrockMaxTokens: 16000,
+  designPrototypeBedrockTimeoutMs: 720000,
   designPrototypeRegenBedrockModelId: '',
   designPrototypeRegenBedrockMaxTokens: 16000,
   designPlanBedrockModelId: '',
@@ -619,6 +621,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
       designPrototypeBedrockMaxTokens: config.designPrototypeBedrockMaxTokens ?? 16000,
+      designPrototypeBedrockTimeoutMs: config.designPrototypeBedrockTimeoutMs ?? 720000,
       designPrototypeRegenBedrockModelId: config.designPrototypeRegenBedrockModelId ?? '',
       designPrototypeRegenBedrockMaxTokens: config.designPrototypeRegenBedrockMaxTokens ?? 16000,
       designPlanBedrockModelId: config.designPlanBedrockModelId ?? '',
@@ -680,6 +683,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
           designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
           designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
+          designPrototypeBedrockTimeoutMs: edit.designPrototypeBedrockTimeoutMs || null,
           designPrototypeRegenBedrockModelId: edit.designPrototypeRegenBedrockModelId || null,
           designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
           designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
@@ -1073,6 +1077,21 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
                     <option value="64000">64 000</option>
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-prototype-bedrock-timeout">Bedrock Timeout</label>
+                  <select
+                    id="ps-prototype-bedrock-timeout"
+                    className={styles.select}
+                    value={String(edit.designPrototypeBedrockTimeoutMs)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockTimeoutMs: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="480000">8 min</option>
+                    <option value="720000">12 min (default)</option>
+                    <option value="900000">15 min</option>
+                    <option value="1200000">20 min</option>
                   </select>
                 </div>
               </div>

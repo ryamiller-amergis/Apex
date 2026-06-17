@@ -332,6 +332,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const skillConfig = await getSkillConfig(prd.project);
   const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
+  const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
   const features = extractFeatures(prd.backlogJson);
   if (features.length === 0) {
@@ -412,7 +413,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   // background — the route returns immediately and the UI polls per-prototype.
   if (pending.length > 0) {
     runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
-      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature).catch(err => {
+      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
         console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
       }),
     )
@@ -450,7 +451,7 @@ function planFeatureToInput(planFeature?: DesignPlanFeature): DesignPrototypeInp
   };
 }
 
-async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string, maxTokens?: number, planFeature?: DesignPlanFeature): Promise<void> {
+async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string, maxTokens?: number, planFeature?: DesignPlanFeature, timeoutMs?: number): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
@@ -465,7 +466,7 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
       pbis,
       targetRoute,
       plan: planFeatureToInput(planFeature),
-    }, modelId, maxTokens);
+    }, modelId, maxTokens, timeoutMs);
 
     const html = sanitizeMockHtml(rawHtml);
     const now = new Date().toISOString();
@@ -537,6 +538,7 @@ export async function regeneratePrototype(
     const prototypeMaxTokens = skillConfig?.designPrototypeRegenBedrockMaxTokens
       ?? skillConfig?.designPrototypeBedrockMaxTokens
       ?? undefined;
+    const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
     const comments = await db
       .select()
@@ -558,6 +560,7 @@ export async function regeneratePrototype(
       targetRoute,
       undefined,
       targetStates,
+      prototypeTimeoutMs,
     );
 
     const html = sanitizeMockHtml(rawHtml);
@@ -633,13 +636,14 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
   const skillConfig = await getSkillConfig(prd.project);
   const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
+  const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
   await db
     .update(designPrototypes)
     .set({ status: 'generating', generationError: null, updatedAt: new Date().toISOString() })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }
