@@ -1,6 +1,7 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
 import https from 'https';
+import { retryWithBackoff } from '../utils/retry';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
 import type { DesignSystemCatalog } from './designSystemService';
@@ -29,6 +30,27 @@ const MODEL_INVOKE_TIMEOUT_MS = (() => {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8 * 60_000;
 })();
+
+/** Max attempts (incl. the first) when Bedrock throttles a model invocation. */
+const MODEL_INVOKE_MAX_ATTEMPTS = (() => {
+  const raw = process.env.BEDROCK_INVOKE_MAX_ATTEMPTS;
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+})();
+
+/**
+ * Retry only on throttling/rate-limit and transient 5xx — NOT on the abort
+ * timeout (that means the model is genuinely too slow, so retrying wastes time)
+ * and NOT on truncation (a deterministic max-tokens failure).
+ */
+function isBedrockThrottleError(err: unknown): boolean {
+  const e = err as { name?: string; statusCode?: number; $metadata?: { httpStatusCode?: number } } | undefined;
+  if (!e) return false;
+  const name = e.name ?? '';
+  if (name === 'ThrottlingException' || name === 'TooManyRequestsException') return true;
+  const status = e.statusCode ?? e.$metadata?.httpStatusCode;
+  return status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+}
 
 const MODEL_ID =
   process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
@@ -1595,6 +1617,12 @@ function normaliseRouteForMatch(route: string): string {
   return r;
 }
 
+/** Match a (possibly comma-separated) inventory route cell against a single target route. */
+function inventoryRouteMatches(inventoryRoute: string, target: string): boolean {
+  const nt = normaliseRouteForMatch(target);
+  return inventoryRoute.split(',').some(sub => normaliseRouteForMatch(sub) === nt);
+}
+
 /**
  * Compact screens-context block derived from the clientapp-screens.md inventory.
  * One line per screen: `route` — purpose [users: …] [states: …]. The user-types and
@@ -2018,22 +2046,33 @@ async function invokeModel(
     body: JSON.stringify(payload),
   });
 
-  const response = await (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), MODEL_INVOKE_TIMEOUT_MS);
-    try {
-      return await client.send(command, { abortSignal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new Error(
-          `Bedrock request timed out after ${Math.round(MODEL_INVOKE_TIMEOUT_MS / 1000)}s (model=${modelId}). The generation was aborted.`,
-        );
+  // Each attempt is bounded by MODEL_INVOKE_TIMEOUT_MS. Throttling/5xx are retried
+  // with exponential backoff + jitter (Bedrock throttles concurrent large calls
+  // hard); the abort-timeout and truncation are NOT retried (see predicate).
+  const response = await retryWithBackoff(
+    async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), MODEL_INVOKE_TIMEOUT_MS);
+      try {
+        return await client.send(command, { abortSignal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new Error(
+            `Bedrock request timed out after ${Math.round(MODEL_INVOKE_TIMEOUT_MS / 1000)}s (model=${modelId}). The generation was aborted.`,
+          );
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
       }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
-  })();
+    },
+    {
+      maxRetries: MODEL_INVOKE_MAX_ATTEMPTS,
+      initialDelay: 2000,
+      jitter: true,
+      shouldRetry: isBedrockThrottleError,
+    },
+  );
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
     stop_reason?: string;
@@ -3146,7 +3185,7 @@ export async function generateDesignPrototypeHtml(
 
   // EXTEND mode: surface the target screen's personas/states from the inventory (when known).
   const targetScreen = input.targetRoute
-    ? screenInventory.find(s => normaliseRouteForMatch(s.route) === normaliseRouteForMatch(input.targetRoute!))
+    ? screenInventory.find(s => inventoryRouteMatches(s.route, input.targetRoute!))
     : undefined;
   const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
     ? `\n\n**Existing page context from inventory:**` +
@@ -3418,7 +3457,7 @@ export async function regenerateDesignPrototypeHtml(
   // EXTEND mode: surface the target screen's personas/states from the inventory (when known),
   // mirroring the generate path's targetScreenHint.
   const targetScreen = targetRoute
-    ? screenInventory.find(s => normaliseRouteForMatch(s.route) === normaliseRouteForMatch(targetRoute))
+    ? screenInventory.find(s => inventoryRouteMatches(s.route, targetRoute))
     : undefined;
   const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
     ? `\n\n**Existing page context from inventory:**` +

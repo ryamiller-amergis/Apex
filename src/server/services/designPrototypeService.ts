@@ -205,6 +205,40 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
 
 // ── Generation ──────────────────────────────────────────────────────────────
 
+/**
+ * How many prototype HTML generations may hit Bedrock at once. Firing every
+ * feature in parallel throttles large models (Opus/Sonnet) hard — concurrent
+ * calls pile into ThrottlingException, back off, and blow past the per-call
+ * timeout. A small cap keeps each call un-throttled so it finishes in normal
+ * time. Override via DESIGN_PROTOTYPE_CONCURRENCY (default 2).
+ */
+const PROTOTYPE_GENERATION_CONCURRENCY = (() => {
+  const raw = process.env.DESIGN_PROTOTYPE_CONCURRENCY;
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 2;
+})();
+
+/**
+ * Run `task` over each item with at most `limit` running concurrently.
+ * Resolves when all have settled. Tasks are expected to handle their own errors
+ * (each generation persists its own failure state), so rejections are logged.
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await task(items[index]);
+    }
+  });
+  await Promise.all(workers);
+}
+
 const HTML_ESCAPES: Record<string, string> = {
   '&': '&amp;',
   '<': '&lt;',
@@ -319,6 +353,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const existingIndices = new Set(existingRows.map(r => r.featureIndex));
 
   const ids: string[] = [];
+  const pending: Array<{ prototypeId: string; feature: BacklogFeature; planFeature?: DesignPlanFeature }> = [];
 
   for (let i = 0; i < features.length; i++) {
     if (existingIndices.has(i)) continue;
@@ -369,18 +404,30 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
       })
       .returning({ id: designPrototypes.id });
     ids.push(row.id);
+    pending.push({ prototypeId: row.id, feature, planFeature });
+  }
 
-    generateSinglePrototype(row.id, feature, prototypeModel, prototypeMaxTokens, planFeature).catch(err => {
-      console.error(`[designPrototypeService] Background generation failed for ${row.id}:`, err);
-    });
+  // Generate with bounded concurrency so we don't fire every feature at Bedrock
+  // at once (which throttles large models and causes timeouts). Runs in the
+  // background — the route returns immediately and the UI polls per-prototype.
+  if (pending.length > 0) {
+    runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
+      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature).catch(err => {
+        console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
+      }),
+    )
+      .then(() => checkAllApprovedAndProceed(prdId))
+      .catch(err => {
+        console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
+      });
   }
 
   // Reviewer assignment + notification now happens at design-plan generation
   // (see designPlanService.generateDesignPlan); the plan is the entry point users see first.
 
   // When every feature was skipped/auto-approved there are no UI prototypes whose
-  // approval would trigger the downstream pipeline, so kick it off here. This is a
-  // safe no-op while any prototype is still generating (not all are approved yet).
+  // approval would trigger the downstream pipeline, so kick it off here. (When some
+  // are still generating this is a safe no-op; the batch above re-checks on finish.)
   await checkAllApprovedAndProceed(prdId).catch(err => {
     console.error(`[designPrototypeService] checkAllApprovedAndProceed failed for PRD ${prdId}:`, err);
   });
