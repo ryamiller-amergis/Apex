@@ -126,6 +126,29 @@ export function useRetryPrototype() {
   });
 }
 
+export function useResetPrototype() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/api/design-prototypes/${id}/reset`, { method: 'POST' }),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['design-prototype', id] });
+      qc.invalidateQueries({ queryKey: ['design-prototypes'] });
+    },
+  });
+}
+
+export function useGeneratePrototypesForPrd() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; prototypeIds: string[] }, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/design-prototypes/prd/${prdId}/generate`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-prototypes'] });
+    },
+  });
+}
+
 export function useReviewPrototype() {
   const qc = useQueryClient();
   return useMutation({

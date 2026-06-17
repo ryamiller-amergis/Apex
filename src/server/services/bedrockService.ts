@@ -17,6 +17,19 @@ const controlPlaneClient = new BedrockClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
 });
 
+/**
+ * Hard wall-clock cap for a single Bedrock InvokeModel call. Prototype/mock
+ * generations are large (high max_tokens); a stalled connection would otherwise
+ * hang indefinitely and leave the generation row stuck. On timeout we abort the
+ * request so callers fail fast and transition to a retryable error state.
+ * Override via BEDROCK_INVOKE_TIMEOUT_MS (default 8 minutes).
+ */
+const MODEL_INVOKE_TIMEOUT_MS = (() => {
+  const raw = process.env.BEDROCK_INVOKE_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8 * 60_000;
+})();
+
 const MODEL_ID =
   process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
@@ -2005,7 +2018,22 @@ async function invokeModel(
     body: JSON.stringify(payload),
   });
 
-  const response = await client.send(command);
+  const response = await (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MODEL_INVOKE_TIMEOUT_MS);
+    try {
+      return await client.send(command, { abortSignal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(
+          `Bedrock request timed out after ${Math.round(MODEL_INVOKE_TIMEOUT_MS / 1000)}s (model=${modelId}). The generation was aborted.`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
     stop_reason?: string;

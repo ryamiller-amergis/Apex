@@ -8,6 +8,8 @@ import {
   usePrototypeComments,
   useRegeneratePrototype,
   useRetryPrototype,
+  useResetPrototype,
+  useGeneratePrototypesForPrd,
   useReviewPrototype,
   useReopenPrototype,
   useAddPrototypeComment,
@@ -75,6 +77,8 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   const regenerate = useRegeneratePrototype();
   const retry = useRetryPrototype();
+  const resetPrototype = useResetPrototype();
+  const generatePrototypes = useGeneratePrototypesForPrd();
   const review = useReviewPrototype();
   const reopenPrototype = useReopenPrototype();
   const addComment = useAddPrototypeComment();
@@ -83,7 +87,7 @@ const DesignPrototypeReviewView: React.FC = () => {
   const approvedCount = prototypes.filter(p => p.status === 'approved').length;
   const totalCount = prototypes.length;
 
-  const isBusy = regenerate.isPending || retry.isPending || review.isPending || reopenPrototype.isPending;
+  const isBusy = regenerate.isPending || retry.isPending || resetPrototype.isPending || review.isPending || reopenPrototype.isPending;
   const hasDesignDocs = relatedDesignDocs.length > 0;
   const mutationError = review.error ?? regenerate.error ?? addComment.error;
 
@@ -105,6 +109,16 @@ const DesignPrototypeReviewView: React.FC = () => {
     if (!selectedProto) return;
     retry.mutate(selectedProto.id);
   }, [selectedProto, retry]);
+
+  const handleReset = useCallback(() => {
+    if (!selectedProto) return;
+    resetPrototype.mutate(selectedProto.id);
+  }, [selectedProto, resetPrototype]);
+
+  const handleGeneratePrototypes = useCallback(() => {
+    if (!prdId) return;
+    generatePrototypes.mutate(prdId);
+  }, [prdId, generatePrototypes]);
 
   const handleApprove = useCallback(() => {
     if (!selectedProto) return;
@@ -183,10 +197,29 @@ const DesignPrototypeReviewView: React.FC = () => {
     const isGenerating = pendingRegeneration || selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating';
     if (isGenerating) {
       const label = selectedProto?.status === 'generating' ? 'Generating prototype...' : 'Regenerating with your feedback...';
+      const canReset =
+        can('interviews:manage') &&
+        !pendingRegeneration &&
+        (selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating');
       return (
         <div className={styles.statusOverlay}>
           <div className={styles.spinner} />
           <div className={styles.statusText}>{label}</div>
+          {canReset && (
+            <>
+              <div className={styles.statusHint}>
+                Taking too long? Reset it to stop and retry.
+              </div>
+              <button
+                className={styles.retryBtn}
+                onClick={handleReset}
+                disabled={isBusy}
+                type="button"
+              >
+                {resetPrototype.isPending ? 'Resetting…' : 'Reset generation'}
+              </button>
+            </>
+          )}
         </div>
       );
     }
@@ -269,6 +302,16 @@ const DesignPrototypeReviewView: React.FC = () => {
         <div className={styles.emptyState}>
           <div>No design prototypes have been generated for this PRD yet.</div>
           <div>Prototypes are generated automatically when the PRD is approved.</div>
+          {can('interviews:manage') && (
+            <button
+              className={styles.btnPrimary}
+              onClick={handleGeneratePrototypes}
+              disabled={generatePrototypes.isPending}
+              type="button"
+            >
+              {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -286,6 +329,17 @@ const DesignPrototypeReviewView: React.FC = () => {
           <span className={styles.progressText}>
             {approvedCount} of {totalCount} approved
           </span>
+          {can('interviews:manage') && (
+            <button
+              className={styles.btnSecondary}
+              onClick={handleGeneratePrototypes}
+              disabled={generatePrototypes.isPending}
+              type="button"
+              title="Re-create any prototypes that were deleted (existing ones are left untouched)"
+            >
+              {generatePrototypes.isPending ? 'Generating…' : 'Generate missing'}
+            </button>
+          )}
         </div>
         <div className={styles.headerRight}>
           {(pendingRegeneration || selectedProto?.status === 'regenerating' || selectedProto?.status === 'generating') ? (

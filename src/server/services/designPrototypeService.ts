@@ -1,4 +1,4 @@
-import { eq, and, asc, desc, type SQL } from 'drizzle-orm';
+import { eq, and, asc, desc, inArray, lt, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
@@ -205,6 +205,91 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
 
 // ── Generation ──────────────────────────────────────────────────────────────
 
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => HTML_ESCAPES[char]);
+}
+
+type PrototypeSkipReason = 'no-ui' | 'no-pbi';
+
+/**
+ * Decide whether a feature actually needs an LLM-generated HTML prototype.
+ * Features the design plan marked `no-ui` (backend, infra, config, or scheduled
+ * jobs) or that have no linked PBIs have nothing to render — generating a mock
+ * for them only burns Bedrock output tokens for a "No UI" placeholder. Returning
+ * a reason here lets the caller skip the model call entirely.
+ */
+function resolvePrototypeSkipReason(
+  feature: BacklogFeature,
+  planFeature?: DesignPlanFeature,
+): PrototypeSkipReason | null {
+  if (planFeature?.decision === 'no-ui') return 'no-ui';
+  if (extractPbiRequirements(feature).length === 0) return 'no-pbi';
+  return null;
+}
+
+/**
+ * Deterministic, self-contained placeholder rendered for features that need no UI
+ * prototype. Built locally (zero model tokens) and shown in the review iframe so
+ * the feature stays visible and the reviewer understands why no mock exists.
+ */
+function buildSkippedPrototypeHtml(
+  featureName: string,
+  reason: PrototypeSkipReason,
+  planFeature?: DesignPlanFeature,
+): string {
+  const heading = reason === 'no-ui' ? 'No User Interface Required' : 'Nothing to Prototype';
+  const chip = reason === 'no-ui' ? 'Backend / server-side only' : 'No linked PBIs';
+  const explanation = reason === 'no-ui'
+    ? 'The design plan classified this feature as backend, infrastructure, configuration, or a scheduled job with no user-facing surface. No prototype was generated, so no AI tokens were spent.'
+    : 'This feature has no linked PBIs, so there are no requirements to render. No prototype was generated, so no AI tokens were spent.';
+
+  const context = planFeature?.designBrief?.trim() || planFeature?.rationale?.trim();
+  const contextBlock = context
+    ? `<div class="ctx"><div class="ctx-label">From the design plan</div><div class="ctx-body">${escapeHtml(context)}</div></div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(featureName)} — No UI</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #f4f5f7; color: #1f2430; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 40px; }
+  .card { background: #ffffff; border: 1px solid #e3e6ea; border-radius: 12px; max-width: 560px; width: 100%; padding: 40px; text-align: center; box-shadow: 0 1px 3px rgba(16,24,40,0.06); }
+  .icon { width: 56px; height: 56px; border-radius: 50%; background: #eef0f4; color: #5b6472; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+  .feature { font-size: 13px; color: #6b7280; margin: 0 0 16px; }
+  .chip { display: inline-block; font-size: 12px; font-weight: 600; color: #5b6472; background: #eef0f4; border-radius: 999px; padding: 4px 12px; margin-bottom: 16px; }
+  p.explain { font-size: 14px; line-height: 1.5; color: #4a5160; margin: 0; }
+  .ctx { text-align: left; margin-top: 24px; padding: 16px; background: #f8f9fb; border: 1px solid #e3e6ea; border-radius: 8px; }
+  .ctx-label { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #8a93a2; margin-bottom: 6px; }
+  .ctx-body { font-size: 13px; line-height: 1.5; color: #4a5160; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/></svg>
+    </div>
+    <h1>${escapeHtml(heading)}</h1>
+    <div class="feature">${escapeHtml(featureName)}</div>
+    <div class="chip">${escapeHtml(chip)}</div>
+    <p class="explain">${escapeHtml(explanation)}</p>
+    ${contextBlock}
+  </div>
+</body>
+</html>`;
+}
+
 export async function generatePrototypesForPrd(prdId: string): Promise<string[]> {
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
@@ -224,11 +309,55 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const planRow = await db.query.designPlans.findFirst({ where: eq(designPlans.prdId, prdId) });
   const planFeatures = planRow?.features ?? [];
 
+  // Idempotent (re)generation: skip features that already have a prototype row so
+  // re-running only fills in the missing ones (e.g. after a delete) and never
+  // creates duplicates. The first generation has no existing rows → generates all.
+  const existingRows = await db
+    .select({ featureIndex: designPrototypes.featureIndex })
+    .from(designPrototypes)
+    .where(eq(designPrototypes.prdId, prdId));
+  const existingIndices = new Set(existingRows.map(r => r.featureIndex));
+
   const ids: string[] = [];
 
   for (let i = 0; i < features.length; i++) {
+    if (existingIndices.has(i)) continue;
     const feature = features[i];
     const planFeature = planFeatures.find(f => f.featureIndex === i);
+    const skipReason = resolvePrototypeSkipReason(feature, planFeature);
+
+    if (skipReason) {
+      // No UI / no PBIs → skip the expensive Bedrock call. Store a deterministic
+      // placeholder and auto-approve so the feature stays visible without blocking
+      // the reviewer or burning tokens.
+      const now = new Date().toISOString();
+      const html = buildSkippedPrototypeHtml(feature.title, skipReason, planFeature);
+      const historyEntry: DesignPrototypeHistoryEntry = { version: 1, html, createdAt: now };
+      const [row] = await db
+        .insert(designPrototypes)
+        .values({
+          prdId,
+          featureName: feature.title,
+          featureIndex: i,
+          authorId: prd.authorId,
+          status: 'approved',
+          mockHtml: html,
+          mockVersion: 1,
+          history: [historyEntry],
+          reviewComment: skipReason === 'no-ui'
+            ? 'Auto-approved: backend-only feature with no user-facing UI.'
+            : 'Auto-approved: feature has no linked PBIs to prototype.',
+          reviewedAt: now,
+          updatedAt: now,
+        })
+        .returning({ id: designPrototypes.id });
+      ids.push(row.id);
+      console.log(
+        `[designPrototypeService] Skipped generation for feature "${feature.title}" (${skipReason}) — auto-approved, no tokens spent`,
+      );
+      continue;
+    }
+
     const [row] = await db
       .insert(designPrototypes)
       .values({
@@ -248,6 +377,13 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
 
   // Reviewer assignment + notification now happens at design-plan generation
   // (see designPlanService.generateDesignPlan); the plan is the entry point users see first.
+
+  // When every feature was skipped/auto-approved there are no UI prototypes whose
+  // approval would trigger the downstream pipeline, so kick it off here. This is a
+  // safe no-op while any prototype is still generating (not all are approved yet).
+  await checkAllApprovedAndProceed(prdId).catch(err => {
+    console.error(`[designPrototypeService] checkAllApprovedAndProceed failed for PRD ${prdId}:`, err);
+  });
 
   return ids;
 }
@@ -459,6 +595,73 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
   generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
+}
+
+// ── Stuck-generation recovery ─────────────────────────────────────────────────
+
+/**
+ * Flip design prototypes that have been stuck in a transient status
+ * (`generating`/`regenerating`) for longer than `thresholdMs` to
+ * `generation_failed`. Prototypes are one-shot Bedrock calls with no chat thread
+ * to rehydrate, so a server restart or a hung model call orphans the row forever.
+ * Marking them failed surfaces the existing "Retry Generation" affordance.
+ *
+ * The threshold must comfortably exceed normal generation time so a slow-but-live
+ * generation is never reset out from under itself. Returns the number reset.
+ */
+export async function failStalePrototypes(thresholdMs: number): Promise<number> {
+  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+  const reset = await db
+    .update(designPrototypes)
+    .set({
+      status: 'generation_failed',
+      generationError:
+        'Generation was interrupted (likely a server restart or a timed-out model call). Click Retry to run it again.',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        inArray(designPrototypes.status, ['generating', 'regenerating']),
+        lt(designPrototypes.updatedAt, cutoff),
+      ),
+    )
+    .returning({ id: designPrototypes.id, featureName: designPrototypes.featureName });
+
+  for (const row of reset) {
+    console.warn(
+      `[designPrototypeService] Reset stale prototype "${row.featureName}" (id=${row.id}) to generation_failed`,
+    );
+  }
+  return reset.length;
+}
+
+/**
+ * Manual unblock: force a prototype currently stuck `generating`/`regenerating`
+ * to `generation_failed` so the user doesn't have to wait for the recovery loop.
+ * The existing "Retry Generation" button then re-runs it from scratch.
+ */
+export async function resetStuckPrototype(prototypeId: string): Promise<void> {
+  const proto = await db.query.designPrototypes.findFirst({
+    where: eq(designPrototypes.id, prototypeId),
+  });
+  if (!proto) {
+    throw Object.assign(new Error(`Prototype ${prototypeId} not found`), { status: 404 });
+  }
+  if (proto.status !== 'generating' && proto.status !== 'regenerating') {
+    throw Object.assign(
+      new Error(`Cannot reset a prototype in status '${proto.status}'`),
+      { status: 409 },
+    );
+  }
+
+  await db
+    .update(designPrototypes)
+    .set({
+      status: 'generation_failed',
+      generationError: 'Generation reset by user. Click Retry to run it again.',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(designPrototypes.id, prototypeId));
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────

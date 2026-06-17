@@ -42,7 +42,7 @@ import {
   useDeleteComment,
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
-import { usePrototypesForPrd } from '../hooks/useDesignPrototypes';
+import { usePrototypesForPrd, useGeneratePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { useDesignPlan } from '../hooks/useDesignPlan';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
@@ -362,6 +362,7 @@ export const PrdReviewView: React.FC = () => {
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(
     prd?.status === 'approved' ? id : null
   );
+  const generatePrototypes = useGeneratePrototypesForPrd();
   const { data: testCaseRecord } = usePrdTestCases(id);
   const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
@@ -1517,6 +1518,28 @@ export const PrdReviewView: React.FC = () => {
             style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
           >
             View Design Prototypes →
+          </button>
+        </div>
+      )}
+
+      {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            No design prototypes exist for this PRD. Generate them to continue the design flow.
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => {
+              if (!id) return;
+              generatePrototypes.mutate(id, {
+                onSuccess: () => navigate(`/backlog/design-prototypes/${id}`),
+              });
+            }}
+            disabled={generatePrototypes.isPending}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
           </button>
         </div>
       )}
