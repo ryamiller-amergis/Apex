@@ -3282,13 +3282,13 @@ Wrap the new feature area in a **2px dashed #a46bff border** (MaxView \`tertiary
 
 ### State sections
 
-1. **DEFAULT STATE** — Page shell + the annotated new feature area populated with realistic sample data. All PBI requirements must be visually represented. No other content in the content area.
+1. **DEFAULT STATE** — Full page shell (sidebar nav + header) + the annotated new feature area populated with realistic sample data. All PBI requirements must be visually represented.
 
-2. **EMPTY STATE** — Page shell + the annotated new feature area showing its empty state: helpful messaging and a call-to-action. No other content.
+2. **EMPTY STATE** — Do NOT reproduce the full page shell or chrome here. Render ONLY a minimal placeholder or a simple card showing the new feature's empty state (helpful messaging, illustration/text, and a call-to-action). Wrap this inside the state comments so it is tiny.
 
-3. **ERROR STATE** — Page shell + the annotated new feature area showing error states: inline validation errors, field-level red borders, and/or error banners with realistic messages derived from the acceptance criteria. No other content.
+3. **ERROR STATE** — Do NOT reproduce the full page shell or chrome here. Render ONLY a minimal representation of the new feature area showing its error states: inline validation errors, field-level red borders, and/or an error banner. Wrap this inside the state comments.
 
-4. **LOADING STATE** — Page shell + the annotated new feature area showing CSS-only animated skeleton placeholders (pulse animation) matching the default layout. No other content.
+4. **LOADING STATE** — Do NOT reproduce the full page shell or chrome here. Render ONLY a simple CSS skeleton pulse loader representing the new feature component. Wrap this inside the state comments.
 
 ### Per-persona behavior variants
 
