@@ -525,6 +525,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdReviewBedrockMaxTokens
       undefined,   // designPrototypeBedrockModelId
       undefined,   // designPrototypeBedrockMaxTokens
+      undefined,   // designPrototypeBedrockTimeoutMs
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
       undefined,   // testCaseSkillPath
@@ -601,6 +602,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdReviewBedrockMaxTokens
       undefined,   // designPrototypeBedrockModelId
       undefined,   // designPrototypeBedrockMaxTokens
+      undefined,   // designPrototypeBedrockTimeoutMs
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
       undefined,   // testCaseSkillPath
@@ -657,6 +659,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdReviewBedrockMaxTokens
       undefined,   // designPrototypeBedrockModelId
       undefined,   // designPrototypeBedrockMaxTokens
+      undefined,   // designPrototypeBedrockTimeoutMs
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
       undefined,   // testCaseSkillPath
@@ -711,6 +714,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // prdReviewBedrockMaxTokens
       undefined,               // designPrototypeBedrockModelId
       undefined,               // designPrototypeBedrockMaxTokens
+      undefined,               // designPrototypeBedrockTimeoutMs
       undefined,               // designPrototypeRegenBedrockModelId
       undefined,               // designPrototypeRegenBedrockMaxTokens
       undefined,               // testCaseSkillPath
@@ -764,6 +768,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // prdReviewBedrockMaxTokens
       undefined,                            // designPrototypeBedrockModelId
       undefined,                            // designPrototypeBedrockMaxTokens
+      undefined,                            // designPrototypeBedrockTimeoutMs
       undefined,                            // designPrototypeRegenBedrockModelId
       undefined,                            // designPrototypeRegenBedrockMaxTokens
       undefined,                            // testCaseSkillPath
@@ -812,6 +817,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdReviewBedrockMaxTokens
       undefined,   // designPrototypeBedrockModelId
       undefined,   // designPrototypeBedrockMaxTokens
+      undefined,   // designPrototypeBedrockTimeoutMs
       undefined,   // designPrototypeRegenBedrockModelId
       undefined,   // designPrototypeRegenBedrockMaxTokens
       undefined,   // testCaseSkillPath
@@ -864,6 +870,7 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // prdReviewBedrockMaxTokens
       undefined,         // designPrototypeBedrockModelId
       undefined,         // designPrototypeBedrockMaxTokens
+      undefined,         // designPrototypeBedrockTimeoutMs
       undefined,         // designPrototypeRegenBedrockModelId
       undefined,         // designPrototypeRegenBedrockMaxTokens
       undefined,         // testCaseSkillPath
