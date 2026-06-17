@@ -28,7 +28,7 @@ const controlPlaneClient = new BedrockClient({
 const MODEL_INVOKE_TIMEOUT_MS = (() => {
   const raw = process.env.BEDROCK_INVOKE_TIMEOUT_MS;
   const parsed = raw ? Number(raw) : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8 * 60_000;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 12 * 60_000;
 })();
 
 /** Max attempts (incl. the first) when Bedrock throttles a model invocation. */
@@ -2015,7 +2015,8 @@ async function invokeModel(
   prompt: string,
   image?: ImageInput,
   modelId: string = MODEL_ID,
-  maxTokens: number = 4096
+  maxTokens: number = 4096,
+  timeoutMs?: number,
 ): Promise<string> {
   const textBlock = { type: 'text', text: prompt };
 
@@ -2051,14 +2052,15 @@ async function invokeModel(
   // hard); the abort-timeout and truncation are NOT retried (see predicate).
   const response = await retryWithBackoff(
     async () => {
+      const effectiveTimeout = timeoutMs ?? MODEL_INVOKE_TIMEOUT_MS;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), MODEL_INVOKE_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), effectiveTimeout);
       try {
         return await client.send(command, { abortSignal: controller.signal });
       } catch (err) {
         if (controller.signal.aborted) {
           throw new Error(
-            `Bedrock request timed out after ${Math.round(MODEL_INVOKE_TIMEOUT_MS / 1000)}s (model=${modelId}). The generation was aborted.`,
+            `Bedrock request timed out after ${Math.round(effectiveTimeout / 1000)}s (model=${modelId}). The generation was aborted.`,
           );
         }
         throw err;
@@ -3129,6 +3131,7 @@ export async function generateDesignPrototypeHtml(
   input: DesignPrototypeInput,
   modelId?: string,
   maxTokens?: number,
+  timeoutMs?: number,
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3347,7 +3350,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
+  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens, timeoutMs);
 
   let html = text.trim();
   if (html.startsWith('```')) {
@@ -3415,6 +3418,7 @@ export async function regenerateDesignPrototypeHtml(
   targetRoute?: string,
   existingPageContext?: string,
   targetStates?: DesignPrototypeStateName[],
+  timeoutMs?: number,
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3544,7 +3548,7 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
   const scoped = markersPresent && requested.length > 0 && requested.length < allStates.length;
 
   if (!scoped) {
-    const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens);
+    const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens, timeoutMs);
     return stripHtmlFences(text);
   }
 
@@ -3588,7 +3592,7 @@ ${scopingSection}
 
 Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
 
-  const text = stripHtmlFences(await invokeModel(scopedPrompt, image, effectiveModel, effectiveMaxTokens));
+  const text = stripHtmlFences(await invokeModel(scopedPrompt, image, effectiveModel, effectiveMaxTokens, timeoutMs));
 
   // Graceful fallback: if the model ignored the contract and returned a full
   // document, just use it directly.
