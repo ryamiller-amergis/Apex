@@ -489,6 +489,7 @@ describe('upsertSkillConfig', () => {
       undefined, // prdReviewBedrockMaxTokens
       undefined, // designPrototypeBedrockModelId
       undefined, // designPrototypeBedrockMaxTokens
+      undefined, // designPrototypeBedrockTimeoutMs
       undefined, // designPrototypeRegenBedrockModelId
       undefined, // designPrototypeRegenBedrockMaxTokens
       '.cursor/skills/test-cases/SKILL.md',
