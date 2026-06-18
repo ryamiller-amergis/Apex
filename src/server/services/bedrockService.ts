@@ -3278,9 +3278,18 @@ Generate a single, self-contained HTML document with inline CSS and inline JavaS
 
 ${scopingSection}
 
-### Visual annotation of the new feature
+### Visual annotation of the new feature — PRECISE SCOPING
 
-Wrap the new feature area in a **2px dashed #a46bff border** (MaxView \`tertiary.main\`) with 8px padding. Add a small floating label at the top-left corner reading "NEW: ${input.featureName}" styled with background #a46bff, white text, 10px bold font, 2px 6px padding, positioned so it overlaps the top border edge.
+The purple annotation border MUST wrap ONLY the specific new UI element(s) being added — NOT the entire page, NOT the entire content area, NOT the existing page shell. Examples of correct annotation scoping:
+- If adding a new **column** to an existing table/grid → wrap ONLY that column (header cell + data cells), not the entire table.
+- If adding a new **tab** to an existing tab bar → wrap ONLY the new tab header and its tab content panel, not all existing tabs.
+- If adding a new **section/panel** to an existing page → wrap ONLY that new section, not the surrounding existing sections.
+- If adding a new **button or control** to an existing toolbar → wrap ONLY that button, not the entire toolbar.
+- If adding a new **drawer/modal** → wrap ONLY the drawer/modal overlay, not the page behind it.
+
+Apply a **2px dashed #a46bff border** (MaxView \`tertiary.main\`) with 8px padding around ONLY the new element(s). Add a small floating label at the top-left corner reading "NEW: ${input.featureName}" styled with background #a46bff, white text, 10px bold font, 2px 6px padding, positioned so it overlaps the top border edge.
+
+**The existing page content (sidebar, header, existing grids, existing tabs, existing forms) MUST NOT be inside the purple border.** The border exists solely to help reviewers instantly identify what is new vs what already exists.
 
 ### State sections
 
