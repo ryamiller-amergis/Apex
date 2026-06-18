@@ -332,6 +332,8 @@ router.post('/prds/:prdId/sync', requirePermission('interviews:manage'), async (
 });
 
 // POST /prds/:prdId/design-docs — create a design doc from an approved PRD
+// Supports direct generation (skip prototypes) by enriching context with the
+// design plan and actual existing-page source code from ADO for update-page features.
 router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -349,13 +351,74 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     const skillConfig = await getSkillConfig(prd.project);
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
 
-    const freeformContext = [
+    // ── Build enriched context: PRD + backlog + design plan + existing page code ──
+
+    const contextParts: string[] = [
       '# PRD Content',
       prd.content,
-      ...(prd.backlogJson
-        ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
-        : []),
-    ].join('\n');
+    ];
+
+    if (prd.backlogJson) {
+      contextParts.push('\n# Backlog', JSON.stringify(prd.backlogJson, null, 2));
+    }
+
+    // Load the design plan (if one exists) for feature decisions and target routes
+    const { designPlans } = await import('../db/schema');
+    const planRow = await db.query.designPlans.findFirst({
+      where: eq(designPlans.prdId, req.params.prdId),
+    });
+
+    if (planRow?.features && Array.isArray(planRow.features) && planRow.features.length > 0) {
+      const features = planRow.features as Array<{
+        featureName?: string; decision?: string; targetRoute?: string;
+        designBrief?: string; layoutPattern?: string; targetPageTitle?: string;
+      }>;
+
+      contextParts.push('\n# Design Plan');
+      for (const f of features) {
+        const parts = [`## Feature: ${f.featureName ?? 'Unnamed'}`];
+        parts.push(`- **Decision:** ${f.decision ?? 'unknown'}`);
+        if (f.targetRoute) parts.push(`- **Target route:** ${f.targetRoute}`);
+        if (f.targetPageTitle) parts.push(`- **Page title:** ${f.targetPageTitle}`);
+        if (f.layoutPattern) parts.push(`- **Layout:** ${f.layoutPattern}`);
+        if (f.designBrief) parts.push(`\n${f.designBrief}`);
+        contextParts.push(parts.join('\n'));
+      }
+
+      // For update-page features, fetch the actual existing page source from ADO
+      const updatePageFeatures = features.filter(f => f.decision === 'update-page' && f.targetRoute);
+      if (updatePageFeatures.length > 0) {
+        try {
+          const { fetchExistingPageContext } = await import('../services/designSystemService');
+          contextParts.push('\n# Existing Page Context (from MaxView codebase)');
+          contextParts.push('The source code below is the ACTUAL existing implementation of the pages these features extend. Use this as the authoritative reference for understanding the current page structure, components, and patterns.\n');
+
+          for (const f of updatePageFeatures) {
+            const pageContext = await fetchExistingPageContext(f.targetRoute!, f.featureName);
+            if (pageContext.trim()) {
+              contextParts.push(`## Existing page for: ${f.featureName} (route: ${f.targetRoute})\n`);
+              contextParts.push(pageContext);
+            }
+          }
+        } catch (err) {
+          console.warn('[interviews] Failed to fetch existing page context for direct design doc:', err);
+        }
+      }
+    }
+
+    // Add existing-code protection rules
+    contextParts.push('\n## CRITICAL — Existing Code Protection Rules');
+    contextParts.push('');
+    contextParts.push('The design doc and any generated code MUST follow these rules with ZERO exceptions:');
+    contextParts.push('');
+    contextParts.push('1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.** The sidebar navigation, header bar, page layout, existing tabs, existing grids, existing forms, and all other pre-existing UI elements are OFF LIMITS. They already exist in the codebase and work correctly.');
+    contextParts.push('2. **ONLY implement the NEW feature component.** Everything else is existing code that must not be touched.');
+    contextParts.push('3. **DO NOT generate code for the sidebar, header, navigation, or page shell.** These are shared application components that already exist. The design doc must ONLY describe adding the new component/column/tab/section.');
+    contextParts.push('4. **For update-page features:** Add the new component INTO the existing page by importing it and placing it at the correct location (e.g. adding a new tab, appending a column to an existing grid, inserting a section). DO NOT rewrite or replace the existing page component.');
+    contextParts.push('5. **For new-page features:** Create ONLY the new page component and its route registration. DO NOT modify the sidebar navigation component or header — route registration handles menu visibility automatically.');
+    contextParts.push('6. **Test cases must ONLY test the new feature behavior.** Do not write tests that assert on existing page structure, existing sidebar items, or existing navigation behavior.');
+
+    const freeformContext = contextParts.join('\n');
 
     const globalModel = await getDefaultModel();
     const model = skillConfig?.designDocModel ?? globalModel;

@@ -32,6 +32,7 @@ import {
   usePrdValidationReport,
   useGenerateTestCases,
   useScreenInventoryRoutes,
+  useCreateDesignDoc,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -363,6 +364,7 @@ export const PrdReviewView: React.FC = () => {
     prd?.status === 'approved' ? id : null
   );
   const generatePrototypes = useGeneratePrototypesForPrd();
+  const createDesignDoc = useCreateDesignDoc();
   const { data: testCaseRecord } = usePrdTestCases(id);
   const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
@@ -1555,6 +1557,32 @@ export const PrdReviewView: React.FC = () => {
             </span>
           </div>
         )}
+
+      {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
+        <div className={styles.designDocBanner}>
+          <span className={styles.designDocBannerText}>
+            Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
+          </span>
+          <button
+            className={styles.actionBtnPrimary}
+            onClick={() => {
+              if (!id) return;
+              createDesignDoc.mutate({ prdId: id }, {
+                onSuccess: (data) => {
+                  if (data?.designDocId) {
+                    navigate(`/backlog/design-doc/${data.designDocId}`);
+                  }
+                },
+              });
+            }}
+            disabled={createDesignDoc.isPending}
+            type="button"
+            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          >
+            {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
+          </button>
+        </div>
+      )}
 
       {(prd.proposedContent != null || prd.proposedBacklogJson != null) && (
         <ProposedChangesReview
