@@ -362,11 +362,18 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       contextParts.push('\n# Backlog', JSON.stringify(prd.backlogJson, null, 2));
     }
 
-    // Load the design plan (if one exists) for feature decisions and target routes
-    const { designPlans } = await import('../db/schema');
-    const planRow = await db.query.designPlans.findFirst({
-      where: eq(designPlans.prdId, req.params.prdId),
-    });
+    // Load the design plan (if one exists) for feature decisions and target routes.
+    // Wrapped in try/catch: the plan is optional enrichment — generation works without it.
+    let planRow: { features: unknown } | null = null;
+    try {
+      const { designPlans } = await import('../db/schema');
+      const found = await db.query.designPlans.findFirst({
+        where: eq(designPlans.prdId, req.params.prdId),
+      });
+      if (found) planRow = found;
+    } catch (err) {
+      console.warn('[interviews] Could not load design plan for direct design doc (non-fatal):', err);
+    }
 
     if (planRow?.features && Array.isArray(planRow.features) && planRow.features.length > 0) {
       const features = planRow.features as Array<{
