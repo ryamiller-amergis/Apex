@@ -84,6 +84,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   usePrdValidationReport: jest.fn(() => ({ data: null })),
   useDocumentAssignments: jest.fn(() => ({ data: [] })),
   useGenerateTestCases: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useCreateDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
 jest.mock('../../hooks/useReviewComments', () => ({
