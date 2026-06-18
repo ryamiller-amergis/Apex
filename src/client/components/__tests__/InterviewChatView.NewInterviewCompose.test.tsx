@@ -287,6 +287,9 @@ describe('NewInterviewCompose — title required', () => {
         skipAutoKickoff: true,
       }),
     );
+    expect(createInterviewMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-opus-4-6' }),
+    );
 
     const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
       String(c[0]).includes('/api/chat/threads/thread-abc/messages'),

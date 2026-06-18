@@ -1051,6 +1051,12 @@ export const PrdReviewView: React.FC = () => {
                   </span>
                 </span>
               )}
+              {prd.model && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Model:</span>
+                  <span className={styles.metaValue}>{prd.model}</span>
+                </span>
+              )}
             </div>
             {(sourceInterview ||
               (prd.status === 'approved' &&

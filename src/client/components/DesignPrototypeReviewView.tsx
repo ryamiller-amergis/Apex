@@ -329,6 +329,9 @@ const DesignPrototypeReviewView: React.FC = () => {
           <span className={styles.progressText}>
             {approvedCount} of {totalCount} approved
           </span>
+          {selectedProto?.model && (
+            <span className={styles.modelText}>Model: {selectedProto.model}</span>
+          )}
           {can('interviews:manage') && (
             <button
               className={styles.btnSecondary}
