@@ -3197,13 +3197,14 @@ export async function generateDesignPrototypeHtml(
     : '';
 
   const scopingSection = extendMode
-    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; reproduce it faithfully, then add the new feature
+    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; show the new feature IN CONTEXT
 ${targetScreenHint}
 Below this section is the **ACTUAL code of the existing MaxView page** at \`${input.targetRoute}\`. You must:
-1. **Faithfully reproduce that existing page** — its layout, structure, sections, components, toolbars, tables/grids, and styling — as rendered HTML/CSS. Do NOT strip, omit, or simplify existing page elements.
-2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the real page** (e.g. the toolbar, the data grid, the relevant panel/section where it logically belongs).
+1. **Reproduce the existing page layout faithfully** — its structure, sections, components, toolbars, tables/grids, and styling — as rendered HTML/CSS. Do NOT strip, omit, or simplify existing page elements. This reproduction is ONLY for visual context in the prototype — it does NOT mean the existing code should be rewritten or replaced.
+2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the real page** (e.g. the toolbar, the data grid, the relevant panel/section where it logically belongs). The new feature MUST be clearly wrapped in the purple dashed annotation border so reviewers can instantly distinguish it from existing page elements.
 3. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code nor described in the PBI Requirements.
-4. **The four state sections (default / empty / error / loading) apply to the NEW feature within the real page** — the rest of the existing page remains the same across all sections.
+4. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature within the real page** — the rest of the existing page remains identical across all sections.
+5. **IMPORTANT — Existing code is READ-ONLY context.** The existing page code below is provided ONLY so the prototype can show the new feature in its real visual context. When this prototype is later used to generate a design doc and implementation code, ONLY the new feature (the annotated area) should be implemented. The existing page code MUST NOT be modified, replaced, or restructured — it already exists and works correctly in the codebase.
 
 ## Existing Page Code (route: ${input.targetRoute})
 
@@ -3212,9 +3213,10 @@ ${existingPageContext}`
 
 You must follow these rules with zero exceptions:
 1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly mentioned in the PBI Requirements or the feature description above. If a card, widget, table, chart, or section is not described in the requirements, it MUST NOT appear.
-2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard role-gated nav items: Home, Companies, Worksites, Users, Shift Scheduler, RTO Management, Coder, Credentials, Document Management, Timecards, Admin Portal, Power BI — only those visible to the relevant persona) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render.
+2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard role-gated nav items: Home, Companies, Worksites, Users, Shift Scheduler, RTO Management, Coder, Credentials, Document Management, Timecards, Admin Portal, Power BI — only those visible to the relevant persona) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render. The sidebar and header are shown ONLY for visual context — they are existing shared components that MUST NOT be modified in any downstream implementation.
 3. **The content area must contain ONLY the new feature component** described in the PBI Requirements. Do not add other cards, widgets, summaries, charts, schedules, or any content that is not part of this feature.
-4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.`;
+4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.
+5. **IMPORTANT — The sidebar, header, and page shell are READ-ONLY visual context.** They are rendered in the prototype purely for visual fidelity. When this prototype is used to generate a design doc and implementation code, ONLY the new feature component should be implemented. The sidebar navigation, header bar, and page layout MUST NOT be modified or regenerated — they already exist in the codebase.`;
 
   const plan = input.plan;
   const hasPlan = Boolean(

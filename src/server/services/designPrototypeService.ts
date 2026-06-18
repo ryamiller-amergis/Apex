@@ -908,7 +908,19 @@ async function triggerDesignDocGeneration(prdId: string): Promise<void> {
   const prototypesContext = approvedPrototypes.length > 0
     ? [
         '\n# Approved Design Prototypes',
-        'The HTML prototypes below were reviewed and approved for each feature. Treat them as the source of truth for the UI/UX (layout, components, states, and visual styling) the design doc must describe.',
+        'The HTML prototypes below were reviewed and approved for each feature.',
+        '',
+        '## CRITICAL — Existing Code Protection Rules',
+        '',
+        'These prototypes show the NEW feature component annotated with a dashed purple border labeled "NEW: ...". The design doc and any generated code MUST follow these rules with ZERO exceptions:',
+        '',
+        '1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.** The sidebar navigation, header bar, page layout, existing tabs, existing grids, existing forms, and all other pre-existing UI elements are OFF LIMITS. They already exist in the codebase and work correctly.',
+        '2. **ONLY implement the NEW feature component** — the part inside the dashed purple "NEW" annotation border. Everything outside that border is existing code that must not be touched.',
+        '3. **DO NOT generate code for the sidebar, header, navigation, or page shell.** These are shared application components that already exist. The design doc must ONLY describe adding the new component/column/tab/section.',
+        '4. **For update-page features:** Add the new component INTO the existing page by importing it and placing it at the correct location (e.g. adding a new tab, appending a column to an existing grid, inserting a section). DO NOT rewrite or replace the existing page component.',
+        '5. **For new-page features:** Create ONLY the new page component and its route registration. DO NOT modify the sidebar navigation component or header — route registration handles menu visibility automatically.',
+        '6. **Test cases must ONLY test the new feature behavior.** Do not write tests that assert on existing page structure, existing sidebar items, or existing navigation behavior.',
+        '',
         ...approvedPrototypes
           .filter(p => p.mockHtml)
           .map(p => `\n## Prototype — ${p.featureName} (v${p.mockVersion})\n\n\`\`\`html\n${p.mockHtml}\n\`\`\``),
