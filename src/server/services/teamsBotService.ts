@@ -24,11 +24,18 @@ function createBotAdapter(): CloudAdapter {
   return new CloudAdapter(botAuth);
 }
 
-const adapter = createBotAdapter();
+let _adapter: CloudAdapter | null = null;
+
+function getAdapter(): CloudAdapter {
+  if (!_adapter) {
+    _adapter = createBotAdapter();
+  }
+  return _adapter;
+}
 
 export async function handleIncoming(req: Request, res: Response): Promise<void> {
   try {
-  await adapter.process(req, res, async (context: TurnContext) => {
+  await getAdapter().process(req, res, async (context: TurnContext) => {
     const activity = context.activity;
 
     const userOid = activity.from?.aadObjectId;
@@ -54,11 +61,7 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
           .where(eq(teamsConversationReferences.userOid, userOid));
       }
     } else if (activity.type === 'message') {
-      console.log('[teams-bot] Message activity from:', { aadObjectId: activity.from?.aadObjectId, fromId: activity.from?.id, fromName: activity.from?.name });
-      if (!userOid) {
-        console.log('[teams-bot] No aadObjectId found — cannot store conversation reference');
-        return;
-      }
+      if (!userOid) return;
       const ref = TurnContext.getConversationReference(activity) as ConversationReference;
       await db
         .insert(teamsConversationReferences)
@@ -106,7 +109,7 @@ export async function sendTeamsNotification(
 
     const card = buildAdaptiveCard(notification);
 
-    await adapter.continueConversationAsync(
+    await getAdapter().continueConversationAsync(
       process.env.TEAMS_BOT_APP_ID ?? '',
       ref,
       async (context: TurnContext) => {
