@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -8,18 +8,207 @@ import {
   useGeneratePrototypesFromPlan,
 } from '../hooks/useDesignPlan';
 import { usePrototypeAssignments } from '../hooks/useDesignPrototypes';
+import { usePageScreenshot, useUploadPageScreenshot, useDeletePageScreenshot } from '../hooks/usePageScreenshots';
+import type { PageScreenshot } from '../../server/services/pageScreenshotService';
 import { designPlanStatusLabel } from '../../shared/types/designPlan';
 import type {
   DesignPlanFeature,
   UiLayoutPattern,
   UiMockDecision,
 } from '../../shared/types/designPlan';
+import { normaliseUrlToRoute } from '../../shared/utils/routeNormalization';
 import styles from './DesignPlanReviewView.module.css';
 
 const LAYOUT_PATTERNS: UiLayoutPattern[] = [
   'table', 'calendar', 'dashboard', 'form', 'detail-page', 'wizard', 'modal', 'drawer', 'widget',
 ];
 const DECISIONS: UiMockDecision[] = ['new-page', 'update-page', 'no-ui'];
+
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+
+interface PageScreenshotFieldProps {
+  route: string | undefined;
+  disabled: boolean;
+}
+
+const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabled }) => {
+  const normalised = route ? normaliseUrlToRoute(route) : undefined;
+  const { data: fetched, isLoading } = usePageScreenshot(normalised);
+  const uploadMutation = useUploadPageScreenshot();
+  const deleteMutation = useDeletePageScreenshot();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [pageUrl, setPageUrl] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  // Local state holds the most recent upload so the thumbnail shows immediately
+  // without depending on cache invalidation timing.
+  const [localScreenshot, setLocalScreenshot] = useState<PageScreenshot | null>(null);
+  const [localRemoved, setLocalRemoved] = useState(false);
+  const [expandedImage, setExpandedImage] = useState(false);
+  const resolvedDisplay = normalised ?? '';
+
+  // Prefer local state: after upload use local copy; after remove show nothing
+  // until the server query confirms deletion; fall back to server query.
+  const screenshot = localRemoved ? undefined : (localScreenshot ?? fetched);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_SCREENSHOT_BYTES) {
+      alert('Screenshot must be under 2 MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      const mediaType = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+      const url = normalised || route || '';
+      uploadMutation.mutate({ url, imageBase64: base64, mediaType }, {
+        onSuccess: (data) => {
+          setLocalScreenshot(data);
+          setLocalRemoved(false);
+          setUploadSuccess(true);
+          setTimeout(() => setUploadSuccess(false), 4000);
+        },
+        onError: () => {
+          alert('Upload failed. Please try again.');
+        },
+      });
+    };
+    reader.readAsDataURL(file);
+    if (fileRef.current) fileRef.current.value = '';
+  }, [normalised, route, uploadMutation]);
+
+  if (!normalised) return null;
+
+  return (
+    <>
+    <div className={styles.screenshotSection}>
+      <div className={styles.field}>
+        <span className={styles.label}>Page URL (for screenshot lookup)</span>
+        <input
+          className={styles.input}
+          value={pageUrl}
+          placeholder="e.g. dev.mymaxview.com/Timecard/Entry or /Timecard/Entry"
+          disabled={disabled}
+          onChange={(e) => setPageUrl(e.target.value)}
+        />
+        {resolvedDisplay && (
+          <span className={styles.resolvedRoute}>Resolved route: {resolvedDisplay}</span>
+        )}
+      </div>
+
+      <div className={styles.field}>
+        <span className={styles.label}>
+          Page Screenshot {screenshot ? '(on file)' : '(required)'}
+        </span>
+
+        {uploadSuccess && (
+          <div className={styles.screenshotSuccess}>
+            Screenshot uploaded for {normalised}
+          </div>
+        )}
+
+        {isLoading ? (
+          <span className={styles.muted}>Checking for existing screenshot…</span>
+        ) : screenshot ? (
+          <div className={styles.screenshotPreview}>
+            <button
+              type="button"
+              className={styles.screenshotThumbBtn}
+              onClick={() => setExpandedImage(true)}
+              aria-label="Expand screenshot"
+            >
+              <img
+                src={`data:${screenshot.mediaType};base64,${screenshot.imageBase64}`}
+                alt={`Screenshot of ${screenshot.route}`}
+                className={styles.screenshotThumb}
+              />
+            </button>
+            <div className={styles.screenshotMeta}>
+              <span className={styles.muted}>
+                Uploaded {new Date(screenshot.updatedAt).toLocaleDateString()}
+              </span>
+              {!disabled && (
+                <div className={styles.screenshotActions}>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploadMutation.isPending}
+                  >
+                    {uploadMutation.isPending ? 'Uploading…' : 'Replace'}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={() => deleteMutation.mutate({ id: screenshot.id, route: screenshot.route }, {
+                      onSuccess: () => {
+                        setLocalScreenshot(null);
+                        setLocalRemoved(true);
+                      },
+                    })}
+                    disabled={deleteMutation.isPending}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className={styles.screenshotUpload}>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={() => fileRef.current?.click()}
+              disabled={disabled || uploadMutation.isPending}
+            >
+              {uploadMutation.isPending ? 'Uploading…' : 'Upload Page Screenshot'}
+            </button>
+            <span className={styles.screenshotRequired}>
+              Screenshot required for {normalised}
+            </span>
+          </div>
+        )}
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg"
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
+      </div>
+    </div>
+
+    {expandedImage && screenshot && (
+      <div
+        className={styles.imageOverlay}
+        onClick={() => setExpandedImage(false)}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Screenshot preview"
+      >
+        <button
+          type="button"
+          className={styles.imageOverlayClose}
+          onClick={(e) => { e.stopPropagation(); setExpandedImage(false); }}
+          aria-label="Close preview"
+        >
+          ✕
+        </button>
+        <img
+          src={`data:${screenshot.mediaType};base64,${screenshot.imageBase64}`}
+          alt={`Screenshot of ${screenshot.route}`}
+          className={styles.imageOverlayImg}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    )}
+    </>
+  );
+};
 
 const DesignPlanReviewView: React.FC = () => {
   const navigate = useNavigate();
@@ -90,6 +279,30 @@ const DesignPlanReviewView: React.FC = () => {
 
   const handleGenerate = useCallback(async () => {
     if (!plan) return;
+
+    const updatePageFeatures = edited.filter((f) => f.decision === 'update-page' && f.targetRoute);
+    if (updatePageFeatures.length > 0) {
+      const missingRoutes: string[] = [];
+      for (const f of updatePageFeatures) {
+        const routes = f.targetRoute!.split(',').map((r) => r.trim()).filter(Boolean);
+        for (const rawRoute of routes) {
+          const route = normaliseUrlToRoute(rawRoute);
+          try {
+            const res = await fetch(`/api/page-screenshots/by-route?route=${encodeURIComponent(route)}`, {
+              credentials: 'include',
+            });
+            if (!res.ok) missingRoutes.push(rawRoute);
+          } catch {
+            missingRoutes.push(rawRoute);
+          }
+        }
+      }
+      if (missingRoutes.length > 0) {
+        alert(`Upload page screenshots for: ${missingRoutes.join(', ')}`);
+        return;
+      }
+    }
+
     if (dirty) {
       await savePlan.mutateAsync({ planId: plan.id, prdId, features: edited });
       setDirty(false);
@@ -217,27 +430,38 @@ const DesignPlanReviewView: React.FC = () => {
                     </div>
 
                     {feature.decision === 'update-page' && (
-                      <div className={styles.fieldRow}>
-                        <label className={styles.field}>
-                          <span className={styles.label}>Target route</span>
-                          <input
-                            className={styles.input}
-                            value={feature.targetRoute ?? ''}
-                            placeholder="/existing-route"
-                            disabled={!canEditPlan || busy}
-                            onChange={(e) => updateFeature(index, { targetRoute: e.target.value || undefined })}
-                          />
-                        </label>
-                        <label className={styles.field}>
-                          <span className={styles.label}>Page title</span>
-                          <input
-                            className={styles.input}
-                            value={feature.targetPageTitle ?? ''}
-                            disabled={!canEditPlan || busy}
-                            onChange={(e) => updateFeature(index, { targetPageTitle: e.target.value || undefined })}
-                          />
-                        </label>
-                      </div>
+                      <>
+                        <div className={styles.fieldRow}>
+                          <label className={styles.field}>
+                            <span className={styles.label}>Target route</span>
+                            <input
+                              className={styles.input}
+                              value={feature.targetRoute ?? ''}
+                              placeholder="/existing-route"
+                              disabled={!canEditPlan || busy}
+                              onChange={(e) => updateFeature(index, { targetRoute: e.target.value || undefined })}
+                            />
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.label}>Page title</span>
+                            <input
+                              className={styles.input}
+                              value={feature.targetPageTitle ?? ''}
+                              disabled={!canEditPlan || busy}
+                              onChange={(e) => updateFeature(index, { targetPageTitle: e.target.value || undefined })}
+                            />
+                          </label>
+                        </div>
+                        {feature.targetRoute
+                          ? feature.targetRoute.split(',').map((r) => r.trim()).filter(Boolean).map((r) => (
+                            <PageScreenshotField
+                              key={r}
+                              route={r}
+                              disabled={!canEditPlan || busy}
+                            />
+                          ))
+                          : null}
+                      </>
                     )}
 
                     <label className={styles.field}>

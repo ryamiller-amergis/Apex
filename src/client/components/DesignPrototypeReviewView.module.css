@@ -384,6 +384,23 @@
   color: #fff;
 }
 
+.boundaryBtn {
+  margin-left: 12px;
+  padding: 4px 14px;
+  border: 1px dashed #a46bff;
+  background: rgba(164, 107, 255, 0.08);
+  color: #a46bff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.boundaryBtn:hover {
+  background: rgba(164, 107, 255, 0.16);
+}
+
 .sourceView {
   flex: 1;
   overflow: auto;

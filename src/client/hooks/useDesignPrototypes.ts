@@ -98,6 +98,22 @@ export function usePrototypeComments(prototypeId: string | null) {
 
 // ── Mutations ───────────────────────────────────────────────────────────────
 
+export function useUpdatePrototypeHtml() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, html }: { id: string; html: string }) =>
+      apiFetch(`/api/design-prototypes/${id}/html`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html }),
+      }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['design-prototype', variables.id] });
+      qc.invalidateQueries({ queryKey: ['design-prototypes'] });
+    },
+  });
+}
+
 export function useRegeneratePrototype() {
   const qc = useQueryClient();
   return useMutation({

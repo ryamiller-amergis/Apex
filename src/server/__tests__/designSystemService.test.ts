@@ -176,7 +176,7 @@ describe('fetchExistingPageContext — deep traversal + keyword prioritization',
   it('respects the byte budget: a huge page is truncated and children are dropped', async () => {
     const hugePage = [
       "import TimecardsGrid from './TimecardsGrid';",
-      `// ${'x'.repeat(60 * 1024)}`,
+      `// ${'x'.repeat(70 * 1024)}`,
     ].join('\n');
     setupAdo(timecardsFiles(hugePage));
 
