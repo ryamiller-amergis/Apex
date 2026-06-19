@@ -566,6 +566,19 @@ export const appSettings = pgTable('app_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const teamsConversationReferences = pgTable('teams_conversation_references', {
+  userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  conversationReference: jsonb('conversation_reference').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const teamsConversationReferencesRelations = relations(teamsConversationReferences, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [teamsConversationReferences.userOid],
+    references: [appUsers.oid],
+  }),
+}));
+
 // ── Review Comments (Inline Annotations) ──────────────────────────────────────
 
 export const reviewComments = pgTable('review_comments', {

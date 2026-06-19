@@ -1,0 +1,91 @@
+.tns-container {
+  padding: 12px 16px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  margin-top: 20px;
+}
+
+.tns-loading {
+  padding: 16px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.tns-header {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.tns-description {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.tns-types {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.tns-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.tns-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tns-label {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.tns-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tns-save-btn {
+  padding: 5px 16px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent-color);
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tns-save-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.tns-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tns-saved {
+  font-size: 0.75rem;
+  color: var(--success-color);
+  font-weight: 600;
+}
+
+.tns-error {
+  font-size: 0.75rem;
+  color: var(--error-color);
+}

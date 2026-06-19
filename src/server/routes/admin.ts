@@ -3,7 +3,7 @@ import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
 import * as groupService from '../services/groupService';
-import { getDefaultModel, setAppSetting } from '../services/appSettingsService';
+import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { listAvailableBedrockModels } from '../services/bedrockService';
 import type {
@@ -14,6 +14,9 @@ import type {
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
+import type { NotificationType } from '../../shared/types/notification';
+
+const ALL_NOTIFICATION_TYPES: NotificationType[] = ['system', 'ai', 'user-action', 'background'];
 
 const router = Router();
 
@@ -439,6 +442,47 @@ router.put('/app-settings/defaultModel', async (req: Request, res: Response): Pr
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
     await setAppSetting('defaultModel', value, updatedBy);
     res.json({ value });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Teams Notification Settings ───────────────────────────────────────────────
+
+router.get('/app-settings/teamsNotifications', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const raw = await getAppSetting('teams_notification_enabled_types');
+    if (raw === null) {
+      res.json({ enabledTypes: ALL_NOTIFICATION_TYPES });
+      return;
+    }
+    let enabledTypes: NotificationType[];
+    try {
+      enabledTypes = JSON.parse(raw) as NotificationType[];
+    } catch {
+      enabledTypes = ALL_NOTIFICATION_TYPES;
+    }
+    res.json({ enabledTypes });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/app-settings/teamsNotifications', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { enabledTypes } = req.body as { enabledTypes: NotificationType[] };
+    if (!Array.isArray(enabledTypes)) {
+      res.status(400).json({ error: 'enabledTypes must be an array' });
+      return;
+    }
+    const invalid = enabledTypes.filter((t) => !ALL_NOTIFICATION_TYPES.includes(t));
+    if (invalid.length > 0) {
+      res.status(400).json({ error: `Invalid notification types: ${invalid.join(', ')}` });
+      return;
+    }
+    const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
+    await setAppSetting('teams_notification_enabled_types', JSON.stringify(enabledTypes), updatedBy);
+    res.json({ enabledTypes });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

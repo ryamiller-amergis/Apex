@@ -1,0 +1,33 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
+  "developer": {
+    "name": "Amergis",
+    "websiteUrl": "https://app-scrum-dev.azurewebsites.net",
+    "privacyUrl": "https://app-scrum-dev.azurewebsites.net/privacy",
+    "termsOfUseUrl": "https://app-scrum-dev.azurewebsites.net/terms"
+  },
+  "name": {
+    "short": "APEX Bot",
+    "full": "APEX Bot Notifications"
+  },
+  "description": {
+    "short": "Get APEX app notifications in Teams",
+    "full": "Sends real-time notifications from the APEX app directly to your Teams chat when you are assigned to interviews or reviews."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#6264A7",
+  "bots": [
+    {
+      "botId": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
+      "scopes": ["personal"],
+      "supportsFiles": false
+    }
+  ],
+  "validDomains": ["app-scrum-dev.azurewebsites.net"]
+}
