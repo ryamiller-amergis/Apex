@@ -25,6 +25,7 @@ import designPlanRoutes from './routes/designPlans';
 import pageScreenshotRoutes from './routes/pageScreenshots';
 import { mountAdoMcp } from './mcp/ado/express';
 import { ensureAuthenticated } from './middleware/auth';
+import { handleIncoming } from './services/teamsBotService';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
 import adminRouter from './routes/admin';
 import {
@@ -84,6 +85,9 @@ app.get('/api/telemetry-config', (_req, res) => {
     connectionString: process.env.APPLICATIONINSIGHTS_CONNECTION_STRING || null,
   });
 });
+
+// Bot Framework messaging endpoint — Teams sends requests with its own auth, not session cookies
+app.post('/api/messages', (req, res) => handleIncoming(req, res));
 
 // Internal-only API routes: callable by the Cursor agent (running on the user's
 // machine, no browser session cookie) via two paths:

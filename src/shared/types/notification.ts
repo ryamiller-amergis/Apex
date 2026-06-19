@@ -42,3 +42,7 @@ export interface UpsertNotificationPreferenceRequest {
   enabled?: boolean;
   toastEnabled?: boolean;
 }
+
+export interface TeamsNotificationConfig {
+  enabledTypes: NotificationType[];
+}

@@ -8,6 +8,7 @@ import type {
   NotificationType,
   NotificationSseEvent,
 } from '../../shared/types/notification';
+import { sendTeamsNotification } from './teamsBotService';
 
 // ── SSE Connection Manager ────────────────────────────────────────────────────
 
@@ -100,6 +101,8 @@ export async function createNotification(
       toast: toastEnabled,
     });
   }
+
+  sendTeamsNotification(userId, notification).catch(() => {});
 
   return notification;
 }

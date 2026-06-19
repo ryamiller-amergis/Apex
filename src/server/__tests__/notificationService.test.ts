@@ -5,6 +5,12 @@
  * through the module's exported functions.
  */
 
+// ── Teams bot mock ─────────────────────────────────────────────────────────────
+
+jest.mock('../services/teamsBotService', () => ({
+  sendTeamsNotification: jest.fn().mockResolvedValue(undefined),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {

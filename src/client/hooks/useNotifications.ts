@@ -3,6 +3,7 @@ import type {
   AppNotification,
   NotificationPreference,
   UpsertNotificationPreferenceRequest,
+  TeamsNotificationConfig,
 } from '../../shared/types/notification';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -117,6 +118,29 @@ export function useUpdateNotificationPreference() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notification-preferences'] });
+    },
+  });
+}
+
+export function useTeamsNotificationConfig() {
+  return useQuery<TeamsNotificationConfig>({
+    queryKey: ['admin', 'app-settings', 'teamsNotifications'],
+    queryFn: () => apiFetch('/api/admin/app-settings/teamsNotifications'),
+    staleTime: 60_000,
+  });
+}
+
+export function useUpdateTeamsNotificationConfig() {
+  const queryClient = useQueryClient();
+  return useMutation<TeamsNotificationConfig, Error, TeamsNotificationConfig>({
+    mutationFn: (body) =>
+      apiFetch('/api/admin/app-settings/teamsNotifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'app-settings', 'teamsNotifications'] });
     },
   });
 }

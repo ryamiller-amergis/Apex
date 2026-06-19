@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate Teams App Icons</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 32px;
+      padding: 40px;
+      background: #f3f3f3;
+    }
+    h1 { margin-bottom: 0; }
+    .icon-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      background: #fff;
+      padding: 24px 32px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .icon-section h2 { margin: 0 0 4px; }
+    .icon-section p { margin: 0 0 8px; color: #555; font-size: 0.9em; }
+    canvas { border: 1px solid #ddd; border-radius: 4px; }
+    canvas.outline-preview { background: #333; }
+    button {
+      padding: 10px 20px;
+      background: #6264A7;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1em;
+      cursor: pointer;
+    }
+    button:hover { background: #4f5190; }
+  </style>
+</head>
+<body>
+  <h1>Teams App Icon Generator</h1>
+  <p>Generate the two required icons for the Scrum Teams app manifest, then save them into the <code>teams-app/</code> folder.</p>
+
+  <div class="icon-section">
+    <h2>color.png — 192×192</h2>
+    <p>Light background with Apex logo. Required by Teams for the app card.</p>
+    <canvas id="colorCanvas" width="192" height="192"></canvas>
+    <button onclick="downloadCanvas('colorCanvas', 'color.png')">Download color.png (192×192)</button>
+  </div>
+
+  <div class="icon-section">
+    <h2>outline.png — 32×32</h2>
+    <p>Transparent background with white Apex logo. Required by Teams for the sidebar/activity icon.</p>
+    <canvas id="outlineCanvas" width="32" height="32" class="outline-preview"></canvas>
+    <button onclick="downloadCanvas('outlineCanvas', 'outline.png')">Download outline.png (32×32)</button>
+  </div>
+
+  <script>
+    const svgColor = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+      <rect x="10" y="10" width="76" height="76" rx="20" fill="#EEF2FF"/>
+      <path d="M20 72L43 22H56L34 72H20Z" fill="#2747D9"/>
+      <path d="M52 22L78 72H61L43 38L52 22Z" fill="#2747D9" opacity="0.9"/>
+      <path d="M40 72L49 54L58 72H40Z" fill="#F8FAFF"/>
+    </svg>`;
+
+    const svgOutline = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+      <path d="M20 72L43 22H56L34 72H20Z" fill="#FFFFFF"/>
+      <path d="M52 22L78 72H61L43 38L52 22Z" fill="#FFFFFF" opacity="0.9"/>
+      <path d="M40 72L49 54L58 72H40Z" fill="#AAAACC"/>
+    </svg>`;
+
+    function drawSvgToCanvas(svgStr, canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, 0, 0, size, size);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+
+    function downloadCanvas(canvasId, filename) {
+      const canvas = document.getElementById(canvasId);
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    drawSvgToCanvas(svgColor, 'colorCanvas', 192);
+    drawSvgToCanvas(svgOutline, 'outlineCanvas', 32);
+  </script>
+</body>
+</html>

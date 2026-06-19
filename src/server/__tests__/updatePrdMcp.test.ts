@@ -4,6 +4,13 @@
  * Tests handleUpdatePrd exported from src/server/mcp/ado/server.ts.
  */
 
+// ── Teams bot mock ────────────────────────────────────────────────────────────
+
+jest.mock('../services/teamsBotService', () => ({
+  sendTeamsNotification: jest.fn().mockResolvedValue(undefined),
+  handleIncoming: jest.fn().mockResolvedValue(undefined),
+}));
+
 // ── DB mock ──────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {

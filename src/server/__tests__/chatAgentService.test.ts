@@ -83,6 +83,11 @@ jest.mock('../utils/retry', () => ({
   retryWithBackoff: jest.fn(),
 }));
 
+jest.mock('../services/teamsBotService', () => ({
+  sendTeamsNotification: jest.fn().mockResolvedValue(undefined),
+  handleIncoming: jest.fn(),
+}));
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import { createThread, closeThread, permanentlyDeleteThread, markAsInterviewThread } from '../services/chatAgentService';
