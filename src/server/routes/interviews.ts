@@ -51,7 +51,7 @@ import {
   getDesignDoc,
   listDesignDocs,
   reviewDesignDoc,
-  startDesignDocWatcher,
+  startSingleFeatureDocWatcher,
   submitForReview as submitDesignDocForReview,
   syncDesignDocContent,
   triggerFixValidation,
@@ -60,9 +60,8 @@ import {
   autoStartValidation,
   markValidationReady,
   syncValidationResult,
-  syncPerFeatureDesignDocs,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, createThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getApproverPool, getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
@@ -363,6 +362,18 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       contextParts.push('\n# Backlog', JSON.stringify(prd.backlogJson, null, 2));
     }
 
+    contextParts.push(
+      '\n# CRITICAL: Output File Instructions',
+      '',
+      'You MUST write the following output files using the built-in file writing tool.',
+      'Do NOT only respond in chat. Do NOT use shell commands or scripts to create these files.',
+      'The app will not mark this design doc complete unless these exact files are present:',
+      '',
+      '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
+      '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification',
+      '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions',
+    );
+
     // Load the design plan (if one exists) for feature decisions and target routes.
     // Wrapped in try/catch: the plan is optional enrichment — generation works without it.
     let planRow: { features: unknown } | null = null;
@@ -431,14 +442,20 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     const globalModel = await getDefaultModel();
     const model = skillConfig?.designDocModel ?? globalModel;
 
-    const thread = await createThread(userId, {
-      project: prd.project,
-      repo: skillConfig?.skillRepo ?? prd.project,
-      branch: skillConfig?.skillBranch ?? 'main',
-      skillPath: designDocSkillPath,
-      freeformContext,
-      model,
-    });
+    const thread = await createThread(
+      userId,
+      {
+        project: prd.project,
+        repo: skillConfig?.skillRepo ?? prd.project,
+        branch: skillConfig?.skillBranch ?? 'main',
+        skillPath: designDocSkillPath,
+        freeformContext,
+        model,
+      },
+      {
+        kickoffMessage: `Generate the design doc for PRD "${prd.title}" using the PRD, backlog, design plan, and existing-page context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+      },
+    );
 
     const { designDocId } = await createDesignDoc({
       prdId: req.params.prdId,
@@ -449,7 +466,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       model,
     });
 
-    startDesignDocWatcher(designDocId, thread.id);
+    startSingleFeatureDocWatcher(designDocId, thread.id, req.params.prdId, prd.project);
 
     res.status(201).json({ designDocId, threadId: thread.id });
 
@@ -1207,116 +1224,9 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       .set({ chatThreadId: thread.id, model, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    startDesignDocWatcher(req.params.id, thread.id);
+    startSingleFeatureDocWatcher(req.params.id, thread.id, doc.prdId, doc.project);
 
     res.json({ ok: true, threadId: thread.id });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /design-docs/:id/generate — finish Q&A phase, create generation thread, start watcher
-router.post('/design-docs/:id/generate', requirePermission('interviews:manage'), async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const doc = await getDesignDoc(req.params.id);
-    if (!doc) {
-      res.status(404).json({ error: 'Design doc not found' });
-      return;
-    }
-    if (doc.status !== 'interviewing') {
-      res.status(409).json({ error: `Design doc is not in interviewing status (current: ${doc.status})` });
-      return;
-    }
-    if (!doc.qaChatThreadId) {
-      res.status(400).json({ error: 'Design doc has no Q&A thread' });
-      return;
-    }
-
-    // Check if the Q&A thread already produced the output artifacts.
-    // Multi-feature check first: if the agent wrote multiple feature triplets,
-    // create separate design doc rows for each instead of writing to the seed row.
-    const qaFeatures = readAllOutputDesignDocFeatures(doc.qaChatThreadId);
-    if (qaFeatures.length > 1) {
-      console.log(`[designDoc] Q&A produced ${qaFeatures.length} feature triplets — creating per-feature rows (designDocId=${req.params.id})`);
-      await syncPerFeatureDesignDocs(req.params.id, doc.prdId, doc.project, doc.authorId, doc.qaChatThreadId);
-      res.json({ ok: true });
-      return;
-    }
-
-    // Single-feature fast path: check workspace files then fall back to DB content
-    const qaDesign = readOutputDesignDoc(doc.qaChatThreadId);
-    const qaTechSpec = readOutputTechSpec(doc.qaChatThreadId);
-    const qaAssumptions = readOutputAssumptions(doc.qaChatThreadId);
-
-    const hasAllInWorkspace = qaDesign !== null && qaTechSpec !== null && qaAssumptions !== null;
-    const hasAllInDb = !!doc.designContent && !!doc.techSpecContent && !!doc.assumptionsContent;
-
-    if (hasAllInWorkspace || hasAllInDb) {
-      const designContent = qaDesign ?? doc.designContent!;
-      const techSpecContent = qaTechSpec ?? doc.techSpecContent!;
-      const assumptionsContent = qaAssumptions ?? doc.assumptionsContent!;
-
-      console.log(`[designDoc] Q&A already produced all artifacts (source=${hasAllInWorkspace ? 'workspace' : 'db'}) — syncing directly (designDocId=${req.params.id})`);
-      const skillConfig = await getSkillConfig(doc.project);
-      const finalStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
-      await syncDesignDocContent(req.params.id, {
-        designContent,
-        techSpecContent,
-        assumptionsContent,
-        finalStatus,
-      });
-      if (finalStatus === 'validating') {
-        autoStartValidation(req.params.id).catch((err) => {
-          console.error(`[designDoc] autoStartValidation failed on fast-path generate (designDocId=${req.params.id})`, err);
-        });
-      }
-      res.json({ ok: true });
-      return;
-    }
-
-    // Read Q&A thread messages to build transcript
-    const qaThread = await getThreadAsync(doc.qaChatThreadId);
-    const transcriptLines: string[] = ['# Design Doc Q&A Transcript', ''];
-    if (qaThread) {
-      for (const msg of qaThread.messages) {
-        if (msg.role === 'user' && msg.text !== 'Begin.') {
-          transcriptLines.push(`**User:** ${msg.text}`, '');
-        } else if (msg.role === 'agent') {
-          transcriptLines.push(`**Agent:** ${msg.text}`, '');
-        }
-      }
-    }
-    const transcript = transcriptLines.join('\n');
-
-    const skillConfig = await getSkillConfig(doc.project);
-    const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
-    const globalModel = await getDefaultModel();
-    const model = skillConfig?.designDocModel ?? globalModel;
-
-    const thread = await createThread(userId, {
-      project: doc.project,
-      repo: skillConfig?.skillRepo ?? doc.project,
-      branch: skillConfig?.skillBranch ?? 'main',
-      skillPath: designDocSkillPath,
-      transcript,
-      model,
-    });
-
-    // Update design doc: set generation thread ID and transition to generating
-    await db
-      .update(designDocsTable)
-      .set({
-        chatThreadId: thread.id,
-        model,
-        status: 'generating',
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(designDocsTable.id, req.params.id));
-
-    startDesignDocWatcher(req.params.id, thread.id);
-
-    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

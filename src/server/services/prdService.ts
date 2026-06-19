@@ -2,12 +2,12 @@ import fs from 'fs';
 import { and, desc, eq } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { prds, appUsers, chatThreads, interviews, testCases } from '../db/schema';
+import { prds, appUsers, chatThreads, interviews, testCases, designDocs, designPrototypes } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
-import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule } from '../../shared/types/interview';
+import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -15,6 +15,7 @@ import { assignApprovers, recordApproverResponse, isAssignedApprover, isApproval
 import { getUnresolvedCount } from './reviewCommentService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { listDesignDocs } from '../services/designDocService';
+import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
@@ -80,6 +81,32 @@ async function getPrdOwnerId(interviewId: string | null): Promise<string | null>
     .where(eq(interviews.id, interviewId))
     .limit(1);
   return rows[0]?.prdOwnerId ?? null;
+}
+
+async function resolveOwnerEmail(oid: string | null | undefined): Promise<string | undefined> {
+  if (!oid) return undefined;
+  try {
+    const rows = await db
+      .select({ email: appUsers.email })
+      .from(appUsers)
+      .where(eq(appUsers.oid, oid))
+      .limit(1);
+    return rows[0]?.email ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildStepsXml(steps: Array<string | { action: string; expected?: string }>): string {
+  if (!steps || steps.length === 0) return '';
+  const stepElements = steps.map((step, i) => {
+    const action = typeof step === 'string' ? step : (step.action ?? '');
+    const expected = typeof step === 'string' ? '' : (step.expected ?? '');
+    const escapedAction = action.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escapedExpected = expected.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<step id="${i + 1}" type="ActionStep"><parameterizedString isformatted="true">${escapedAction}</parameterizedString><parameterizedString isformatted="true">${escapedExpected}</parameterizedString></step>`;
+  });
+  return `<steps id="0" last="${steps.length}">${stepElements.join('')}</steps>`;
 }
 
 /**
@@ -600,6 +627,12 @@ function rowToPrdSummary(
   };
 }
 
+// ── Title normalization for fuzzy matching ────────────────────────────────────
+
+function normalizeTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
 // ── HTML helpers for rich ADO descriptions ───────────────────────────────────
 
 function esc(s: string): string {
@@ -740,21 +773,65 @@ export async function createPrdAdoWorkItems(
     throw conflict('PRD must be approved before creating ADO work items');
   }
 
-  const designDocs = await listDesignDocs({ prdId });
-  const approvedDesignDocs = designDocs.filter(d => d.status === 'approved');
-  if (approvedDesignDocs.length === 0) {
+  const designDocSummaries = await listDesignDocs({ prdId });
+  const approvedDesignDocSummaries = designDocSummaries.filter(d => d.status === 'approved');
+  if (approvedDesignDocSummaries.length === 0) {
     const err = new Error('At least one approved design doc is required before creating ADO work items');
     (err as any).status = 422;
     throw err;
   }
 
+  // Load full design doc content for approved docs
+  const approvedDocIds = approvedDesignDocSummaries.map(d => d.id);
+  const fullDesignDocs = approvedDocIds.length > 0
+    ? await db
+        .select()
+        .from(designDocs)
+        .where(and(eq(designDocs.prdId, prdId), eq(designDocs.status, 'approved')))
+        .limit(500)
+    : [];
+
+  // Load interview owner data once
+  const interviewRow = prd.interviewId
+    ? await db
+        .select({
+          designDocOwnerId: interviews.designDocOwnerId,
+          testCaseApproverIds: interviews.testCaseApproverIds,
+        })
+        .from(interviews)
+        .where(eq(interviews.id, prd.interviewId))
+        .limit(1)
+        .then(rows => rows[0] ?? null)
+    : null;
+
+  const prdOwnerOid = await getPrdOwnerId(prd.interviewId ?? null);
+  const [prdOwnerEmail, designDocOwnerEmail] = await Promise.all([
+    resolveOwnerEmail(prdOwnerOid),
+    resolveOwnerEmail(interviewRow?.designDocOwnerId),
+  ]);
+  const qaReviewerOid = (interviewRow?.testCaseApproverIds as string[] | null | undefined)?.[0];
+  const qaReviewerEmail = await resolveOwnerEmail(qaReviewerOid) ?? designDocOwnerEmail;
+
+  // Load test cases JSON for this PRD
+  const testCaseRecord = await getTestCases(prdId);
+  const testCasesJson = (testCaseRecord as any)?.testCasesJson ?? null;
+
+  // Flat list of features from the backlog for design-doc matching
+  const backlogFeatures = extractFeatures(prd.backlogJson);
+
   const adoService = new AzureDevOpsService(req.project, req.areaPath);
 
   const response: CreatePrdAdoItemsResponse = {
     success: true,
-    created: { epics: [], features: [], pbis: [] },
+    created: { epics: [], features: [], pbis: [], tasks: [], testCases: [] },
     totalCreated: 0,
   };
+
+  // Maps for dependency second pass and test case linking.
+  // itemIdToAdoId tracks backlog IDs for both PBIs and TBIs so cross-type
+  // dependsOn references (e.g. TBI-001 → TBI-002, PBI → TBI-003) resolve.
+  const titleToAdoId = new Map<string, number>();
+  const itemIdToAdoId = new Map<string, number>();
 
   for (const epic of req.selectedItems.epics) {
     const epicDescHtml = buildEpicDescriptionHtml(epic, req.globalBusinessRules);
@@ -763,8 +840,13 @@ export async function createPrdAdoWorkItems(
       title: epic.title,
       description: epicDescHtml || undefined,
       priority: epic.priority,
+      assignedTo: prdOwnerEmail,
     });
-    response.created.epics.push({ title: epic.title, adoId: epicResult.id, adoUrl: epicResult.url });
+    response.created.epics.push({
+      title: epic.title, adoId: epicResult.id, adoUrl: epicResult.url,
+      dependsOn: epic.dependencies,
+    });
+    titleToAdoId.set(epic.title, epicResult.id);
     response.totalCreated += 1;
 
     if (epic.features) {
@@ -776,29 +858,235 @@ export async function createPrdAdoWorkItems(
           description: featureDescHtml || undefined,
           priority: feature.priority,
           parentId: epicResult.id,
+          assignedTo: designDocOwnerEmail,
         });
-        response.created.features.push({ title: feature.title, adoId: featureResult.id, adoUrl: featureResult.url });
+        response.created.features.push({
+          title: feature.title, adoId: featureResult.id, adoUrl: featureResult.url,
+          dependsOn: feature.dependencies,
+        });
+        titleToAdoId.set(feature.title, featureResult.id);
         response.totalCreated += 1;
 
-        if (feature.items) {
-          for (const pbi of feature.items) {
-            const pbiDescHtml = buildPbiDescriptionHtml(pbi);
-            const acHtml =
-              pbi.acceptanceCriteria && pbi.acceptanceCriteria.length > 0
-                ? buildAcceptanceCriteriaHtml(pbi.acceptanceCriteria)
-                : undefined;
+        // Attach design doc files to the Feature.
+        // Primary: match by designDocId stamped on the backlog feature.
+        // Fallback (legacy): single-doc PRD → attach to all; multi-doc → featureIndex or title.
+        const matchedDoc =
+          (feature.designDocId && fullDesignDocs.find(doc => doc.id === feature.designDocId))
+          || (designDocSummaries.length === 1
+            ? fullDesignDocs[0]
+            : fullDesignDocs.find(doc => {
+                if (doc.featureIndex != null) {
+                  return backlogFeatures[doc.featureIndex]?.title === feature.title;
+                }
+                const docNorm = normalizeTitle(doc.title);
+                const featNorm = normalizeTitle(feature.title);
+                if (docNorm === featNorm) return true;
+                if (docNorm.length >= 4 && featNorm.length >= 4) {
+                  if (docNorm.includes(featNorm) || featNorm.includes(docNorm)) return true;
+                }
+                return false;
+              }))
+          || undefined;
+        if (matchedDoc) {
+          const attachments: Array<{ fileName: string; content: string }> = [];
+          if (matchedDoc.designContent) attachments.push({ fileName: 'design.md', content: matchedDoc.designContent });
+          if (matchedDoc.techSpecContent) attachments.push({ fileName: 'tech-spec.md', content: matchedDoc.techSpecContent });
+          if (matchedDoc.assumptionsContent) attachments.push({ fileName: 'assumptions.md', content: matchedDoc.assumptionsContent });
 
-            const pbiResult = await adoService.createWorkItemForPrd({
-              type: 'Product Backlog Item',
-              title: pbi.title,
-              description: pbiDescHtml || undefined,
-              acceptanceCriteriaHtml: acHtml,
-              priority: pbi.priority,
-              parentId: featureResult.id,
-            });
-            response.created.pbis.push({ title: pbi.title, adoId: pbiResult.id, adoUrl: pbiResult.url });
-            response.totalCreated += 1;
+          if (matchedDoc.designPrototypeId) {
+            try {
+              const protoRows = await db
+                .select({ mockHtml: designPrototypes.mockHtml })
+                .from(designPrototypes)
+                .where(eq(designPrototypes.id, matchedDoc.designPrototypeId))
+                .limit(1);
+              const mockHtml = protoRows[0]?.mockHtml;
+              if (mockHtml) attachments.push({ fileName: 'prototype.html', content: mockHtml });
+            } catch (err) {
+              console.warn(`[prdAdoWorkItems] Could not load prototype for doc ${matchedDoc.id}:`, err);
+            }
           }
+
+          for (const { fileName, content } of attachments) {
+            try {
+              const { url: attachUrl } = await adoService.uploadAttachment(fileName, content);
+              await adoService.addAttachmentToWorkItem(featureResult.id, attachUrl, fileName);
+            } catch (err) {
+              console.warn(`[prdAdoWorkItems] Could not attach ${fileName} to Feature #${featureResult.id}:`, err);
+            }
+          }
+        }
+
+        if (feature.items) {
+          for (const item of feature.items) {
+            if (item.type === 'TBI') {
+              const tbiDescHtml = buildPbiDescriptionHtml(item);
+              const acHtml =
+                item.acceptanceCriteria && item.acceptanceCriteria.length > 0
+                  ? buildAcceptanceCriteriaHtml(item.acceptanceCriteria)
+                  : undefined;
+              const tbiResult = await adoService.createWorkItemForPrd({
+                type: 'Technical Backlog Item',
+                title: item.title,
+                description: tbiDescHtml || undefined,
+                acceptanceCriteriaHtml: acHtml,
+                priority: item.priority,
+                parentId: featureResult.id,
+                assignedTo: designDocOwnerEmail,
+              });
+              response.created.tasks.push({
+                title: item.title, adoId: tbiResult.id, adoUrl: tbiResult.url,
+                id: item.id, dependsOn: item.dependsOn,
+              });
+              titleToAdoId.set(item.title, tbiResult.id);
+              if (item.id) itemIdToAdoId.set(item.id, tbiResult.id);
+              response.totalCreated += 1;
+            } else {
+              const pbiDescHtml = buildPbiDescriptionHtml(item);
+              const acHtml =
+                item.acceptanceCriteria && item.acceptanceCriteria.length > 0
+                  ? buildAcceptanceCriteriaHtml(item.acceptanceCriteria)
+                  : undefined;
+
+              const pbiResult = await adoService.createWorkItemForPrd({
+                type: 'Product Backlog Item',
+                title: item.title,
+                description: pbiDescHtml || undefined,
+                acceptanceCriteriaHtml: acHtml,
+                priority: item.priority,
+                parentId: featureResult.id,
+                assignedTo: designDocOwnerEmail,
+              });
+              response.created.pbis.push({
+                title: item.title, adoId: pbiResult.id, adoUrl: pbiResult.url,
+                id: item.id, dependsOn: item.dependsOn,
+              });
+              titleToAdoId.set(item.title, pbiResult.id);
+              if (item.id) itemIdToAdoId.set(item.id, pbiResult.id);
+              response.totalCreated += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Second pass — dependency links
+  for (const epic of req.selectedItems.epics) {
+    if (epic.dependencies && epic.dependencies.length > 0) {
+      const epicAdoId = titleToAdoId.get(epic.title);
+      if (epicAdoId) {
+        const predIds = epic.dependencies.flatMap(dep => {
+          const id = titleToAdoId.get(dep);
+          return id != null ? [id] : [];
+        });
+        if (predIds.length > 0) {
+          await adoService.addDependencyLinks(epicAdoId, predIds).catch(err =>
+            console.warn(`[prdAdoWorkItems] Could not add dependency links for Epic "${epic.title}":`, err),
+          );
+        }
+      }
+    }
+
+    for (const feature of epic.features ?? []) {
+      if (feature.dependencies && feature.dependencies.length > 0) {
+        const featAdoId = titleToAdoId.get(feature.title);
+        if (featAdoId) {
+          const predIds = feature.dependencies.flatMap(dep => {
+            const id = titleToAdoId.get(dep);
+            return id != null ? [id] : [];
+          });
+          if (predIds.length > 0) {
+            await adoService.addDependencyLinks(featAdoId, predIds).catch(err =>
+              console.warn(`[prdAdoWorkItems] Could not add dependency links for Feature "${feature.title}":`, err),
+            );
+          }
+        }
+      }
+
+      for (const item of feature.items ?? []) {
+        if (item.dependsOn && item.dependsOn.length > 0) {
+          const itemAdoId = titleToAdoId.get(item.title);
+          if (itemAdoId) {
+            const predIds = item.dependsOn.flatMap(dep => {
+              const byTitle = titleToAdoId.get(dep);
+              if (byTitle != null) return [byTitle];
+              const byId = itemIdToAdoId.get(dep);
+              return byId != null ? [byId] : [];
+            });
+            if (predIds.length > 0) {
+              await adoService.addDependencyLinks(itemAdoId, predIds).catch(err =>
+                console.warn(`[prdAdoWorkItems] Could not add dependency links for item "${item.title}":`, err),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Resolve dependsOnAdoIds on each created item and build dependency graph
+  const resolveDeps = (deps: string[] | undefined): number[] => {
+    if (!deps || deps.length === 0) return [];
+    return deps.flatMap(dep => {
+      const byTitle = titleToAdoId.get(dep);
+      if (byTitle != null) return [byTitle];
+      const byId = itemIdToAdoId.get(dep);
+      return byId != null ? [byId] : [];
+    });
+  };
+
+  const dependencyGraph: DependencyGraphNode[] = [];
+  for (const item of response.created.epics) {
+    item.dependsOnAdoIds = resolveDeps(item.dependsOn);
+    dependencyGraph.push({ adoId: item.adoId, title: item.title, type: 'Epic', predecessorAdoIds: item.dependsOnAdoIds });
+  }
+  for (const item of response.created.features) {
+    item.dependsOnAdoIds = resolveDeps(item.dependsOn);
+    dependencyGraph.push({ adoId: item.adoId, title: item.title, type: 'Feature', predecessorAdoIds: item.dependsOnAdoIds });
+  }
+  for (const item of response.created.pbis) {
+    item.dependsOnAdoIds = resolveDeps(item.dependsOn);
+    dependencyGraph.push({ adoId: item.adoId, title: item.title, type: 'PBI', predecessorAdoIds: item.dependsOnAdoIds });
+  }
+  for (const item of response.created.tasks) {
+    item.dependsOnAdoIds = resolveDeps(item.dependsOn);
+    dependencyGraph.push({ adoId: item.adoId, title: item.title, type: 'TBI', predecessorAdoIds: item.dependsOnAdoIds });
+  }
+  response.dependencyGraph = dependencyGraph;
+
+  // Create test cases for each PBI
+  if (testCasesJson) {
+    const root = testCasesJson as Record<string, unknown>;
+    const suites = Array.isArray(root.suites) ? root.suites as Record<string, unknown>[] : [];
+    for (const suite of suites) {
+      const pbiId = String(suite.pbiId ?? suite.pbi_id ?? suite.workItemId ?? suite.work_item_id ?? '');
+      const pbiAdoId = pbiId ? itemIdToAdoId.get(pbiId) : undefined;
+      if (!pbiAdoId) continue;
+
+      const cases = Array.isArray(suite.testCases)
+        ? suite.testCases as Record<string, unknown>[]
+        : Array.isArray(suite.test_cases)
+          ? suite.test_cases as Record<string, unknown>[]
+          : Array.isArray(suite.cases)
+            ? suite.cases as Record<string, unknown>[]
+            : [];
+
+      for (const tc of cases) {
+        const tcTitle = String(tc.title ?? tc.name ?? '');
+        if (!tcTitle) continue;
+        const steps = Array.isArray(tc.steps) ? tc.steps as Array<string | { action: string; expected?: string }> : [];
+        try {
+          const tcResult = await adoService.createTestCaseWorkItem({
+            title: tcTitle,
+            stepsHtml: buildStepsXml(steps),
+            parentId: pbiAdoId,
+            assignedTo: qaReviewerEmail,
+          });
+          response.created.testCases.push({ title: tcTitle, adoId: tcResult.id, adoUrl: tcResult.url });
+          response.totalCreated += 1;
+        } catch (err) {
+          console.warn(`[prdAdoWorkItems] Could not create test case "${tcTitle}" for PBI #${pbiAdoId}:`, err);
         }
       }
     }

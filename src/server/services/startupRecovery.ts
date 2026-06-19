@@ -5,7 +5,7 @@ import { prds, designDocs, testCases } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
 import {
-  startDesignDocWatcher,
+  startSingleFeatureDocWatcher,
   startValidationWatcher,
   isValidationWatcherActive,
 } from './designDocService';
@@ -64,13 +64,19 @@ export async function recoverInFlightWork(): Promise<void> {
 
   const generatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'generating'),
-    columns: { id: true, chatThreadId: true },
+    columns: {
+      id: true,
+      chatThreadId: true,
+      prdId: true,
+      project: true,
+      designPrototypeId: true,
+    },
   });
   for (const doc of generatingDocs) {
     if (!doc.chatThreadId) continue;
     const ok = await hydrateThread(doc.chatThreadId);
     if (ok) {
-      startDesignDocWatcher(doc.id, doc.chatThreadId);
+      startSingleFeatureDocWatcher(doc.id, doc.chatThreadId, doc.prdId, doc.project);
       recovered++;
       console.log(
         `[recovery] Restarted design doc watcher (designDocId=${doc.id})`

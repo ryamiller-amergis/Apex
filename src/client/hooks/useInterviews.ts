@@ -108,6 +108,7 @@ export function usePrd(id: string | null) {
       const data = query.state.data;
       if (!data) return false;
       if (data.status === 'generating' && data.content === '') return 5_000;
+      if (data.status === 'validating') return 5_000;
       if (data.fixBaseline) return 5_000;
       if (data.fixCommentId && data.proposedContent == null && data.proposedBacklogJson == null) {
         return 5_000;
@@ -181,7 +182,6 @@ export function useDesignDoc(id: string | null) {
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return false;
-      if (d.status === 'interviewing') return 10_000;
       if (d.status === 'validating') return 10_000;
       if (
         d.status === 'generating' &&
@@ -642,20 +642,6 @@ export function useSyncDesignDoc() {
   >({
     mutationFn: (designDocId) =>
       apiFetch(`/api/interviews/design-docs/${designDocId}/sync`, {
-        method: 'POST',
-      }),
-    onSuccess: (_data, designDocId) => {
-      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
-      qc.invalidateQueries({ queryKey: ['design-docs'] });
-    },
-  });
-}
-
-export function useGenerateDesignDoc() {
-  const qc = useQueryClient();
-  return useMutation<{ ok: boolean }, Error, string>({
-    mutationFn: (designDocId) =>
-      apiFetch(`/api/interviews/design-docs/${designDocId}/generate`, {
         method: 'POST',
       }),
     onSuccess: (_data, designDocId) => {

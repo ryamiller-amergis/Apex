@@ -101,6 +101,7 @@ const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rba
 const {
   createDesignDoc: mockCreateDesignDoc,
   startDesignDocWatcher: mockStartDesignDocWatcher,
+  startSingleFeatureDocWatcher: mockStartSingleFeatureDocWatcher,
   getDesignDoc: mockGetDesignDoc,
   listDesignDocs: mockListDesignDocs,
   updateDesignDocContent: mockUpdateDesignDocContent,
@@ -115,6 +116,7 @@ const {
 } = jest.requireMock('../services/designDocService') as {
   createDesignDoc: jest.Mock;
   startDesignDocWatcher: jest.Mock;
+  startSingleFeatureDocWatcher: jest.Mock;
   getDesignDoc: jest.Mock;
   listDesignDocs: jest.Mock;
   updateDesignDocContent: jest.Mock;
@@ -775,6 +777,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     jest.clearAllMocks();
     mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
     mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockStartSingleFeatureDocWatcher.mockReturnValue(undefined);
   });
 
   it('passes designDocModel from skillConfig to createThread when set', async () => {
@@ -792,6 +795,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'claude-3-opus' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 
@@ -811,6 +815,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'global-default-model' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 
@@ -824,6 +829,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'global-default-model' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 

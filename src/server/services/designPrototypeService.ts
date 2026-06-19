@@ -7,6 +7,7 @@ import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -50,6 +51,8 @@ export interface BacklogFeature {
   description?: string;
   items?: BacklogItem[];
   pbis?: BacklogItem[];
+  designDocId?: string;
+  designPrototypeId?: string;
   /** Optional route of an existing MaxView page this feature extends (enables EXTEND mode). */
   route?: string;
 }
@@ -423,22 +426,40 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
       generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
         console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
       }),
-    )
-      .then(() => checkAllApprovedAndProceed(prdId))
-      .catch(err => {
-        console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
-      });
+    ).catch(err => {
+      console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
+    });
   }
 
-  // Reviewer assignment + notification now happens at design-plan generation
-  // (see designPlanService.generateDesignPlan); the plan is the entry point users see first.
+  // Stamp all newly created prototype IDs into the backlog JSON features
+  let updatedBacklog = prd.backlogJson;
+  const allCreated: Array<{ protoId: string; featureIndex: number }> = [];
+  for (let i = 0; i < features.length; i++) {
+    if (existingIndices.has(i)) continue;
+    const matchingId = ids[allCreated.length];
+    if (matchingId) allCreated.push({ protoId: matchingId, featureIndex: i });
+  }
+  for (const { protoId, featureIndex: fi } of allCreated) {
+    updatedBacklog = stampFeatureLinkId(updatedBacklog, fi, 'designPrototypeId', protoId);
+  }
+  if (allCreated.length > 0) {
+    await db.update(prds).set({ backlogJson: updatedBacklog as any, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdId));
+  }
 
-  // When every feature was skipped/auto-approved there are no UI prototypes whose
-  // approval would trigger the downstream pipeline, so kick it off here. (When some
-  // are still generating this is a safe no-op; the batch above re-checks on finish.)
-  await checkAllApprovedAndProceed(prdId).catch(err => {
-    console.error(`[designPrototypeService] checkAllApprovedAndProceed failed for PRD ${prdId}:`, err);
-  });
+  // Auto-approved (skipped) features have no reviewer step, so kick off their
+  // design docs immediately here. UI-generating features get triggered via reviewPrototype.
+  const autoApprovedIds = ids.filter(id => !pending.some(p => p.prototypeId === id));
+  for (const protoId of autoApprovedIds) {
+    const protoRow = await db.query.designPrototypes.findFirst({
+      where: eq(designPrototypes.id, protoId),
+      columns: { featureIndex: true },
+    });
+    if (protoRow) {
+      triggerDesignDocForPrototype(protoId, protoRow.featureIndex).catch(err => {
+        console.error(`[designPrototypeService] triggerDesignDocForPrototype failed for auto-approved prototype ${protoId}:`, err);
+      });
+    }
+  }
 
   return ids;
 }
@@ -905,7 +926,9 @@ export async function reviewPrototype(
     .where(eq(designPrototypes.id, prototypeId));
 
   if (action === 'approve') {
-    await checkAllApprovedAndProceed(proto.prdId);
+    triggerDesignDocForPrototype(prototypeId, proto.featureIndex).catch(err => {
+      console.error(`[designPrototypeService] triggerDesignDocForPrototype failed (prototypeId=${prototypeId})`, err);
+    });
   }
 }
 
@@ -923,15 +946,18 @@ export async function reopenPrototypeForReview(prototypeId: string): Promise<voi
     );
   }
 
-  const existingDocs = await db
+  const existingDoc = await db
     .select({ id: designDocs.id })
     .from(designDocs)
-    .where(eq(designDocs.prdId, proto.prdId))
+    .where(and(
+      eq(designDocs.designPrototypeId, prototypeId),
+      eq(designDocs.featureIndex, proto.featureIndex),
+    ))
     .limit(1);
 
-  if (existingDocs.length > 0) {
+  if (existingDoc.length > 0) {
     throw Object.assign(
-      new Error('Cannot reopen — design docs have already been created for this PRD'),
+      new Error('Cannot reopen — a design doc has already been created for this prototype feature'),
       { status: 409 },
     );
   }
@@ -948,244 +974,28 @@ export async function reopenPrototypeForReview(prototypeId: string): Promise<voi
     .where(eq(designPrototypes.id, prototypeId));
 }
 
-export async function checkAllApprovedAndProceed(prdId: string): Promise<boolean> {
-  const all = await db
-    .select()
-    .from(designPrototypes)
-    .where(eq(designPrototypes.prdId, prdId));
-
-  const allApproved = all.length > 0 && all.every(p => p.status === 'approved');
-
-  if (allApproved) {
-    console.log(`[designPrototypeService] All prototypes approved for PRD ${prdId} — triggering Design Doc generation`);
-    triggerDesignDocGeneration(prdId).catch(err => {
-      console.error(`[designPrototypeService] Design Doc generation failed for PRD ${prdId}:`, err);
-    });
-  }
-
-  return allApproved;
-}
-
-async function triggerDesignDocGeneration(prdId: string): Promise<void> {
-  const { createDesignDoc, startDesignDocWatcher } = await import('./designDocService');
-  const { createThread } = await import('./chatAgentService');
-  const { getSkillConfig } = await import('./projectSettingsService');
-  const { getDefaultModel } = await import('./appSettingsService');
-
-  const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
-  if (!prd) return;
-
-  const skillConfig = await getSkillConfig(prd.project);
-  const globalModel = await getDefaultModel();
-
-  // Load the reviewed design plan so the design doc receives structured decisions
-  // (decision, route, components, brief) instead of prototype HTML. The prototype
-  // HTML served the human reviewer; the design doc needs the actual React source.
-  const planRow = await db.query.designPlans.findFirst({
-    where: eq(designPlans.prdId, prdId),
+/**
+ * Idempotently kicks off a design doc for a single prototype feature.
+ * Called when a prototype is approved (either manually reviewed or auto-approved).
+ * Safe to call multiple times — delegates idempotency to startSingleFeatureDesignDocWatcher.
+ */
+export async function triggerDesignDocForPrototype(prototypeId: string, featureIndex: number): Promise<void> {
+  const proto = await db.query.designPrototypes.findFirst({
+    where: eq(designPrototypes.id, prototypeId),
+    columns: { prdId: true },
   });
-  const planFeatures = planRow?.features ?? [];
-
-  const contextParts: string[] = [];
-
-  if (planFeatures.length > 0) {
-    contextParts.push('\n# Approved Design Plan');
-    contextParts.push('The design plan below was reviewed and approved. It specifies exactly what to build and where.\n');
-    for (const f of planFeatures) {
-      const parts = [`## Feature: ${f.featureName}`];
-      parts.push(`- **Decision:** ${f.decision}`);
-      if (f.targetRoute) parts.push(`- **Target route:** ${f.targetRoute}`);
-      if (f.targetPageTitle) parts.push(`- **Page title:** ${f.targetPageTitle}`);
-      if (f.layoutPattern) parts.push(`- **Layout pattern:** ${f.layoutPattern}`);
-      if (f.primaryComponents?.length)
-        parts.push(`- **Primary components:** ${f.primaryComponents.join(', ')}`);
-      if (f.states?.length) parts.push(`- **States:** ${f.states.join(', ')}`);
-      if (f.rationale) parts.push(`- **Rationale:** ${f.rationale}`);
-      if (f.notes?.trim()) parts.push(`- **Reviewer notes:** ${f.notes.trim()}`);
-      if (f.pbiContributions?.length) {
-        parts.push('\n**PBI contributions (what to add where):**');
-        for (const c of f.pbiContributions)
-          parts.push(`- ${c.pbiTitle}: ${c.contribution}`);
-      }
-      if (f.designBrief) parts.push(`\n**Design brief:**\n${f.designBrief}`);
-      contextParts.push(parts.join('\n'));
-    }
+  if (!proto) {
+    console.error(`[designPrototypeService] triggerDesignDocForPrototype: prototype ${prototypeId} not found`);
+    return;
   }
 
-  // Fetch actual React source for update-page features so the design doc can
-  // reference the real codebase structure rather than the prototype's HTML guess.
-  const updatePageFeatures = planFeatures.filter(
-    (f): f is typeof f & { targetRoute: string } => f.decision === 'update-page' && !!f.targetRoute,
-  );
-  if (updatePageFeatures.length > 0) {
-    try {
-      const { fetchExistingPageContext } = await import('./designSystemService');
-      contextParts.push('\n# Existing Page Context (from MaxView codebase)');
-      contextParts.push(
-        'The source code below is the ACTUAL existing React implementation. ' +
-        'Use this as the authoritative reference. DO NOT rewrite these files.\n',
-      );
-      for (const f of updatePageFeatures) {
-        const pageContext = await fetchExistingPageContext(f.targetRoute, f.featureName);
-        if (pageContext.trim()) {
-          contextParts.push(`## Existing page for: ${f.featureName} (route: ${f.targetRoute})\n`);
-          contextParts.push(pageContext);
-        }
-      }
-    } catch (err) {
-      console.warn('[designPrototypeService] Failed to fetch existing page context:', err);
-    }
-  }
+  const prd = await db.query.prds.findFirst({
+    where: eq(prds.id, proto.prdId),
+    columns: { interviewId: true },
+  });
 
-  // Extract the approved new-feature content from each prototype. Only the
-  // content between <!-- NEW_FEATURE:START --> and <!-- NEW_FEATURE:END -->
-  // markers is included — this is what the reviewer approved visually.
-  const approvedPrototypes = await db
-    .select()
-    .from(designPrototypes)
-    .where(
-      and(
-        eq(designPrototypes.prdId, prdId),
-        eq(designPrototypes.status, 'approved'),
-      ),
-    )
-    .orderBy(asc(designPrototypes.featureIndex));
-
-  const protosWithHtml = approvedPrototypes.filter(p => p.mockHtml);
-
-  if (protosWithHtml.length > 0) {
-    const extractStateScopedHtml = (html: string): string => {
-      const stateBlockRe = /<!--\s*STATE:[a-z_]+:START\s*-->[\s\S]*?<!--\s*STATE:[a-z_]+:END\s*-->/gi;
-      const stateBlocks = html.match(stateBlockRe);
-      return stateBlocks && stateBlocks.length > 0 ? stateBlocks.join('\n') : html;
-    };
-    const dedupeFragments = (fragments: string[]): string[] => {
-      const unique: string[] = [];
-      const seen = new Set<string>();
-      for (const fragment of fragments) {
-        const trimmed = fragment.trim();
-        if (!trimmed) continue;
-        // Normalize whitespace so copy-appended duplicates are collapsed reliably.
-        const key = trimmed.replace(/\s+/g, ' ');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unique.push(trimmed);
-      }
-      return unique;
-    };
-    const newFeatureRe = /<!--\s*NEW_FEATURE:START\s*-->([\s\S]*?)<!--\s*NEW_FEATURE:END\s*-->/gi;
-    const extracted: Array<{ featureName: string; fragments: string[] }> = [];
-    const noMarkers: Array<{ featureName: string; html: string }> = [];
-
-    for (const p of protosWithHtml) {
-      const matches: string[] = [];
-      const htmlForExtraction = extractStateScopedHtml(p.mockHtml!);
-      let m: RegExpExecArray | null;
-      while ((m = newFeatureRe.exec(htmlForExtraction)) !== null) matches.push(m[1].trim());
-      newFeatureRe.lastIndex = 0;
-      const uniqueMatches = dedupeFragments(matches);
-
-      if (uniqueMatches.length > 0) {
-        extracted.push({ featureName: p.featureName, fragments: uniqueMatches });
-      } else {
-        noMarkers.push({ featureName: p.featureName, html: htmlForExtraction });
-      }
-    }
-
-    if (extracted.length > 0) {
-      contextParts.push('\n# Approved New Feature Designs (from reviewed prototypes)');
-      contextParts.push('The HTML fragments below were extracted from the approved design prototypes. They show ONLY the new feature content that was reviewed and approved — not the existing page. Implement these visual designs faithfully.\n');
-      for (const ef of extracted) {
-        contextParts.push(`## Approved design for: ${ef.featureName}\n`);
-        contextParts.push('```html');
-        contextParts.push(ef.fragments.join('\n\n'));
-        contextParts.push('```\n');
-      }
-    }
-
-    // Fallback: for prototypes without NEW_FEATURE markers, include the full
-    // prototype HTML so the design doc still has visual context. This covers
-    // new-page features (entire page is "new") and prototypes where the reviewer
-    // didn't use the boundary editor.
-    if (noMarkers.length > 0) {
-      contextParts.push('\n# Full Prototype Designs (no boundary markers — treat entire content as the new feature)');
-      contextParts.push('The prototypes below do not have explicit NEW_FEATURE boundary markers. The ENTIRE content area is the new feature to implement.\n');
-      for (const p of noMarkers) {
-        contextParts.push(`## Prototype for: ${p.featureName}\n`);
-        contextParts.push('```html');
-        contextParts.push(p.html);
-        contextParts.push('```\n');
-      }
-    }
-  }
-
-  contextParts.push('\n## CRITICAL — Existing Code Protection Rules');
-  contextParts.push('');
-  contextParts.push('The design doc and any generated code MUST follow these rules with ZERO exceptions:');
-  contextParts.push('');
-  contextParts.push('1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.** The sidebar navigation, header bar, page layout, existing tabs, existing grids, existing forms, and all other pre-existing UI elements are OFF LIMITS.');
-  contextParts.push('2. **ONLY implement the NEW feature component** as described in the design plan above. Everything else is existing code that must not be touched.');
-  contextParts.push('3. **DO NOT generate code for the sidebar, header, navigation, or page shell.** These are shared application components that already exist.');
-  contextParts.push('4. **For update-page features:** Add the new component INTO the existing page by importing it and placing it at the correct location (e.g. adding a new tab, appending a column to an existing grid, inserting a section). DO NOT rewrite or replace the existing page component.');
-  contextParts.push('5. **For new-page features:** Create ONLY the new page component and its route registration. DO NOT modify the sidebar navigation component or header — route registration handles menu visibility automatically.');
-  contextParts.push('6. **Test cases must ONLY test the new feature behavior.** Do not write tests that assert on existing page structure, existing sidebar items, or existing navigation behavior.');
-  contextParts.push('7. **Output policy:** Use prototype HTML fragments as internal visual guidance only. DO NOT paste raw prototype HTML, full-page mock markup, `NEW_FEATURE` markers, or `STATE:*` marker blocks into the final tech spec output.');
-
-  const prototypesContext = contextParts.join('\n');
-
-  const prdFreeformContext = [
-    '# PRD Content',
-    prd.content,
-    ...(prd.backlogJson
-      ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)]
-      : []),
-    ...(prototypesContext ? [prototypesContext] : []),
-  ].join('\n');
-
-  if (skillConfig?.designDocQaSkillPath) {
-    const qaModel = skillConfig.designDocQaModel ?? globalModel;
-    const qaThread = await createThread(prd.authorId, {
-      project: prd.project,
-      repo: skillConfig.skillRepo,
-      branch: skillConfig.skillBranch ?? 'main',
-      skillPath: skillConfig.designDocQaSkillPath,
-      freeformContext: prdFreeformContext,
-      model: qaModel,
-    });
-
-    await createDesignDoc({
-      prdId,
-      project: prd.project,
-      userId: prd.authorId,
-      qaChatThreadId: qaThread.id,
-      title: prd.title,
-      status: 'interviewing',
-      model: qaModel,
-    });
-  } else {
-    const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
-    const model = skillConfig?.designDocModel ?? globalModel;
-
-    const thread = await createThread(prd.authorId, {
-      project: prd.project,
-      repo: skillConfig?.skillRepo ?? prd.project,
-      branch: skillConfig?.skillBranch ?? 'main',
-      skillPath: designDocSkillPath,
-      freeformContext: prdFreeformContext,
-      model,
-    });
-
-    const { designDocId } = await createDesignDoc({
-      prdId,
-      project: prd.project,
-      userId: prd.authorId,
-      chatThreadId: thread.id,
-      title: prd.title,
-      model,
-    });
-
-    startDesignDocWatcher(designDocId, thread.id);
-  }
+  const { startSingleFeatureDesignDocWatcher } = await import('./designDocService');
+  await startSingleFeatureDesignDocWatcher(prototypeId, featureIndex, proto.prdId, prd?.interviewId ?? null);
 }
 
 // ── Comments ────────────────────────────────────────────────────────────────

@@ -65,7 +65,6 @@ export interface ProjectSkillConfig {
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
   designDocSkillPath?: string | null;
-  designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
   testCaseSkillPath?: string | null;
@@ -74,7 +73,6 @@ export interface ProjectSkillConfig {
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
-  designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
   testCaseModel?: string | null;
@@ -110,7 +108,6 @@ export interface UpsertProjectSkillConfigRequest {
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
   designDocSkillPath?: string | null;
-  designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
   testCaseSkillPath?: string | null;
@@ -119,7 +116,6 @@ export interface UpsertProjectSkillConfigRequest {
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
-  designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
   testCaseModel?: string | null;
@@ -180,7 +176,6 @@ export interface ProjectSkillConfigResponse {
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
   designDocSkillPath?: string | null;
-  designDocQaSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
   testCaseSkillPath?: string | null;
@@ -189,7 +184,6 @@ export interface ProjectSkillConfigResponse {
   interviewModel?: string | null;
   prdModel?: string | null;
   designDocModel?: string | null;
-  designDocQaModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
   testCaseModel?: string | null;

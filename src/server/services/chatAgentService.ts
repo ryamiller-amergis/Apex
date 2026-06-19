@@ -530,7 +530,6 @@ async function threadBacksDocument(threadId: string): Promise<string | null> {
   const ddRow = await db.query.designDocs.findFirst({
     where: or(
       eq(designDocs.chatThreadId, threadId),
-      eq(designDocs.qaChatThreadId, threadId),
       eq(designDocs.docAssistantThreadId, threadId),
       eq(designDocs.validationThreadId, threadId),
     ),
@@ -1098,35 +1097,6 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
     return;
   }
 
-  // Check if this thread is a Q&A thread
-  const ddQaRow = await db.query.designDocs.findFirst({
-    where: eq(designDocs.qaChatThreadId, threadId),
-  });
-  if (ddQaRow) {
-    // Try multi-feature output first — the agent may have written per-feature triplets
-    const features = readAllOutputDesignDocFeatures(threadId);
-    if (features.length > 1) {
-      await syncPerFeatureDesignDocs(ddQaRow.id, ddQaRow.prdId, ddQaRow.project, ddQaRow.authorId, threadId);
-      console.log(`[chat] post-run: synced ${features.length} per-feature design docs from Q&A (prdId=${ddQaRow.prdId})`);
-      fullySynced = true;
-    } else {
-      // Single-feature fallback — write to the seed row directly
-      const design = readOutputDesignDoc(threadId);
-      const techSpec = readOutputTechSpec(threadId);
-      const assumptions = readOutputAssumptions(threadId);
-      if (design || techSpec || assumptions) {
-        const syncOpts: Parameters<typeof syncDesignDocContent>[1] = {};
-        if (design) syncOpts.designContent = design;
-        if (techSpec) syncOpts.techSpecContent = techSpec;
-        if (assumptions) syncOpts.assumptionsContent = assumptions;
-        await syncDesignDocContent(ddQaRow.id, syncOpts);
-        console.log(`[chat] post-run: synced Q&A design doc output to DB (designDocId=${ddQaRow.id})`);
-        fullySynced = design !== null && techSpec !== null && assumptions !== null;
-      }
-    }
-    if (fullySynced) cleanupWorkspaceDir(workspaceDir);
-    return;
-  }
 }
 
 function cleanupWorkspaceDir(workspaceDir: string): void {

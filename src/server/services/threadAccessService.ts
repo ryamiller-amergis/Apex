@@ -44,14 +44,12 @@ async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
   const doc = await db.query.designDocs.findFirst({
     where: or(
       eq(designDocs.chatThreadId, threadId),
-      eq(designDocs.qaChatThreadId, threadId),
       eq(designDocs.docAssistantThreadId, threadId),
       eq(designDocs.validationThreadId, threadId),
     ),
     columns: {
       id: true,
       chatThreadId: true,
-      qaChatThreadId: true,
       docAssistantThreadId: true,
       validationThreadId: true,
     },
@@ -59,7 +57,6 @@ async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
   if (!doc) return null;
 
   if (doc.chatThreadId === threadId) return { kind: 'design_doc', documentId: doc.id };
-  if (doc.qaChatThreadId === threadId) return { kind: 'design_doc_qa', documentId: doc.id };
   if (doc.docAssistantThreadId === threadId) return { kind: 'design_doc_assistant', documentId: doc.id };
   if (doc.validationThreadId === threadId) return { kind: 'design_doc_validation', documentId: doc.id };
 

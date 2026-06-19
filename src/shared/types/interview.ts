@@ -236,7 +236,7 @@ export interface PrdValidationBaseline {
   fixThreadId?: string;
 }
 
-export type DesignDocStatus = 'interviewing' | 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+export type DesignDocStatus = 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
@@ -244,7 +244,8 @@ export interface DesignDocSummary {
   prdTitle?: string;
   project: string;
   chatThreadId: string | null;
-  qaChatThreadId?: string | null;
+  designPrototypeId?: string | null;
+  featureIndex?: number | null;
   docAssistantThreadId?: string | null;
   validationThreadId?: string | null;
   validationScore?: number | null;
@@ -285,7 +286,6 @@ export interface ReviewDesignDocRequest {
 
 export function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
@@ -297,7 +297,6 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
 
 export function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return 'interviewing';
     case 'generating': return 'generating';
     case 'validating': return 'validating';
     case 'draft': return 'draft';
@@ -312,6 +311,7 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
 export interface SelectedBacklogPBI {
   id: string;
   title: string;
+  type?: 'PBI' | 'TBI';
   description?: string;
   priority?: string;
   acceptanceCriteria?: Array<{ given?: string; when?: string; then?: string }>;
@@ -331,6 +331,8 @@ export interface SelectedBacklogFeature {
   affectedPersonas?: string[];
   outOfScope?: string[];
   dependencies?: string[];
+  designDocId?: string;
+  designPrototypeId?: string;
   items?: SelectedBacklogPBI[];
 }
 
@@ -358,14 +360,42 @@ export interface CreatePrdAdoItemsRequest {
   selectedItems: { epics: SelectedBacklogEpic[] };
 }
 
+export interface CreatedAdoItem {
+  title: string;
+  adoId: number;
+  adoUrl: string;
+  /** Original backlog item ID (e.g. "pbi-1", "tbi-2") */
+  id?: string;
+  /** Original dependency references (backlog IDs or titles) */
+  dependsOn?: string[];
+  /** Resolved ADO work item IDs for each dependency */
+  dependsOnAdoIds?: number[];
+}
+
+export interface DependencyGraphNode {
+  adoId: number;
+  title: string;
+  type: 'Epic' | 'Feature' | 'PBI' | 'TBI';
+  /** ADO IDs this item must wait for before starting */
+  predecessorAdoIds: number[];
+}
+
 export interface CreatePrdAdoItemsResponse {
   success: boolean;
   created: {
-    epics: Array<{ title: string; adoId: number; adoUrl: string }>;
-    features: Array<{ title: string; adoId: number; adoUrl: string }>;
-    pbis: Array<{ title: string; adoId: number; adoUrl: string }>;
+    epics: CreatedAdoItem[];
+    features: CreatedAdoItem[];
+    pbis: CreatedAdoItem[];
+    tasks: CreatedAdoItem[];
+    testCases: CreatedAdoItem[];
   };
   totalCreated: number;
+  /**
+   * Dependency graph for all created PBIs/TBIs.
+   * Items with empty predecessorAdoIds can start immediately (async).
+   * Items with predecessors must wait for those to complete first (sync).
+   */
+  dependencyGraph?: DependencyGraphNode[];
 }
 
 // ── Active User (for owner assignment dropdowns) ─────────────────────────────

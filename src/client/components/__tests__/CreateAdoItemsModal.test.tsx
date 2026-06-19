@@ -11,13 +11,14 @@
  *  - Cancel: button, overlay click, Escape key
  */
 
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { CreateAdoItemsModal } from '../CreateAdoItemsModal';
 import type {
   Prd,
   DesignDocSummary,
   CreatePrdAdoItemsRequest,
+  CreatePrdAdoItemsResponse,
 } from '../../../shared/types/interview';
 
 /* ── Module mocks ─────────────────────────────────────────────────────────── */
@@ -135,6 +136,23 @@ const BACKLOG_PARTIAL_ADO = {
 
 /* ── Render helper ────────────────────────────────────────────────────────── */
 
+function makeCreateResponse(
+  overrides: Partial<CreatePrdAdoItemsResponse> = {},
+): CreatePrdAdoItemsResponse {
+  return {
+    success: true,
+    totalCreated: 2,
+    created: {
+      epics: [],
+      features: [{ title: 'Feature Auth', adoId: 101, adoUrl: 'https://ado.example/101' }],
+      pbis: [{ title: 'Login form', adoId: 102, adoUrl: 'https://ado.example/102' }],
+      tasks: [],
+      testCases: [],
+    },
+    ...overrides,
+  };
+}
+
 interface RenderOptions {
   backlogJson?: unknown;
   designDocs?: DesignDocSummary[];
@@ -148,7 +166,7 @@ function renderModal(opts: RenderOptions = {}) {
     backlogJson = BACKLOG,
     designDocs = [makeDesignDoc()],
     isPending = false,
-    onSubmit = jest.fn().mockResolvedValue(undefined),
+    onSubmit = jest.fn().mockResolvedValue(makeCreateResponse()),
     onCancel = jest.fn(),
   } = opts;
 
@@ -650,8 +668,8 @@ describe('CreateAdoItemsModal – submit', () => {
     expect(screen.getByRole('button', { name: 'Create in ADO' })).not.toBeDisabled();
   });
 
-  it('calls onSubmit with the correct structure on submit', () => {
-    const onSubmit = jest.fn().mockResolvedValue(undefined);
+  it('calls onSubmit with the correct structure on submit', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(makeCreateResponse());
     renderModal({
       designDocs: [makeDesignDoc({ title: 'Feature Auth', status: 'approved' })],
       onSubmit,
@@ -660,7 +678,7 @@ describe('CreateAdoItemsModal – submit', () => {
     fireEvent.click(getRowCheckbox('Feature Auth'));
     fireEvent.click(screen.getByRole('button', { name: 'Create in ADO' }));
 
-    expect(onSubmit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const req: CreatePrdAdoItemsRequest = onSubmit.mock.calls[0][0];
     expect(req.project).toBe('MyProject');
     expect(req.selectedItems.epics).toHaveLength(1);
@@ -671,8 +689,8 @@ describe('CreateAdoItemsModal – submit', () => {
     expect(features[0].items).toHaveLength(2); // PBI + TBI
   });
 
-  it('does NOT include locked features in the submit payload (multi-doc scenario)', () => {
-    const onSubmit = jest.fn().mockResolvedValue(undefined);
+  it('does NOT include locked features in the submit payload (multi-doc scenario)', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(makeCreateResponse());
     renderModal({
       designDocs: [
         makeDesignDoc({ id: 'doc-1', title: 'Feature Auth', status: 'approved' }),
@@ -684,14 +702,15 @@ describe('CreateAdoItemsModal – submit', () => {
     fireEvent.click(getRowCheckbox('Epic One')); // cascades only to enabled features
     fireEvent.click(screen.getByRole('button', { name: 'Create in ADO' }));
 
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const req: CreatePrdAdoItemsRequest = onSubmit.mock.calls[0][0];
     const featureTitles = req.selectedItems.epics[0].features?.map(f => f.title) ?? [];
     expect(featureTitles).toContain('Feature Auth');
     expect(featureTitles).not.toContain('Feature Reports');
   });
 
-  it('uses the selected area path in the payload', () => {
-    const onSubmit = jest.fn().mockResolvedValue(undefined);
+  it('uses the selected area path in the payload', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(makeCreateResponse());
     renderModal({
       designDocs: [makeDesignDoc({ title: 'Feature Auth', status: 'approved' })],
       onSubmit,
@@ -701,8 +720,47 @@ describe('CreateAdoItemsModal – submit', () => {
     fireEvent.click(getRowCheckbox('Feature Auth'));
     fireEvent.click(screen.getByRole('button', { name: 'Create in ADO' }));
 
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const req: CreatePrdAdoItemsRequest = onSubmit.mock.calls[0][0];
     expect(req.areaPath).toBe('MyProject\\Team B');
+  });
+
+  it('shows a success panel with ADO links after a successful submit', async () => {
+    renderModal({
+      designDocs: [makeDesignDoc({ title: 'Feature Auth', status: 'approved' })],
+    });
+
+    fireEvent.click(getRowCheckbox('Feature Auth'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create in ADO' }));
+
+    expect(await screen.findByTestId('ado-create-success')).toBeInTheDocument();
+    expect(screen.getByText(/2 items created successfully/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /#101 — Feature Auth/i })).toHaveAttribute(
+      'href',
+      'https://ado.example/101',
+    );
+    expect(screen.getByRole('link', { name: /#102 — Login form/i })).toHaveAttribute(
+      'href',
+      'https://ado.example/102',
+    );
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(screen.queryByTestId('summary-bar')).not.toBeInTheDocument();
+  });
+
+  it('shows an error banner when submit fails and keeps the form visible', async () => {
+    const onSubmit = jest.fn().mockRejectedValue(new Error('ADO API unavailable'));
+    renderModal({
+      designDocs: [makeDesignDoc({ title: 'Feature Auth', status: 'approved' })],
+      onSubmit,
+    });
+
+    fireEvent.click(getRowCheckbox('Feature Auth'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create in ADO' }));
+
+    expect(await screen.findByTestId('ado-create-error')).toBeInTheDocument();
+    expect(screen.getByText('ADO API unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create in ADO' })).toBeInTheDocument();
+    expect(screen.queryByTestId('ado-create-success')).not.toBeInTheDocument();
   });
 });
 

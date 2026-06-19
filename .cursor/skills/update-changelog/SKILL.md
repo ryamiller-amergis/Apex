@@ -117,6 +117,17 @@ Create a migration named like:
 migrations/<YYYYMMDDHHMMSS>_sync-changelog-version-<new-version-with-dashes>.sql
 ```
 
+**Get the filename from the helper — do not guess:**
+
+```bash
+node scripts/next-migration-timestamp.mjs sync-changelog-version-<new-version-with-dashes>
+# → migrations/20260618140200_sync-changelog-version-1-28-0.sql
+```
+
+Create that path and write the SQL into it.
+
+See `.cursor/skills/postgresql-migrations/SKILL.md` for ordering rules. Never rename a changelog sync migration after it has been applied.
+
 Example for version `1.26.0`:
 
 ```sql

@@ -3,6 +3,7 @@ import type {
   Prd,
   DesignDocSummary,
   CreatePrdAdoItemsRequest,
+  CreatePrdAdoItemsResponse,
   SelectedBacklogEpic,
   SelectedBacklogFeature,
   SelectedBacklogPBI,
@@ -38,6 +39,8 @@ interface FeatureNode {
   outOfScope?: string[];
   dependencies?: string[];
   items?: BacklogItemNode[];
+  designDocId?: string;
+  designPrototypeId?: string;
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
 }
@@ -66,7 +69,7 @@ interface CreateAdoItemsModalProps {
   prd: Prd;
   isPending: boolean;
   designDocs: DesignDocSummary[];
-  onSubmit: (req: CreatePrdAdoItemsRequest) => Promise<void>;
+  onSubmit: (req: CreatePrdAdoItemsRequest) => Promise<CreatePrdAdoItemsResponse>;
   onCancel: () => void;
 }
 
@@ -136,6 +139,8 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
   const [areaPath, setAreaPath] = useState(prd.project);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [submitResult, setSubmitResult] = useState<CreatePrdAdoItemsResponse | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -158,32 +163,31 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
 
   // Map from featureKey(ei, fi) → the matching approved DesignDocSummary.
   //
-  // Single-doc PRD (designDocs.length === 1): the one doc covers the entire
-  // PRD — unlock all features when it is approved. No title matching needed.
-  //
-  // Multi-doc PRD (designDocs.length > 1): one doc per feature workflow.
-  // Title-match each feature to its own approved doc; features with no
-  // matching approved doc stay locked (preserves per-feature gating).
+  // Primary: match by designDocId stamped on the backlog feature.
+  // Fallback (legacy data without stamped IDs):
+  //   Single-doc PRD → unlock all features.
+  //   Multi-doc PRD → title-match via findMatchingDoc.
   const featureDocMap = useMemo<Map<string, DesignDocSummary>>(() => {
     const map = new Map<string, DesignDocSummary>();
     const approvedDocs = designDocs.filter(d => d.status === 'approved');
     if (approvedDocs.length === 0) return map;
 
-    if (designDocs.length === 1) {
-      // Holistic single doc — unlock every feature.
-      (backlog.epics ?? []).forEach((epic, ei) => {
-        (epic.features ?? []).forEach((_feat, fi) => {
-          map.set(featureKey(ei, fi), approvedDocs[0]);
-        });
-      });
-      return map;
-    }
+    const approvedById = new Map(approvedDocs.map(d => [d.id, d]));
 
-    // Multi-doc: title-match each feature to its own approved doc.
     (backlog.epics ?? []).forEach((epic, ei) => {
       (epic.features ?? []).forEach((feat, fi) => {
-        const doc = findMatchingDoc(feat.title, approvedDocs);
-        if (doc) map.set(featureKey(ei, fi), doc);
+        // Primary: direct ID match
+        if (feat.designDocId) {
+          const doc = approvedById.get(feat.designDocId);
+          if (doc) { map.set(featureKey(ei, fi), doc); return; }
+        }
+        // Fallback for legacy data
+        if (designDocs.length === 1) {
+          map.set(featureKey(ei, fi), approvedDocs[0]);
+        } else {
+          const doc = findMatchingDoc(feat.title, approvedDocs);
+          if (doc) map.set(featureKey(ei, fi), doc);
+        }
       });
     });
     return map;
@@ -276,12 +280,15 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
     return { epics, features, pbis, tbis };
   }, [checked, backlog]);
 
-  const canSubmit = useMemo(() => {
-    return !isPending && areaPath.trim().length > 0 && checked.size > 0;
-  }, [isPending, areaPath, checked]);
+  const submitting = isPending;
 
-  const handleSubmit = useCallback(() => {
+  const canSubmit = useMemo(() => {
+    return !submitting && !submitResult && areaPath.trim().length > 0 && checked.size > 0;
+  }, [submitting, submitResult, areaPath, checked]);
+
+  const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
+    setSubmitError(null);
     const epics = backlog.epics ?? [];
     const selectedEpics: SelectedBacklogEpic[] = [];
 
@@ -300,6 +307,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
             selectedPBIs.push({
               id: item.id,
               title: item.title,
+              type: item.type,
               description: item.description,
               priority: item.priority,
               acceptanceCriteria: item.acceptanceCriteria,
@@ -321,6 +329,8 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
             affectedPersonas: feat.affectedPersonas,
             outOfScope: feat.outOfScope,
             dependencies: feat.dependencies,
+            designDocId: feat.designDocId,
+            designPrototypeId: feat.designPrototypeId,
             items: selectedPBIs.length > 0 ? selectedPBIs : undefined,
           });
         }
@@ -351,7 +361,13 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
       globalBusinessRules,
       selectedItems: { epics: selectedEpics },
     };
-    onSubmit(req);
+    try {
+      const result = await onSubmit(req);
+      setSubmitResult(result);
+      setChecked(new Set());
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to create work items in ADO');
+    }
   }, [canSubmit, backlog, checked, prd.project, areaPath, onSubmit]);
 
   useEffect(() => {
@@ -391,82 +407,107 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
 
         {/* Body */}
         <div className={styles.body}>
-          {/* Area Path */}
-          <p className={styles['section-label']}>Area Path</p>
-          <div className={styles['field-row']}>
-            <div className={styles['field-group']}>
-              <span className={styles['field-label']}>Project</span>
-              <span className={styles['project-label']}>{prd.project}</span>
-            </div>
-            <div className={styles['field-group']}>
-              <span className={styles['field-label']}>Area Path</span>
-              {areaPathsError ? (
-                <input
-                  className={styles.input}
-                  type="text"
-                  value={areaPath}
-                  onChange={(e) => setAreaPath(e.target.value)}
-                  placeholder={`${prd.project}\\TeamName`}
-                />
-              ) : (
-                <select
-                  className={styles.select}
-                  value={areaPath}
-                  onChange={(e) => setAreaPath(e.target.value)}
-                  disabled={areaPathsLoading}
-                >
-                  {areaPathsLoading && <option value="">Loading area paths…</option>}
-                  {!areaPathsLoading && (!areaPaths || areaPaths.length === 0) && (
-                    <option value={prd.project}>{prd.project}</option>
-                  )}
-                  {areaPaths?.map(p => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </div>
-
-          {/* Checklist tree */}
-          <p className={styles['section-label']}>Select Items</p>
-
-          {lockedFeatureCount > 0 && (
-            <div className={styles['pending-banner']}>
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+          {submitResult ? (
+            <AdoCreateResultPanel result={submitResult} />
+          ) : (
+            <>
+          {submitError && (
+            <div className={styles['error-banner']} role="alert" data-testid="ado-create-error">
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="8" cy="8" r="6.5" />
                 <line x1="8" y1="5" x2="8" y2="8.5" />
                 <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none" />
               </svg>
-              <span>
-                <strong>{lockedFeatureCount} feature{lockedFeatureCount !== 1 ? 's' : ''}</strong>
-                {lockedFeatureCount !== 1 ? ' are' : ' is'} locked — {lockedFeatureCount !== 1 ? 'their' : 'its'} design doc{lockedFeatureCount !== 1 ? 's are' : ' is'} still pending review.
-              </span>
+              <div>
+                <strong>Could not create work items in ADO</strong>
+                <p>{submitError}</p>
+              </div>
             </div>
           )}
 
-          <div className={styles['checklist-section']}>
-            {(backlog.epics ?? []).map((epic, ei) => (
-              <EpicRow
-                key={ei}
-                epic={epic}
-                ei={ei}
-                checked={checked}
-                collapsed={collapsed}
-                onCheck={handleCheck}
-                onToggleCollapse={toggleCollapse}
-                isIndeterminate={isIndeterminate}
-                featureDocMap={featureDocMap}
-              />
-            ))}
-            {(!backlog.epics || backlog.epics.length === 0) && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                No backlog items found in this PRD.
-              </p>
+          <CollapsibleSection title="Area Path" sectionId="area-path">
+            <div className={styles['field-row']}>
+              <div className={styles['field-group']}>
+                <span className={styles['field-label']}>Project</span>
+                <span className={styles['project-label']}>{prd.project}</span>
+              </div>
+              <div className={styles['field-group']}>
+                <span className={styles['field-label']}>Area Path</span>
+                {areaPathsError ? (
+                  <input
+                    className={styles.input}
+                    type="text"
+                    value={areaPath}
+                    onChange={(e) => setAreaPath(e.target.value)}
+                    placeholder={`${prd.project}\\TeamName`}
+                  />
+                ) : (
+                  <select
+                    className={styles.select}
+                    value={areaPath}
+                    onChange={(e) => setAreaPath(e.target.value)}
+                    disabled={areaPathsLoading}
+                  >
+                    {areaPathsLoading && <option value="">Loading area paths…</option>}
+                    {!areaPathsLoading && (!areaPaths || areaPaths.length === 0) && (
+                      <option value={prd.project}>{prd.project}</option>
+                    )}
+                    {areaPaths?.map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Select Items"
+            sectionId="select-items"
+            count={(backlog.epics ?? []).length}
+            bodyClassName={styles['section-body-flush']}
+          >
+            {lockedFeatureCount > 0 && (
+              <div className={styles['pending-banner']} style={{ margin: '12px 12px 0' }}>
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+                  <circle cx="8" cy="8" r="6.5" />
+                  <line x1="8" y1="5" x2="8" y2="8.5" />
+                  <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none" />
+                </svg>
+                <span>
+                  <strong>{lockedFeatureCount} feature{lockedFeatureCount !== 1 ? 's' : ''}</strong>
+                  {lockedFeatureCount !== 1 ? ' are' : ' is'} locked — {lockedFeatureCount !== 1 ? 'their' : 'its'} design doc{lockedFeatureCount !== 1 ? 's are' : ' is'} still pending review.
+                </span>
+              </div>
             )}
-          </div>
+
+            <div className={styles['checklist-section']} style={{ padding: '8px 12px 12px' }}>
+              {(backlog.epics ?? []).map((epic, ei) => (
+                <EpicRow
+                  key={ei}
+                  epic={epic}
+                  ei={ei}
+                  checked={checked}
+                  collapsed={collapsed}
+                  onCheck={handleCheck}
+                  onToggleCollapse={toggleCollapse}
+                  isIndeterminate={isIndeterminate}
+                  featureDocMap={featureDocMap}
+                />
+              ))}
+              {(!backlog.epics || backlog.epics.length === 0) && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  No backlog items found in this PRD.
+                </p>
+              )}
+            </div>
+          </CollapsibleSection>
+            </>
+          )}
         </div>
 
         {/* Summary */}
+        {!submitResult && (
         <div className={styles['summary-bar']} data-testid="summary-bar">
           <span>
             <span className={styles['summary-count']}>{summary.epics}</span> Epic{summary.epics !== 1 ? 's' : ''},&nbsp;
@@ -478,25 +519,38 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
             {' '}selected
           </span>
         </div>
+        )}
 
         {/* Footer */}
         <div className={styles.footer}>
-          <button
-            className={styles['btn-cancel']}
-            onClick={onCancel}
-            disabled={isPending}
-            type="button"
-          >
-            Cancel
-          </button>
-          <button
-            className={styles['btn-submit']}
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            type="button"
-          >
-            {isPending ? 'Creating...' : 'Create in ADO'}
-          </button>
+          {submitResult ? (
+            <button
+              className={styles['btn-submit']}
+              onClick={onCancel}
+              type="button"
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                className={styles['btn-cancel']}
+                onClick={onCancel}
+                disabled={submitting}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles['btn-submit']}
+                onClick={() => void handleSubmit()}
+                disabled={!canSubmit}
+                type="button"
+              >
+                {submitting ? 'Creating...' : 'Create in ADO'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -810,6 +864,176 @@ const IndeterminateCheckbox: React.FC<IndeterminateCheckboxProps> = ({
       disabled={disabled}
       onChange={(e) => onChange(e.target.checked)}
     />
+  );
+};
+
+interface AdoCreateResultPanelProps {
+  result: CreatePrdAdoItemsResponse;
+}
+
+const RESULT_GROUPS: Array<{
+  key: keyof CreatePrdAdoItemsResponse['created'];
+  label: string;
+}> = [
+  { key: 'epics', label: 'Epics' },
+  { key: 'features', label: 'Features' },
+  { key: 'pbis', label: 'PBIs' },
+  { key: 'tasks', label: 'TBIs' },
+  { key: 'testCases', label: 'Test Cases' },
+];
+
+const AdoCreateResultPanel: React.FC<AdoCreateResultPanelProps> = ({ result }) => {
+  const adoIdTitleMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const list of [result.created.epics, result.created.features, result.created.pbis, result.created.tasks]) {
+      for (const item of list ?? []) map.set(item.adoId, item.title);
+    }
+    return map;
+  }, [result]);
+
+  const graph = result.dependencyGraph;
+  const rootNodes = graph?.filter(n => n.predecessorAdoIds.length === 0) ?? [];
+  const depNodes = graph?.filter(n => n.predecessorAdoIds.length > 0) ?? [];
+
+  return (
+    <div className={styles['result-panel']} role="status" data-testid="ado-create-success">
+      <div className={styles['success-banner']}>
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5" />
+          <path d="M5 8l2 2 4-4" />
+        </svg>
+        <div>
+          <strong>Work items created in ADO</strong>
+          <p>
+            {result.totalCreated} item{result.totalCreated !== 1 ? 's' : ''} created successfully.
+            Open any link below to verify in Azure DevOps.
+          </p>
+        </div>
+      </div>
+
+      {RESULT_GROUPS.map(({ key, label }) => {
+        const items = result.created[key];
+        if (!items || items.length === 0) return null;
+        return (
+          <CollapsibleSection
+            key={key}
+            sectionId={`result-${key}`}
+            title={label}
+            count={items.length}
+            defaultCollapsed={false}
+          >
+            <ul className={styles['result-list']}>
+              {items.map((item) => (
+                <li key={item.adoId}>
+                  <a
+                    className={styles['ado-link']}
+                    href={item.adoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    #{item.adoId} — {item.title} ↗
+                  </a>
+                  {item.dependsOnAdoIds && item.dependsOnAdoIds.length > 0 && (
+                    <span className={styles['depends-on-tag']}>
+                      depends on: {item.dependsOnAdoIds.map(id => `#${id}`).join(', ')}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CollapsibleSection>
+        );
+      })}
+
+      {graph && graph.length > 0 && (
+        <CollapsibleSection
+          sectionId="result-dep-graph"
+          title="Dependency Graph"
+          count={graph.length}
+          defaultCollapsed={false}
+        >
+          <div className={styles['dep-graph']}>
+            {rootNodes.length > 0 && (
+              <div className={styles['dep-group']}>
+                <span className={styles['dep-group-label']}>Can start immediately (async)</span>
+                <ul className={styles['result-list']}>
+                  {rootNodes.map(n => (
+                    <li key={n.adoId}>
+                      <span className={`${styles.badge} ${styles['badge-type-' + n.type.toLowerCase()]}`}>{n.type}</span>
+                      <span>#{n.adoId} — {n.title}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {depNodes.length > 0 && (
+              <div className={styles['dep-group']}>
+                <span className={styles['dep-group-label']}>Has dependencies (sync)</span>
+                <ul className={styles['result-list']}>
+                  {depNodes.map(n => (
+                    <li key={n.adoId}>
+                      <span className={`${styles.badge} ${styles['badge-type-' + n.type.toLowerCase()]}`}>{n.type}</span>
+                      <span>#{n.adoId} — {n.title}</span>
+                      <span className={styles['depends-on-tag']}>
+                        waits for: {n.predecessorAdoIds.map(id => {
+                          const title = adoIdTitleMap.get(id);
+                          return title ? `#${id} (${title})` : `#${id}`;
+                        }).join(', ')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </CollapsibleSection>
+      )}
+    </div>
+  );
+};
+
+interface CollapsibleSectionProps {
+  sectionId: string;
+  title: string;
+  count?: number;
+  defaultCollapsed?: boolean;
+  bodyClassName?: string;
+  children: React.ReactNode;
+}
+
+const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
+  sectionId,
+  title,
+  count,
+  defaultCollapsed = false,
+  bodyClassName,
+  children,
+}) => {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const panelId = `${sectionId}-panel`;
+
+  return (
+    <div className={styles['section-block']} data-testid={`section-${sectionId}`}>
+      <button
+        type="button"
+        className={styles['section-header']}
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+        aria-controls={panelId}
+      >
+        <ChevronIcon collapsed={collapsed} />
+        <span className={styles['section-header-title']}>{title}</span>
+        {count != null && (
+          <span className={styles['section-header-count']}>{count}</span>
+        )}
+      </button>
+      <div
+        id={panelId}
+        className={`${styles['section-body']} ${bodyClassName ?? ''} ${collapsed ? styles['section-body-collapsed'] : ''}`}
+      >
+        {children}
+      </div>
+    </div>
   );
 };
 

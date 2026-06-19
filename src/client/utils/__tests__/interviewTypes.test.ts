@@ -31,7 +31,6 @@ describe('prdBadgeClass', () => {
 
 describe('designDocStatusLabel', () => {
   it.each([
-    ['interviewing', 'Interviewing'],
     ['generating', 'Generating'],
     ['validating', 'Validating'],
     ['draft', 'Draft'],
@@ -45,7 +44,6 @@ describe('designDocStatusLabel', () => {
 
 describe('designDocBadgeClass', () => {
   it.each([
-    ['interviewing', 'interviewing'],
     ['generating', 'generating'],
     ['validating', 'validating'],
     ['draft', 'draft'],

@@ -116,6 +116,30 @@ jest.mock('../services/testCaseService', () => ({
   triggerTestCaseGeneration: jest.fn().mockResolvedValue(true),
 }));
 
+const mockCreateWorkItemForPrd = jest.fn();
+const mockUploadAttachment = jest.fn();
+const mockAddAttachmentToWorkItem = jest.fn();
+const mockAddDependencyLinks = jest.fn();
+const mockCreateTestCaseWorkItem = jest.fn();
+
+jest.mock('../services/azureDevOps', () => ({
+  AzureDevOpsService: jest.fn().mockImplementation(() => ({
+    createWorkItemForPrd: mockCreateWorkItemForPrd,
+    uploadAttachment: mockUploadAttachment,
+    addAttachmentToWorkItem: mockAddAttachmentToWorkItem,
+    addDependencyLinks: mockAddDependencyLinks,
+    createTestCaseWorkItem: mockCreateTestCaseWorkItem,
+  })),
+}));
+
+jest.mock('../services/designDocService', () => ({
+  listDesignDocs: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../services/designPrototypeService', () => ({
+  extractFeatures: jest.fn().mockReturnValue([]),
+}));
+
 import {
   createPrd,
   listPrds,
@@ -137,6 +161,7 @@ import {
   triggerFixPrdValidation,
   acceptFixPrdValidation,
   revertPrdSection,
+  createPrdAdoWorkItems,
 } from '../services/prdService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -199,6 +224,14 @@ const {
 } = jest.requireMock('../services/documentValidationService') as {
   autoStartDocumentValidation: jest.Mock;
   cancelDocumentValidation: jest.Mock;
+};
+
+const { listDesignDocs: mockListDesignDocs } = jest.requireMock('../services/designDocService') as {
+  listDesignDocs: jest.Mock;
+};
+
+const { extractFeatures: mockExtractFeatures } = jest.requireMock('../services/designPrototypeService') as {
+  extractFeatures: jest.Mock;
 };
 
 const readyTestCase = {
@@ -1334,5 +1367,371 @@ describe('PRD validation lifecycle', () => {
         fixBaseline: null,
       }),
     );
+  });
+});
+
+// ── createPrdAdoWorkItems ──────────────────────────────────────────────────────
+
+describe('createPrdAdoWorkItems', () => {
+  const approvedPrdRow = makePrdRow({ status: 'approved', interviewId: 'interview-1', backlogJson: { epics: [] } });
+
+  const approvedDesignDocSummary = {
+    id: 'doc-1',
+    prdId: 'prd-1',
+    project: 'proj-alpha',
+    chatThreadId: null,
+    designPrototypeId: null,
+    featureIndex: null,
+    authorId: 'user-1',
+    title: 'Feature Alpha',
+    status: 'approved',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+
+  const fullDesignDocRow = {
+    id: 'doc-1',
+    prdId: 'prd-1',
+    project: 'proj-alpha',
+    chatThreadId: null,
+    designPrototypeId: null,
+    featureIndex: 0,
+    docAssistantThreadId: null,
+    validationThreadId: null,
+    validationScore: null,
+    validationScorecard: null,
+    validationReportMd: null,
+    validationPhase: null,
+    fixBaseline: null,
+    authorId: 'user-1',
+    title: 'Feature Alpha',
+    model: null,
+    designContent: '# Design',
+    techSpecContent: '# Tech Spec',
+    assumptionsContent: '# Assumptions',
+    proposedDesignContent: null,
+    proposedTechSpecContent: null,
+    proposedAssumptionsContent: null,
+    fixCommentId: null,
+    status: 'approved',
+    reviewerId: null,
+    reviewComment: null,
+    reviewedAt: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+
+  const makeAdoRequest = (overrides: Record<string, any> = {}) => ({
+    project: 'TestProject',
+    areaPath: 'TestProject\\TestArea',
+    selectedItems: {
+      epics: [
+        {
+          title: 'Epic One',
+          features: [
+            {
+              title: 'Feature Alpha',
+              items: [
+                { id: 'pbi-1', title: 'PBI One', type: 'PBI' as const },
+                { id: 'tbi-1', title: 'TBI One', type: 'TBI' as const },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    ...overrides,
+  });
+
+  function setupSelectChainSequence(responses: unknown[][]) {
+    let callCount = 0;
+    mockDb.select.mockImplementation(() => {
+      const data = responses[callCount] ?? [];
+      callCount += 1;
+      return makeSelectChain(data);
+    });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateWorkItemForPrd.mockResolvedValue({ id: 100, url: 'https://ado/100' });
+    mockUploadAttachment.mockResolvedValue({ url: 'https://ado/attachments/1' });
+    mockAddAttachmentToWorkItem.mockResolvedValue(undefined);
+    mockAddDependencyLinks.mockResolvedValue(undefined);
+    mockCreateTestCaseWorkItem.mockResolvedValue({ id: 200, url: 'https://ado/200' });
+    mockListDesignDocs.mockResolvedValue([approvedDesignDocSummary]);
+    mockExtractFeatures.mockReturnValue([{ title: 'Feature Alpha' }]);
+    mockGetTestCases.mockResolvedValue({ testCasesJson: null });
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+  });
+
+  function setupDbForCreateAdo(interviewOverrides: Record<string, any> = {}, userEmail = 'owner@example.com') {
+    // Sequence: getPrd (1 select), fullDesignDocs (1 select), interview (1 select),
+    //   prdOwnerId via getPrdOwnerId (1 select), resolveOwnerEmail x2 (2 selects),
+    //   qaReviewer email (1 select).
+    // We use a queue-style mock that returns responses in order.
+    const prdSelectData = [{ prd: approvedPrdRow, reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: 'owner-oid', prdOwnerDisplayName: null }];
+    const fullDocsData = [fullDesignDocRow];
+    const interviewData = [{ designDocOwnerId: 'doc-owner-oid', testCaseApproverIds: ['qa-oid'], ...interviewOverrides }];
+    const prdOwnerOidData = [{ prdOwnerId: 'owner-oid' }];
+    const prdOwnerEmailData = [{ email: userEmail }];
+    const docOwnerEmailData = [{ email: 'docowner@example.com' }];
+    const qaEmailData = [{ email: 'qa@example.com' }];
+
+    const responses = [
+      prdSelectData,    // getPrd select
+      fullDocsData,     // designDocs full content select
+      interviewData,    // interview owner select
+      prdOwnerOidData,  // getPrdOwnerId select
+      prdOwnerEmailData, // resolveOwnerEmail(prdOwnerOid)
+      docOwnerEmailData, // resolveOwnerEmail(designDocOwnerId)
+      qaEmailData,       // resolveOwnerEmail(qaReviewerOid)
+    ];
+
+    setupSelectChainSequence(responses);
+  }
+
+  it('throws conflict when PRD is not approved', async () => {
+    const draftPrdRow = makePrdRow({ status: 'draft' });
+    mockDb.select.mockReturnValue(makeSelectChain([{
+      prd: draftPrdRow,
+      reviewerDisplayName: null,
+      authorDisplayName: null,
+      prdOwnerId: null,
+      prdOwnerDisplayName: null,
+    }]));
+
+    await expect(createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest())).rejects.toThrow(
+      'PRD must be approved before creating ADO work items',
+    );
+  });
+
+  it('throws 422 when no approved design docs exist', async () => {
+    mockDb.select.mockReturnValue(makeSelectChain([{
+      prd: approvedPrdRow,
+      reviewerDisplayName: null,
+      authorDisplayName: null,
+      prdOwnerId: null,
+      prdOwnerDisplayName: null,
+    }]));
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await expect(createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest())).rejects.toThrow(
+      'At least one approved design doc is required',
+    );
+  });
+
+  it('calls createWorkItemForPrd with type Technical Backlog Item for TBI items', async () => {
+    setupDbForCreateAdo();
+    let callIndex = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      callIndex += 1;
+      return Promise.resolve({ id: 100 + callIndex, url: `https://ado/${100 + callIndex}` });
+    });
+
+    const result = await createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest());
+
+    const tbiCall = mockCreateWorkItemForPrd.mock.calls.find((c: any[]) => c[0].type === 'Technical Backlog Item');
+    expect(tbiCall).toBeDefined();
+    expect(tbiCall[0]).toMatchObject({ type: 'Technical Backlog Item', title: 'TBI One' });
+
+    expect(result.created.tasks).toHaveLength(1);
+    expect(result.created.tasks[0].title).toBe('TBI One');
+  });
+
+  it('assigns prdOwnerEmail to Epic and designDocOwnerEmail to Feature/PBI/TBI', async () => {
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    await createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest());
+
+    const epicCall = mockCreateWorkItemForPrd.mock.calls.find((c: any[]) => c[0].type === 'Epic');
+    expect(epicCall[0].assignedTo).toBe('owner@example.com');
+
+    const featureCall = mockCreateWorkItemForPrd.mock.calls.find((c: any[]) => c[0].type === 'Feature');
+    expect(featureCall[0].assignedTo).toBe('docowner@example.com');
+
+    const pbiCall = mockCreateWorkItemForPrd.mock.calls.find((c: any[]) => c[0].type === 'Product Backlog Item');
+    expect(pbiCall[0].assignedTo).toBe('docowner@example.com');
+
+    const tbiCall = mockCreateWorkItemForPrd.mock.calls.find((c: any[]) => c[0].type === 'Technical Backlog Item');
+    expect(tbiCall[0].assignedTo).toBe('docowner@example.com');
+  });
+
+  it('uploads and attaches design doc files to the Feature ADO item', async () => {
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    await createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest());
+
+    const uploadedNames = mockUploadAttachment.mock.calls.map((c: any[]) => c[0]);
+    expect(uploadedNames).toContain('design.md');
+    expect(uploadedNames).toContain('tech-spec.md');
+    expect(uploadedNames).toContain('assumptions.md');
+    expect(mockAddAttachmentToWorkItem).toHaveBeenCalledTimes(3);
+  });
+
+  it('matches design doc by designDocId when stamped on feature', async () => {
+    const req = makeAdoRequest();
+    (req.selectedItems.epics[0].features[0] as any).designDocId = 'doc-1';
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    await createPrdAdoWorkItems('prd-1', 'user-1', req);
+
+    expect(mockUploadAttachment).toHaveBeenCalled();
+    expect(mockAddAttachmentToWorkItem).toHaveBeenCalled();
+  });
+
+  it('calls addDependencyLinks in second pass when dependsOn is set', async () => {
+    const reqWithDeps = makeAdoRequest();
+    (reqWithDeps.selectedItems.epics[0].features[0].items[0] as any).dependsOn = ['TBI One'];
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    await createPrdAdoWorkItems('prd-1', 'user-1', reqWithDeps);
+
+    expect(mockAddDependencyLinks).toHaveBeenCalled();
+    const [, predecessorIds] = mockAddDependencyLinks.mock.calls[0];
+    expect(predecessorIds.length).toBeGreaterThan(0);
+  });
+
+  it('returns dependencyGraph with resolved predecessorAdoIds', async () => {
+    const reqWithDeps = makeAdoRequest();
+    (reqWithDeps.selectedItems.epics[0].features[0].items[0] as any).dependsOn = ['TBI One'];
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    const result = await createPrdAdoWorkItems('prd-1', 'user-1', reqWithDeps);
+
+    expect(result.dependencyGraph).toBeDefined();
+    expect(result.dependencyGraph!.length).toBeGreaterThan(0);
+
+    const pbiNode = result.dependencyGraph!.find(n => n.type === 'PBI');
+    expect(pbiNode).toBeDefined();
+    expect(pbiNode!.predecessorAdoIds).toEqual([104]);
+
+    const tbiNode = result.dependencyGraph!.find(n => n.type === 'TBI');
+    expect(tbiNode).toBeDefined();
+    expect(tbiNode!.predecessorAdoIds).toEqual([]);
+
+    expect(result.created.pbis[0].dependsOn).toEqual(['TBI One']);
+    expect(result.created.pbis[0].dependsOnAdoIds).toEqual([104]);
+  });
+
+  it('resolves cross-type dependsOn by backlog ID (TBI→TBI, PBI→TBI)', async () => {
+    const req = {
+      project: 'TestProject',
+      areaPath: 'TestProject\\TestArea',
+      selectedItems: {
+        epics: [{
+          title: 'Epic One',
+          features: [{
+            title: 'Feature Alpha',
+            items: [
+              { id: 'tbi-002', title: 'Setup Infra', type: 'TBI' as const },
+              { id: 'tbi-001', title: 'Build API', type: 'TBI' as const, dependsOn: ['tbi-002'] },
+              { id: 'tbi-003', title: 'Add Logging', type: 'TBI' as const, dependsOn: ['tbi-002'] },
+              { id: 'pbi-001', title: 'Login Page', type: 'PBI' as const, dependsOn: ['tbi-003'] },
+            ],
+          }],
+        }],
+      },
+    };
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 200 + idx, url: `https://ado/${200 + idx}` });
+    });
+
+    const result = await createPrdAdoWorkItems('prd-1', 'user-1', req);
+
+    // Epic=201, Feature=202, tbi-002=203, tbi-001=204, tbi-003=205, pbi-001=206
+    expect(mockAddDependencyLinks).toHaveBeenCalledTimes(3);
+
+    // tbi-001 depends on tbi-002 (ADO 203)
+    const tbi001Call = mockAddDependencyLinks.mock.calls.find((c: any[]) => c[0] === 204);
+    expect(tbi001Call).toBeDefined();
+    expect(tbi001Call![1]).toEqual([203]);
+
+    // tbi-003 depends on tbi-002 (ADO 203)
+    const tbi003Call = mockAddDependencyLinks.mock.calls.find((c: any[]) => c[0] === 205);
+    expect(tbi003Call).toBeDefined();
+    expect(tbi003Call![1]).toEqual([203]);
+
+    // pbi-001 depends on tbi-003 (ADO 205)
+    const pbi001Call = mockAddDependencyLinks.mock.calls.find((c: any[]) => c[0] === 206);
+    expect(pbi001Call).toBeDefined();
+    expect(pbi001Call![1]).toEqual([205]);
+
+    // Dependency graph
+    const graph = result.dependencyGraph!;
+    const infraNode = graph.find(n => n.title === 'Setup Infra');
+    expect(infraNode!.predecessorAdoIds).toEqual([]);
+
+    const buildApiNode = graph.find(n => n.title === 'Build API');
+    expect(buildApiNode!.predecessorAdoIds).toEqual([203]);
+
+    const loggingNode = graph.find(n => n.title === 'Add Logging');
+    expect(loggingNode!.predecessorAdoIds).toEqual([203]);
+
+    const loginNode = graph.find(n => n.title === 'Login Page');
+    expect(loginNode!.predecessorAdoIds).toEqual([205]);
+  });
+
+  it('creates ADO test cases for PBIs that appear in testCasesJson', async () => {
+    mockGetTestCases.mockResolvedValue({
+      testCasesJson: {
+        suites: [
+          {
+            pbiId: 'pbi-1',
+            testCases: [
+              { title: 'TC: Should login', steps: ['Open login page', 'Enter credentials'] },
+            ],
+          },
+        ],
+      },
+    });
+    setupDbForCreateAdo();
+    let idx = 0;
+    mockCreateWorkItemForPrd.mockImplementation(() => {
+      idx += 1;
+      return Promise.resolve({ id: 100 + idx, url: `https://ado/${100 + idx}` });
+    });
+
+    const result = await createPrdAdoWorkItems('prd-1', 'user-1', makeAdoRequest());
+
+    expect(mockCreateTestCaseWorkItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'TC: Should login',
+        assignedTo: 'qa@example.com',
+      }),
+    );
+    expect(result.created.testCases).toHaveLength(1);
+    expect(result.created.testCases[0].title).toBe('TC: Should login');
   });
 });

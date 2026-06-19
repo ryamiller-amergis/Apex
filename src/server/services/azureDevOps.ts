@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
@@ -5233,6 +5234,8 @@ export class AzureDevOpsService {
   /**
    * Create a single work item from a PRD-generated spec.
    * Optionally links to a parent work item and/or a PRD wiki page URL.
+   * If `assignedTo` is provided and ADO rejects the identity, the call is
+   * retried without the assignee field (a warning is logged).
    */
   async createWorkItemForPrd(spec: {
     type: string;
@@ -5244,78 +5247,96 @@ export class AzureDevOpsService {
     predecessorIds?: number[];
     prdUrl?: string;
     tags?: string[];
+    assignedTo?: string;
   }): Promise<{ id: number; url: string }> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
       const orgUrl = this.organization.replace(/\/$/, '');
 
-      const patch: any[] = [
-        { op: 'add', path: '/fields/System.Title', value: spec.title },
-      ];
+      const buildPatch = (includeAssignedTo: boolean): any[] => {
+        const patch: any[] = [
+          { op: 'add', path: '/fields/System.Title', value: spec.title },
+        ];
 
-      if (this.areaPath) {
-        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
-      }
-
-      if (spec.description) {
-        patch.push({ op: 'add', path: '/fields/System.Description', value: spec.description });
-      }
-
-      if (spec.acceptanceCriteriaHtml) {
-        patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
-      }
-
-      if (spec.priority) {
-        const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4, 'Must Have': 1, 'Should Have': 2, 'Could Have': 3, "Won't Have": 4 };
-        const numericPriority = priorityMap[spec.priority];
-        if (numericPriority) {
-          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: numericPriority });
+        if (this.areaPath) {
+          patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
         }
-      }
 
-      if (spec.tags && spec.tags.length > 0) {
-        patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
-      }
+        if (spec.description) {
+          patch.push({ op: 'add', path: '/fields/System.Description', value: spec.description });
+        }
 
-      if (spec.parentId) {
-        patch.push({
-          op: 'add',
-          path: '/relations/-',
-          value: {
-            rel: 'System.LinkTypes.Hierarchy-Reverse',
-            url: `${orgUrl}/_apis/wit/workItems/${spec.parentId}`,
-          },
-        });
-      }
+        if (spec.acceptanceCriteriaHtml) {
+          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
+        }
 
-      if (spec.predecessorIds && spec.predecessorIds.length > 0) {
-        const orgUrl = this.organization.replace(/\/$/, '');
-        for (const predId of spec.predecessorIds) {
+        if (spec.priority) {
+          const priorityMap: Record<string, number> = { Critical: 1, High: 2, Medium: 3, Low: 4, 'Must Have': 1, 'Should Have': 2, 'Could Have': 3, "Won't Have": 4 };
+          const numericPriority = priorityMap[spec.priority];
+          if (numericPriority) {
+            patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: numericPriority });
+          }
+        }
+
+        if (spec.tags && spec.tags.length > 0) {
+          patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
+        }
+
+        if (includeAssignedTo && spec.assignedTo) {
+          patch.push({ op: 'add', path: '/fields/System.AssignedTo', value: spec.assignedTo });
+        }
+
+        if (spec.parentId) {
           patch.push({
             op: 'add',
             path: '/relations/-',
             value: {
-              rel: 'System.LinkTypes.Dependency-Reverse',
-              url: `${orgUrl}/_apis/wit/workItems/${predId}`,
-              attributes: { comment: 'Predecessor' },
+              rel: 'System.LinkTypes.Hierarchy-Reverse',
+              url: `${orgUrl}/_apis/wit/workItems/${spec.parentId}`,
             },
           });
         }
-      }
 
-      if (spec.prdUrl) {
-        patch.push({
-          op: 'add',
-          path: '/relations/-',
-          value: {
-            rel: 'Hyperlink',
-            url: spec.prdUrl,
-            attributes: { comment: 'PRD' },
-          },
-        });
-      }
+        if (spec.predecessorIds && spec.predecessorIds.length > 0) {
+          for (const predId of spec.predecessorIds) {
+            patch.push({
+              op: 'add',
+              path: '/relations/-',
+              value: {
+                rel: 'System.LinkTypes.Dependency-Reverse',
+                url: `${orgUrl}/_apis/wit/workItems/${predId}`,
+                attributes: { comment: 'Predecessor' },
+              },
+            });
+          }
+        }
 
-      const wi = await witApi.createWorkItem({}, patch, this.project, spec.type);
+        if (spec.prdUrl) {
+          patch.push({
+            op: 'add',
+            path: '/relations/-',
+            value: {
+              rel: 'Hyperlink',
+              url: spec.prdUrl,
+              attributes: { comment: 'PRD' },
+            },
+          });
+        }
+
+        return patch;
+      };
+
+      let wi: any;
+      try {
+        wi = await witApi.createWorkItem({}, buildPatch(true), this.project, spec.type);
+      } catch (err: any) {
+        if (spec.assignedTo && (err?.status === 400 || /identity/i.test(String(err?.message)))) {
+          console.warn(`[ADO] createWorkItemForPrd: identity "${spec.assignedTo}" rejected, retrying without assignee. Error: ${err?.message}`);
+          wi = await witApi.createWorkItem({}, buildPatch(false), this.project, spec.type);
+        } else {
+          throw err;
+        }
+      }
 
       if (!wi?.id) throw new Error(`Failed to create ${spec.type} "${spec.title}"`);
 
@@ -5324,6 +5345,130 @@ export class AzureDevOpsService {
         url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
       };
     });
+  }
+
+  /**
+   * Upload a text/binary attachment to ADO and return its URL.
+   */
+  async uploadAttachment(fileName: string, content: Buffer | string): Promise<{ url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const buffer = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+    const stream = Readable.from(buffer);
+    const result = await witApi.createAttachment(
+      {},
+      stream,
+      fileName,
+      'Simple',
+      this.project,
+    );
+    if (!result?.url) throw new Error(`Failed to upload attachment "${fileName}"`);
+    return { url: result.url };
+  }
+
+  /**
+   * Attach an already-uploaded file URL to an ADO work item.
+   */
+  async addAttachmentToWorkItem(workItemId: number, attachmentUrl: string, comment: string): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const patch = [
+      {
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'AttachedFile',
+          url: attachmentUrl,
+          attributes: { comment },
+        },
+      },
+    ];
+    await witApi.updateWorkItem({}, patch, workItemId, this.project);
+  }
+
+  /**
+   * Add predecessor (Dependency-Reverse) links to a work item in a single patch call.
+   */
+  async addDependencyLinks(workItemId: number, predecessorIds: number[]): Promise<void> {
+    if (predecessorIds.length === 0) return;
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const patch = predecessorIds.map(predId => ({
+      op: 'add',
+      path: '/relations/-',
+      value: {
+        rel: 'System.LinkTypes.Dependency-Reverse',
+        url: `${orgUrl}/_apis/wit/workItems/${predId}`,
+        attributes: { comment: 'Predecessor' },
+      },
+    }));
+    await witApi.updateWorkItem({}, patch, workItemId, this.project);
+  }
+
+  /**
+   * Create a Test Case work item linked as a child under `parentId`.
+   * Falls back to TestedBy-Reverse if hierarchy link is rejected.
+   */
+  async createTestCaseWorkItem(spec: {
+    title: string;
+    stepsHtml: string;
+    parentId: number;
+    assignedTo?: string;
+  }): Promise<{ id: number; url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+
+    const buildPatch = (linkRel: string, includeAssignedTo: boolean): any[] => {
+      const patch: any[] = [
+        { op: 'add', path: '/fields/System.Title', value: spec.title },
+      ];
+      if (this.areaPath) {
+        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+      }
+      if (spec.stepsHtml) {
+        patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml });
+      }
+      if (includeAssignedTo && spec.assignedTo) {
+        patch.push({ op: 'add', path: '/fields/System.AssignedTo', value: spec.assignedTo });
+      }
+      patch.push({
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: linkRel,
+          url: `${orgUrl}/_apis/wit/workItems/${spec.parentId}`,
+          attributes: { comment: 'Parent PBI' },
+        },
+      });
+      return patch;
+    };
+
+    let wi: any;
+    try {
+      wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', true), this.project, 'Test Case');
+    } catch (firstErr: any) {
+      if (firstErr?.status === 400 || /identity/i.test(String(firstErr?.message))) {
+        try {
+          wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', false), this.project, 'Test Case');
+        } catch (noAssigneeErr: any) {
+          if (noAssigneeErr?.status === 400) {
+            console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
+            wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', false), this.project, 'Test Case');
+          } else {
+            throw noAssigneeErr;
+          }
+        }
+      } else if (firstErr?.status === 400) {
+        console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
+        wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', true), this.project, 'Test Case');
+      } else {
+        throw firstErr;
+      }
+    }
+
+    if (!wi?.id) throw new Error(`Failed to create Test Case "${spec.title}"`);
+    return {
+      id: wi.id,
+      url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
+    };
   }
 
   /**

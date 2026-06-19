@@ -54,7 +54,6 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   prds: many(prds),
   testCases: many(testCases),
   designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
-  designDocsAsQa: many(designDocs, { relationName: 'designDocQaChatThread' }),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -302,7 +301,8 @@ export const designDocs = pgTable('design_docs', {
   prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
   project: text('project').notNull(),
   chatThreadId: uuid('chat_thread_id'),
-  qaChatThreadId: uuid('qa_chat_thread_id'),
+  designPrototypeId: uuid('design_prototype_id').references(() => designPrototypes.id, { onDelete: 'set null' }),
+  featureIndex: integer('feature_index'),
   docAssistantThreadId: uuid('doc_assistant_thread_id'),
   validationThreadId: uuid('validation_thread_id'),
   validationScore: integer('validation_score'),
@@ -393,15 +393,14 @@ export const designDocsRelations = relations(designDocs, ({ one }) => ({
     fields: [designDocs.chatThreadId],
     references: [chatThreads.id],
   }),
-  qaChatThread: one(chatThreads, {
-    relationName: 'designDocQaChatThread',
-    fields: [designDocs.qaChatThreadId],
-    references: [chatThreads.id],
-  }),
   docAssistantThread: one(chatThreads, {
     relationName: 'designDocAssistantThread',
     fields: [designDocs.docAssistantThreadId],
     references: [chatThreads.id],
+  }),
+  designPrototype: one(designPrototypes, {
+    fields: [designDocs.designPrototypeId],
+    references: [designPrototypes.id],
   }),
 }));
 
@@ -416,14 +415,12 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
   designDocSkillPath: text('design_doc_skill_path'),
-  designDocQaSkillPath: text('design_doc_qa_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   designPrototypeSkillPath: text('design_prototype_skill_path'),
   testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
   designDocModel: text('design_doc_model'),
-  designDocQaModel: text('design_doc_qa_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
   designPrototypeModel: text('design_prototype_model'),
   testCaseModel: text('test_case_model'),
@@ -686,6 +683,7 @@ export const designPrototypesRelations = relations(designPrototypes, ({ one, man
     references: [prds.id],
   }),
   comments: many(designPrototypeComments),
+  designDocs: many(designDocs),
 }));
 
 export const designPrototypeCommentsRelations = relations(designPrototypeComments, ({ one }) => ({
