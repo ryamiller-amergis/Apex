@@ -45,6 +45,8 @@ interface Feature {
   affectedPersonas?: string[];
   outOfScope?: string[];
   dependencies?: string[];
+  designDocId?: string;
+  designPrototypeId?: string;
   items?: BacklogItem[];
   [key: string]: unknown;
 }
@@ -166,7 +168,8 @@ function joinPath(parent: string | undefined, segment: string): string {
 /* ── Field configuration ─────────────────────────────────────────────────── */
 
 const SKIP_FIELDS = new Set([
-  'features', 'items', 'adoWorkItemId', 'adoWorkItemUrl',
+  'features', 'items', 'adoWorkItemId', 'adoWorkItemUrl', 'dependsOnAdoIds',
+  'designDocId', 'designPrototypeId',
   'featureFlag', 'uiMock', 'uiSurfacePlan',
   'businessClarifications', 'uiUxClarifications',
   'clarificationNeeded', 'nonFunctionalRequirements',

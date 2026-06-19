@@ -81,6 +81,8 @@ interface Feature {
   dependencies?: string[];
   featureFlag?: { name: string };
   items?: BacklogItem[];
+  designDocId?: string;
+  designPrototypeId?: string;
   adoWorkItemId?: number;
   adoWorkItemUrl?: string;
   /** Route of an existing MaxView page this feature extends (enables EXTEND-mode prototypes). */

@@ -27,7 +27,6 @@ import {
   useReviewDesignDoc,
   useDeleteDesignDoc,
   useSyncDesignDoc,
-  useGenerateDesignDoc,
   useReopenPrd,
   useActiveUsers,
   usePrdValidationReport,
@@ -1132,29 +1131,7 @@ describe('useSyncDesignDoc', () => {
   });
 });
 
-// ── useGenerateDesignDoc ──────────────────────────────────────────────────────
-
-describe('useGenerateDesignDoc', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('POSTs to /api/interviews/design-docs/:id/generate', async () => {
-    mockFetchOk({ ok: true });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useGenerateDesignDoc(), { wrapper });
-
-    await act(async () => {
-      result.current.mutate('dd-1');
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/interviews/design-docs/dd-1/generate',
-      expect.objectContaining({ method: 'POST' }),
-    );
-  });
-});
+// useGenerateDesignDoc removed — Q&A phase removed
 
 // ── useGenerateTestCases ──────────────────────────────────────────────────────
 

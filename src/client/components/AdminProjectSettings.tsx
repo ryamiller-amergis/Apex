@@ -255,7 +255,6 @@ const SKILL_FIELDS = [
   { key: 'prdSkillPath' as const, label: 'PRD Skill', desc: 'Generates the product requirements document', emptyLabel: 'None (use default)' },
   { key: 'designPrototypeSkillPath' as const, label: 'Design Prototype Skill', desc: 'Guides HTML prototype generation from approved requirements', emptyLabel: 'None (use default)' },
   { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
-  { key: 'designDocQaSkillPath' as const, label: 'Design Doc Q&A Skill', desc: 'Runs the Q&A review phase on design docs', emptyLabel: 'None (skip Q&A phase)' },
   { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
   { key: 'testCaseSkillPath' as const, label: 'Test Case Skill', desc: 'Generates QA test cases after PRD generation', emptyLabel: 'None (skip test-case generation)' },
   { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
@@ -266,7 +265,6 @@ const MODEL_FIELDS = [
   { key: 'interviewModel' as const, label: 'Interview Model' },
   { key: 'prdModel' as const, label: 'PRD Model' },
   { key: 'designDocModel' as const, label: 'Design Doc Model' },
-  { key: 'designDocQaModel' as const, label: 'Design Doc Q&A Model' },
   { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
   { key: 'testCaseModel' as const, label: 'Test Case Model' },
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
@@ -428,7 +426,6 @@ interface EditState {
   interviewSkillPath: string;
   prdSkillPath: string;
   designDocSkillPath: string;
-  designDocQaSkillPath: string;
   designDocAssistantSkillPath: string;
   designPrototypeSkillPath: string;
   testCaseSkillPath: string;
@@ -437,7 +434,6 @@ interface EditState {
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
-  designDocQaModel: string;
   designDocAssistantModel: string;
   designPrototypeModel: string;
   testCaseModel: string;
@@ -463,9 +459,9 @@ interface EditState {
 const emptyEdit = (): EditState => ({
   project: '', skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
-  designDocQaSkillPath: '', designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
+  designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
-  designDocQaModel: '', designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
+  designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -601,7 +597,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
       designDocSkillPath: config.designDocSkillPath ?? '',
-      designDocQaSkillPath: config.designDocQaSkillPath ?? '',
       designDocAssistantSkillPath: config.designDocAssistantSkillPath ?? '',
       designPrototypeSkillPath: config.designPrototypeSkillPath ?? '',
       testCaseSkillPath: config.testCaseSkillPath ?? '',
@@ -610,7 +605,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
-      designDocQaModel: config.designDocQaModel ?? '',
       designDocAssistantModel: config.designDocAssistantModel ?? '',
       designPrototypeModel: config.designPrototypeModel ?? '',
       testCaseModel: config.testCaseModel ?? '',
@@ -663,7 +657,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           interviewSkillPath: edit.interviewSkillPath || null,
           prdSkillPath: edit.prdSkillPath || null,
           designDocSkillPath: edit.designDocSkillPath || null,
-          designDocQaSkillPath: edit.designDocQaSkillPath || null,
           designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
           designPrototypeSkillPath: edit.designPrototypeSkillPath || null,
           testCaseSkillPath: edit.testCaseSkillPath || null,
@@ -672,7 +665,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           interviewModel: edit.interviewModel || null,
           prdModel: edit.prdModel || null,
           designDocModel: edit.designDocModel || null,
-          designDocQaModel: edit.designDocQaModel || null,
           designDocAssistantModel: edit.designDocAssistantModel || null,
           designPrototypeModel: edit.designPrototypeModel || null,
           testCaseModel: edit.testCaseModel || null,

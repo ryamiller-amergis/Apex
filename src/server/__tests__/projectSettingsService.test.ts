@@ -239,8 +239,6 @@ describe('upsertSkillConfig', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
-      undefined,
       undefined, // designPrototypeSkillPath
       undefined, // designPrototypeModel
       'composer-2',
@@ -302,8 +300,6 @@ describe('upsertSkillConfig', () => {
       undefined, // interviewModel
       undefined, // prdModel
       undefined, // designDocModel
-      undefined, // designDocQaSkillPath
-      undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
       undefined, // designPrototypeSkillPath
@@ -350,8 +346,6 @@ describe('upsertSkillConfig', () => {
       undefined, // interviewModel
       undefined, // prdModel
       undefined, // designDocModel
-      undefined, // designDocQaSkillPath
-      undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
       undefined, // designPrototypeSkillPath
@@ -409,8 +403,6 @@ describe('upsertSkillConfig', () => {
       undefined, // interviewModel
       undefined, // prdModel
       undefined, // designDocModel
-      undefined, // designDocQaSkillPath
-      undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
       undefined, // designPrototypeSkillPath
@@ -471,8 +463,6 @@ describe('upsertSkillConfig', () => {
       undefined, // interviewModel
       undefined, // prdModel
       undefined, // designDocModel
-      undefined, // designDocQaSkillPath
-      undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
       undefined, // designPrototypeSkillPath

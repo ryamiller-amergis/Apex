@@ -45,7 +45,7 @@ const PRD_FILTERS: { label: string; value: PrdStatus | undefined }[] = [
 
 const DESIGN_DOC_FILTERS: { label: string; value: DesignDocStatus | undefined }[] = [
   { label: 'All', value: undefined },
-  { label: 'Interviewing', value: 'interviewing' },
+  { label: 'Generating', value: 'generating' },
   { label: 'Draft', value: 'draft' },
   { label: 'Pending Review', value: 'pending_review' },
   { label: 'Approved', value: 'approved' },
@@ -91,7 +91,6 @@ function prdReadinessBadgeClass(severity: PrdReadinessSeverity): string {
 
 function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return styles.badgeInterviewing;
     case 'generating': return styles.badgeGenerating;
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
@@ -103,7 +102,6 @@ function designDocBadgeClass(status: DesignDocStatus): string {
 
 function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating…';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
@@ -316,12 +314,15 @@ const DesignDocGroupCard: React.FC<DesignDocGroupCardProps> = ({ prdTitle, docs,
     return counts;
   }, [docs]);
 
-  const summaryParts: string[] = [];
   const approved = statusCounts.get('approved') ?? 0;
+  const total = docs.length;
+  const pct = total > 0 ? Math.round((approved / total) * 100) : 0;
+
+  const summaryParts: string[] = [];
   if (approved > 0) summaryParts.push(`${approved} approved`);
   const pending = statusCounts.get('pending_review') ?? 0;
   if (pending > 0) summaryParts.push(`${pending} pending`);
-  const remaining = docs.length - approved - pending;
+  const remaining = total - approved - pending;
   if (remaining > 0) summaryParts.push(`${remaining} other`);
 
   return (
@@ -342,9 +343,15 @@ const DesignDocGroupCard: React.FC<DesignDocGroupCardProps> = ({ prdTitle, docs,
           <div className={styles.groupCardTitleArea}>
             <h3 className={styles.cardTitle}>{prdTitle}</h3>
             <span className={styles.groupCardMeta}>
-              {docs.length} design doc{docs.length !== 1 ? 's' : ''}
+              {total} design doc{total !== 1 ? 's' : ''}
               {summaryParts.length > 0 && ` \u2014 ${summaryParts.join(', ')}`}
             </span>
+            <div className={styles.groupProgressRow}>
+              <div className={styles.groupProgressBar}>
+                <div className={styles.groupProgressFill} style={{ width: `${pct}%` }} />
+              </div>
+              <span className={styles.groupProgressLabel}>{approved}/{total} approved</span>
+            </div>
           </div>
         </button>
         {canDelete && (

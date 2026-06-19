@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useReducer } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -366,6 +366,7 @@ export const PrdReviewView: React.FC = () => {
   const generatePrototypes = useGeneratePrototypesForPrd();
   const createDesignDoc = useCreateDesignDoc();
   const { data: testCaseRecord } = usePrdTestCases(id);
+  const prevTestCaseStatusRef = useRef<string | undefined>(undefined);
   const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
@@ -805,6 +806,17 @@ export const PrdReviewView: React.FC = () => {
     }, 5_000);
     return () => window.clearInterval(interval);
   }, [id, prd?.fixBaseline, prdFixFlow.phase, queryClient]);
+
+  // When test case generation finishes, immediately refetch the PRD to pick up
+  // any server-side status transition (e.g. draft → validating when auto-validation kicks off).
+  useEffect(() => {
+    const prev = prevTestCaseStatusRef.current;
+    const curr = testCaseRecord?.status;
+    prevTestCaseStatusRef.current = curr;
+    if (prev === 'generating' && curr !== 'generating' && id) {
+      void queryClient.invalidateQueries({ queryKey: ['prd', id] });
+    }
+  }, [testCaseRecord?.status, id, queryClient]);
 
   useEffect(() => {
     if (!prd || prd.status !== 'approved' || !prd.backlogJson) return;
@@ -2244,10 +2256,9 @@ export const PrdReviewView: React.FC = () => {
           prd={prd}
           isPending={createAdoItems.isPending}
           designDocs={relatedDesignDocs ?? []}
-          onSubmit={async (req) => {
-            await createAdoItems.mutateAsync({ prdId: prd.id, ...req });
-            setShowAdoModal(false);
-          }}
+          onSubmit={async (req) =>
+            createAdoItems.mutateAsync({ prdId: prd.id, ...req })
+          }
           onCancel={() => setShowAdoModal(false)}
         />
       )}

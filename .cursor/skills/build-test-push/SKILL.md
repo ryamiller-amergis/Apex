@@ -1,19 +1,42 @@
 ---
 name: build-test-push
-description: Run build, run impacted tests, auto-fix failures, then git add/commit/push, and optionally open a GitHub PR. Use when the user says "build test push", "ship it", "run the pipeline", "build and push", "open a PR", or wants to validate changes, commit them, and create a pull request.
+description: Run build, run impacted tests, auto-fix failures, create a feature branch when on main, git add/commit/push, and open a GitHub PR. Use when the user says "build test push", "ship it", "run the pipeline", "build and push", "open a PR", or wants to validate changes, commit them, and create a pull request.
 disable-model-invocation: true
 ---
 
-# Build → Test → Fix → Push
+# Build → Test → Fix → Push → PR
 
-Full pipeline: build, run tests scoped to changed files, auto-fix failures, then commit and push.
+Full pipeline: ensure a feature branch, build, run tests, auto-fix failures, commit, push, and open a pull request.
 
-## Step 0 — Pull latest from main and merge into current branch
+## Step 0a — Ensure a feature branch (before build/commit)
 
-First, capture the current branch name and fetch the latest from the remote:
+Capture the current branch and whether there is work to ship:
 
 ```bash
 git branch --show-current
+git status --porcelain
+```
+
+**If the current branch is `main` or `master` and there are uncommitted changes** (or the user invoked this skill to ship local work), **create and switch to a feature branch before proceeding**:
+
+```bash
+git checkout -b <branch-name>
+```
+
+**Branch naming:**
+- Use `feat/`, `fix/`, `refactor/`, etc. matching the conventional commit type.
+- Derive a short kebab-case slug from the primary change (e.g. `feat/model-audit-trail`, `fix/prd-comment-thread`).
+- If the scope is unclear, infer from changed files or the planned commit summary; ask the user only when multiple themes are equally plausible.
+
+**If already on a feature branch** (anything other than `main` / `master`), stay on it and continue.
+
+**Do not commit or push directly to `main` / `master`** as part of this pipeline unless the user explicitly asks to skip branching (e.g. "push straight to main").
+
+## Step 0 — Pull latest from main and merge into current branch
+
+Fetch the latest from the remote:
+
+```bash
 git fetch origin main
 ```
 
@@ -153,20 +176,24 @@ git commit -m "$(cat <<'EOF'
 <your drafted message>
 EOF
 )"
-git push
+git push -u origin HEAD
 ```
+
+Use `git push -u origin HEAD` so a newly created feature branch is tracked on the remote. On later pushes for the same branch, plain `git push` is fine.
 
 If `git push` is rejected (non-fast-forward), run `git pull --rebase` then push again.
 
 ## Step 7 — Create a Pull Request
 
-After a successful push, offer to open a PR. If the user confirms (or already asked for it), run:
+After a successful push, **open a PR** (this skill's default outcome — do not stop at push-only unless the user asked to skip the PR).
+
+First check whether this branch already has an open PR:
 
 ```bash
-gh pr create --fill
+gh pr view --json url,state 2>$null
 ```
 
-`--fill` auto-populates the title and body from the commit messages. The command will open an editor only if no commits exist — otherwise it proceeds immediately.
+(On bash/macOS, omit `2>$null`; use `2>/dev/null` if you need to suppress errors.)
 
 ### If the branch already has an open PR
 
@@ -174,7 +201,17 @@ gh pr create --fill
 gh pr view --web
 ```
 
-Just open the existing PR in the browser instead.
+Open the existing PR in the browser and report its URL.
+
+### If there is no open PR
+
+```bash
+gh pr create --fill --base main
+```
+
+`--fill` auto-populates the title and body from the commit messages. Use `--base main` (or the repo's default branch if not `main`).
+
+Return the PR URL to the user when creation succeeds.
 
 ### Linking to a GitHub Project
 
@@ -210,7 +247,8 @@ When not using `--fill`, draft the body with:
 
 ### Guardrails for PR creation
 
-- Never open a PR from `main` or `master` into itself.
+- Never open a PR from `main` or `master` into itself — Step 0a should have created a feature branch first.
+- If still on `main` / `master` at Step 7, stop and create a feature branch (Step 0a) before pushing or opening a PR.
 - If the remote branch is behind `main`, warn the user before opening the PR.
 - Always confirm the base branch is correct (`gh pr create --base <base-branch>`) — default is the repo's default branch.
 
@@ -219,5 +257,5 @@ When not using `--fill`, draft the body with:
 - Never force-push (`--force`).
 - Never skip hooks (`--no-verify`).
 - Never commit `.env`, `.env.local`, or any secrets file.
-- If on `main` or `master`, warn the user before pushing and ask for explicit confirmation.
+- Do not commit or push to `main` / `master` unless the user explicitly requests it; use Step 0a to branch first.
 - Respect the scope-discipline rule: do not modify config/infrastructure files to make tests pass without asking.

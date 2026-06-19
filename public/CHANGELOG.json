@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.28.0",
+    "date": "2026-06-19",
+    "title": "Per-Feature Design Docs & ADO Export",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design docs now generate automatically when each design prototype is approved, grounded in the interview transcript, PRD, and that feature's prototype HTML"
+      },
+      {
+        "type": "feature",
+        "description": "Create in ADO now exports Technical Backlog Items separately from PBIs, links dependencies between work items, attaches design doc files and prototype HTML to features, and creates ADO test cases from generated QA suites"
+      },
+      {
+        "type": "feature",
+        "description": "The Create in ADO modal shows a results panel after export with created work items, dependency links, and direct links to ADO"
+      },
+      {
+        "type": "improvement",
+        "description": "Removed the Design Doc Q&A interview phase — design docs start generating immediately after prototype approval instead of waiting for a separate Q&A step"
+      },
+      {
+        "type": "improvement",
+        "description": "Design doc groups on the interviews dashboard show an approval progress bar with approved/total counts"
+      },
+      {
+        "type": "improvement",
+        "description": "Backlog features now carry designDocId and designPrototypeId links for reliable matching when gating ADO creation"
+      },
+      {
+        "type": "bugfix",
+        "description": "PRD status now refreshes automatically when test case generation completes so validation transitions appear without a manual reload"
+      }
+    ]
+  },
+  {
     "version": "1.27.0",
     "date": "2026-06-18",
     "title": "AI Model Audit Trail",
