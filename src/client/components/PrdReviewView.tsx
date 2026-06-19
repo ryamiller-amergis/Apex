@@ -1502,105 +1502,103 @@ export const PrdReviewView: React.FC = () => {
         coverage={latestTestCase?.coverageSummary ?? null}
       />
 
-      {prd.status === 'approved' && designPlanResponse?.plan && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            {designPlanResponse.plan.status === 'generating'
-              ? 'A design plan is being generated for this PRD.'
-              : designPlanResponse.plan.status === 'consumed'
-                ? 'The design plan has been used to generate prototypes.'
-                : 'A design plan is ready. Review and edit it, then generate the designs.'}
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => navigate(`/backlog/design-plan/${id}`)}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            View Design Plan →
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' && relatedPrototypes.length > 0 && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            {relatedPrototypes.length === 1
-              ? '1 design prototype was generated for this PRD.'
-              : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}{' '}
-            {relatedPrototypes.filter((p) => p.status === 'approved').length} of{' '}
-            {relatedPrototypes.length} approved.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            View Design Prototypes →
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            No design prototypes exist for this PRD. Generate them to continue the design flow.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => {
-              if (!id) return;
-              generatePrototypes.mutate(id, {
-                onSuccess: () => navigate(`/backlog/design-prototypes/${id}`),
-              });
-            }}
-            disabled={generatePrototypes.isPending}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' &&
-        relatedDesignDocs &&
-        relatedDesignDocs.length > 0 && (
+      <div className={styles.bannerRow}>
+        {prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
-              {relatedDesignDocs.length === 1
-                ? 'A design doc was created from this PRD.'
-                : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
+              {designPlanResponse.plan.status === 'generating'
+                ? 'A design plan is being generated for this PRD.'
+                : designPlanResponse.plan.status === 'consumed'
+                  ? 'The design plan has been used to generate prototypes.'
+                  : 'A design plan is ready. Review and edit it, then generate the designs.'}
             </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => navigate(`/backlog/design-plan/${id}`)}
+              type="button"
+            >
+              View Design Plan →
+            </button>
           </div>
         )}
 
-      {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => {
-              if (!id) return;
-              createDesignDoc.mutate({ prdId: id }, {
-                onSuccess: (data) => {
-                  if (data?.designDocId) {
-                    navigate(`/backlog/design-doc/${data.designDocId}`);
-                  }
-                },
-              });
-            }}
-            disabled={createDesignDoc.isPending}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
-          </button>
-        </div>
-      )}
+        {prd.status === 'approved' && relatedPrototypes.length > 0 && (
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              {relatedPrototypes.length === 1
+                ? '1 design prototype was generated for this PRD.'
+                : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}{' '}
+              {relatedPrototypes.filter((p) => p.status === 'approved').length} of{' '}
+              {relatedPrototypes.length} approved.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
+              type="button"
+            >
+              View Design Prototypes →
+            </button>
+          </div>
+        )}
+
+        {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              No design prototypes exist for this PRD. Generate them to continue the design flow.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => {
+                if (!id) return;
+                generatePrototypes.mutate(id, {
+                  onSuccess: () => navigate(`/backlog/design-prototypes/${id}`),
+                });
+              }}
+              disabled={generatePrototypes.isPending}
+              type="button"
+            >
+              {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
+            </button>
+          </div>
+        )}
+
+        {prd.status === 'approved' &&
+          relatedDesignDocs &&
+          relatedDesignDocs.length > 0 && (
+            <div className={styles.designDocBanner}>
+              <span className={styles.designDocBannerText}>
+                {relatedDesignDocs.length === 1
+                  ? 'A design doc was created from this PRD.'
+                  : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
+              </span>
+            </div>
+          )}
+
+        {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => {
+                if (!id) return;
+                createDesignDoc.mutate({ prdId: id }, {
+                  onSuccess: (data) => {
+                    if (data?.designDocId) {
+                      navigate(`/backlog/design-doc/${data.designDocId}`);
+                    }
+                  },
+                });
+              }}
+              disabled={createDesignDoc.isPending}
+              type="button"
+            >
+              {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
+            </button>
+          </div>
+        )}
+      </div>
 
       {(prd.proposedContent != null || prd.proposedBacklogJson != null) && (
         <ProposedChangesReview
