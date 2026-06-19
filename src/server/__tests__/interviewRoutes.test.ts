@@ -51,8 +51,14 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       prds: { findFirst: jest.fn() },
+      designPlans: { findFirst: jest.fn() },
     },
   },
+}));
+
+jest.mock('../services/designSystemService', () => ({
+  getScreenInventory: jest.fn().mockResolvedValue([]),
+  fetchExistingPageContext: jest.fn().mockResolvedValue(''),
 }));
 
 jest.mock('../middleware/rbac', () => ({
@@ -144,8 +150,17 @@ const {
 };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
-  db: { query: { prds: { findFirst: jest.Mock } } };
+  db: {
+    query: {
+      prds: { findFirst: jest.Mock };
+      designPlans: { findFirst: jest.Mock };
+    };
+  };
 };
+
+const { fetchExistingPageContext: mockFetchExistingPageContext } = jest.requireMock(
+  '../services/designSystemService',
+) as { fetchExistingPageContext: jest.Mock };
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -1497,5 +1512,149 @@ describe('GET /api/interviews/active-users', () => {
     const res = await request(buildApp()).get('/api/interviews/active-users');
 
     expect(res.status).toBe(500);
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/design-docs — enriched freeformContext ──
+
+describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformContext', () => {
+  const approvedPrdWithBacklog = {
+    ...prdSummary,
+    status: 'approved' as const,
+    content: 'PRD content',
+    backlogJson: { features: [{ title: 'Feature A', points: 3 }] },
+  };
+
+  const approvedPrdNoBacklog = {
+    ...prdSummary,
+    status: 'approved' as const,
+    content: 'PRD content',
+    backlogJson: null,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
+    mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockGetSkillConfig.mockResolvedValue(null);
+    mockGetDefaultModel.mockResolvedValue('global-default-model');
+    // Default: no design plan found
+    mockDb.query.designPlans.findFirst.mockResolvedValue(null);
+    mockFetchExistingPageContext.mockResolvedValue('');
+  });
+
+  it('always includes PRD content in freeformContext', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# PRD Content');
+    expect(freeformContext).toContain('PRD content');
+  });
+
+  it('includes backlog JSON in freeformContext when the PRD has a backlog', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdWithBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# Backlog');
+    expect(freeformContext).toContain('"features"');
+  });
+
+  it('omits the backlog section from freeformContext when the PRD has no backlog', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).not.toContain('# Backlog');
+  });
+
+  it('includes design plan features in freeformContext when a plan exists', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'Timecard Dashboard',
+          decision: 'new-page',
+          targetRoute: '/timecard',
+          designBrief: 'A new dashboard page for timecards',
+        },
+      ],
+    });
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# Design Plan');
+    expect(freeformContext).toContain('Timecard Dashboard');
+    expect(freeformContext).toContain('new-page');
+    expect(freeformContext).toContain('/timecard');
+  });
+
+  it('proceeds and returns 201 when design plan lookup fails (graceful degradation)', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(res.status).toBe(201);
+    expect(mockCreateThread).toHaveBeenCalled();
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).not.toContain('# Design Plan');
+  });
+
+  it('always includes existing-code protection rules in freeformContext', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('CRITICAL — Existing Code Protection Rules');
+    expect(freeformContext).toContain('DO NOT modify');
+    expect(freeformContext).toContain('ONLY implement the NEW feature component');
+  });
+
+  it('calls fetchExistingPageContext for update-page features when a plan exists', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'Timecard Entry',
+          decision: 'update-page',
+          targetRoute: '/timecard/entry',
+        },
+      ],
+    });
+    mockFetchExistingPageContext.mockResolvedValue('// Existing React component code');
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockFetchExistingPageContext).toHaveBeenCalledWith('/timecard/entry', 'Timecard Entry');
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('Existing Page Context');
+    expect(freeformContext).toContain('Existing React component code');
+  });
+
+  it('does not call fetchExistingPageContext for new-page features', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'New Dashboard',
+          decision: 'new-page',
+          targetRoute: '/new-dashboard',
+        },
+      ],
+    });
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockFetchExistingPageContext).not.toHaveBeenCalled();
   });
 });
