@@ -323,6 +323,7 @@ export function useCreateInterview() {
       repo: string;
       title?: string;
       chatThreadId: string;
+      model?: string;
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
@@ -402,7 +403,7 @@ export function useCreatePrd() {
   return useMutation<
     CreatePrdResponse,
     Error,
-    { interviewId: string; chatThreadId: string; title?: string }
+    { interviewId: string; chatThreadId: string; title?: string; model?: string }
   >({
     mutationFn: ({ interviewId, ...body }) =>
       apiFetch(`/api/interviews/${interviewId}/prds`, {

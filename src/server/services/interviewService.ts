@@ -22,6 +22,7 @@ export async function createInterview(opts: {
   repo: string;
   title?: string;
   chatThreadId: string;
+  model?: string;
   prdOwnerId?: string;
   designDocOwnerId?: string;
   designPrototypeOwnerId?: string;
@@ -39,6 +40,7 @@ export async function createInterview(opts: {
       title: opts.title ?? 'Untitled Interview',
       project: opts.project,
       repo: opts.repo,
+      model: opts.model ?? null,
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
       designDocOwnerId: opts.designDocOwnerId ?? null,
@@ -160,6 +162,7 @@ export async function listInterviews(
       title: interviews.title,
       project: interviews.project,
       repo: interviews.repo,
+      model: interviews.model,
       status: interviews.status,
       prdOwnerId: interviews.prdOwnerId,
       designDocOwnerId: interviews.designDocOwnerId,
@@ -190,6 +193,7 @@ export async function listInterviews(
     title: row.title,
     project: row.project,
     repo: row.repo,
+    model: row.model ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: prdCountMap.get(row.id) ?? 0,
     prdOwnerId: row.prdOwnerId ?? undefined,
@@ -220,6 +224,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     authorId: p.authorId,
     project: p.project,
     title: p.title,
+    model: p.model ?? undefined,
     status: p.status as PrdStatus,
     reviewerId: p.reviewerId ?? undefined,
     reviewComment: p.reviewComment ?? undefined,
@@ -235,6 +240,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     title: row.title,
     project: row.project,
     repo: row.repo,
+    model: row.model ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: row.prds.length,
     prdOwnerId: row.prdOwnerId ?? undefined,

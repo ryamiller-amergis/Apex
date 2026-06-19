@@ -1797,6 +1797,12 @@ export const DesignDocReviewView: React.FC = () => {
                   </span>
                 </span>
               )}
+              {doc.model && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Model:</span>
+                  <span className={styles.metaValue}>{doc.model}</span>
+                </span>
+              )}
             </div>
             {sourcePrd && (
               <div className={styles.parentLinks}>

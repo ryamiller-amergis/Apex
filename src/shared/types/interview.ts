@@ -8,6 +8,7 @@ export interface InterviewSummary {
   title: string;
   project: string;
   repo: string;
+  model?: string;
   status: InterviewStatus;
   prdCount: number;
   prdOwnerId?: string;
@@ -43,6 +44,7 @@ export interface PrdSummary {
   ownerName?: string;
   project: string;
   title: string;
+  model?: string;
   status: PrdStatus;
   reviewerId?: string;
   reviewerName?: string;
@@ -255,6 +257,7 @@ export interface DesignDocSummary {
   ownerId?: string;
   ownerName?: string;
   title: string;
+  model?: string;
   status: DesignDocStatus;
   reviewerId?: string;
   reviewerName?: string;

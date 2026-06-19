@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.27.0",
+    "date": "2026-06-18",
+    "title": "AI Model Audit Trail",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Interviews, PRDs, design docs, and design prototypes now record which AI model was used for generation and show it in each review view"
+      },
+      {
+        "type": "improvement",
+        "description": "The model selected when starting an interview or generating a PRD is persisted through the workflow, including per-feature design docs split from a parent doc"
+      },
+      {
+        "type": "improvement",
+        "description": "Design prototype generation now stores the resolved Bedrock model (project skill override or default) on each prototype, including retries"
+      }
+    ]
+  },
+  {
     "version": "1.26.0",
     "date": "2026-06-15",
     "title": "Project Access & Release Banner",

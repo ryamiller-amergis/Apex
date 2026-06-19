@@ -119,6 +119,7 @@ export async function createPrd(opts: {
   userId: string;
   chatThreadId: string;
   title?: string;
+  model?: string;
 }): Promise<{ prdId: string; threadId: string }> {
   const [row] = await db
     .insert(prds)
@@ -128,6 +129,7 @@ export async function createPrd(opts: {
       chatThreadId: opts.chatThreadId,
       authorId: opts.userId,
       title: opts.title ?? 'Untitled PRD',
+      model: opts.model ?? null,
       content: '',
       status: 'generating',
     })
@@ -586,6 +588,7 @@ function rowToPrdSummary(
     ownerName: effectiveOwnerName,
     project: row.project,
     title: row.title,
+    model: row.model ?? undefined,
     status: row.status as PrdStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,

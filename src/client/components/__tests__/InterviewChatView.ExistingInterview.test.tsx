@@ -599,6 +599,9 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
           kickoff: expect.objectContaining({ model: 'claude-opus-4-6' }),
         }),
       );
+      expect(mockCreatePrdMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-opus-4-6' }),
+      );
     });
   });
 

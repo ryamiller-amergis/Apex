@@ -92,11 +92,12 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
+    const { project, repo, title, chatThreadId, model, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
       project: string;
       repo: string;
       title?: string;
       chatThreadId: string;
+      model?: string;
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
@@ -112,7 +113,7 @@ router.post('/', requirePermission('interviews:manage'), async (req, res, next) 
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
@@ -445,6 +446,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       userId,
       chatThreadId: thread.id,
       title: prd.title,
+      model,
     });
 
     startDesignDocWatcher(designDocId, thread.id);
@@ -1202,7 +1204,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
 
     await db
       .update(designDocsTable)
-      .set({ chatThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .set({ chatThreadId: thread.id, model, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
     startDesignDocWatcher(req.params.id, thread.id);
@@ -1306,6 +1308,7 @@ router.post('/design-docs/:id/generate', requirePermission('interviews:manage'),
       .update(designDocsTable)
       .set({
         chatThreadId: thread.id,
+        model,
         status: 'generating',
         updatedAt: new Date().toISOString(),
       })
@@ -1977,7 +1980,7 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
 router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { chatThreadId, title } = req.body as { chatThreadId: string; title?: string };
+    const { chatThreadId, title, model } = req.body as { chatThreadId: string; title?: string; model?: string };
 
     if (!chatThreadId) {
       res.status(400).json({ error: 'chatThreadId is required' });
@@ -1996,6 +1999,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       userId,
       chatThreadId,
       title,
+      model,
     });
     startPrdWatcher(result.prdId, chatThreadId);
     res.status(201).json(result);

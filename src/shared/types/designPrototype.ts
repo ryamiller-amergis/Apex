@@ -38,6 +38,7 @@ export interface DesignPrototypeSummary {
   featureIndex: number;
   authorId: string;
   authorName?: string;
+  model?: string;
   status: DesignPrototypeStatus;
   mockVersion: number;
   reviewerId?: string;

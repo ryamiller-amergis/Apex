@@ -334,6 +334,7 @@ const NewInterviewCompose: React.FC = () => {
         repo: resolvedRepoName,
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
+        model,
         prdOwnerId: selections.prdOwnerId,
         designDocOwnerId: selections.designDocOwnerId,
         designPrototypeOwnerId: selections.designPrototypeOwnerId,
@@ -785,6 +786,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         interviewId: id,
         chatThreadId: threadResult.threadId,
         title: interview.title,
+        model: prdModel,
       });
       navigate(`/backlog/prd/${prdResult.prdId}`);
     } catch (err: unknown) {
@@ -867,6 +869,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span>{interview.project}</span>
               <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
+              {interview.model && (
+                <>
+                  <span className={styles.titleMetaSep}>·</span>
+                  <span>Model: {interview.model}</span>
+                </>
+              )}
             </div>
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
               <div className={styles.ownerChips}>

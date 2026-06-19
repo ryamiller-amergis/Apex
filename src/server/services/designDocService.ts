@@ -87,6 +87,7 @@ export async function createDesignDoc(opts: {
   qaChatThreadId?: string;
   title?: string;
   status?: DesignDocStatus;
+  model?: string;
 }): Promise<{ designDocId: string }> {
   const status = opts.status ?? (opts.qaChatThreadId && !opts.chatThreadId ? 'interviewing' : 'generating');
   const [row] = await db
@@ -98,6 +99,7 @@ export async function createDesignDoc(opts: {
       qaChatThreadId: opts.qaChatThreadId ?? null,
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
+      model: opts.model ?? null,
       designContent: '',
       techSpecContent: '',
       assumptionsContent: '',
@@ -412,6 +414,11 @@ export async function syncPerFeatureDesignDocs(
 
   const skillConfig = await getSkillConfig(project);
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+  const seedModelRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.id, seedId),
+    columns: { model: true },
+  });
+  const seedModel = seedModelRow?.model ?? null;
 
   // Load titles already persisted for this PRD so the watcher's early inserts are not duplicated
   const existingRows = await db
@@ -435,6 +442,7 @@ export async function syncPerFeatureDesignDocs(
         chatThreadId: null,
         authorId,
         title,
+        model: seedModel,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
@@ -494,7 +502,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId) {
       clearInterval(interval);
@@ -527,6 +535,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               chatThreadId: null,
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
+              model: seedDoc.model ?? null,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
@@ -616,6 +625,7 @@ function rowToSummary(
     ownerId: effectiveOwnerId,
     ownerName: effectiveOwnerName,
     title: row.title,
+    model: row.model ?? undefined,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,

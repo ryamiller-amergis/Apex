@@ -16,6 +16,11 @@ import type {
   PbiRequirement,
 } from '../../shared/types/designPrototype';
 
+const DEFAULT_DESIGN_PROTOTYPE_MODEL =
+  process.env.BEDROCK_UI_MOCK_MODEL_ID
+  ?? process.env.BEDROCK_MODEL_ID
+  ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+
 type AcceptanceCriterionEntry =
   | string
   | { given?: string; when?: string; then?: string; value?: string; text?: string; scenario?: string };
@@ -191,6 +196,7 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
     featureIndex: row.featureIndex,
     authorId: row.authorId,
     authorName: resolveUserName(row.authorId),
+    model: row.model ?? undefined,
     status: row.status as DesignPrototypeSummary['status'],
     mockVersion: row.mockVersion,
     reviewerId: row.reviewerId ?? undefined,
@@ -330,7 +336,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
 
   const { getSkillConfig } = await import('./projectSettingsService');
   const skillConfig = await getSkillConfig(prd.project);
-  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
+  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? DEFAULT_DESIGN_PROTOTYPE_MODEL;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
   const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
@@ -401,6 +407,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
         featureName: feature.title,
         featureIndex: i,
         authorId: prd.authorId,
+        model: prototypeModel,
         status: 'generating',
       })
       .returning({ id: designPrototypes.id });
@@ -672,13 +679,18 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
 
   const { getSkillConfig } = await import('./projectSettingsService');
   const skillConfig = await getSkillConfig(prd.project);
-  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? undefined;
+  const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? DEFAULT_DESIGN_PROTOTYPE_MODEL;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
   const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
   await db
     .update(designPrototypes)
-    .set({ status: 'generating', generationError: null, updatedAt: new Date().toISOString() })
+    .set({
+      status: 'generating',
+      model: prototypeModel,
+      generationError: null,
+      updatedAt: new Date().toISOString(),
+    })
     .where(eq(designPrototypes.id, prototypeId));
 
   generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
@@ -1148,6 +1160,7 @@ async function triggerDesignDocGeneration(prdId: string): Promise<void> {
       qaChatThreadId: qaThread.id,
       title: prd.title,
       status: 'interviewing',
+      model: qaModel,
     });
   } else {
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
@@ -1168,6 +1181,7 @@ async function triggerDesignDocGeneration(prdId: string): Promise<void> {
       userId: prd.authorId,
       chatThreadId: thread.id,
       title: prd.title,
+      model,
     });
 
     startDesignDocWatcher(designDocId, thread.id);
