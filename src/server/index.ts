@@ -87,7 +87,10 @@ app.get('/api/telemetry-config', (_req, res) => {
 });
 
 // Bot Framework messaging endpoint — Teams sends requests with its own auth, not session cookies
-app.post('/api/messages', (req, res) => handleIncoming(req, res));
+app.post('/api/messages', (req, res) => {
+  console.log('[teams-bot] Incoming POST /api/messages', { type: req.body?.type, from: req.body?.from?.id });
+  handleIncoming(req, res);
+});
 
 // Internal-only API routes: callable by the Cursor agent (running on the user's
 // machine, no browser session cookie) via two paths:

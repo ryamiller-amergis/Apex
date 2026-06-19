@@ -16,7 +16,8 @@ function createBotAdapter(): CloudAdapter {
   const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
     MicrosoftAppId: process.env.TEAMS_BOT_APP_ID ?? '',
     MicrosoftAppPassword: process.env.TEAMS_BOT_APP_PASSWORD ?? '',
-    MicrosoftAppType: 'MultiTenant',
+    MicrosoftAppType: 'SingleTenant',
+    MicrosoftAppTenantId: process.env.AZURE_TENANT_ID ?? '',
   });
 
   const botAuth = new ConfigurationBotFrameworkAuthentication({}, credentialsFactory);
@@ -26,11 +27,13 @@ function createBotAdapter(): CloudAdapter {
 const adapter = createBotAdapter();
 
 export async function handleIncoming(req: Request, res: Response): Promise<void> {
+  try {
   await adapter.process(req, res, async (context: TurnContext) => {
     const activity = context.activity;
 
+    const userOid = activity.from?.aadObjectId;
+
     if (activity.type === 'installationUpdate') {
-      const userOid = activity.from?.aadObjectId;
       if (!userOid) return;
 
       if (activity.action === 'add') {
@@ -50,8 +53,31 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
           .delete(teamsConversationReferences)
           .where(eq(teamsConversationReferences.userOid, userOid));
       }
+    } else if (activity.type === 'message') {
+      console.log('[teams-bot] Message activity from:', { aadObjectId: activity.from?.aadObjectId, fromId: activity.from?.id, fromName: activity.from?.name });
+      if (!userOid) {
+        console.log('[teams-bot] No aadObjectId found — cannot store conversation reference');
+        return;
+      }
+      const ref = TurnContext.getConversationReference(activity) as ConversationReference;
+      await db
+        .insert(teamsConversationReferences)
+        .values({
+          userOid,
+          conversationReference: ref,
+        })
+        .onConflictDoUpdate({
+          target: teamsConversationReferences.userOid,
+          set: { conversationReference: ref },
+        });
     }
   });
+  } catch (err) {
+    console.error('[teamsBotService] Error handling incoming activity:', err);
+    if (!res.headersSent) {
+      res.status(200).end();
+    }
+  }
 }
 
 export async function sendTeamsNotification(
@@ -119,10 +145,12 @@ function buildAdaptiveCard(notification: AppNotification): object {
 
   const actions: object[] = [];
   if (notification.link) {
+    const baseUrl = process.env.AZURE_REDIRECT_URL?.replace('/auth/callback', '') || 'https://app-scrum-dev.azurewebsites.net';
+    const fullUrl = notification.link.startsWith('http') ? notification.link : `${baseUrl}${notification.link}`;
     actions.push({
       type: 'Action.OpenUrl',
       title: 'View',
-      url: notification.link,
+      url: fullUrl,
     });
   }
 
