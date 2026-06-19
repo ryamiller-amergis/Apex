@@ -58,6 +58,27 @@ function notFound(msg: string): Error {
   return err;
 }
 
+function stripPrototypeArtifactsFromTechSpec(content: string): string {
+  let cleaned = content;
+
+  // Remove full HTML document dumps if they leak into generated tech specs.
+  cleaned = cleaned.replace(/<!DOCTYPE\s+html[\s\S]*?<\/html>/gi, '');
+
+  // Remove fenced HTML blocks that appear to be prototype payloads.
+  cleaned = cleaned.replace(/```html[\s\S]*?```/gi, (block) => {
+    if (/NEW_FEATURE|STATE:(?:default|empty|error|loading)|annotation-wrapper|time-entry-table|<body|<html/i.test(block)) {
+      return '';
+    }
+    return block;
+  });
+
+  // Remove prototype-only comment markers in case they appear inline.
+  cleaned = cleaned.replace(/<!--\s*NEW_FEATURE:(?:START|END)\s*-->/gi, '');
+  cleaned = cleaned.replace(/<!--\s*STATE:[a-z_]+:(?:START|END)\s*-->/gi, '');
+
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export async function createDesignDoc(opts: {
   prdId: string;
   project: string;
@@ -168,7 +189,9 @@ export async function updateDesignDocContent(
   };
 
   if (opts.designContent !== undefined) updates.designContent = opts.designContent;
-  if (opts.techSpecContent !== undefined) updates.techSpecContent = opts.techSpecContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.techSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
   if (opts.assumptionsContent !== undefined) updates.assumptionsContent = opts.assumptionsContent;
 
   if (row.status === 'revision_requested') {
@@ -318,7 +341,9 @@ export async function syncDesignDocContent(
   };
 
   if (opts.designContent !== undefined) updates.designContent = opts.designContent;
-  if (opts.techSpecContent !== undefined) updates.techSpecContent = opts.techSpecContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.techSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
   if (opts.assumptionsContent !== undefined) updates.assumptionsContent = opts.assumptionsContent;
   if (opts.finalStatus !== undefined) updates.status = opts.finalStatus;
 
@@ -411,7 +436,7 @@ export async function syncPerFeatureDesignDocs(
         authorId,
         title,
         designContent: feat.design,
-        techSpecContent: feat.techSpec,
+        techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
         status: finalStatus,
       })
@@ -503,7 +528,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
               designContent: feat.design,
-              techSpecContent: feat.techSpec,
+              techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
               status: finalStatus,
             })

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -14,6 +14,7 @@ import {
   useReopenPrototype,
   useAddPrototypeComment,
   useResolvePrototypeComment,
+  useUpdatePrototypeHtml,
 } from '../hooks/useDesignPrototypes';
 import { useDesignDocsByPrd } from '../hooks/useInterviews';
 import { UiMockPreview } from './UiMockPreview';
@@ -25,6 +26,7 @@ import {
 import type { DesignPrototypeSummary, DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import type { UiMock } from '../../shared/types/backlog';
 import DesignTokenInspector from './DesignTokenInspector';
+const BoundaryEditor = lazy(() => import('./BoundaryEditor'));
 import styles from './DesignPrototypeReviewView.module.css';
 
 function badgeClass(status: DesignPrototypeSummary['status']): string {
@@ -62,6 +64,8 @@ const DesignPrototypeReviewView: React.FC = () => {
   // (server regenerates Default + Error and reuses Empty + Loading verbatim).
   const [overrideStates, setOverrideStates] = useState<DesignPrototypeStateName[]>([]);
   const [viewSource, setViewSource] = useState(false);
+  const [editingBoundary, setEditingBoundary] = useState(false);
+  const updateHtmlMutation = useUpdatePrototypeHtml();
 
   const toggleOverrideState = useCallback((state: DesignPrototypeStateName) => {
     setOverrideStates(prev =>
@@ -238,23 +242,53 @@ const DesignPrototypeReviewView: React.FC = () => {
     }
 
     if (mockForPreview) {
+      if (editingBoundary && fullPrototype?.mockHtml) {
+        return (
+          <div className={styles.previewArea}>
+            <Suspense fallback={<div className={styles.statusText}>Loading editor…</div>}>
+              <BoundaryEditor
+                html={fullPrototype.mockHtml}
+                featureName={selectedProto?.featureName ?? ''}
+                isSaving={updateHtmlMutation.isPending}
+                onSave={(updatedHtml) => {
+                  updateHtmlMutation.mutate(
+                    { id: selectedProto!.id, html: updatedHtml },
+                    { onSuccess: () => setEditingBoundary(false) },
+                  );
+                }}
+                onCancel={() => setEditingBoundary(false)}
+              />
+            </Suspense>
+          </div>
+        );
+      }
+
       return (
         <div className={styles.previewArea}>
           <div className={styles.viewToggleBar}>
             <button
               type="button"
-              className={`${styles.viewToggleBtn}${!viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
-              onClick={() => setViewSource(false)}
+              className={`${styles.viewToggleBtn}${!viewSource && !editingBoundary ? ` ${styles.viewToggleBtnActive}` : ''}`}
+              onClick={() => { setViewSource(false); setEditingBoundary(false); }}
             >
               Preview
             </button>
             <button
               type="button"
               className={`${styles.viewToggleBtn}${viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
-              onClick={() => setViewSource(true)}
+              onClick={() => { setViewSource(true); setEditingBoundary(false); }}
             >
               View Source
             </button>
+            {canReview && fullPrototype?.mockHtml && (
+              <button
+                type="button"
+                className={styles.boundaryBtn}
+                onClick={() => { setEditingBoundary(true); setViewSource(false); }}
+              >
+                Edit Feature Boundary
+              </button>
+            )}
           </div>
           {viewSource ? (
             <pre className={styles.sourceView}><code>{fullPrototype?.mockHtml ?? ''}</code></pre>

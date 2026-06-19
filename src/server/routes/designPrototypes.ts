@@ -7,6 +7,7 @@ import {
   generatePrototypesForPrd,
   getPrototype,
   deletePrototype,
+  updatePrototypeHtml,
   regeneratePrototype,
   retryPrototype,
   resetStuckPrototype,
@@ -95,6 +96,22 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
     await deletePrototype(req.params.id);
     res.status(204).end();
   } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /:id/html — update prototype HTML (e.g. after boundary editing)
+router.patch('/:id/html', requirePermission('design-prototypes:review'), async (req, res, next) => {
+  try {
+    const { html } = req.body as { html?: string };
+    if (!html) {
+      res.status(400).json({ error: 'html is required' });
+      return;
+    }
+    await updatePrototypeHtml(req.params.id, html);
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err.status === 404) { res.status(404).json({ error: err.message }); return; }
     next(err);
   }
 });

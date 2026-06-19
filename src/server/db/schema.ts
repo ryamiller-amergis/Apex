@@ -712,3 +712,18 @@ export const designPlansRelations = relations(designPlans, ({ one }) => ({
     references: [prds.id],
   }),
 }));
+
+// ── Page Screenshots ──────────────────────────────────────────────────────────
+
+export const pageScreenshots = pgTable('page_screenshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  route: text('route').notNull().unique(),
+  displayUrl: text('display_url'),
+  imageBase64: text('image_base64').notNull(),
+  mediaType: text('media_type').notNull().default('image/png'),
+  width: integer('width'),
+  height: integer('height'),
+  uploadedBy: text('uploaded_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});

@@ -1113,11 +1113,80 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
 
     const skillConfig = await getSkillConfig(doc.project);
     const prd = await getPrd(doc.prdId);
-    const freeformContext = [
+
+    const contextParts: string[] = [
       '# PRD Content',
       prd?.content ?? '(empty)',
       ...(prd?.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
-    ].join('\n');
+    ];
+
+    // Include structured design plan data + actual React source (mirrors
+    // triggerDesignDocGeneration in designPrototypeService).
+    const { designPlans } = await import('../db/schema');
+    const planRow = await db.query.designPlans.findFirst({
+      where: eq(designPlans.prdId, doc.prdId),
+    });
+    const planFeatures = planRow?.features ?? [];
+
+    if (planFeatures.length > 0) {
+      contextParts.push('\n# Approved Design Plan');
+      contextParts.push('The design plan below was reviewed and approved. It specifies exactly what to build and where.\n');
+      for (const f of planFeatures) {
+        const parts = [`## Feature: ${f.featureName}`];
+        parts.push(`- **Decision:** ${f.decision}`);
+        if (f.targetRoute) parts.push(`- **Target route:** ${f.targetRoute}`);
+        if (f.targetPageTitle) parts.push(`- **Page title:** ${f.targetPageTitle}`);
+        if (f.layoutPattern) parts.push(`- **Layout pattern:** ${f.layoutPattern}`);
+        if (f.primaryComponents?.length)
+          parts.push(`- **Primary components:** ${f.primaryComponents.join(', ')}`);
+        if (f.states?.length) parts.push(`- **States:** ${f.states.join(', ')}`);
+        if (f.rationale) parts.push(`- **Rationale:** ${f.rationale}`);
+        if (f.notes?.trim()) parts.push(`- **Reviewer notes:** ${f.notes.trim()}`);
+        if (f.pbiContributions?.length) {
+          parts.push('\n**PBI contributions (what to add where):**');
+          for (const c of f.pbiContributions)
+            parts.push(`- ${c.pbiTitle}: ${c.contribution}`);
+        }
+        if (f.designBrief) parts.push(`\n**Design brief:**\n${f.designBrief}`);
+        contextParts.push(parts.join('\n'));
+      }
+    }
+
+    const retryUpdatePageFeatures = planFeatures.filter(
+      (f): f is typeof f & { targetRoute: string } => f.decision === 'update-page' && !!f.targetRoute,
+    );
+    if (retryUpdatePageFeatures.length > 0) {
+      try {
+        const { fetchExistingPageContext } = await import('../services/designSystemService');
+        contextParts.push('\n# Existing Page Context (from MaxView codebase)');
+        contextParts.push(
+          'The source code below is the ACTUAL existing React implementation. ' +
+          'Use this as the authoritative reference. DO NOT rewrite these files.\n',
+        );
+        for (const f of retryUpdatePageFeatures) {
+          const pageContext = await fetchExistingPageContext(f.targetRoute, f.featureName);
+          if (pageContext.trim()) {
+            contextParts.push(`## Existing page for: ${f.featureName} (route: ${f.targetRoute})\n`);
+            contextParts.push(pageContext);
+          }
+        }
+      } catch (err) {
+        console.warn('[interviews] Failed to fetch existing page context for retry-generate:', err);
+      }
+    }
+
+    contextParts.push('\n## CRITICAL — Existing Code Protection Rules');
+    contextParts.push('');
+    contextParts.push('The design doc and any generated code MUST follow these rules with ZERO exceptions:');
+    contextParts.push('');
+    contextParts.push('1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.**');
+    contextParts.push('2. **ONLY implement the NEW feature component** as described in the design plan above.');
+    contextParts.push('3. **DO NOT generate code for the sidebar, header, navigation, or page shell.**');
+    contextParts.push('4. **For update-page features:** Add the new component INTO the existing page.');
+    contextParts.push('5. **For new-page features:** Create ONLY the new page component and route.');
+    contextParts.push('6. **Test cases must ONLY test the new feature behavior.**');
+
+    const freeformContext = contextParts.join('\n');
 
     const globalModel = await getDefaultModel();
     const model = skillConfig?.designDocModel ?? globalModel;

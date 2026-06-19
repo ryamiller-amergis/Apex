@@ -2013,26 +2013,25 @@ export class BedrockModelTruncatedError extends Error {
  */
 async function invokeModel(
   prompt: string,
-  image?: ImageInput,
+  image?: ImageInput | ImageInput[],
   modelId: string = MODEL_ID,
   maxTokens: number = 4096,
   timeoutMs?: number,
 ): Promise<string> {
   const textBlock = { type: 'text', text: prompt };
 
-  const content: unknown[] = image
-    ? [
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: image.mediaType,
-            data: image.base64,
-          },
-        },
-        textBlock,
-      ]
-    : [textBlock];
+  const images = image ? (Array.isArray(image) ? image : [image]) : [];
+  const content: unknown[] = [
+    ...images.map((img) => ({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: img.mediaType,
+        data: img.base64,
+      },
+    })),
+    textBlock,
+  ];
 
   const payload = {
     anthropic_version: 'bedrock-2023-05-31',
@@ -3110,6 +3109,8 @@ export interface DesignPrototypeInput {
   targetRoute?: string;
   /** Pre-fetched existing page code/structure text. When omitted in EXTEND mode it is fetched. */
   existingPageContext?: string;
+  /** Reviewer-uploaded screenshot of the existing page. Sent as vision input in EXTEND mode. */
+  pageScreenshot?: { base64: string; mediaType: string };
   /**
    * Authoritative design-plan decisions for this feature (from the reviewed/edited design plan).
    * When present, these override the model's own inference for layout/components/states.
@@ -3196,15 +3197,19 @@ export async function generateDesignPrototypeHtml(
       (targetScreen?.states ? `\n- Known UI states: ${targetScreen.states}` : '')
     : '';
 
+  const pageScreenshotHint = extendMode && input.pageScreenshot
+    ? `\n\n**A screenshot of the ACTUAL existing page is provided as a vision input.** Use this screenshot as your visual ground truth for the page layout. Your skeleton should match the structure visible in this screenshot — do NOT invent a different layout. Add the new feature in the correct position within this real page layout.`
+    : '';
+
   const scopingSection = extendMode
     ? `### CRITICAL SCOPING RULE — EXTEND an existing page; show the new feature IN CONTEXT
-${targetScreenHint}
+${targetScreenHint}${pageScreenshotHint}
 Below this section is the **ACTUAL code of the existing MaxView page** at \`${input.targetRoute}\`. You must:
-1. **Reproduce the existing page layout faithfully** — its structure, sections, components, toolbars, tables/grids, and styling — as rendered HTML/CSS. Do NOT strip, omit, or simplify existing page elements. This reproduction is ONLY for visual context in the prototype — it does NOT mean the existing code should be rewritten or replaced.
-2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the real page** (e.g. the toolbar, the data grid, the relevant panel/section where it logically belongs). The new feature MUST be clearly wrapped in the purple dashed annotation border so reviewers can instantly distinguish it from existing page elements.
+1. **Render a SIMPLIFIED SKELETON of the existing page** — show the overall page structure (sidebar, header, tab bar, grid outline, toolbar) as simple labeled placeholder blocks using muted colors (\`text.secondary\`, \`ui.divider\`, \`background.paper\` tokens). DO NOT attempt to faithfully reproduce every cell, button, dropdown, or form field from the existing code. The skeleton exists ONLY to show WHERE the new feature sits within the page layout.${input.pageScreenshot ? ' When a page screenshot is provided, match its layout structure exactly.' : ''}
+2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the skeleton page** (e.g. the toolbar, a new tab, a new grid column). The new feature MUST be rendered in FULL DETAIL with all interactions, styling, and states. Wrap it in the purple annotation border and \`<!-- NEW_FEATURE:START/END -->\` markers.
 3. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code nor described in the PBI Requirements.
-4. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature within the real page** — the rest of the existing page remains identical across all sections.
-5. **IMPORTANT — Existing code is READ-ONLY context.** The existing page code below is provided ONLY so the prototype can show the new feature in its real visual context. When this prototype is later used to generate a design doc and implementation code, ONLY the new feature (the annotated area) should be implemented. The existing page code MUST NOT be modified, replaced, or restructured — it already exists and works correctly in the codebase.
+4. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature within the skeleton page** — the skeleton remains identical across all sections.
+5. **IMPORTANT — Existing code is READ-ONLY context.** The skeleton is for visual placement context only. The design doc receives the actual React source code separately and will never see this prototype HTML.
 
 ## Existing Page Code (route: ${input.targetRoute})
 
@@ -3291,6 +3296,10 @@ Apply a **2px dashed #a46bff border** (MaxView \`tertiary.main\`) with 8px paddi
 
 **The existing page content (sidebar, header, existing grids, existing tabs, existing forms) MUST NOT be inside the purple border.** The border exists solely to help reviewers instantly identify what is new vs what already exists.
 
+Additionally, wrap ALL new feature HTML content in comment markers:
+\`<!-- NEW_FEATURE:START -->\` immediately before the first new element and \`<!-- NEW_FEATURE:END -->\` immediately after the last.
+These markers must appear inside each state section that contains new feature content (at minimum inside the DEFAULT and ERROR states). Place them just inside the purple annotation border so they enclose exactly the same content the border visually highlights.
+
 ### State sections
 
 1. **DEFAULT STATE** — Full page shell (sidebar nav + header) + the annotated new feature area populated with realistic sample data. All PBI requirements must be visually represented.
@@ -3371,7 +3380,19 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens, timeoutMs);
+
+  const images: ImageInput[] = [];
+  if (image) images.push(image);
+  if (extendMode && input.pageScreenshot) {
+    images.push({
+      base64: input.pageScreenshot.base64,
+      mediaType: (input.pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],
+      width: 0,
+      height: 0,
+    });
+  }
+
+  const text = await invokeModel(prompt, images.length > 0 ? images : undefined, effectiveModel, effectiveMaxTokens, timeoutMs);
 
   let html = text.trim();
   if (html.startsWith('```')) {
@@ -3440,6 +3461,7 @@ export async function regenerateDesignPrototypeHtml(
   existingPageContext?: string,
   targetStates?: DesignPrototypeStateName[],
   timeoutMs?: number,
+  pageScreenshot?: { base64: string; mediaType: string },
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3493,8 +3515,9 @@ export async function regenerateDesignPrototypeHtml(
   const scopingSection = extendMode
     ? `### CRITICAL SCOPING RULE — preserve EXTEND mode in all revisions
 ${targetScreenHint}
-- This prototype extends the EXISTING MaxView page at \`${targetRoute}\` (its actual code is provided below). Keep faithfully reproducing that existing page — do NOT strip or simplify its existing elements.
+- This prototype extends the EXISTING MaxView page at \`${targetRoute}\`. Keep the simplified skeleton of the existing page intact — do NOT add detail to existing page areas.
 - The dashed annotation border (2px dashed #a46bff, MaxView \`tertiary.main\`) with the "NEW: ..." label must remain around the new feature area in every section.
+- The \`<!-- NEW_FEATURE:START -->\` and \`<!-- NEW_FEATURE:END -->\` comment markers must remain around the new feature content in every state section.
 - Do NOT invent or fabricate UI elements that are neither in the existing page code nor described in the feature requirements.
 - Empty, Error, and Loading states must ONLY affect the annotated new feature area — the rest of the existing page remains unchanged.
 
@@ -3504,6 +3527,7 @@ ${resolvedPageContext}`
     : `### CRITICAL SCOPING RULE — preserve in all revisions
 
 - The dashed annotation border (2px dashed #a46bff, MaxView \`tertiary.main\`) with the "NEW: ..." label must remain around the new feature area in every section.
+- The \`<!-- NEW_FEATURE:START -->\` and \`<!-- NEW_FEATURE:END -->\` comment markers must remain around the new feature content in every state section.
 - The page must contain ONLY the sidebar nav, header bar, and the annotated new feature component. Do NOT add any cards, widgets, summaries, charts, schedules, or content that is not part of this feature.
 - Do NOT invent or fabricate any UI elements not described in the feature requirements.
 - Empty, Error, and Loading states must ONLY affect the annotated new feature area — the sidebar and header remain unchanged.`;
@@ -3559,6 +3583,18 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
 
+  const regenImages: ImageInput[] = [];
+  if (image) regenImages.push(image);
+  if (extendMode && pageScreenshot) {
+    regenImages.push({
+      base64: pageScreenshot.base64,
+      mediaType: (pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],
+      width: 0,
+      height: 0,
+    });
+  }
+  const regenImageArg = regenImages.length > 0 ? regenImages : undefined;
+
   // ── Decide scope: which state sections actually need regeneration ──────────
   const allStates = DESIGN_PROTOTYPE_STATE_NAMES;
   const requested = (targetStates && targetStates.length > 0)
@@ -3569,7 +3605,7 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
   const scoped = markersPresent && requested.length > 0 && requested.length < allStates.length;
 
   if (!scoped) {
-    const text = await invokeModel(prompt, image, effectiveModel, effectiveMaxTokens, timeoutMs);
+    const text = await invokeModel(prompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs);
     return stripHtmlFences(text);
   }
 
@@ -3613,7 +3649,7 @@ ${scopingSection}
 
 Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
 
-  const text = stripHtmlFences(await invokeModel(scopedPrompt, image, effectiveModel, effectiveMaxTokens, timeoutMs));
+  const text = stripHtmlFences(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs));
 
   // Graceful fallback: if the model ignored the contract and returned a full
   // document, just use it directly.
