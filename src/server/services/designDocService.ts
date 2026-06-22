@@ -766,6 +766,14 @@ export async function startSingleFeatureDesignDocWatcher(
         '5. **For new-page features:** Create ONLY the new page component and its route registration.',
         '6. **Test cases must ONLY test the new feature behavior.**',
         '',
+        '## REQUIRED — Reflect the approved UI and flag impact',
+        '',
+        'The dashed purple "NEW" annotation marks EXACTLY the scope that was approved by the reviewer. Treat that marked region as the source of truth for what is changing. The generated doc MUST additionally:',
+        '',
+        '7. **Summarize the UI changes** exactly as shown inside the annotation border (new fields, columns, controls, states), so the doc stays faithful to the approved prototype.',
+        '8. **For update-page features, analyze and flag impact on EXISTING functionality:** explicitly identify any existing behavior, data flow, validation, or interaction on the page that these UI changes could alter, break, or make ambiguous (e.g. layout shifts, changed defaults, new required inputs, conflicts with existing actions). Do NOT silently assume; if a change would touch existing behavior, call it out.',
+        '9. **Raise developer sign-off questions:** where the prototype leaves a decision open or where implementation could reasonably go more than one way, pose a concrete question for the developer to confirm BEFORE implementation, rather than guessing.',
+        '',
         `\`\`\`html\n${proto.mockHtml}\n\`\`\``,
       ].join('\n')
     : '';
@@ -789,8 +797,8 @@ export async function startSingleFeatureDesignDocWatcher(
     'The app will not mark this design doc complete unless all three files are present:',
     '',
     '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
-    '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification',
-    '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions',
+    '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification. When a prototype is provided, this file MUST include a `## UI Changes (from approved prototype)` section that describes the changes shown inside the "NEW" annotation, and (for update-page features) a `## Existing Functionality Impact` section that flags any existing behavior these changes could alter or break.',
+    '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section listing concrete decisions the developer should confirm BEFORE implementation, and a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
   ].join('\n');
 
   const thread = await createThread(
