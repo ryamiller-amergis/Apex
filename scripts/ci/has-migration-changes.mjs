@@ -10,7 +10,6 @@ import { execSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import pg from 'pg';
 
 function gitDiffMigrations(base, head) {
   if (!base || !head) return false;
@@ -21,6 +20,7 @@ function gitDiffMigrations(base, head) {
 }
 
 async function hasPendingMigrations(databaseUrl) {
+  const { default: pg } = await import('pg');
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
 
