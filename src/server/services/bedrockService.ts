@@ -3008,12 +3008,28 @@ The \`designBrief\` is the primary content of the plan. It is a multi-paragraph,
 Use newlines (\\n) to separate paragraphs for readability. Aim for 150–300 words per feature. Do NOT use markdown headings — just plain text with paragraph breaks.
 
 ### Other rules
-- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be one of the existing routes listed above.
+- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be a SINGLE route — exactly one of the existing routes listed above. NEVER return a comma-separated list or multiple routes. If the feature touches several related screens, choose the ONE primary route where the change is most central; the others can be mentioned in the \`designBrief\`.
 - \`primaryComponents\` should reference MWx Design System component names from the catalog where possible.
 - \`states\` should list the UI states worth designing (default/empty/error/loading is a good baseline).
 - Every PBI of a feature must have exactly one entry in \`pbiContributions\`.
 - Leave \`notes\` as an empty string.
 - Respond ONLY with the JSON fenced block — no other text.`;
+}
+
+/**
+ * Normalise the model's `targetRoute` to a SINGLE route. Despite the prompt asking for one
+ * route, the model sometimes returns a comma-separated list (e.g. "/Timecard/Entry, /Timecard/Manual,
+ * /Timecard/Edit/:id"). Downstream (screenshot lookup + existing-page context fetch) treats
+ * targetRoute as one route, so a multi-route value silently disables EXTEND mode. Keep only the
+ * first non-empty route so the contract the rest of the pipeline depends on is never violated.
+ */
+function normalisePlanTargetRoute(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const primary = raw
+    .split(',')
+    .map(r => r.trim())
+    .find(r => r.length > 0);
+  return primary || undefined;
 }
 
 function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): DesignPlanFeature[] {
@@ -3047,7 +3063,7 @@ function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): De
       featureName: feature.featureName,
       designBrief: typeof match.designBrief === 'string' ? match.designBrief : '',
       decision,
-      targetRoute: typeof match.targetRoute === 'string' && match.targetRoute.trim() ? match.targetRoute : undefined,
+      targetRoute: normalisePlanTargetRoute(match.targetRoute),
       targetPageTitle: typeof match.targetPageTitle === 'string' && match.targetPageTitle.trim() ? match.targetPageTitle : undefined,
       layoutPattern,
       primaryComponents: Array.isArray(match.primaryComponents)
@@ -3198,18 +3214,19 @@ export async function generateDesignPrototypeHtml(
     : '';
 
   const pageScreenshotHint = extendMode && input.pageScreenshot
-    ? `\n\n**A screenshot of the ACTUAL existing page is provided as a vision input.** Use this screenshot as your visual ground truth for the page layout. Your skeleton should match the structure visible in this screenshot — do NOT invent a different layout. Add the new feature in the correct position within this real page layout.`
+    ? `\n\n**A screenshot of the ACTUAL existing page is provided as a vision input. It is the AUTHORITATIVE ground truth for the existing page's layout, structure, and control types.** Reproduce the layout you see — the same regions, the same arrangement, and the same entry mechanism (e.g. per-day cards vs. a table/grid). Do NOT substitute a different layout, and do NOT let the feature description or design brief change the existing layout.`
     : '';
 
   const scopingSection = extendMode
-    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; show the new feature IN CONTEXT
+    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
 ${targetScreenHint}${pageScreenshotHint}
-Below this section is the **ACTUAL code of the existing MaxView page** at \`${input.targetRoute}\`. You must:
-1. **Render a SIMPLIFIED SKELETON of the existing page** — show the overall page structure (sidebar, header, tab bar, grid outline, toolbar) as simple labeled placeholder blocks using muted colors (\`text.secondary\`, \`ui.divider\`, \`background.paper\` tokens). DO NOT attempt to faithfully reproduce every cell, button, dropdown, or form field from the existing code. The skeleton exists ONLY to show WHERE the new feature sits within the page layout.${input.pageScreenshot ? ' When a page screenshot is provided, match its layout structure exactly.' : ''}
-2. **Add the new feature** described in the PBI Requirements, placed in the **correct location within the skeleton page** (e.g. the toolbar, a new tab, a new grid column). The new feature MUST be rendered in FULL DETAIL with all interactions, styling, and states. Wrap it in the purple annotation border and \`<!-- NEW_FEATURE:START/END -->\` markers.
-3. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code nor described in the PBI Requirements.
-4. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature within the skeleton page** — the skeleton remains identical across all sections.
-5. **IMPORTANT — Existing code is READ-ONLY context.** The skeleton is for visual placement context only. The design doc receives the actual React source code separately and will never see this prototype HTML.
+The existing page is defined by the AUTHORITATIVE source(s) below: the **ACTUAL React source code** at \`${input.targetRoute}\`${input.pageScreenshot ? ' **and the page screenshot (vision input)**' : ''}. These — NOT the feature description or design brief — are the single source of truth for the existing page's layout. You must:
+1. **Reproduce the existing page faithfully from the code${input.pageScreenshot ? ' and screenshot' : ''}.** Recreate the REAL structure as accurately as you can: the actual regions, panels, tab bars, and the real entry mechanism. If the page uses per-day cards with Time In / Time Out / Break fields, reproduce per-day cards — do NOT convert them into a generic table/grid, and do NOT introduce rows, columns, or fields (e.g. "Hours", "Regular/Overtime", "Position") that are not present in the actual code/screenshot. Render the reproduced existing areas with muted styling so the new feature stands out, but keep their STRUCTURE true to the real page.
+2. **The feature description, PBI requirements, and design brief describe ONLY the DELTA** — the new or changed behavior to add on top of the existing page. Use them solely to decide what to add, disable, grey out, annotate, or modify. **NEVER use the feature/brief wording to infer or redraw the base page layout.** If the brief's wording implies a different layout than the code/screenshot (e.g. it says "grid", "columns", or "rows" but the real page uses cards), the code/screenshot WIN — reproduce the real layout and apply the delta to it.
+3. **Add the new feature** in the correct location within the faithfully-reproduced page (the specific control, cell, card, tab, or banner the requirements describe). The new/changed element(s) MUST be rendered in FULL DETAIL with all interactions, styling, and states. Wrap ONLY them in the purple annotation border and \`<!-- NEW_FEATURE:START/END -->\` markers.
+4. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code/screenshot nor described in the PBI Requirements.
+5. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
+6. **IMPORTANT — Existing code/screenshot are READ-ONLY context.** They define the existing layout for this review only. The design doc receives the actual React source code separately and will never see this prototype HTML; the existing page must not be re-implemented or modified.
 
 ## Existing Page Code (route: ${input.targetRoute})
 
@@ -3234,6 +3251,10 @@ You must follow these rules with zero exceptions:
     parts.push('## Approved Design Brief (AUTHORITATIVE — follow exactly)');
     parts.push('');
     parts.push('A designer has reviewed and approved the following design brief for this feature. This brief is authoritative and **overrides any inference you would otherwise make**. Honor it precisely.');
+    if (extendMode) {
+      parts.push('');
+      parts.push('**Scope of this brief (EXTEND mode):** this brief is authoritative for the NEW or changed behavior (the delta) ONLY. The EXISTING page layout is defined by the actual page code and screenshot provided below — if any wording here describes the existing layout differently than the real code/screenshot, the code/screenshot win. Do NOT use this brief to redraw the existing page.');
+    }
     parts.push('');
 
     if (plan!.designBrief?.trim()) {
@@ -3515,10 +3536,11 @@ export async function regenerateDesignPrototypeHtml(
   const scopingSection = extendMode
     ? `### CRITICAL SCOPING RULE — preserve EXTEND mode in all revisions
 ${targetScreenHint}
-- This prototype extends the EXISTING MaxView page at \`${targetRoute}\`. Keep the simplified skeleton of the existing page intact — do NOT add detail to existing page areas.
+- This prototype extends the EXISTING MaxView page at \`${targetRoute}\`. The existing page's layout is FIXED ground truth, defined by the ACTUAL page code below${pageScreenshot ? ' and the page screenshot (vision input)' : ''} — NOT by the reviewer feedback or the feature description. Keep the faithfully-reproduced existing page intact: same regions, same arrangement, same control types (e.g. per-day cards vs. table/grid). Do NOT redraw, simplify, or restructure existing page areas, and do NOT introduce rows, columns, or fields not present in the real page.
+- The reviewer feedback and feature requirements govern ONLY the new feature (the delta). If feedback wording implies a different existing layout than the code/screenshot, the code/screenshot win.
 - The dashed annotation border (2px dashed #a46bff, MaxView \`tertiary.main\`) with the "NEW: ..." label must remain around the new feature area in every section.
 - The \`<!-- NEW_FEATURE:START -->\` and \`<!-- NEW_FEATURE:END -->\` comment markers must remain around the new feature content in every state section.
-- Do NOT invent or fabricate UI elements that are neither in the existing page code nor described in the feature requirements.
+- Do NOT invent or fabricate UI elements that are neither in the existing page code/screenshot nor described in the feature requirements.
 - Empty, Error, and Loading states must ONLY affect the annotated new feature area — the rest of the existing page remains unchanged.
 
 ## Existing Page Code (route: ${targetRoute})
