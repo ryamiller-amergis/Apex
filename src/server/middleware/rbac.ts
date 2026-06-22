@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { getUserPermissions } from '../services/rbacService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserGroupNames } from '../services/groupService';
 
 declare global {
   namespace Express {
@@ -74,6 +75,36 @@ export const requireSuperAdmin: RequestHandler = async (
   }
   next();
 };
+
+export function requireGroupMembership(...groupNames: string[]): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (isSuperAdminRequest(req)) {
+      next();
+      return;
+    }
+    const userId = (req.user as any)?.profile?.oid as string | undefined;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    // Admins (users with admin:roles permission) bypass the group check
+    const perms = await loadPermissions(req);
+    if (perms.has('admin:roles')) {
+      next();
+      return;
+    }
+    const userGroups = await getUserGroupNames(userId);
+    if (groupNames.some(g => userGroups.includes(g))) {
+      next();
+      return;
+    }
+    res.status(403).json({ error: 'Forbidden', requiredGroups: groupNames });
+  };
+}
 
 export const attachPermissions: RequestHandler = async (
   req: Request,

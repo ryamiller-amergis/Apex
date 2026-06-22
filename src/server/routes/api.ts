@@ -3788,6 +3788,7 @@ import fs from 'fs';
 import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { getAppSetting } from '../services/appSettingsService';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
@@ -3813,9 +3814,10 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
-    const [permSet, roles, changelogPrefs, currentVersion] = await Promise.all([
+    const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
       getUserPermissions(userId),
       getUserRoleNames(userId),
+      getUserGroupNames(userId),
       getChangelogPrefs(userId),
       getCurrentChangelogVersion(),
     ]);
@@ -3825,6 +3827,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
     res.json({
       permissions: [...permSet],
       roles,
+      groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
       changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,

@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -38,7 +40,17 @@ jobs:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
         run: npm run build
 
+      - name: Detect migration changes
+        id: migration_changes
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/ci/has-migration-changes.mjs
+
       - name: Run database migrations
+        if: steps.migration_changes.outputs.has_migration_changes == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up

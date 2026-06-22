@@ -58,6 +58,7 @@ export function useAppShell() {
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
@@ -105,6 +106,7 @@ export function useAppShell() {
         if (d) {
           setPermissions(d.permissions);
           setRoles(d.roles);
+          setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
           setHasUnreadChangelog(d.changelogUnread);
@@ -213,6 +215,11 @@ export function useAppShell() {
 
   const can = useCallback((key: string) => isSuperAdmin || permissions.includes(key), [isSuperAdmin, permissions]);
 
+  const isInAnyGroup = useCallback(
+    (names: string[]) => isSuperAdmin || roles.includes('admin') || groups.some(g => names.includes(g)),
+    [isSuperAdmin, roles, groups],
+  );
+
   const handleMarkChangelogAsRead = useCallback(() => {
     setHasUnreadChangelog(false);
     void fetch('/api/me/preferences', {
@@ -250,9 +257,11 @@ export function useAppShell() {
     authenticatedUser,
     permissions,
     roles,
+    groups,
     userId,
     permissionsLoaded,
     can,
+    isInAnyGroup,
     isSuperAdmin,
     isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,

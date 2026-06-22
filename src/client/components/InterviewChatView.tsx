@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, KeyboardEvent } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
@@ -1379,9 +1379,15 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
 export const InterviewChatView: React.FC = () => {
   const location = useLocation();
+  const { can, isInAnyGroup } = useAppShell();
   const id = location.pathname.split('/').pop();
 
-  if (id === 'new') return <NewInterviewCompose />;
+  if (id === 'new') {
+    if (!can('interviews:manage') || !isInAnyGroup(['BA', 'Manager', 'Product-Owner'])) {
+      return <Navigate to="/backlog" replace />;
+    }
+    return <NewInterviewCompose />;
+  }
   if (!id) return null;
   return <ExistingInterviewView id={id} />;
 };

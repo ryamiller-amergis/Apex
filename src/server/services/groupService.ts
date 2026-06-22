@@ -117,6 +117,15 @@ export async function deleteGroup(id: string): Promise<void> {
   await db.delete(appGroups).where(eq(appGroups.id, id));
 }
 
+export async function getUserGroupNames(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: appGroups.name })
+    .from(appGroupMembers)
+    .innerJoin(appGroups, eq(appGroupMembers.groupId, appGroups.id))
+    .where(eq(appGroupMembers.userId, userId));
+  return [...new Set(rows.map(r => r.name))];
+}
+
 export async function setGroupMembers(groupId: string, userIds: string[], addedBy?: string): Promise<GroupMember[]> {
   await db.transaction(async (tx) => {
     await tx.delete(appGroupMembers).where(eq(appGroupMembers.groupId, groupId));

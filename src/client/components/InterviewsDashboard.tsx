@@ -538,7 +538,7 @@ type OwnerFilter = 'all' | 'mine';
 export const InterviewsDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { can, selectedProject } = useAppShell();
+  const { can, isInAnyGroup, selectedProject } = useAppShell();
 
   const rawTab = searchParams.get('tab');
   const initialTab: TabId =
@@ -597,6 +597,7 @@ export const InterviewsDashboard: React.FC = () => {
   });
 
   const canManage = can('interviews:manage');
+  const canStartInterview = canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
 
   const filteredInterviews = interviewSearch.trim()
     ? interviews.filter((iv) => iv.title.toLowerCase().includes(interviewSearch.toLowerCase()))
@@ -659,9 +660,16 @@ export const InterviewsDashboard: React.FC = () => {
       <div className={styles.header}>
         <h1 className={styles.heading}>Interviews & PRDs</h1>
         {canManage && (
-          <button className={styles.startButton} onClick={() => navigate('/backlog/interview/new')} type="button">
-            + Start New Interview
-          </button>
+          <div className={styles.startButtonWrap} title={!canStartInterview ? 'You must be a member of the BA, Manager, or Product-Owner group to start an interview.' : undefined}>
+            <button
+              className={styles.startButton}
+              onClick={() => navigate('/backlog/interview/new')}
+              type="button"
+              disabled={!canStartInterview}
+            >
+              + Start New Interview
+            </button>
+          </div>
         )}
       </div>
 
@@ -758,7 +766,7 @@ export const InterviewsDashboard: React.FC = () => {
                       <line x1="14" x2="26" y1="38" y2="38" />
                     </svg>
                   </div>
-                  <p className={styles.emptyStateText}>No interviews yet.{can('interviews:manage') ? ' Start one above.' : ''}</p>
+                  <p className={styles.emptyStateText}>No interviews yet.{canStartInterview ? ' Start one above.' : ''}</p>
                 </>
               )}
             </div>

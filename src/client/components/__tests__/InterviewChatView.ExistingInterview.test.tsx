@@ -18,6 +18,7 @@ jest.mock('../../hooks/useAppShell', () => ({
     can: jest.fn(() => true),
     userId: 'user-1',
     isAdmin: false,
+    isInAnyGroup: jest.fn(() => true),
   })),
 }));
 
