@@ -10,10 +10,21 @@ interface BoundaryEditorProps {
 }
 
 const SELECTED_ATTR = 'data-nf-selected';
+// Marks elements that already carried a #a46bff dashed annotation border when the
+// editor opened (whether from inline style OR a CSS class rule). During editing
+// their original border is hidden so the selection outline is the only visual,
+// which lets users deselect the outer annotation block and have it truly disappear.
+const ORIG_ATTR = 'data-nf-orig';
 
 function injectEditorScript(): string {
   return `
 <style>
+  /* Hide the ORIGINAL annotation border (inline or CSS-class) while editing so the
+     only border visual is the selection outline below. !important beats both inline
+     non-important styles and class rules, so deselecting truly removes the box. */
+  [${ORIG_ATTR}] {
+    border-color: transparent !important;
+  }
   [${SELECTED_ATTR}] {
     outline: 3px dashed #a46bff !important;
     outline-offset: 2px;
@@ -41,6 +52,24 @@ function injectEditorScript(): string {
   function clearSelection() {
     var prev = document.querySelectorAll('[${SELECTED_ATTR}]');
     for (var i = 0; i < prev.length; i++) prev[i].removeAttribute('${SELECTED_ATTR}');
+  }
+
+  // The nearest annotation block (ancestor-or-self carrying ORIG_ATTR) that an
+  // element belongs to. Used to scope a plain-click reset to a SINGLE feature
+  // block so editing one block does not wipe the other annotated blocks.
+  function origScope(el) {
+    var n = el;
+    while (n && n !== document.body) {
+      if (n.getAttribute && n.getAttribute('${ORIG_ATTR}')) return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+
+  function clearWithinScope(scope) {
+    if (scope.hasAttribute('${SELECTED_ATTR}')) scope.removeAttribute('${SELECTED_ATTR}');
+    var inner = scope.querySelectorAll('[${SELECTED_ATTR}]');
+    for (var i = 0; i < inner.length; i++) inner[i].removeAttribute('${SELECTED_ATTR}');
   }
 
   function selectedEls() { return document.querySelectorAll('[${SELECTED_ATTR}]'); }
@@ -128,19 +157,35 @@ function injectEditorScript(): string {
     window.parent.postMessage({ type: 'nf-changed', count: sel.length, label: label }, '*');
   }
 
+  // Returns true when an element's COMPUTED border is dashed and #a46bff-ish.
+  // Computed style catches the annotation border regardless of whether it came
+  // from an inline style or a CSS class rule.
+  function hasPurpleDashedBorder(el) {
+    try {
+      var cs = window.getComputedStyle(el);
+      if (cs.borderTopStyle !== 'dashed') return false;
+      var m = cs.borderTopColor.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+      // #a46bff = rgb(164, 107, 255) — allow ±25 tolerance for rendering variation
+      return !!m && Math.abs(+m[1]-164)<25 && Math.abs(+m[2]-107)<25 && Math.abs(+m[3]-255)<25;
+    } catch(e) { return false; }
+  }
+
   function init() {
-    var target = null;
+    // Find every element carrying the #a46bff dashed annotation border (inline OR
+    // CSS class). Mark each with ORIG_ATTR (so its border is hidden via the injected
+    // rule above) and SELECTED_ATTR (so it loads back as an editable selection).
+    // The user can then deselect the outer block and it disappears entirely, while
+    // keeping the columns they want — no need to re-select everything from scratch.
     var all = document.body.querySelectorAll('*');
+    var targets = [];
     for (var i = 0; i < all.length; i++) {
-      var st = (all[i].getAttribute('style') || '');
-      if (/dashed[^;]*#a46bff/i.test(st) || /#a46bff[^;]*dashed/i.test(st)) { target = all[i]; break; }
+      if (hasPurpleDashedBorder(all[i])) targets.push(all[i]);
     }
-    if (target) {
-      var s2 = target.getAttribute('style') || '';
-      s2 = s2.replace(/border\\s*:[^;]*#a46bff[^;]*(;|$)/gi, '').replace(/^\\s*;+|;+\\s*$/g, '').trim();
-      if (s2) target.setAttribute('style', s2); else target.removeAttribute('style');
+    for (var t = 0; t < targets.length; t++) {
+      var target = targets[t];
       var lbls = target.querySelectorAll('span');
       for (var j = 0; j < lbls.length; j++) if (/^NEW:/i.test(lbls[j].textContent || '')) lbls[j].remove();
+      target.setAttribute('${ORIG_ATTR}', 'true');
       target.setAttribute('${SELECTED_ATTR}', 'true');
     }
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
@@ -170,12 +215,42 @@ function injectEditorScript(): string {
     if (!el) return;
     lastClicked = el;
     if (e.ctrlKey || e.metaKey) {
-      // Toggle this element in/out of the current selection
-      if (el.hasAttribute('${SELECTED_ATTR}')) el.removeAttribute('${SELECTED_ATTR}');
-      else setSelection([el], false, true);
+      if (el.hasAttribute('${SELECTED_ATTR}')) {
+        // The exact element is selected — deselect it directly.
+        el.removeAttribute('${SELECTED_ATTR}');
+      } else {
+        // The leaf itself is not selected. Walk up to find the nearest selected
+        // ancestor (e.g. the AI-generated outer block). If found, deselect it —
+        // this is how users remove the outer annotation container without needing
+        // to hit it pixel-perfectly on its border. If no selected ancestor exists,
+        // fall through to additive selection of this leaf element.
+        var anc = el.parentElement;
+        var selectedAnc = null;
+        while (anc && anc !== document.body) {
+          if (anc.hasAttribute('${SELECTED_ATTR}')) { selectedAnc = anc; break; }
+          anc = anc.parentElement;
+        }
+        if (selectedAnc) {
+          selectedAnc.removeAttribute('${SELECTED_ATTR}');
+        } else {
+          setSelection([el], false, true);
+        }
+      }
       notify();
     } else {
-      setSelection([el], false);
+      // Plain click = start the selection over, but only WITHIN the annotation
+      // block that was clicked, so the other annotated blocks keep their selection
+      // (and therefore their boundary) untouched. Clicking outside every block
+      // resets the whole document (legacy "start over").
+      var scope = origScope(el);
+      if (scope) {
+        clearWithinScope(scope);
+        el.setAttribute('${SELECTED_ATTR}', 'true');
+        el.classList.remove('nf-hover');
+        notify();
+      } else {
+        setSelection([el], false);
+      }
     }
   }, true);
 
@@ -234,6 +309,33 @@ function buildFromDom(iframeDoc: Document, featureName: string): string {
   docClone.querySelectorAll('.nf-hover').forEach(el => el.classList.remove('nf-hover'));
 
   const selected = Array.from(docClone.querySelectorAll(`[${SELECTED_ATTR}]`)) as HTMLElement[];
+
+  // Pick one label anchor per group BEFORE the ORIG_ATTR markers are stripped.
+  // Each original annotation block (its ORIG_ATTR ancestor) gets a single label so
+  // independent blocks — e.g. Punch In/Out and QR — keep their own "NEW:" badge;
+  // all brand-new selections that aren't inside an original block share one label.
+  const labelAnchors = new Set<HTMLElement>();
+  const seenGroups = new Set<unknown>();
+  for (const el of selected) {
+    const group: unknown = el.closest(`[${ORIG_ATTR}]`) ?? '__new__';
+    if (!seenGroups.has(group)) {
+      seenGroups.add(group);
+      labelAnchors.add(el);
+    }
+  }
+
+  // Resolve the original annotation borders. An element that opened with a #a46bff
+  // dashed border but is now DESELECTED has its border forced off (inline `border:none`
+  // overrides any CSS-class rule), so that block's box truly disappears from the saved
+  // output. Selected originals keep their border (re-applied below). The marker attr
+  // itself is always stripped so it never leaks into saved HTML.
+  const origs = Array.from(docClone.querySelectorAll(`[${ORIG_ATTR}]`)) as HTMLElement[];
+  for (const el of origs) {
+    const stillSelected = el.hasAttribute(SELECTED_ATTR);
+    el.removeAttribute(ORIG_ATTR);
+    if (!stillSelected) el.style.setProperty('border', 'none');
+  }
+
   if (selected.length === 0) return '<!DOCTYPE html>\n' + docClone.outerHTML;
 
   // Border every selected element in place
@@ -248,13 +350,13 @@ function buildFromDom(iframeDoc: Document, featureName: string): string {
   // Wrap EACH selected element with its own NEW_FEATURE:START/END marker pair.
   // This keeps extraction precise for non-contiguous selections (e.g. Wed + Fri
   // columns) instead of marking everything between them via a common ancestor.
-  selected.forEach((el, idx) => {
+  selected.forEach((el) => {
     if (!el.parentNode) return;
     const parent = el.parentNode;
     parent.insertBefore(docClone.ownerDocument.createComment(' NEW_FEATURE:START '), el);
-    // A single label on the first selected element identifies the feature without
-    // disrupting table/grid layout for the remaining cells.
-    if (idx === 0) {
+    // One label per group (see labelAnchors above) identifies the feature without
+    // disrupting table/grid layout for the remaining cells in that group.
+    if (labelAnchors.has(el)) {
       const label = docClone.ownerDocument.createElement('span');
       label.setAttribute('style',
         'display:inline-block;background:#a46bff;color:#fff;font-size:10px;font-weight:700;' +
