@@ -37,15 +37,31 @@ const UI_KNOWLEDGE_BASE_PATH = '/.cursor/skills/figma-ui-knowledge-base/SKILL.md
 /** Inventory table (Route → Component/File → Purpose → …) for every ClientApp page. */
 const SCREENS_INVENTORY_PATH = '/.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md';
 
-/** Combined byte cap for an extracted existing-page context block (page + child components). */
-const MAX_PAGE_CONTEXT_BYTES = 64 * 1024;
+/**
+ * Combined byte cap for an extracted existing-page context block (page + child components).
+ * Raised from 64 KB so EXTEND mode can faithfully reproduce real pages whose layout spans the
+ * page file plus several child components (e.g. a timecard page + its per-day entry-card
+ * components). ~192 KB is still well within the model's context window. Override with
+ * PAGE_CONTEXT_MAX_BYTES when a project's pages need more (or less) context.
+ */
+function maxPageContextBytes(): number {
+  const parsed = Number(process.env.PAGE_CONTEXT_MAX_BYTES);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 192 * 1024;
+}
 
 /**
  * Maximum import depth followed when extracting existing-page context. Depth 0 is the page
  * file, depth 1 its direct imports (always included), and depth >= 2 imports are only
  * followed when their component name matches the feature keywords (keeps token cost bounded).
+ * Raised from 3 to 4 so deeply-nested entry components (page → form → day-card → field) are
+ * reachable; deeper levels remain keyword-filtered and bounded by the byte budget.
+ * Read live (like clientAppRoot) so it can be tuned without a restart and overridden in tests.
+ * Override with PAGE_CONTEXT_MAX_DEPTH.
  */
-const MAX_PAGE_CONTEXT_DEPTH = 3;
+function maxPageContextDepth(): number {
+  const parsed = Number(process.env.PAGE_CONTEXT_MAX_DEPTH);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 4;
+}
 
 /** TTL for cached per-route page context. */
 const PAGE_CONTEXT_TTL_MS = 10 * 60 * 1000;
@@ -835,7 +851,8 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
   }
 
   const sections: string[] = [];
-  let budget = MAX_PAGE_CONTEXT_BYTES;
+  const maxDepth = maxPageContextDepth();
+  let budget = maxPageContextBytes();
 
   const addSection = (path: string, src: string): void => {
     if (budget <= 0) return;
@@ -893,7 +910,7 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
     // parents keeps the shallowest depth.
     const candidateDepth = new Map<string, number>();
     for (const node of frontier) {
-      if (node.depth >= MAX_PAGE_CONTEXT_DEPTH) continue;
+      if (node.depth >= maxDepth) continue;
       const childDepth = node.depth + 1;
       for (const ref of parseLocalImportRefs(node.src, node.path)) {
         if (enqueuedRefs.has(ref)) continue;

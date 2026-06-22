@@ -92,6 +92,8 @@ describe('fetchExistingPageContext — deep traversal + keyword prioritization',
     process.env.ADO_ORG = 'https://dev.azure.com/myorg';
     process.env.ADO_PAT = 'test-pat';
     delete process.env.MAXVIEW_CLIENTAPP_ROOT;
+    delete process.env.PAGE_CONTEXT_MAX_BYTES;
+    delete process.env.PAGE_CONTEXT_MAX_DEPTH;
   });
 
   it('follows imports past depth 1 to reach a feature-relevant in-page sub-view', async () => {
@@ -174,6 +176,8 @@ describe('fetchExistingPageContext — deep traversal + keyword prioritization',
   });
 
   it('respects the byte budget: a huge page is truncated and children are dropped', async () => {
+    // Pin the budget so the test is independent of the (configurable) default.
+    process.env.PAGE_CONTEXT_MAX_BYTES = String(64 * 1024);
     const hugePage = [
       "import TimecardsGrid from './TimecardsGrid';",
       `// ${'x'.repeat(70 * 1024)}`,
