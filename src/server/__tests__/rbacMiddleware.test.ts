@@ -1,11 +1,21 @@
 import type { Request, Response, NextFunction } from 'express';
-import { requirePermission, requireAnyPermission, attachPermissions } from '../middleware/rbac';
+import { requirePermission, requireAnyPermission, attachPermissions, requireGroupMembership } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
+import * as groupService from '../services/groupService';
+import * as superAdminUtils from '../utils/superAdmin';
 
 jest.mock('../services/rbacService');
+jest.mock('../services/groupService');
+jest.mock('../utils/superAdmin');
 
 const mockGetUserPermissions = rbacService.getUserPermissions as jest.MockedFunction<
   typeof rbacService.getUserPermissions
+>;
+const mockGetUserGroupNames = groupService.getUserGroupNames as jest.MockedFunction<
+  typeof groupService.getUserGroupNames
+>;
+const mockIsSuperAdminRequest = superAdminUtils.isSuperAdminRequest as jest.MockedFunction<
+  typeof superAdminUtils.isSuperAdminRequest
 >;
 
 function makeReq(user: unknown, cachedPerms?: Set<string>): Request {
@@ -253,5 +263,119 @@ describe('attachPermissions', () => {
     expect(mockGetUserPermissions).not.toHaveBeenCalled();
     expect((req as any)._permissions).toBe(existing);
     expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── requireGroupMembership ─────────────────────────────────────────────────────
+
+describe('requireGroupMembership', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsSuperAdminRequest.mockReturnValue(false);
+  });
+
+  it('returns 401 when req.user is missing', async () => {
+    const req = makeReq(undefined);
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager')(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when req.user has no oid', async () => {
+    const req = makeReq({ profile: {} });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA')(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('calls next() when the request is a super admin request', async () => {
+    mockIsSuperAdminRequest.mockReturnValue(true);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(mockGetUserGroupNames).not.toHaveBeenCalled();
+  });
+
+  it('calls next() when the user has the admin:roles permission (admin bypass)', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['admin:roles']));
+    mockGetUserGroupNames.mockResolvedValue([]);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('calls next() when the user is in one of the allowed groups', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockGetUserGroupNames.mockResolvedValue(['BA']);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager', 'Product-Owner')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('calls next() when the user is in a second allowed group (not the first)', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockGetUserGroupNames.mockResolvedValue(['Manager']);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager', 'Product-Owner')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 403 when the user is not in any of the allowed groups', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockGetUserGroupNames.mockResolvedValue(['Developer', 'QA']);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager', 'Product-Owner')(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      requiredGroups: ['BA', 'Manager', 'Product-Owner'],
+    });
+  });
+
+  it('returns 403 when the user has no groups at all', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockGetUserGroupNames.mockResolvedValue([]);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requireGroupMembership('BA', 'Manager')(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });

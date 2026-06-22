@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { requirePermission } from '../middleware/rbac';
+import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
@@ -88,7 +88,7 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
   }
 });
 
-router.post('/', requirePermission('interviews:manage'), async (req, res, next) => {
+router.post('/', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { project, repo, title, chatThreadId, model, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {

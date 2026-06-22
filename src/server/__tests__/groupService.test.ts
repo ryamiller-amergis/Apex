@@ -62,6 +62,7 @@ import {
   updateGroup,
   deleteGroup,
   setGroupMembers,
+  getUserGroupNames,
 } from '../services/groupService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -353,6 +354,56 @@ describe('deleteGroup', () => {
 
     expect(mockDb.delete).toHaveBeenCalled();
     expect(deleteChain.where).toHaveBeenCalled();
+  });
+});
+
+// ── getUserGroupNames ──────────────────────────────────────────────────────────
+
+describe('getUserGroupNames', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns an empty array when the user is in no groups', async () => {
+    const chain = makeSelectChain([]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupNames('user-xyz');
+
+    expect(result).toEqual([]);
+    expect(chain.innerJoin).toHaveBeenCalled();
+    expect(chain.where).toHaveBeenCalled();
+  });
+
+  it('returns group names for a given userId', async () => {
+    const chain = makeSelectChain([{ name: 'BA' }, { name: 'Manager' }]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupNames('user-abc');
+
+    expect(result).toEqual(expect.arrayContaining(['BA', 'Manager']));
+    expect(result).toHaveLength(2);
+  });
+
+  it('deduplicates group names when the user appears in the same group across projects', async () => {
+    const chain = makeSelectChain([
+      { name: 'BA' },
+      { name: 'BA' },
+      { name: 'Manager' },
+    ]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupNames('user-abc');
+
+    expect(result).toEqual(expect.arrayContaining(['BA', 'Manager']));
+    expect(result).toHaveLength(2);
+  });
+
+  it('queries using the correct userId', async () => {
+    const chain = makeSelectChain([{ name: 'Product-Owner' }]);
+    mockDb.select.mockReturnValue(chain);
+
+    await getUserGroupNames('specific-user-oid');
+
+    expect(chain.where).toHaveBeenCalled();
   });
 });
 

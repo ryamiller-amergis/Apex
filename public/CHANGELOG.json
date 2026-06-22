@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.29.0",
+    "date": "2026-06-22",
+    "title": "Group-Based Interview Access Control",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Start New Interview is now restricted to members of the BA, Manager, or Product-Owner groups — users without group membership see the button disabled with a tooltip explaining the requirement"
+      },
+      {
+        "type": "improvement",
+        "description": "The server now enforces group membership on interview creation, so the restriction is upheld even if the UI is bypassed"
+      },
+      {
+        "type": "improvement",
+        "description": "User group memberships are now included in the permissions API response and exposed via useAppShell for client-side access control checks"
+      }
+    ]
+  },
+  {
     "version": "1.28.0",
     "date": "2026-06-19",
     "title": "Per-Feature Design Docs & ADO Export",

@@ -9,6 +9,24 @@ env:
   NODE_VERSION: '20.x'
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      migrations: ${{ steps.detect.outputs.has_migration_changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect migration file changes
+        id: detect
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/ci/has-migration-changes.mjs
+
   test:
     runs-on: ubuntu-latest
 
@@ -27,3 +45,44 @@ jobs:
 
       - name: Run full test suite
         run: npm test -- --ci
+
+  migrate-check:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate migration sequence
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/aipilot
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/ci/validate-migrations.mjs

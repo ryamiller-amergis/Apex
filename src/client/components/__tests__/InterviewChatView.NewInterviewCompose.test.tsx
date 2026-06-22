@@ -9,6 +9,7 @@ jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(() => ({
     selectedProject: 'MaxView',
     can: jest.fn(() => true),
+    isInAnyGroup: jest.fn(() => true),
   })),
 }));
 

@@ -108,6 +108,7 @@ jest.mock('../services/appSettingsService', () => ({
 jest.mock('../middleware/rbac', () => ({
   requirePermission: jest.fn((..._keys: string[]) => (_req: any, _res: any, next: any) => next()),
   requireAnyPermission: jest.fn((..._keys: string[]) => (_req: any, _res: any, next: any) => next()),
+  requireGroupMembership: jest.fn((..._groupNames: string[]) => (_req: any, _res: any, next: any) => next()),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
 }));
 
