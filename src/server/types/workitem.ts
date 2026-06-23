@@ -290,12 +290,14 @@ export interface EslintBurnDownResponse {
   snapshots: EslintBuildSnapshot[];
   latest: EslintBuildSnapshot | null;
   summary: {
+    definitionId?: number;
     buildsScanned: number;
     buildsWithArtifact: number;
     startingIssueCount: number | null;
     endingIssueCount: number | null;
     issueReduction: number | null;
     reductionPercent: number | null;
+    hint?: string;
   };
 }
 

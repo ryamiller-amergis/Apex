@@ -1889,7 +1889,7 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
               <strong>What this section shows:</strong>
               <br />
               ESLint issue counts from the nightly <code>mv-nightly-runs-workflow</code> pipeline artifact (<code>eslint-summary.json</code>).
-              Each point is the latest nightly run in that period — a downward line means the team is burning down lint debt.
+              Each point is the latest run in that period where the artifact was published — pipeline pass/fail (red X) does not matter, only that the file exists.
             </p>
             <p>
               <strong>How to interpret:</strong>
@@ -1991,12 +1991,15 @@ export const DevStats: React.FC<DevStatsProps> = ({ workItems, onSelectItem }) =
             </div>
 
             <div className="eslint-run-meta">
-              {eslintBurnDown.summary.buildsWithArtifact} nightly run{eslintBurnDown.summary.buildsWithArtifact === 1 ? '' : 's'} with artifacts
-              {' '}({eslintBurnDown.summary.buildsScanned} builds scanned, {eslintBurnDown.from} to {eslintBurnDown.to})
+              {eslintBurnDown.summary.buildsWithArtifact} run{eslintBurnDown.summary.buildsWithArtifact === 1 ? '' : 's'} with eslint-summary.json
+              {' '}({eslintBurnDown.summary.buildsScanned} pipeline runs checked, {eslintBurnDown.from} to {eslintBurnDown.to})
             </div>
 
             {eslintChartData.length === 0 ? (
-              <p className="placeholder-text">No ESLint pipeline artifacts found in the selected date range.</p>
+              <p className="placeholder-text">
+                {eslintBurnDown.summary.hint ??
+                  'No ESLint pipeline artifacts found in the selected date range.'}
+              </p>
             ) : (
               <div className="eslint-burndown-chart-container" aria-label="ESLint issue burn-down line chart">
                 <ResponsiveContainer width="100%" height={320}>

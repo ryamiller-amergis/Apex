@@ -434,7 +434,6 @@ router.get('/maxview-eslint-burndown', async (req: Request, res: Response) => {
       return;
     }
 
-    console.log('=== API: /maxview-eslint-burndown called ===', { from, to });
     const burnDown = await getMaxViewEslintBurnDown(from, to);
     res.json(burnDown);
   } catch (error: any) {
