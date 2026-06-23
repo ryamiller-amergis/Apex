@@ -448,7 +448,8 @@ export const PrdReviewView: React.FC = () => {
   const [showAdoModal, setShowAdoModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
-  const [showAllLinks, setShowAllLinks] = useState(false);
+  const [showAllDocs, setShowAllDocs] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
   const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
@@ -1070,116 +1071,42 @@ export const PrdReviewView: React.FC = () => {
                 </span>
               )}
             </div>
-            {(sourceInterview ||
-              (prd.status === 'approved' &&
-                relatedDesignDocs &&
-                relatedDesignDocs.length > 0)) &&
-              (() => {
-                const MAX_VISIBLE = 3;
-                const docs =
-                  prd.status === 'approved' && relatedDesignDocs
-                    ? relatedDesignDocs
-                    : [];
-                const totalChips = (sourceInterview ? 1 : 0) + docs.length;
-                const needsCollapse = totalChips > MAX_VISIBLE;
-                const visibleDocs =
-                  needsCollapse && !showAllLinks
-                    ? docs.slice(0, MAX_VISIBLE - (sourceInterview ? 1 : 0))
-                    : docs;
-                const hiddenCount = docs.length - visibleDocs.length;
-
-                return (
-                  <div className={styles.parentLinks}>
-                    {sourceInterview && (
-                      <button
-                        className={styles.parentLinkChip}
-                        onClick={() =>
-                          navigate(`/backlog/interview/${sourceInterview.id}`)
-                        }
-                        type="button"
-                        title={`View Interview: ${sourceInterview.title}`}
-                      >
-                        <svg
-                          viewBox="0 0 14 14"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.6"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <circle cx="7" cy="5" r="2.5" />
-                          <path d="M2 12c0-2.76 2.24-5 5-5s5 2.24 5 5" />
-                        </svg>
-                        {sourceInterview.title}
-                        <svg
-                          viewBox="0 0 10 10"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          style={{ width: 8, height: 8, opacity: 0.6 }}
-                        >
-                          <path d="M2 8L8 2M5 2h3v3" />
-                        </svg>
-                      </button>
-                    )}
-                    {visibleDocs.map((doc) => (
-                      <button
-                        key={doc.id}
-                        className={styles.parentLinkChip}
-                        onClick={() =>
-                          navigate(`/backlog/design-doc/${doc.id}`)
-                        }
-                        type="button"
-                        title={`View Design Doc: ${doc.title}`}
-                      >
-                        <svg
-                          viewBox="0 0 14 14"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.6"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <rect x="2" y="1" width="10" height="12" rx="1.5" />
-                          <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
-                        </svg>
-                        {doc.title}
-                        <svg
-                          viewBox="0 0 10 10"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          style={{ width: 8, height: 8, opacity: 0.6 }}
-                        >
-                          <path d="M2 8L8 2M5 2h3v3" />
-                        </svg>
-                      </button>
-                    ))}
-                    {needsCollapse && !showAllLinks && (
-                      <button
-                        className={styles.showMoreChip}
-                        onClick={() => setShowAllLinks(true)}
-                        type="button"
-                      >
-                        +{hiddenCount} more
-                      </button>
-                    )}
-                    {needsCollapse && showAllLinks && (
-                      <button
-                        className={styles.showMoreChip}
-                        onClick={() => setShowAllLinks(false)}
-                        type="button"
-                      >
-                        Show less
-                      </button>
-                    )}
-                  </div>
-                );
-              })()}
+            {sourceInterview && (
+              <div className={styles.parentLinks}>
+                <button
+                  className={styles.parentLinkChip}
+                  onClick={() =>
+                    navigate(`/backlog/interview/${sourceInterview.id}`)
+                  }
+                  type="button"
+                  title={`View Interview: ${sourceInterview.title}`}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="7" cy="5" r="2.5" />
+                    <path d="M2 12c0-2.76 2.24-5 5-5s5 2.24 5 5" />
+                  </svg>
+                  {sourceInterview.title}
+                  <svg
+                    viewBox="0 0 10 10"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ width: 8, height: 8, opacity: 0.6 }}
+                  >
+                    <path d="M2 8L8 2M5 2h3v3" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1502,103 +1429,156 @@ export const PrdReviewView: React.FC = () => {
         coverage={latestTestCase?.coverageSummary ?? null}
       />
 
-      {prd.status === 'approved' && designPlanResponse?.plan && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            {designPlanResponse.plan.status === 'generating'
-              ? 'A design plan is being generated for this PRD.'
-              : designPlanResponse.plan.status === 'consumed'
-                ? 'The design plan has been used to generate prototypes.'
-                : 'A design plan is ready. Review and edit it, then generate the designs.'}
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => navigate(`/backlog/design-plan/${id}`)}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            View Design Plan →
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' && relatedPrototypes.length > 0 && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            {relatedPrototypes.length === 1
-              ? '1 design prototype was generated for this PRD.'
-              : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}{' '}
-            {relatedPrototypes.filter((p) => p.status === 'approved').length} of{' '}
-            {relatedPrototypes.length} approved.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            View Design Prototypes →
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            No design prototypes exist for this PRD. Generate them to continue the design flow.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => {
-              if (!id) return;
-              generatePrototypes.mutate(id, {
-                onSuccess: () => navigate(`/backlog/design-prototypes/${id}`),
-              });
-            }}
-            disabled={generatePrototypes.isPending}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
-          </button>
-        </div>
-      )}
-
-      {prd.status === 'approved' &&
-        relatedDesignDocs &&
-        relatedDesignDocs.length > 0 && (
+      <div className={styles.bannerRow}>
+        {prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
-              {relatedDesignDocs.length === 1
-                ? 'A design doc was created from this PRD.'
-                : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
+              {designPlanResponse.plan.status === 'generating'
+                ? 'A design plan is being generated for this PRD.'
+                : designPlanResponse.plan.status === 'consumed'
+                  ? 'The design plan has been used to generate prototypes.'
+                  : 'A design plan is ready. Review and edit it, then generate the designs.'}
             </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => navigate(`/backlog/design-plan/${id}`)}
+              type="button"
+            >
+              View Design Plan →
+            </button>
           </div>
         )}
 
+        {prd.status === 'approved' && relatedPrototypes.length > 0 && (
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              {relatedPrototypes.length === 1
+                ? '1 design prototype was generated for this PRD.'
+                : `${relatedPrototypes.length} design prototypes were generated for this PRD.`}{' '}
+              {relatedPrototypes.filter((p) => p.status === 'approved').length} of{' '}
+              {relatedPrototypes.length} approved.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
+              type="button"
+            >
+              View Design Prototypes →
+            </button>
+          </div>
+        )}
+
+        {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              No design prototypes exist for this PRD. Generate them to continue the design flow.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => {
+                if (!id) return;
+                generatePrototypes.mutate(id, {
+                  onSuccess: () => navigate(`/backlog/design-prototypes/${id}`),
+                });
+              }}
+              disabled={generatePrototypes.isPending}
+              type="button"
+            >
+              {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
+            </button>
+          </div>
+        )}
+
+      </div>
+
+      {prd.status === 'approved' &&
+        relatedDesignDocs &&
+        relatedDesignDocs.length > 0 && (() => {
+          const MAX_DOCS = 3;
+          const visibleDocs = showAllDocs
+            ? relatedDesignDocs
+            : relatedDesignDocs.slice(0, MAX_DOCS);
+          const hiddenCount = relatedDesignDocs.length - visibleDocs.length;
+          return (
+            <div className={styles.designDocRow}>
+              <div className={styles.designDocBanner}>
+                <span className={styles.designDocBannerText}>
+                  {relatedDesignDocs.length === 1
+                    ? 'A design doc was created from this PRD.'
+                    : `${relatedDesignDocs.length} feature design docs were created from this PRD.`}
+                </span>
+                <div className={styles.designDocLinks}>
+                  {visibleDocs.map((doc) => (
+                    <button
+                      key={doc.id}
+                      className={styles.designDocBannerLink}
+                      onClick={() => navigate(`/backlog/design-doc/${doc.id}`)}
+                      type="button"
+                      title={`View Design Doc: ${doc.title}`}
+                    >
+                      <svg
+                        viewBox="0 0 14 14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ width: 11, height: 11, flexShrink: 0 }}
+                      >
+                        <rect x="2" y="1" width="10" height="12" rx="1.5" />
+                        <path d="M4.5 4.5h5M4.5 7h5M4.5 9.5h3" />
+                      </svg>
+                      {doc.title}
+                    </button>
+                  ))}
+                  {hiddenCount > 0 && (
+                    <button
+                      className={styles.showMoreChip}
+                      onClick={() => setShowAllDocs(true)}
+                      type="button"
+                    >
+                      +{hiddenCount} more
+                    </button>
+                  )}
+                  {showAllDocs && relatedDesignDocs.length > MAX_DOCS && (
+                    <button
+                      className={styles.showMoreChip}
+                      onClick={() => setShowAllDocs(false)}
+                      type="button"
+                    >
+                      Show less
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
       {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
-        <div className={styles.designDocBanner}>
-          <span className={styles.designDocBannerText}>
-            Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
-          </span>
-          <button
-            className={styles.actionBtnPrimary}
-            onClick={() => {
-              if (!id) return;
-              createDesignDoc.mutate({ prdId: id }, {
-                onSuccess: (data) => {
-                  if (data?.designDocId) {
-                    navigate(`/backlog/design-doc/${data.designDocId}`);
-                  }
-                },
-              });
-            }}
-            disabled={createDesignDoc.isPending}
-            type="button"
-            style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          >
-            {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
-          </button>
+        <div className={styles.designDocRow}>
+          <div className={styles.designDocBanner}>
+            <span className={styles.designDocBannerText}>
+              Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
+            </span>
+            <button
+              className={styles.designDocBannerLink}
+              onClick={() => {
+                if (!id) return;
+                createDesignDoc.mutate({ prdId: id }, {
+                  onSuccess: (data) => {
+                    if (data?.designDocId) {
+                      navigate(`/backlog/design-doc/${data.designDocId}`);
+                    }
+                  },
+                });
+              }}
+              disabled={createDesignDoc.isPending}
+              type="button"
+            >
+              {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1728,7 +1708,7 @@ export const PrdReviewView: React.FC = () => {
         </div>
       ) : (
         /* ── Normal tabs ─────────────────────────────────────────────────────── */
-        <>
+        <div className={[styles.tabArea, isFullscreen && styles.tabAreaFullscreen].filter(Boolean).join(' ')}>
           <div className={styles.tabs}>
             <button
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
@@ -1753,6 +1733,23 @@ export const PrdReviewView: React.FC = () => {
                 Validation
               </button>
             )}
+            <button
+              className={[styles.tabFullscreenBtn, isFullscreen && styles.tabFullscreenBtnActive].filter(Boolean).join(' ')}
+              onClick={() => setIsFullscreen((v) => !v)}
+              type="button"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                </svg>
+              )}
+            </button>
           </div>
 
           <div className={styles.tabContent}>
@@ -2110,7 +2107,7 @@ export const PrdReviewView: React.FC = () => {
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
 
       {/* ── Full-document edit modal ────────────────────────────────────────── */}

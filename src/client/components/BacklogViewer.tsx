@@ -617,35 +617,57 @@ const AcCard: React.FC<{
   ac: AcceptanceCriterion;
   index: number;
   testCases?: GeneratedTestCase[];
-}> = ({ ac, index, testCases = [] }) => (
-  <div className={styles.acCard}>
-    <div className={styles.acIndex}>#{index + 1}</div>
-    {ac.given && (
-      <div className={styles.acRow}>
-        <span className={styles.acLabel}>Given</span>
-        <span className={styles.acText}>{ac.given}</span>
-      </div>
-    )}
-    {ac.when && (
-      <div className={styles.acRow}>
-        <span className={styles.acLabel}>When</span>
-        <span className={styles.acText}>{ac.when}</span>
-      </div>
-    )}
-    {ac.then && (
-      <div className={styles.acRow}>
-        <span className={styles.acLabel}>Then</span>
-        <span className={styles.acText}>{ac.then}</span>
-      </div>
-    )}
-    {testCases.length > 0 && (
-      <div className={styles.acTestCases}>
-        <div className={styles.testCaseBlockLabel}>Test Cases</div>
-        <TestCaseList testCases={testCases} />
-      </div>
-    )}
-  </div>
-);
+}> = ({ ac, index, testCases = [] }) => {
+  const [tcOpen, setTcOpen] = useState(false);
+  return (
+    <div className={styles.acCard}>
+      <div className={styles.acIndex}>#{index + 1}</div>
+      {ac.given && (
+        <div className={styles.acRow}>
+          <span className={styles.acLabel}>Given</span>
+          <span className={styles.acText}>{ac.given}</span>
+        </div>
+      )}
+      {ac.when && (
+        <div className={styles.acRow}>
+          <span className={styles.acLabel}>When</span>
+          <span className={styles.acText}>{ac.when}</span>
+        </div>
+      )}
+      {ac.then && (
+        <div className={styles.acRow}>
+          <span className={styles.acLabel}>Then</span>
+          <span className={styles.acText}>{ac.then}</span>
+        </div>
+      )}
+      {testCases.length > 0 && (
+        <div className={styles.acTestCases}>
+          <button
+            type="button"
+            className={styles.tcCollapseToggle}
+            onClick={() => setTcOpen((v) => !v)}
+            aria-expanded={tcOpen}
+          >
+            <svg
+              className={[styles.chevron, tcOpen && styles.chevronOpen].filter(Boolean).join(' ')}
+              viewBox="0 0 14 14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 5l3 3 3-3" />
+            </svg>
+            {testCases.length} test case{testCases.length !== 1 ? 's' : ''}
+          </button>
+          {tcOpen && <TestCaseList testCases={testCases} />}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /* ── Non-functional requirements ─────────────────────────────────────────── */
 
@@ -694,6 +716,8 @@ const ItemCard: React.FC<{
       testCase.acceptanceCriteriaIndex === undefined ||
       !item.acceptanceCriteria?.[testCase.acceptanceCriteriaIndex]
   );
+
+  const [otherTcOpen, setOtherTcOpen] = useState(false);
 
   return (
     <div className={styles.itemWrapper}>
@@ -872,13 +896,32 @@ const ItemCard: React.FC<{
 
           {isPbi && unassignedTestCases.length > 0 && (
             <div className={styles.itemSection}>
-              <div className={styles.subsectionLabel}>
-                Other Generated Test Cases
-              </div>
-              <TestCaseList
-                testCases={unassignedTestCases}
-                showAcceptanceCriterion
-              />
+              <button
+                type="button"
+                className={styles.tcCollapseToggle}
+                onClick={() => setOtherTcOpen((v) => !v)}
+                aria-expanded={otherTcOpen}
+              >
+                <svg
+                  className={[styles.chevron, otherTcOpen && styles.chevronOpen].filter(Boolean).join(' ')}
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 5l3 3 3-3" />
+                </svg>
+                Other Generated Test Cases ({unassignedTestCases.length})
+              </button>
+              {otherTcOpen && (
+                <TestCaseList
+                  testCases={unassignedTestCases}
+                  showAcceptanceCriterion
+                />
+              )}
             </div>
           )}
         </div>
