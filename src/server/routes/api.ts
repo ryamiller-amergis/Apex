@@ -2,8 +2,6 @@ import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { generateBacklogId } from '../../shared/utils/backlogId';
 import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
-// figmaExportService intentionally unused — Figma design creation is handled
-// by the .cursor/hooks.json sessionStart hook running inside Cursor Desktop.
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
 // DesignDocKickoffStats is returned directly by the service - no import needed here
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
@@ -14,32 +12,136 @@ import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
+import { fetchAvailableModels } from '../services/modelsService';
+import { getAgentHealthStats } from '../services/chatAgentService';
+import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
+import {
+  filterProjectCatalogByNames,
+  listProjectCatalog,
+} from '../services/projectCatalogService';
+import {
+  createProjectAccessRequests,
+  listCurrentUserAccessRequests,
+  listRequestableProjectsForUser,
+} from '../services/projectAccessRequestService';
+import { getUserProjects } from '../services/adoMembershipService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserEmail } from '../utils/requestUser';
+import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 
 const router = express.Router();
 
-// GET /api/projects - List ADO projects accessible to the configured PAT,
-// filtered to the allowlist in ADO_ALLOWED_PROJECTS (comma-separated).
-router.get('/projects', async (_req: Request, res: Response) => {
+// GET /api/available-models — accessible to all authenticated users so that
+// non-admin roles (e.g. interviews:manage) can populate model dropdowns.
+router.get('/available-models', async (_req: Request, res: Response) => {
   try {
-    const adoService = new AzureDevOpsService();
-    let projects = await adoService.getProjects();
+    const models = await fetchAvailableModels();
+    res.json({ models });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
-    const allowList = (process.env.ADO_ALLOWED_PROJECTS || '')
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
+function getProfileOid(req: Request): string | null {
+  return (req.user as any)?.profile?.oid ?? null;
+}
 
-    if (allowList.length > 0) {
-      const allowed = new Set(allowList.map((p) => p.toLowerCase()));
-      projects = projects.filter((p) => allowed.has(p.name.toLowerCase()));
-      // Preserve the order defined in ADO_ALLOWED_PROJECTS
-      projects.sort((a, b) => allowList.findIndex((p) => p.toLowerCase() === a.name.toLowerCase()) - allowList.findIndex((p) => p.toLowerCase() === b.name.toLowerCase()));
+function requireAuthenticatedUserId(req: Request, res: Response): string | null {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+
+  const userId = getProfileOid(req);
+  if (!userId) {
+    res.status(400).json({ error: 'Authenticated user is missing an oid' });
+    return null;
+  }
+
+  return userId;
+}
+
+function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
+}
+
+// GET /api/projects - List projects available to the current user.
+// Super admins see the full catalog; everyone else sees the union of:
+//   1. Manual assignments (via user_project_assignments, managed by admins)
+//   2. ADO team membership (auto-detected via Teams/Members API)
+router.get('/projects', async (req: Request, res: Response) => {
+  try {
+    if (isSuperAdminRequest(req)) {
+      res.json(await listProjectCatalog());
+      return;
     }
 
-    res.json(projects);
+    const userId: string | undefined = (req.user as any)?.profile?.oid;
+    const email = getUserEmail(req);
+
+    const [assignedProjects, adoProjects] = await Promise.all([
+      userId ? getAssignmentsForUser(userId) : Promise.resolve([]),
+      email ? getUserProjects(email).catch((err) => {
+        console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
+        return [];
+      }) : Promise.resolve([]),
+    ]);
+
+    const adoProjectNames = adoProjects.map((p) => p.name);
+    const merged = [...new Set([...assignedProjects, ...adoProjectNames])];
+
+    if (merged.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const catalog = await listProjectCatalog();
+    res.json(filterProjectCatalogByNames(catalog, merged));
   } catch (error: any) {
     console.error('Error fetching ADO projects:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });
+  }
+});
+
+router.get('/project-access-requests/me', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    const requests = await listCurrentUserAccessRequests(userId);
+    res.json({ requests });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch project access requests' });
+  }
+});
+
+router.get('/project-access-requests/catalog', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    const projects = await listRequestableProjectsForUser(userId);
+    res.json({ projects });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch requestable projects' });
+  }
+});
+
+router.post('/project-access-requests', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  const { projects } = req.body as CreateProjectAccessRequestsRequest;
+  if (!isStringArrayOfNonEmptyItems(projects)) {
+    res.status(400).json({ error: 'projects must be an array of non-empty strings' });
+    return;
+  }
+
+  try {
+    const requests = await createProjectAccessRequests(userId, projects);
+    res.status(201).json({ requests });
+  } catch {
+    res.status(500).json({ error: 'Failed to create project access requests' });
   }
 });
 
@@ -69,16 +171,58 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
   }
 });
 
+// POST /api/projects/:project/select - Record that the user selected this project.
+// Inserts into user_project_assignments if no row exists yet (idempotent).
+router.post('/projects/:project/select', async (req: Request, res: Response): Promise<void> => {
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return;
+
+  try {
+    await ensureUserProjectAssignment(userId, req.params.project, 'auto-select');
+    res.status(204).end();
+  } catch (error: any) {
+    console.error('[api] project auto-assign failed:', error);
+    res.status(500).json({ error: 'Failed to record project selection' });
+  }
+});
+
 // GET /api/workitems - Fetch work items for date range
 router.get('/workitems', async (req: Request, res: Response) => {
   try {
     const { from, to, project, areaPath } = req.query as WorkItemsQuery & { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     const adoService = new AzureDevOpsService(project, areaPath);
     const workItems = await adoService.getWorkItems(from, to);
     res.json(workItems);
   } catch (error: any) {
     console.error('Error fetching work items:', error);
     res.status(500).json({ error: 'Failed to fetch work items' });
+  }
+});
+
+// GET /api/pr-review-tag-trends — work items tagged pr-reviewed / pr-review-skipped by ChangedDate
+router.get('/pr-review-tag-trends', async (req: Request, res: Response) => {
+  try {
+    const { from, to, areaPath: areaPathParam } = req.query as {
+      from?: string;
+      to?: string;
+      areaPath?: string;
+    };
+
+    if (!from || !to) {
+      return res.status(400).json({ error: 'from and to query parameters are required' });
+    }
+
+    console.log('=== API: /pr-review-tag-trends called ===', { from, to, areaPath: areaPathParam });
+
+    const adoService = new AzureDevOpsService('MaxView', areaPathParam || '');
+    const workItems = await adoService.getPrReviewTagTrendWorkItems(from, to);
+
+    console.log(`=== API: Returning ${workItems.length} PR review tag trend work items ===`);
+    res.json(workItems);
+  } catch (error: any) {
+    console.error('Error fetching PR review tag trend work items:', error);
+    res.status(500).json({ error: 'Failed to fetch PR review tag trend work items', details: error.message });
   }
 });
 
@@ -190,6 +334,11 @@ router.get('/health/db', async (_req: Request, res: Response) => {
     console.error('[db] Health check failed:', error);
     res.status(503).json({ healthy: false, error: 'Database unavailable' });
   }
+});
+
+// GET /api/health/agents - Chat agent system health
+router.get('/health/agents', (_req: Request, res: Response) => {
+  res.json(getAgentHealthStats());
 });
 
 // GET /api/due-date-stats - Get due date change statistics by developer
@@ -916,6 +1065,7 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 router.get('/releases/epics', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     const adoService = new AzureDevOpsService(project, areaPath);
     const epics = await adoService.getReleaseEpics();
     res.json(epics);
@@ -1097,6 +1247,7 @@ router.delete('/releases/:epicId', async (req: Request, res: Response) => {
 router.get('/releases', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    if (project?.toLowerCase() === 'apex') return res.json([]);
     console.log(`[GET /releases] Fetching releases for project: ${project}, areaPath: ${areaPath}`);
     const adoService = new AzureDevOpsService(project, areaPath);
     const versions = await adoService.getReleaseVersions();
@@ -3668,8 +3819,15 @@ import fs from 'fs';
 import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getUserGroupNames } from '../services/groupService';
+import { getMenuConfig } from '../services/menuSettingsService';
+import { getAppSetting } from '../services/appSettingsService';
+import type { MenuItemKey } from '../../shared/types/menuSettings';
+const ALL_MENU_VIEWS: MenuItemKey[] = ['calendar', 'planning', 'cloudcost', 'backlog'];
 
-function readCurrentChangelogVersion(): string {
+async function getCurrentChangelogVersion(): Promise<string> {
+  const dbValue = await getAppSetting('current_changelog_version');
+  if (dbValue) return dbValue;
   try {
     const raw = fs.readFileSync(path.resolve(process.cwd(), 'public/CHANGELOG.json'), 'utf8');
     const entries = JSON.parse(raw) as Array<{ version: string }>;
@@ -3679,10 +3837,6 @@ function readCurrentChangelogVersion(): string {
   }
 }
 
-// Cached at startup — the version only changes on deployment so a module-level
-// read is sufficient and avoids a file-system hit on every permissions request.
-const CURRENT_CHANGELOG_VERSION = readCurrentChangelogVersion();
-
 router.get('/me/permissions', attachPermissions, async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req.user as any)?.profile?.oid;
@@ -3690,16 +3844,24 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const [permSet, roles, changelogPrefs] = await Promise.all([
+    const superAdmin = isSuperAdminRequest(req);
+    const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
       getUserPermissions(userId),
       getUserRoleNames(userId),
+      getUserGroupNames(userId),
       getChangelogPrefs(userId),
+      getCurrentChangelogVersion(),
     ]);
+    if (superAdmin && !roles.includes('admin')) {
+      roles.push('admin');
+    }
     res.json({
       permissions: [...permSet],
       roles,
+      groups: userGroups,
       userId,
-      changelogUnread: changelogPrefs.lastSeenVersion !== CURRENT_CHANGELOG_VERSION,
+      isSuperAdmin: superAdmin,
+      changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
     });
   } catch {
@@ -3723,7 +3885,7 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       showChangelogOnLogin?: boolean;
     };
     const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
-    if (markChangelogRead === true) updates.lastSeenChangelogVersion = CURRENT_CHANGELOG_VERSION;
+    if (markChangelogRead === true) updates.lastSeenChangelogVersion = await getCurrentChangelogVersion();
     if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
     await updateChangelogPrefs(userId, updates);
     res.json({ ok: true });
@@ -3752,11 +3914,29 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       interviewSkillPath: config.interviewSkillPath ?? null,
       prdSkillPath: config.prdSkillPath ?? null,
       designDocSkillPath: config.designDocSkillPath ?? null,
+      testCaseSkillPath: config.testCaseSkillPath ?? null,
       interviewModel: config.interviewModel ?? null,
       prdModel: config.prdModel ?? null,
       designDocModel: config.designDocModel ?? null,
+      testCaseModel: config.testCaseModel ?? null,
       quickSkillPills: config.quickSkillPills ?? null,
+      quickMcpPills: config.quickMcpPills ?? null,
     });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/menu-config?project=<name> — resolve per-project menu visibility
+router.get('/menu-config', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = req.query.project as string | undefined;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    const config = await getMenuConfig(project);
+    res.json({ enabledViews: config?.enabledViews ?? ALL_MENU_VIEWS });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

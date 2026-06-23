@@ -16,6 +16,9 @@ jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(() => ({
     selectedProject: 'MaxView',
     can: jest.fn(() => true),
+    userId: 'user-1',
+    isAdmin: false,
+    isInAnyGroup: jest.fn(() => true),
   })),
 }));
 
@@ -78,6 +81,15 @@ jest.mock('../../hooks/useSpeechInput', () => ({
     speechError: null,
     toggle: jest.fn(),
     stop: jest.fn(),
+  })),
+}));
+
+jest.mock('../../hooks/useSpeechOutput', () => ({
+  useSpeechOutput: jest.fn(() => ({
+    speak: jest.fn(),
+    stop: jest.fn(),
+    isSpeaking: false,
+    isSpeechOutputSupported: true,
   })),
 }));
 
@@ -164,6 +176,8 @@ beforeEach(() => {
   (useAppShell as jest.Mock).mockReturnValue({
     selectedProject: 'MaxView',
     can: jest.fn(() => true),
+    userId: 'user-1',
+    isAdmin: false,
   });
   global.fetch = jest.fn().mockResolvedValue({
     ok: true,
@@ -269,6 +283,27 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
   });
 });
 
+// ── Read-only viewer (non-author) ─────────────────────────────────────────────
+
+describe('ExistingInterviewView — read-only viewer', () => {
+  it('hides the compose area and shows a read-only notice for a non-author viewer', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+      userId: 'viewer-2',
+      isAdmin: false,
+    });
+    renderExistingInterview();
+    expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+});
+
 // ── Locked notice content ──────────────────────────────────────────────────────
 
 describe('ExistingInterviewView — locked notice copy', () => {
@@ -315,6 +350,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -330,6 +367,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => false),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -344,6 +383,8 @@ describe('ExistingInterviewView — Reopen button in locked notice', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'archived' }),
@@ -391,6 +432,8 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [] }),
@@ -406,6 +449,8 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'complete', prds: [makePrd()] }),
@@ -415,6 +460,26 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
     renderExistingInterview();
     const btn = screen.getByTitle('Cannot reopen — a PRD has already been generated');
     expect(btn).toBeDisabled();
+  });
+});
+
+// ── Read Aloud on agent messages ───────────────────────────────────────────────
+
+describe('ExistingInterviewView — Read Aloud', () => {
+  it('shows a Read Aloud button on agent messages', () => {
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'agent' as const,
+          text: 'Here is the interview question.',
+          ts: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    renderExistingInterview();
+    expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
   });
 });
 
@@ -491,6 +556,8 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
 
     mockStartChatMutate.mockResolvedValue({ threadId: 'new-thread-1' });
@@ -532,6 +599,9 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
         expect.objectContaining({
           kickoff: expect.objectContaining({ model: 'claude-opus-4-6' }),
         }),
+      );
+      expect(mockCreatePrdMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-opus-4-6' }),
       );
     });
   });
@@ -611,6 +681,8 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),
+      userId: 'user-1',
+      isAdmin: false,
     });
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,

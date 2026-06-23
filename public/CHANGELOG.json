@@ -1,5 +1,259 @@
 [
   {
+    "version": "1.29.0",
+    "date": "2026-06-22",
+    "title": "Group-Based Interview Access Control",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Start New Interview is now restricted to members of the BA, Manager, or Product-Owner groups — users without group membership see the button disabled with a tooltip explaining the requirement"
+      },
+      {
+        "type": "improvement",
+        "description": "The server now enforces group membership on interview creation, so the restriction is upheld even if the UI is bypassed"
+      },
+      {
+        "type": "improvement",
+        "description": "User group memberships are now included in the permissions API response and exposed via useAppShell for client-side access control checks"
+      }
+    ]
+  },
+  {
+    "version": "1.28.0",
+    "date": "2026-06-19",
+    "title": "Per-Feature Design Docs & ADO Export",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design docs now generate automatically when each design prototype is approved, grounded in the interview transcript, PRD, and that feature's prototype HTML"
+      },
+      {
+        "type": "feature",
+        "description": "Create in ADO now exports Technical Backlog Items separately from PBIs, links dependencies between work items, attaches design doc files and prototype HTML to features, and creates ADO test cases from generated QA suites"
+      },
+      {
+        "type": "feature",
+        "description": "The Create in ADO modal shows a results panel after export with created work items, dependency links, and direct links to ADO"
+      },
+      {
+        "type": "improvement",
+        "description": "Removed the Design Doc Q&A interview phase — design docs start generating immediately after prototype approval instead of waiting for a separate Q&A step"
+      },
+      {
+        "type": "improvement",
+        "description": "Design doc groups on the interviews dashboard show an approval progress bar with approved/total counts"
+      },
+      {
+        "type": "improvement",
+        "description": "Backlog features now carry designDocId and designPrototypeId links for reliable matching when gating ADO creation"
+      },
+      {
+        "type": "bugfix",
+        "description": "PRD status now refreshes automatically when test case generation completes so validation transitions appear without a manual reload"
+      }
+    ]
+  },
+  {
+    "version": "1.27.0",
+    "date": "2026-06-18",
+    "title": "AI Model Audit Trail",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Interviews, PRDs, design docs, and design prototypes now record which AI model was used for generation and show it in each review view"
+      },
+      {
+        "type": "improvement",
+        "description": "The model selected when starting an interview or generating a PRD is persisted through the workflow, including per-feature design docs split from a parent doc"
+      },
+      {
+        "type": "improvement",
+        "description": "Design prototype generation now stores the resolved Bedrock model (project skill override or default) on each prototype, including retries"
+      }
+    ]
+  },
+  {
+    "version": "1.26.0",
+    "date": "2026-06-15",
+    "title": "Project Access & Release Banner",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added project access requests on the project selector so users can request access to ADO and non-ADO projects before entering the app"
+      },
+      {
+        "type": "feature",
+        "description": "Platform admins can now review project access requests and manage project assignments, including pending email assignments for users who have not logged in yet"
+      },
+      {
+        "type": "improvement",
+        "description": "What's New updates now appear as a non-blocking banner on the project selector page instead of interrupting users after they choose a project"
+      },
+      {
+        "type": "improvement",
+        "description": "Release announcement tracking now syncs through a server-side setting so the latest changelog version can be updated without relying only on startup file reads"
+      }
+    ]
+  },
+  {
+    "version": "1.25.0",
+    "date": "2026-06-05",
+    "title": "PRD Apex Assistant & Inline Editing",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added Apex Assistant button to PRD view (when not yet approved) — opens a resizable slide-out chat panel pre-loaded with the full PRD, backlog, and all reviewer comments so the AI can bulk-address feedback and propose content changes"
+      },
+      {
+        "type": "feature",
+        "description": "AI-proposed PRD or backlog changes are staged for review — a GitHub-style diff banner appears with Accept and Reject buttons so authors control exactly what gets applied"
+      },
+      {
+        "type": "feature",
+        "description": "New resolve_prd_comment MCP tool lets the Apex Assistant automatically mark reviewer comments as resolved after addressing them in the content, closing the feedback loop without manual intervention"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the full-document Edit tab with a header Edit button (opens a focused modal) and per-section pencil icons in the Preview tab — hover a section heading to edit just that section without touching the rest of the document"
+      },
+      {
+        "type": "improvement",
+        "description": "Backlog tab is now editable — each epic, feature, and item card has an edit icon that opens a pre-filled form, letting authors update titles, descriptions, and priorities without leaving the PRD view"
+      }
+    ]
+  },
+  {
+    "version": "1.24.0",
+    "date": "2026-06-02",
+    "title": "Inline Review Comments",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Reviewers can now highlight text in PRDs and Design Docs to leave inline comments — a sidebar panel shows all threads with reply, resolve, reopen, and delete actions"
+      },
+      {
+        "type": "feature",
+        "description": "Approve button is blocked until all inline review comments are resolved, ensuring no document is approved with outstanding feedback"
+      },
+      {
+        "type": "improvement",
+        "description": "Owner and assigned reviewer names are now always visible in the document header, regardless of document status"
+      },
+      {
+        "type": "improvement",
+        "description": "Replaced the Request Revision modal with the inline comment workflow — reviewers leave structured, text-anchored feedback instead of a single free-text reason"
+      }
+    ]
+  },
+  {
+    "version": "1.23.0",
+    "date": "2026-06-02",
+    "title": "Section Owners & Chat Resilience",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Assign PRD and Design Doc owners when starting an interview — a modal lets you select section owners from active users, and each owner receives an in-app notification on assignment"
+      },
+      {
+        "type": "feature",
+        "description": "PRD and Design Doc owner names are now displayed as chips in the interview header"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agent retries transient run failures automatically and shows a live 'Retrying…' indicator in the conversation instead of immediately surfacing an error"
+      },
+      {
+        "type": "improvement",
+        "description": "Error messages in interview chat now include a '↺ Try again' button to re-send the last user message without leaving the chat"
+      }
+    ]
+  },
+  {
+    "version": "1.22.0",
+    "date": "2026-06-01",
+    "title": "Interview Context & Agent Reliability",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Interview chat shows a context usage bar and wrap-up banners as the conversation approaches the model limit — with one-click Generate PRD and a confirmation before sending when the window is nearly full"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat agents automatically retry transient and rate-limited Cursor API errors with exponential backoff, and classify failures so auth issues prompt a refresh instead of endless retries"
+      },
+      {
+        "type": "improvement",
+        "description": "Interview chat sessions use a longer idle timeout (2 hours) and the server recovers threads left stuck in running after a restart"
+      },
+      {
+        "type": "improvement",
+        "description": "Failed sends and PRD generation in interviews now show a dismissible error banner instead of failing silently"
+      },
+      {
+        "type": "improvement",
+        "description": "Azure Application Insights telemetry for client and server when APPLICATIONINSIGHTS_CONNECTION_STRING is configured"
+      }
+    ]
+  },
+  {
+    "version": "1.21.0",
+    "date": "2026-05-31",
+    "title": "Document Approver Assignments & Notifications",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Approvers are now assigned per-document at submit time — a modal lets authors pick specific PRD and design doc approvers from the project pool before submitting for review"
+      },
+      {
+        "type": "feature",
+        "description": "In-app notification center — a bell icon in the header shows unread notifications; approvers receive a notification when assigned to review a document"
+      },
+      {
+        "type": "feature",
+        "description": "Real-time notification delivery via Server-Sent Events — new notifications appear instantly without page refresh, with optional toast popups"
+      },
+      {
+        "type": "feature",
+        "description": "Notification preferences — users can toggle per-type notifications and toast alerts on or off from the Notifications page"
+      },
+      {
+        "type": "feature",
+        "description": "Admins can reassign pending approvers on any document after submission via a new assignments panel"
+      },
+      {
+        "type": "improvement",
+        "description": "Approval mode (any one / all required) is now configurable per project in Admin → Project Settings"
+      },
+      {
+        "type": "improvement",
+        "description": "Design doc approver IDs set at PRD submission are automatically propagated to new per-feature design docs as they are generated"
+      }
+    ]
+  },
+  {
+    "version": "1.20.0",
+    "date": "2026-05-30",
+    "title": "Project Settings & Approvers",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Admins can assign designated design doc and PRD approvers per project — any listed approver with review permission can approve that document type"
+      },
+      {
+        "type": "feature",
+        "description": "Each project can override the global default AI model with its own per-project default"
+      },
+      {
+        "type": "improvement",
+        "description": "Project settings admin page is reorganized into accordion sections with contextual help, making skill paths, models, and pills easier to configure"
+      },
+      {
+        "type": "improvement",
+        "description": "Project list view shows approver counts at a glance instead of a wide table of truncated model IDs"
+      }
+    ]
+  },
+  {
     "version": "1.19.2",
     "date": "2026-05-28",
     "title": "PRD & Interview Guardrails",

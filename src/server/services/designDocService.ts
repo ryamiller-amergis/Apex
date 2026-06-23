@@ -1,16 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 import { and, desc, eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds } from '../db/schema';
-import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard } from '../../shared/types/interview';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes } from '../db/schema';
+
+const authorUser = alias(appUsers, 'author_user');
+const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
+import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isAdminUser } from '../utils/rbacHelpers';
+import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
+import { getUnresolvedCount } from './reviewCommentService';
+import { notifyAiCompletion } from './aiCompletionNotifier';
 import { getSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
+import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 
-const VALID_STATUSES: DesignDocStatus[] = ['interviewing', 'generating', 'validating', 'draft', 'pending_review', 'approved', 'revision_requested'];
+const VALID_STATUSES: DesignDocStatus[] = ['generating', 'validating', 'draft', 'pending_review', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -23,6 +31,37 @@ async function cleanupWorkspace(threadId: string): Promise<void> {
       console.log(`[watcher] Cleaned up workspace for thread ${threadId}`);
     }
   } catch { /* non-fatal */ }
+}
+
+/**
+ * Best-effort read of an interview's conversation as a plain-text transcript,
+ * used to ground design doc generation in the BA's own words. Returns null when
+ * the interview, its thread, or any messages are unavailable.
+ */
+async function readInterviewTranscript(interviewId: string): Promise<string | null> {
+  try {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, interviewId),
+      columns: { chatThreadId: true },
+    });
+    if (!interview?.chatThreadId) return null;
+
+    const { getThreadAsync } = await import('./chatAgentService');
+    const thread = await getThreadAsync(interview.chatThreadId);
+    if (!thread) return null;
+
+    const lines: string[] = [];
+    for (const msg of thread.messages) {
+      if (msg.role === 'user' && msg.text && msg.text !== 'Begin.') {
+        lines.push(`BA: ${msg.text}`);
+      } else if (msg.role === 'agent' && msg.text) {
+        lines.push(`Interviewer: ${msg.text}`);
+      }
+    }
+    return lines.length > 0 ? lines.join('\n\n') : null;
+  } catch {
+    return null;
+  }
 }
 
 function assertValidStatus(status: string): asserts status is DesignDocStatus {
@@ -51,25 +90,50 @@ function notFound(msg: string): Error {
   return err;
 }
 
+function stripPrototypeArtifactsFromTechSpec(content: string): string {
+  let cleaned = content;
+
+  // Remove full HTML document dumps if they leak into generated tech specs.
+  cleaned = cleaned.replace(/<!DOCTYPE\s+html[\s\S]*?<\/html>/gi, '');
+
+  // Remove fenced HTML blocks that appear to be prototype payloads.
+  cleaned = cleaned.replace(/```html[\s\S]*?```/gi, (block) => {
+    if (/NEW_FEATURE|STATE:(?:default|empty|error|loading)|annotation-wrapper|time-entry-table|<body|<html/i.test(block)) {
+      return '';
+    }
+    return block;
+  });
+
+  // Remove prototype-only comment markers in case they appear inline.
+  cleaned = cleaned.replace(/<!--\s*NEW_FEATURE:(?:START|END)\s*-->/gi, '');
+  cleaned = cleaned.replace(/<!--\s*STATE:[a-z_]+:(?:START|END)\s*-->/gi, '');
+
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export async function createDesignDoc(opts: {
   prdId: string;
   project: string;
   userId: string;
   chatThreadId?: string;
-  qaChatThreadId?: string;
+  designPrototypeId?: string;
+  featureIndex?: number;
   title?: string;
   status?: DesignDocStatus;
+  model?: string;
 }): Promise<{ designDocId: string }> {
-  const status = opts.status ?? (opts.qaChatThreadId && !opts.chatThreadId ? 'interviewing' : 'generating');
+  const status = opts.status ?? 'generating';
   const [row] = await db
     .insert(designDocs)
     .values({
       prdId: opts.prdId,
       project: opts.project,
       chatThreadId: opts.chatThreadId ?? null,
-      qaChatThreadId: opts.qaChatThreadId ?? null,
+      designPrototypeId: opts.designPrototypeId ?? null,
+      featureIndex: opts.featureIndex ?? null,
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
+      model: opts.model ?? null,
       designContent: '',
       techSpecContent: '',
       assumptionsContent: '',
@@ -90,31 +154,57 @@ export async function listDesignDocs(
   if (filters?.project) conditions.push(eq(designDocs.project, filters.project));
 
   const rows = await db
-    .select({ designDoc: designDocs, reviewerDisplayName: appUsers.displayName, prdTitle: prds.title })
+    .select({
+      designDoc: designDocs,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      prdTitle: prds.title,
+      designDocOwnerId: interviews.designDocOwnerId,
+      designDocOwnerDisplayName: designDocOwnerUser.displayName,
+    })
     .from(designDocs)
     .leftJoin(appUsers, eq(designDocs.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(designDocs.authorId, authorUser.oid))
     .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(designDocOwnerUser, eq(interviews.designDocOwnerId, designDocOwnerUser.oid))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(designDocs.updatedAt));
 
-  return rows.map(({ designDoc, reviewerDisplayName, prdTitle }) => rowToSummary(designDoc, reviewerDisplayName, prdTitle));
+  return rows.map(({ designDoc, reviewerDisplayName, authorDisplayName, prdTitle, designDocOwnerId, designDocOwnerDisplayName }) =>
+    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+  );
 }
 
 export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
   const rows = await db
-    .select({ designDoc: designDocs, reviewerDisplayName: appUsers.displayName })
+    .select({
+      designDoc: designDocs,
+      reviewerDisplayName: appUsers.displayName,
+      authorDisplayName: authorUser.displayName,
+      designDocOwnerId: interviews.designDocOwnerId,
+      designDocOwnerDisplayName: designDocOwnerUser.displayName,
+    })
     .from(designDocs)
     .leftJoin(appUsers, eq(designDocs.reviewerId, appUsers.oid))
+    .leftJoin(authorUser, eq(designDocs.authorId, authorUser.oid))
+    .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+    .leftJoin(designDocOwnerUser, eq(interviews.designDocOwnerId, designDocOwnerUser.oid))
     .where(eq(designDocs.id, id))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { designDoc: row, reviewerDisplayName } = rows[0];
+  const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
   return {
-    ...rowToSummary(row, reviewerDisplayName),
+    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
+    proposedDesignContent: row.proposedDesignContent ?? null,
+    proposedTechSpecContent: row.proposedTechSpecContent ?? null,
+    proposedAssumptionsContent: row.proposedAssumptionsContent ?? null,
+    fixCommentId: row.fixCommentId ?? null,
   };
 }
 
@@ -135,20 +225,25 @@ export async function updateDesignDocContent(
   };
 
   if (opts.designContent !== undefined) updates.designContent = opts.designContent;
-  if (opts.techSpecContent !== undefined) updates.techSpecContent = opts.techSpecContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.techSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
   if (opts.assumptionsContent !== undefined) updates.assumptionsContent = opts.assumptionsContent;
 
   if (row.status === 'revision_requested') {
     updates.status = 'draft';
     updates.reviewerId = null;
-    updates.reviewComment = null;
     updates.reviewedAt = null;
   }
 
   await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
 }
 
-export async function submitForReview(id: string, requestingUserId: string): Promise<void> {
+export async function submitForReview(
+  id: string,
+  requestingUserId: string,
+  opts?: { approverIds?: string[] },
+): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
@@ -161,16 +256,36 @@ export async function submitForReview(id: string, requestingUserId: string): Pro
     throw conflict('Design doc content must be non-empty before submitting for review');
   }
 
+  let effectiveApproverIds = opts?.approverIds;
+  if ((!effectiveApproverIds || effectiveApproverIds.length === 0) && row.prdId) {
+    const prd = await db.query.prds.findFirst({
+      where: eq(prds.id, row.prdId),
+      columns: { interviewId: true },
+    });
+    if (prd?.interviewId) {
+      const interview = await db.query.interviews.findFirst({
+        where: eq(interviews.id, prd.interviewId),
+        columns: { designDocApproverIds: true },
+      });
+      if (interview?.designDocApproverIds && interview.designDocApproverIds.length > 0) {
+        effectiveApproverIds = interview.designDocApproverIds;
+      }
+    }
+  }
+
   await db
     .update(designDocs)
     .set({
       status: 'pending_review',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(designDocs.id, id));
+
+  if (effectiveApproverIds && effectiveApproverIds.length > 0) {
+    await assignApprovers(id, 'design_doc', effectiveApproverIds, requestingUserId);
+  }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
@@ -186,7 +301,6 @@ export async function withdrawFromReview(id: string, requestingUserId: string): 
     .set({
       status: 'draft',
       reviewerId: null,
-      reviewComment: null,
       reviewedAt: null,
       updatedAt: new Date().toISOString(),
     })
@@ -204,38 +318,50 @@ export async function reviewDesignDoc(
   if (row.authorId === reviewerId && !(await isAdminUser(reviewerId))) {
     throw forbidden('You cannot review your own design doc');
   }
-  if (opts.action !== 'approve' && opts.action !== 'request_revision') {
+  if (opts.action !== 'approve') {
     const err = new Error(`Invalid review action: ${opts.action}`);
     (err as any).status = 400;
     throw err;
   }
-  if (opts.action === 'request_revision' && !opts.comment) {
-    const err = new Error('A comment is required when requesting revision');
-    (err as any).status = 400;
-    throw err;
-  }
-  if (opts.action === 'approve') {
-    const skillConfig = await getSkillConfig(row.project);
-    if (skillConfig?.designDocValidationSkillPath) {
-      if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
-        const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
-        (err as any).status = 409;
-        throw err;
-      }
+
+  const skillConfig = await getSkillConfig(row.project);
+  if (skillConfig?.designDocValidationSkillPath) {
+    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
+      const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+      (err as any).status = 409;
+      throw err;
     }
   }
 
-  const statusMap: Record<ReviewDesignDocRequest['action'], DesignDocStatus> = {
-    approve: 'approved',
-    request_revision: 'revision_requested',
-  };
+  const unresolvedCount = await getUnresolvedCount(id, 'design_doc');
+  if (unresolvedCount > 0) {
+    const err = new Error(`Cannot approve: ${unresolvedCount} unresolved review comment(s) remain`);
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const admin = await isAdminUser(reviewerId);
+  const assigned = await isAssignedApprover(id, 'design_doc', reviewerId);
+  if (!assigned && !admin) {
+    throw forbidden('You are not an assigned approver for this design doc');
+  }
+
+  if (assigned) {
+    await recordApproverResponse(id, 'design_doc', reviewerId, 'approved');
+  }
+
+  if (!admin) {
+    const { complete } = await isApprovalComplete(id, 'design_doc', row.project);
+    if (!complete) {
+      return;
+    }
+  }
 
   await db
     .update(designDocs)
     .set({
-      status: statusMap[opts.action],
+      status: 'approved',
       reviewerId,
-      reviewComment: opts.comment ?? null,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
@@ -251,7 +377,9 @@ export async function syncDesignDocContent(
   };
 
   if (opts.designContent !== undefined) updates.designContent = opts.designContent;
-  if (opts.techSpecContent !== undefined) updates.techSpecContent = opts.techSpecContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.techSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
   if (opts.assumptionsContent !== undefined) updates.assumptionsContent = opts.assumptionsContent;
   if (opts.finalStatus !== undefined) updates.status = opts.finalStatus;
 
@@ -259,6 +387,12 @@ export async function syncDesignDocContent(
     .update(designDocs)
     .set(updates)
     .where(eq(designDocs.id, id));
+
+  if (opts.finalStatus === 'pending_review') {
+    notifyApproversDocumentReady(id, 'design_doc').catch((err) =>
+      console.error(`[syncDesignDocContent] Failed to notify approvers (docId=${id})`, err),
+    );
+  }
 }
 
 const WATCHER_INTERVAL_MS = 5_000;
@@ -314,6 +448,11 @@ export async function syncPerFeatureDesignDocs(
 
   const skillConfig = await getSkillConfig(project);
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+  const seedModelRow = await db.query.designDocs.findFirst({
+    where: eq(designDocs.id, seedId),
+    columns: { model: true },
+  });
+  const seedModel = seedModelRow?.model ?? null;
 
   // Load titles already persisted for this PRD so the watcher's early inserts are not duplicated
   const existingRows = await db
@@ -337,8 +476,9 @@ export async function syncPerFeatureDesignDocs(
         chatThreadId: null,
         authorId,
         title,
+        model: seedModel,
         designContent: feat.design,
-        techSpecContent: feat.techSpec,
+        techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
         status: finalStatus,
       })
@@ -346,6 +486,9 @@ export async function syncPerFeatureDesignDocs(
     createdIds.push(row.id);
     existingTitles.add(title);
     console.log(`[designDoc] Created per-feature row "${title}" (id=${row.id}, status=${finalStatus})`);
+    propagateDesignDocApprovers(prdId, row.id, authorId).catch((err) => {
+      console.error(`[designDoc] propagateDesignDocApprovers failed (prdId=${prdId}, docId=${row.id})`, err);
+    });
   }
 
   // Null the seed row's chatThreadId — marks it as processed so the watcher skips creation
@@ -361,6 +504,12 @@ export async function syncPerFeatureDesignDocs(
       });
     }
   }
+
+  notifyAiCompletion('design_doc_generated', seedId, {
+    title: `${features.length} design doc${features.length > 1 ? 's' : ''}`,
+  }).catch(err =>
+    console.error(`[designDoc] AI notification failed for design_doc_generated (seedId=${seedId}):`, err),
+  );
 }
 
 export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): void {
@@ -377,14 +526,17 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
-      console.warn(`[designDocWatcher] Timed out (seedDocId=${seedDocId}, threadId=${chatThreadId})`);
+      console.warn(`[designDocWatcher] Timed out — resetting to draft (seedDocId=${seedDocId}, threadId=${chatThreadId})`);
+      await db.update(designDocs)
+        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, seedDocId), eq(designDocs.status, 'generating')));
       return;
     }
 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId) {
       clearInterval(interval);
@@ -417,14 +569,18 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               chatThreadId: null,
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
+              model: seedDoc.model ?? null,
               designContent: feat.design,
-              techSpecContent: feat.techSpec,
+              techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
               status: finalStatus,
             })
             .returning({ id: designDocs.id });
           createdSlugs.add(feat.slug);
           console.log(`[designDocWatcher] Created feature row "${humanizeSlug(feat.slug)}" (id=${row.id})`);
+          propagateDesignDocApprovers(seedDoc.prdId, row.id, seedDoc.authorId).catch((err) => {
+            console.error(`[designDocWatcher] propagateDesignDocApprovers failed (prdId=${seedDoc.prdId}, docId=${row.id})`, err);
+          });
           if (finalStatus === 'validating') {
             autoStartValidation(row.id).catch((err) => {
               console.error(`[designDocWatcher] autoStartValidation failed (id=${row.id})`, err);
@@ -463,6 +619,228 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
   activeDocWatchers.set(seedDocId, interval);
 }
 
+/**
+ * Watcher for single-feature design docs (triggered by prototype approval).
+ * Unlike the multi-feature watcher, this updates the existing doc row directly
+ * instead of spawning child rows.
+ */
+export function startSingleFeatureDocWatcher(
+  designDocId: string,
+  chatThreadId: string,
+  prdId: string,
+  project: string,
+): void {
+  stopDocWatcher(designDocId);
+  let attempts = 0;
+
+  console.log(`[singleFeatureDocWatcher] Started — designDocId=${designDocId} threadId=${chatThreadId}`);
+
+  const interval = setInterval(async () => {
+    attempts += 1;
+
+    if (attempts > WATCHER_MAX_ATTEMPTS) {
+      clearInterval(interval);
+      activeDocWatchers.delete(designDocId);
+      console.warn(`[singleFeatureDocWatcher] Timed out — marking failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
+      await db.update(designDocs)
+        .set({ status: 'draft', chatThreadId: null, updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
+      return;
+    }
+
+    const design = readOutputDesignDoc(chatThreadId);
+    const techSpec = readOutputTechSpec(chatThreadId);
+    const assumptions = readOutputAssumptions(chatThreadId);
+
+    console.log(
+      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} (designDocId=${designDocId})`,
+    );
+
+    if (design && techSpec && assumptions) {
+      clearInterval(interval);
+      activeDocWatchers.delete(designDocId);
+
+      const skillConfig = await getSkillConfig(project);
+      const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+
+      await db.update(designDocs)
+        .set({
+          designContent: design,
+          techSpecContent: techSpec,
+          assumptionsContent: assumptions,
+          status: finalStatus,
+          chatThreadId: null,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(designDocs.id, designDocId));
+
+      await cleanupWorkspace(chatThreadId);
+      console.log(`[singleFeatureDocWatcher] Done — content synced, status=${finalStatus} (designDocId=${designDocId})`);
+
+      notifyAiCompletion('design_doc_generated', designDocId, { title: 'Design doc' }).catch(err =>
+        console.error(`[singleFeatureDocWatcher] AI notification failed (designDocId=${designDocId}):`, err),
+      );
+
+      if (finalStatus === 'validating') {
+        autoStartValidation(designDocId).catch((err) => {
+          console.error(`[singleFeatureDocWatcher] autoStartValidation failed (designDocId=${designDocId})`, err);
+        });
+      }
+      return;
+    }
+
+    if (isThreadIdle(chatThreadId)) {
+      clearInterval(interval);
+      activeDocWatchers.delete(designDocId);
+      console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — resetting to draft (designDocId=${designDocId})`);
+      await db.update(designDocs)
+        .set({ status: 'draft', chatThreadId: null, updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
+      await cleanupWorkspace(chatThreadId);
+    }
+  }, WATCHER_INTERVAL_MS);
+
+  activeDocWatchers.set(designDocId, interval);
+}
+
+/**
+ * Idempotently creates one design_docs row for a specific prototype+feature pair and
+ * starts the generation watcher. The doc is grounded in interview transcript + PRD
+ * content + the single feature's HTML prototype.
+ *
+ * Safe to call multiple times — if a linked row already exists it is a no-op.
+ */
+export async function startSingleFeatureDesignDocWatcher(
+  prototypeId: string,
+  featureIndex: number,
+  prdId: string,
+  interviewId: string | null,
+): Promise<void> {
+  const existingDoc = await db.query.designDocs.findFirst({
+    where: and(
+      eq(designDocs.designPrototypeId, prototypeId),
+      eq(designDocs.featureIndex, featureIndex),
+    ),
+    columns: { id: true },
+  });
+  if (existingDoc) {
+    console.log(`[designDoc] startSingleFeatureDesignDocWatcher: doc already exists (docId=${existingDoc.id}, prototypeId=${prototypeId}, featureIndex=${featureIndex})`);
+    return;
+  }
+
+  const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!prd) {
+    console.error(`[designDoc] startSingleFeatureDesignDocWatcher: PRD ${prdId} not found`);
+    return;
+  }
+
+  const { getSkillConfig } = await import('./projectSettingsService');
+  const { getDefaultModel } = await import('./appSettingsService');
+  const { createThread } = await import('./chatAgentService');
+
+  const skillConfig = await getSkillConfig(prd.project);
+  const globalModel = await getDefaultModel();
+  const model = skillConfig?.designDocModel ?? globalModel;
+
+  const proto = await db.query.designPrototypes.findFirst({
+    where: eq(designPrototypes.id, prototypeId),
+    columns: { featureName: true, mockHtml: true, mockVersion: true },
+  });
+
+  const interviewTranscript = interviewId
+    ? await readInterviewTranscript(interviewId)
+    : null;
+
+  const prototypeContext = proto?.mockHtml
+    ? [
+        `\n# Approved Design Prototype — ${proto.featureName} (v${proto.mockVersion})`,
+        '',
+        '## CRITICAL — Existing Code Protection Rules',
+        '',
+        'This prototype shows the NEW feature component annotated with a dashed purple border labeled "NEW: ...". The design doc and any generated code MUST follow these rules with ZERO exceptions:',
+        '',
+        '1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.**',
+        '2. **ONLY implement the NEW feature component** inside the dashed purple "NEW" annotation border.',
+        '3. **DO NOT generate code for the sidebar, header, navigation, or page shell.**',
+        '4. **For update-page features:** Add the new component INTO the existing page at the correct location.',
+        '5. **For new-page features:** Create ONLY the new page component and its route registration.',
+        '6. **Test cases must ONLY test the new feature behavior.**',
+        '',
+        '## REQUIRED — Reflect the approved UI and flag impact',
+        '',
+        'The dashed purple "NEW" annotation marks EXACTLY the scope that was approved by the reviewer. Treat that marked region as the source of truth for what is changing. The generated doc MUST additionally:',
+        '',
+        '7. **Summarize the UI changes** exactly as shown inside the annotation border (new fields, columns, controls, states), so the doc stays faithful to the approved prototype.',
+        '8. **For update-page features, analyze and flag impact on EXISTING functionality:** explicitly identify any existing behavior, data flow, validation, or interaction on the page that these UI changes could alter, break, or make ambiguous (e.g. layout shifts, changed defaults, new required inputs, conflicts with existing actions). Do NOT silently assume; if a change would touch existing behavior, call it out.',
+        '9. **Raise developer sign-off questions:** where the prototype leaves a decision open or where implementation could reasonably go more than one way, pose a concrete question for the developer to confirm BEFORE implementation, rather than guessing.',
+        '',
+        `\`\`\`html\n${proto.mockHtml}\n\`\`\``,
+      ].join('\n')
+    : '';
+
+  const featureName = proto?.featureName ?? `Feature ${featureIndex + 1}`;
+
+  const freeformContext = [
+    `# Design Doc Generation — Single Feature: "${featureName}"`,
+    '',
+    `Generate a design doc for the SINGLE feature "${featureName}" only. Do NOT produce design docs for other features in the PRD. Ground every section in the PRD, the interview transcript, and (if present) the approved prototype below.`,
+    '',
+    '# PRD Content',
+    prd.content,
+    ...(prd.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
+    ...(interviewTranscript ? ['\n# Interview Transcript', interviewTranscript] : []),
+    ...(prototypeContext ? [prototypeContext] : []),
+    '\n# CRITICAL: Output File Instructions',
+    '',
+    'You MUST write the following output files using the built-in file writing tool.',
+    'Do NOT only respond in chat. Do NOT use shell commands or scripts to create these files.',
+    'The app will not mark this design doc complete unless all three files are present:',
+    '',
+    '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
+    '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification. When a prototype is provided, this file MUST include a `## UI Changes (from approved prototype)` section that describes the changes shown inside the "NEW" annotation, and (for update-page features) a `## Existing Functionality Impact` section that flags any existing behavior these changes could alter or break.',
+    '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section listing concrete decisions the developer should confirm BEFORE implementation, and a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
+  ].join('\n');
+
+  const thread = await createThread(
+    prd.authorId,
+    {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillPath: skillConfig?.designDocSkillPath ?? undefined,
+      freeformContext,
+      model,
+    },
+    {
+      kickoffMessage: `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+    },
+  );
+
+  const { designDocId } = await createDesignDoc({
+    prdId,
+    project: prd.project,
+    userId: prd.authorId,
+    chatThreadId: thread.id,
+    designPrototypeId: prototypeId,
+    featureIndex,
+    title: featureName,
+    model,
+  });
+
+  console.log(`[designDoc] startSingleFeatureDesignDocWatcher: created doc (docId=${designDocId}, prototypeId=${prototypeId}, featureIndex=${featureIndex})`);
+
+  // Stamp designDocId onto the backlog JSON feature so ADO creation can match by ID
+  const updatedBacklog = stampFeatureLinkId(prd.backlogJson, featureIndex, 'designDocId', designDocId);
+  await db.update(prds).set({ backlogJson: updatedBacklog as any, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdId));
+
+  startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+
+  const { propagateDesignDocApprovers } = await import('./documentApprovalService');
+  propagateDesignDocApprovers(prdId, designDocId, prd.authorId).catch((err) => {
+    console.error(`[designDoc] propagateDesignDocApprovers failed (prdId=${prdId}, docId=${designDocId})`, err);
+  });
+}
+
 export async function deleteDesignDoc(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
@@ -474,14 +852,24 @@ export async function deleteDesignDoc(id: string, requestingUserId: string): Pro
   await db.delete(designDocs).where(eq(designDocs.id, id));
 }
 
-function rowToSummary(row: typeof designDocs.$inferSelect, reviewerName?: string | null, prdTitle?: string | null): DesignDocSummary {
+function rowToSummary(
+  row: typeof designDocs.$inferSelect,
+  reviewerName?: string | null,
+  prdTitle?: string | null,
+  authorName?: string | null,
+  designDocOwnerId?: string | null,
+  designDocOwnerName?: string | null,
+): DesignDocSummary {
+  const effectiveOwnerId = designDocOwnerId ?? row.authorId;
+  const effectiveOwnerName = designDocOwnerName ?? authorName ?? undefined;
   return {
     id: row.id,
     prdId: row.prdId,
     prdTitle: prdTitle ?? undefined,
     project: row.project,
     chatThreadId: row.chatThreadId,
-    qaChatThreadId: row.qaChatThreadId ?? null,
+    designPrototypeId: row.designPrototypeId ?? null,
+    featureIndex: row.featureIndex ?? null,
     docAssistantThreadId: row.docAssistantThreadId ?? null,
     validationThreadId: row.validationThreadId ?? null,
     validationScore: row.validationScore ?? null,
@@ -490,7 +878,11 @@ function rowToSummary(row: typeof designDocs.$inferSelect, reviewerName?: string
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as ContentSnapshot | null) ?? null,
     authorId: row.authorId,
+    authorName: authorName ?? undefined,
+    ownerId: effectiveOwnerId,
+    ownerName: effectiveOwnerName,
     title: row.title,
+    model: row.model ?? undefined,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,
@@ -676,16 +1068,16 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     '',
   ];
 
-  if (scorecard.features.length > 0) {
+  if ((scorecard.features ?? []).length > 0) {
     lines.push('## Feature Scores', '');
     lines.push('| Feature | Design | Tech Spec | Assumptions | Overall | Verdict |');
     lines.push('|---------|--------|-----------|-------------|---------|---------|');
-    for (const f of scorecard.features) {
+    for (const f of scorecard.features!) {
       lines.push(`| ${f.feature_title} | ${f.design_score}% | ${f.tech_spec_score}% | ${f.assumptions_score}% | ${f.overall_score}% | ${f.verdict} |`);
     }
     lines.push('');
 
-    const allGaps = scorecard.features.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
+    const allGaps = scorecard.features!.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
     if (allGaps.length > 0) {
       lines.push('## Open Gaps', '');
       for (const gap of allGaps) {
@@ -704,15 +1096,15 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     lines.push('');
   }
 
-  if (scorecard.accepted_gaps.length > 0) {
+  if ((scorecard.accepted_gaps ?? []).length > 0) {
     lines.push('## Accepted Gaps', '');
-    for (const g of scorecard.accepted_gaps) lines.push(`- ${g}`);
+    for (const g of scorecard.accepted_gaps!) lines.push(`- ${g}`);
     lines.push('');
   }
 
-  if (scorecard.deferred_gaps.length > 0) {
+  if ((scorecard.deferred_gaps ?? []).length > 0) {
     lines.push('## Deferred Gaps', '');
-    for (const g of scorecard.deferred_gaps) lines.push(`- ${g}`);
+    for (const g of scorecard.deferred_gaps!) lines.push(`- ${g}`);
     lines.push('');
   }
 
@@ -736,6 +1128,20 @@ export async function syncValidationResult(
   if (newStatus) updates.status = newStatus;
 
   await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
+
+  notifyAiCompletion('design_doc_validation_complete', designDocId, {
+    title: '',
+    score: Math.round(scorecard.overall_score),
+    passed: scorecard.is_ready,
+  }).catch(err =>
+    console.error(`[designDocValidation] AI notification failed (docId=${designDocId}):`, err),
+  );
+
+  if (newStatus === 'pending_review') {
+    notifyApproversDocumentReady(designDocId, 'design_doc').catch((err) =>
+      console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
+    );
+  }
 }
 
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {
@@ -781,6 +1187,10 @@ export async function markValidationReady(id: string, requestingUserId: string):
   await db.update(designDocs)
     .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
     .where(eq(designDocs.id, id));
+
+  notifyApproversDocumentReady(id, 'design_doc').catch((err) =>
+    console.error(`[markValidationReady] Failed to notify approvers (docId=${id})`, err),
+  );
 }
 
 // ── Fix Validation Flow ───────────────────────────────────────────────────────
@@ -915,8 +1325,8 @@ export async function triggerFixValidation(
   const scorecard = doc.validationScorecard;
 
   // Group pending gaps by section so the AI can address each section systematically
-  const gapsBySection: Record<string, typeof scorecard.features[0]['gaps']> = {};
-  for (const f of scorecard.features) {
+  const gapsBySection: Record<string, ValidationScorecardGap[]> = {};
+  for (const f of (scorecard.features ?? [])) {
     for (const g of f.gaps) {
       if (g.resolution !== 'pending') continue;
       const sec = g.section.toLowerCase();
@@ -935,7 +1345,7 @@ export async function triggerFixValidation(
     'assumptions': doc.assumptionsContent || '(empty)',
   };
 
-  for (const [sectionKey, gaps] of Object.entries(gapsBySection)) {
+  for (const [sectionKey, gaps] of Object.entries(gapsBySection) as [string, ValidationScorecardGap[]][]) {
     sectionBlocks.push([
       `### ${sectionNames[sectionKey] ?? sectionKey} Section`,
       '',
@@ -1042,6 +1452,10 @@ export async function acceptFixValidation(designDocId: string): Promise<void> {
   await db.update(designDocs)
     .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
     .where(eq(designDocs.id, designDocId));
+
+  notifyAiCompletion('design_doc_fix_complete', designDocId, { title: row.title }).catch(err =>
+    console.error(`[designDocFix] AI notification failed (docId=${designDocId}):`, err),
+  );
 
   await autoStartValidation(designDocId);
 }

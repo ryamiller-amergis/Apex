@@ -1,0 +1,49 @@
+export interface TextSelector {
+  exact: string;
+  prefix: string;
+  suffix: string;
+  start: number;
+  end: number;
+}
+
+export type ReviewCommentStatus = 'open' | 'resolved';
+export type ReviewSectionKey = 'prd' | 'design' | 'tech_spec' | 'assumptions' | 'backlog';
+
+export interface ReviewComment {
+  id: string;
+  documentId: string;
+  documentType: 'prd' | 'design_doc';
+  sectionKey: ReviewSectionKey;
+  authorUserId: string;
+  authorDisplayName?: string;
+  body: string;
+  selector: TextSelector;
+  status: ReviewCommentStatus;
+  resolvedBy?: string | null;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewReply {
+  id: string;
+  commentId: string;
+  authorUserId: string;
+  authorDisplayName?: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface ReviewCommentWithReplies extends ReviewComment {
+  replies: ReviewReply[];
+}
+
+export interface CreateReviewCommentRequest {
+  sectionKey: ReviewSectionKey;
+  body: string;
+  selector: TextSelector;
+}
+
+export interface CreateReviewReplyRequest {
+  body: string;
+}

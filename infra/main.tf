@@ -89,6 +89,9 @@ resource "azurerm_linux_web_app" "main" {
     "CURSOR_API_KEY"                         = var.cursor_api_key
     "CURSOR_TEAM_API_KEY"                    = var.cursor_team_api_key
 
+    # SendGrid
+    "SENDGRID_API_KEY"                       = var.sendgrid_api_key
+
     # Polling
     "POLL_INTERVAL"                          = var.poll_interval
   }

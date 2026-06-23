@@ -1,0 +1,116 @@
+{
+  "$meta": {
+    "name": "Maxview Light",
+    "source": "Figma — MaxviewColorsStylesLight",
+    "companion": "./maxview-colors.md",
+    "description": "Canonical color tokens for the Maxview light theme. AI agents and developers MUST use these exact values when generating UI for this project. Do not invent hex/rgba values; pick the closest semantic token here."
+  },
+  "text": {
+    "primary":   { "value": "#0a0d1a",             "description": "text.primary",           "usage": "Default body and heading text." },
+    "secondary": { "value": "#3e4c5f",             "description": "text.secondary",         "usage": "Supporting text, captions, labels." },
+    "disabled":  { "value": "rgba(62,76,95,0.38)", "description": "text.disabled",          "usage": "Disabled controls and inactive labels." },
+    "muted":     { "value": "#bebebe",             "description": "text.disabled (mobile)", "usage": "Mobile-only muted text." }
+  },
+  "background": {
+    "paper":   { "value": "#ffffff",                                                        "description": "background.paper",   "usage": "Card / surface background." },
+    "default": { "value": "linear-gradient(-14.8deg, #dee9f7 45.9%, #ffffff 43.6%)",        "description": "background.default", "usage": "Page-level background gradient." },
+    "gray":    { "value": "#f1f3f5",                                                        "description": "background.gray",    "usage": "Subtle gray surface (sections, wells)." }
+  },
+  "ui": {
+    "chipDefault":             { "value": "#e7eaed",              "usage": "Default Chip background." },
+    "divider":                 { "value": "#e7eaed",              "usage": "Dividers separating content." },
+    "outlineBorder":           { "value": "#919aa5",              "usage": "Border for outlined components at rest (TextField, Select, Chip)." },
+    "standardInputLine":       { "value": "#919aa5",              "usage": "Underline for standard variant TextField & Select." },
+    "backdropOverlay":         { "value": "rgba(136,153,175,0.5)","usage": "Modal/dialog backdrop overlay." },
+    "ratingActive":            { "value": "#fcd757",              "usage": "Active state for Rating component." },
+    "snackbarBackground":      { "value": "#3e4c5f",              "usage": "Snackbar background." },
+    "cardHeader":              { "value": "#e7eaed",              "usage": "Card header background." },
+    "tooltipDefault":          { "value": "#4a4e60",              "usage": "Default tooltip background." },
+    "quickActionButtonBorder": { "value": "#8995b4",              "usage": "Border for Quick Action buttons." }
+  },
+  "primary": {
+    "main":     { "value": "#323695", "description": "primary.main",     "usage": "Primary buttons, key UI accents." },
+    "dark":     { "value": "#181c6c", "description": "primary.dark",     "usage": "Primary hover state." },
+    "light":    { "value": "#b1b3d3", "description": "primary.light",    "usage": "Soft primary tint backgrounds." },
+    "contrast": { "value": "#ffffff", "description": "primary.contrast", "usage": "Text/icons on top of primary.main (AA contrast)." },
+    "4p":  { "value": "rgba(50,54,149,0.04)",   "usage": "Subtle hover background (action.hover at 4%)." },
+    "8p":  { "value": "rgba(50,54,149,0.08)",   "usage": "Selected row / DataGrid hover (action.selected at 8%)." },
+    "12p": { "value": "rgba(50,54,149,0.12)",   "usage": "Button hover state." },
+    "30p": { "value": "rgba(103,119,239,0.30)", "usage": "Focus-visible ring." },
+    "50p": { "value": "rgba(50,54,149,0.50)",   "usage": "Enabled outline state." }
+  },
+  "secondary": {
+    "main":     { "value": "#6777ef", "description": "secondary.main",     "usage": "Secondary accents, secondary buttons." },
+    "dark":     { "value": "#3e51c2", "description": "secondary.dark",     "usage": "Secondary hover state." },
+    "light":    { "value": "#c3c9fa", "description": "secondary.light",    "usage": "Soft secondary tint backgrounds." },
+    "contrast": { "value": "#ffffff", "description": "secondary.contrast", "usage": "Text/icons on secondary.main." },
+    "4p":  { "value": "rgba(103,119,239,0.04)", "usage": "Hover background." },
+    "8p":  { "value": "rgba(50,54,149,0.08)",   "usage": "Selected state." },
+    "12p": { "value": "rgba(50,54,149,0.12)",   "usage": "Focus visible." },
+    "30p": { "value": "rgba(103,119,239,0.30)", "usage": "Focus-visible ring." },
+    "50p": { "value": "rgba(103,119,239,0.50)", "usage": "Enabled state." }
+  },
+  "tertiary": {
+    "main":     { "value": "#a46bff", "usage": "Tertiary accent." },
+    "dark":     { "value": "#703dcb", "usage": "Tertiary hover state." },
+    "light":    { "value": "#d9c6ff", "usage": "Soft tertiary tint backgrounds." },
+    "contrast": { "value": "#ffffff", "usage": "Text/icons on tertiary.main." }
+  },
+  "action": {
+    "active":             { "value": "#8899af",                "description": "action.active",             "usage": "Default icon / active control color." },
+    "hover":              { "value": "rgba(136,153,175,0.12)", "description": "action.hover",              "usage": "Hover overlay on neutral controls." },
+    "selected":           { "value": "rgba(136,153,175,0.70)", "description": "action.selected",           "usage": "Selected state on neutral controls." },
+    "disabled":           { "value": "rgba(136,153,175,0.40)", "description": "action.disabled",           "usage": "Disabled icon / control color." },
+    "disabledBackground": { "value": "rgba(136,153,175,0.12)", "description": "action.disabledBackground", "usage": "Disabled background fill." },
+    "focus":              { "value": "rgba(136,153,175,0.12)", "description": "action.focus",              "usage": "Focus overlay on neutral controls." }
+  },
+  "error": {
+    "main":     { "value": "#e43443", "description": "error.main",     "usage": "Error icons and bold text." },
+    "dark":     { "value": "#871c1c", "description": "error.dark",     "usage": "Error text and hover state." },
+    "light":    { "value": "#e9b9b9", "description": "error.light",    "usage": "Error backgrounds only." },
+    "contrast": { "value": "#ffffff", "description": "error.contrast", "usage": "Text/icons on error.main." },
+    "4p":   { "value": "rgba(228,52,67,0.04)", "usage": "Hover background." },
+    "12p":  { "value": "rgba(228,52,67,0.12)", "usage": "Focus visible." },
+    "30p":  { "value": "rgba(228,52,67,0.30)", "usage": "Focus-visible ring." },
+    "50p":  { "value": "rgba(228,52,67,0.50)", "usage": "Enabled state." },
+    "160p": { "value": "#660202",              "usage": "Alert content text (60% black over error.main)." },
+    "190p": { "value": "#ffe6e6",              "usage": "Alert background (90% white over error.main)." }
+  },
+  "info": {
+    "main":     { "value": "#3363f5", "description": "info.main",     "usage": "Info icons and bold text." },
+    "dark":     { "value": "#193151", "description": "info.dark",     "usage": "Info text and hover state." },
+    "light":    { "value": "#7c9cff", "description": "info.light",    "usage": "Info backgrounds." },
+    "contrast": { "value": "#ffffff", "description": "info.contrast", "usage": "Text/icons on info.main." },
+    "4p":   { "value": "rgba(51,99,245,0.04)", "usage": "Hover background." },
+    "12p":  { "value": "rgba(51,99,245,0.12)", "usage": "Focus visible." },
+    "30p":  { "value": "rgba(51,99,245,0.30)", "usage": "Focus-visible ring." },
+    "50p":  { "value": "rgba(51,99,245,0.50)", "usage": "Enabled state." },
+    "160p": { "value": "#152858",              "usage": "Alert content text (60% black over info.main)." },
+    "190p": { "value": "#ebf0fe",              "usage": "Alert background (90% white over info.main)." }
+  },
+  "warning": {
+    "main":     { "value": "#ec7d22", "description": "warning.main",     "usage": "Warning icons and bold text." },
+    "dark":     { "value": "#b84900", "description": "warning.dark",     "usage": "Warning text and hover state." },
+    "light":    { "value": "#ffecd6", "description": "warning.light",    "usage": "Warning backgrounds." },
+    "contrast": { "value": "#ffffff", "description": "warning.contrast", "usage": "Text/icons on warning.main." },
+    "4p":   { "value": "rgba(236,125,34,0.04)", "usage": "Hover background." },
+    "12p":  { "value": "rgba(236,125,34,0.12)", "usage": "Focus visible." },
+    "30p":  { "value": "rgba(236,125,34,0.30)", "usage": "Focus-visible ring." },
+    "50p":  { "value": "rgba(236,125,34,0.50)", "usage": "Enabled state." },
+    "160p": { "value": "#5f2c01",               "usage": "Alert content text (60% black over warning.main)." },
+    "190p": { "value": "#fdf0e1",               "usage": "Alert background (90% white over warning.main)." }
+  },
+  "success": {
+    "main":     { "value": "#39c164", "description": "success.main",     "usage": "Success icons and bold text." },
+    "dark":     { "value": "#1c6232", "description": "success.dark",     "usage": "Success text and hover state." },
+    "light":    { "value": "#97dbac", "description": "success.light",    "usage": "Success backgrounds only." },
+    "contrast": { "value": "#ffffff", "description": "success.contrast", "usage": "Text/icons on success.main." },
+    "4p":   { "value": "rgba(57,193,100,0.04)", "usage": "Hover background." },
+    "12p":  { "value": "rgba(57,193,100,0.12)", "usage": "Hover state." },
+    "20p":  { "value": "rgba(57,193,100,0.20)", "usage": "Success background on Alerts/Toasts." },
+    "30p":  { "value": "rgba(57,193,100,0.30)", "usage": "Focus-visible ring." },
+    "50p":  { "value": "rgba(38,208,124,0.50)", "usage": "Enabled state." },
+    "160p": { "value": "#0f4d28",               "usage": "Alert content text (60% black over success.main)." },
+    "190p": { "value": "#e9faf2",               "usage": "Alert background (90% white over success.main)." }
+  }
+}

@@ -28,6 +28,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 
 jest.mock('../services/designDocService');
+jest.mock('../services/documentApprovalService');
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn().mockResolvedValue(null),
 }));
@@ -37,10 +38,35 @@ jest.mock('../services/appSettingsService', () => ({
   setAppSetting: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/rbacService', () => ({
+  getActiveUsers: jest.fn(),
+}));
+
+jest.mock('../services/testCaseService', () => ({
+  getTestCases: jest.fn(),
+  triggerTestCaseGeneration: jest.fn(),
+}));
+
+jest.mock('../db/drizzle', () => ({
+  db: {
+    query: {
+      prds: { findFirst: jest.fn() },
+      designPlans: { findFirst: jest.fn() },
+    },
+  },
+}));
+
+jest.mock('../services/designSystemService', () => ({
+  getScreenInventory: jest.fn().mockResolvedValue([]),
+  fetchExistingPageContext: jest.fn().mockResolvedValue(''),
+}));
+
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   requireAnyPermission: (..._keys: string[]) =>
+    (_req: any, _res: any, next: any) => next(),
+  requireGroupMembership: (..._groupNames: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
 }));
@@ -70,9 +96,14 @@ const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
   '../services/appSettingsService',
 ) as { getDefaultModel: jest.Mock };
 
+const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+  getActiveUsers: jest.Mock;
+};
+
 const {
   createDesignDoc: mockCreateDesignDoc,
   startDesignDocWatcher: mockStartDesignDocWatcher,
+  startSingleFeatureDocWatcher: mockStartSingleFeatureDocWatcher,
   getDesignDoc: mockGetDesignDoc,
   listDesignDocs: mockListDesignDocs,
   updateDesignDocContent: mockUpdateDesignDocContent,
@@ -87,6 +118,7 @@ const {
 } = jest.requireMock('../services/designDocService') as {
   createDesignDoc: jest.Mock;
   startDesignDocWatcher: jest.Mock;
+  startSingleFeatureDocWatcher: jest.Mock;
   getDesignDoc: jest.Mock;
   listDesignDocs: jest.Mock;
   updateDesignDocContent: jest.Mock;
@@ -100,8 +132,39 @@ const {
   syncValidationResult: jest.Mock;
 };
 
+const {
+  getAssignments: mockGetAssignments,
+  getAvailableApprovers: mockGetAvailableApprovers,
+  reassignApprovers: mockReassignApprovers,
+} = jest.requireMock('../services/documentApprovalService') as {
+  getAssignments: jest.Mock;
+  getAvailableApprovers: jest.Mock;
+  reassignApprovers: jest.Mock;
+};
+
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
 mockAutoStartValidation.mockResolvedValue(undefined);
+
+const {
+  getTestCases: mockGetTestCases,
+  triggerTestCaseGeneration: mockTriggerTestCaseGeneration,
+} = jest.requireMock('../services/testCaseService') as {
+  getTestCases: jest.Mock;
+  triggerTestCaseGeneration: jest.Mock;
+};
+
+const { db: mockDb } = jest.requireMock('../db/drizzle') as {
+  db: {
+    query: {
+      prds: { findFirst: jest.Mock };
+      designPlans: { findFirst: jest.Mock };
+    };
+  };
+};
+
+const { fetchExistingPageContext: mockFetchExistingPageContext } = jest.requireMock(
+  '../services/designSystemService',
+) as { fetchExistingPageContext: jest.Mock };
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -167,7 +230,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { status: 'complete' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: 'complete',
+      project: undefined,
+      authorId: undefined,
+    });
   });
 
   it('passes project filter to the service', async () => {
@@ -175,7 +242,11 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', { project: 'proj-alpha' });
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
   });
 
   it('passes both project and status filters to the service', async () => {
@@ -183,9 +254,22 @@ describe('GET /api/interviews', () => {
 
     await request(buildApp()).get('/api/interviews?project=proj-alpha&status=complete');
 
-    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith('user-test', {
-      project: 'proj-alpha',
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
       status: 'complete',
+      project: 'proj-alpha',
+      authorId: undefined,
+    });
+  });
+
+  it('passes author=me as authorId to the service', async () => {
+    mockInterviewService.listInterviews.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews?author=me');
+
+    expect(mockInterviewService.listInterviews).toHaveBeenCalledWith({
+      status: undefined,
+      project: undefined,
+      authorId: 'user-test',
     });
   });
 
@@ -393,6 +477,26 @@ describe('GET /api/interviews/prds', () => {
     );
   });
 
+  it('passes author=me as userId filter to listPrds', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds?author=me');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockPrdService.listPrds.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/prds');
+
+    expect(mockPrdService.listPrds).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: undefined }),
+    );
+  });
+
   it('returns only PRDs for the requested project', async () => {
     const alphaPrd = { ...prdSummary, id: 'prd-alpha' };
     mockPrdService.listPrds.mockResolvedValue([alphaPrd]);
@@ -494,7 +598,7 @@ describe('POST /api/interviews/prds/:prdId/submit', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test');
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', { prdApproverIds: [], designDocApproverIds: [] });
   });
 
   it('propagates 409 conflict from service', async () => {
@@ -528,7 +632,7 @@ describe('POST /api/interviews/prds/:prdId/review', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns 200 { ok: true } on approve', async () => {
-    mockPrdService.reviewPrd.mockResolvedValue(undefined);
+    mockPrdService.reviewPrd.mockResolvedValue({ approved: true });
 
     const res = await request(buildApp())
       .post('/api/interviews/prds/prd-1/review')
@@ -645,90 +749,24 @@ describe('POST /api/interviews/:interviewId/prds', () => {
   });
 });
 
-// ── POST /api/interviews/prds/:prdId/review — design doc model resolution ─────
+// ── POST /api/interviews/prds/:prdId/review (approve) — prototype trigger ─────
 
-describe('POST /api/interviews/prds/:prdId/review (approve) — design doc model resolution', () => {
-  const approvedPrd = { ...prd, status: 'pending_review' as const };
-
+describe('POST /api/interviews/prds/:prdId/review (approve) — prototype trigger', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockPrdService.reviewPrd.mockResolvedValue(undefined);
-    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
-    mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockPrdService.reviewPrd.mockResolvedValue({ approved: true });
   });
 
-  it('passes designDocModel from skillConfig to createThread when set', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: 'gpt-4o',
-    });
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'gpt-4o' }),
-    );
-  });
-
-  it('falls back to global default model when skillConfig.designDocModel is null', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: null,
-    });
-    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
-    );
-  });
-
-  it('falls back to global default model when skillConfig is null (no config for project)', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue(null);
-    mockGetDefaultModel.mockResolvedValue('claude-3.5-sonnet');
-
-    await request(buildApp())
-      .post('/api/interviews/prds/prd-1/review')
-      .send({ action: 'approve' });
-
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'user-test',
-      expect.objectContaining({ model: 'claude-3.5-sonnet' }),
-    );
-  });
-
-  it('returns 200 { ok: true, designDocId } on successful approval with design doc creation', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
-    mockGetSkillConfig.mockResolvedValue({
-      project: 'proj-alpha',
-      skillRepo: 'org/skills',
-      skillBranch: 'main',
-      designDocSkillPath: null,
-      designDocModel: 'gpt-4o',
-    });
-
+  it('returns 200 { ok, prdId, approved } and does not create a design doc directly', async () => {
     const res = await request(buildApp())
       .post('/api/interviews/prds/prd-1/review')
       .send({ action: 'approve' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, designDocId: 'design-doc-1' });
+    expect(res.body).toMatchObject({ ok: true, prdId: 'prd-1', approved: true });
+    // Design-doc creation moved to POST /design-docs (triggered after prototype
+    // approval), so the review endpoint must not create a design doc directly.
+    expect(mockCreateDesignDoc).not.toHaveBeenCalled();
   });
 });
 
@@ -741,6 +779,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     jest.clearAllMocks();
     mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
     mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockStartSingleFeatureDocWatcher.mockReturnValue(undefined);
   });
 
   it('passes designDocModel from skillConfig to createThread when set', async () => {
@@ -758,6 +797,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'claude-3-opus' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 
@@ -777,6 +817,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'global-default-model' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 
@@ -790,6 +831,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.objectContaining({ model: 'global-default-model' }),
+      expect.objectContaining({ kickoffMessage: expect.stringContaining('Generate the design doc') }),
     );
   });
 
@@ -877,6 +919,26 @@ describe('GET /api/interviews/design-docs', () => {
 
     expect(mockListDesignDocs).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'approved' }),
+    );
+  });
+
+  it('passes author=me as userId filter to listDesignDocs', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs?author=me');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test' }),
+    );
+  });
+
+  it('does not pass userId when author param is absent', async () => {
+    mockListDesignDocs.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/interviews/design-docs');
+
+    expect(mockListDesignDocs).toHaveBeenCalledWith(
+      expect.not.objectContaining({ userId: 'user-test' }),
     );
   });
 });
@@ -1109,3 +1171,498 @@ describe('GET /api/interviews/design-docs/:id/validation', () => {
   });
 });
 
+// ── GET /api/interviews/prds/:prdId/assignments ──────────────────────────────
+
+describe('GET /api/interviews/prds/:prdId/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with assignment array', async () => {
+    const assignments = [
+      { id: 'assign-1', documentId: 'prd-1', documentType: 'prd', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'pending' },
+    ];
+    mockGetAssignments.mockResolvedValue(assignments);
+
+    const res = await request(buildApp()).get('/api/interviews/prds/prd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 'assign-1', approverDisplayName: 'Alice' });
+    expect(mockGetAssignments).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('returns 200 with empty array when no assignments', async () => {
+    mockGetAssignments.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/prds/prd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+// ── GET /api/interviews/design-docs/:id/assignments ──────────────────────────
+
+describe('GET /api/interviews/design-docs/:id/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with assignment array', async () => {
+    const assignments = [
+      { id: 'assign-1', documentId: 'dd-1', documentType: 'design_doc', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'approved' },
+    ];
+    mockGetAssignments.mockResolvedValue(assignments);
+
+    const res = await request(buildApp()).get('/api/interviews/design-docs/dd-1/assignments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockGetAssignments).toHaveBeenCalledWith('dd-1', 'design_doc');
+  });
+});
+
+// ── GET /api/interviews/available-approvers/:project/:documentType ────────────
+
+describe('GET /api/interviews/available-approvers/:project/:documentType', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with available approvers for prd type', async () => {
+    const approvers = [
+      { userId: 'u1', displayName: 'Alice' },
+      { userId: 'u2', displayName: 'Bob' },
+    ];
+    mockGetAvailableApprovers.mockResolvedValue(approvers);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/prd?excludeSelf=true');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'prd', 'user-test');
+  });
+
+  it('returns 200 with available approvers for design_doc type', async () => {
+    mockGetAvailableApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/design_doc?excludeSelf=true');
+
+    expect(res.status).toBe(200);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'design_doc', 'user-test');
+  });
+
+  it('passes undefined excludeUserId when excludeSelf is not set', async () => {
+    mockGetAvailableApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/prd');
+
+    expect(res.status).toBe(200);
+    expect(mockGetAvailableApprovers).toHaveBeenCalledWith('proj-alpha', 'prd', undefined);
+  });
+
+  it('returns 400 for invalid documentType', async () => {
+    const res = await request(buildApp()).get('/api/interviews/available-approvers/proj-alpha/invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'documentType must be "prd" or "design_doc"' });
+  });
+});
+
+// ── PUT /api/interviews/prds/:prdId/assignments ───────────────────────────────
+
+describe('PUT /api/interviews/prds/:prdId/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with updated assignments', async () => {
+    const assignments = [
+      { id: 'a1', documentId: 'prd-1', documentType: 'prd', approverUserId: 'u1', approverDisplayName: 'Alice', status: 'pending' },
+    ];
+    mockReassignApprovers.mockResolvedValue(assignments);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: ['u1'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 'a1', approverDisplayName: 'Alice' });
+    expect(mockReassignApprovers).toHaveBeenCalledWith('prd-1', 'prd', ['u1'], 'user-test');
+  });
+
+  it('returns 200 with empty array to clear all pending approvers', async () => {
+    mockReassignApprovers.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: [] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('returns 400 when approverUserIds is missing', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when approverUserIds is not an array', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: 'u1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+  });
+});
+
+// ── PUT /api/interviews/design-docs/:id/assignments ───────────────────────────
+
+describe('PUT /api/interviews/design-docs/:id/assignments', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with updated assignments', async () => {
+    const assignments = [
+      { id: 'a1', documentId: 'dd-1', documentType: 'design_doc', approverUserId: 'u2', approverDisplayName: 'Bob', status: 'pending' },
+    ];
+    mockReassignApprovers.mockResolvedValue(assignments);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/assignments')
+      .send({ approverUserIds: ['u2'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockReassignApprovers).toHaveBeenCalledWith('dd-1', 'design_doc', ['u2'], 'user-test');
+  });
+
+  it('returns 400 when approverUserIds is missing', async () => {
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/assignments')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+});
+
+// ── POST /api/interviews — owner field forwarding ─────────────────────────────
+
+describe('POST /api/interviews — owner field forwarding', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('forwards prdOwnerId and designDocOwnerId to the interview service', async () => {
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-new',
+      threadId: 'thread-new',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews')
+      .send({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        prdOwnerId: 'user-prd',
+        designDocOwnerId: 'user-dd',
+      });
+
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' }),
+    );
+  });
+
+  it('creates interview without owner IDs when they are omitted', async () => {
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-new',
+      threadId: 'thread-new',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews')
+      .send({ project: 'proj', repo: 'org/repo', chatThreadId: 'thread-x' });
+
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-test', project: 'proj' }),
+    );
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/test-cases/generate ─────────────────────
+
+describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
+  const prdRowWithContent = {
+    id: 'prd-1',
+    chatThreadId: 'thread-2',
+    content: 'PRD content',
+    backlogJson: { features: [] },
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with started:true when generation succeeds', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ started: true });
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+  });
+
+  it('returns 200 with started:false when skill is not configured', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(false);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ started: false });
+  });
+
+  it('returns 404 when PRD does not exist', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/nonexistent/test-cases/generate');
+
+    expect(res.status).toBe(404);
+    expect(mockTriggerTestCaseGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when PRD has no content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      content: '',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(422);
+    expect(mockTriggerTestCaseGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 when PRD has no backlog (backlog is optional)', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      backlogJson: null,
+    });
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+  });
+
+  it('passes empty string as sourceThreadId when PRD has no chatThreadId', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      ...prdRowWithContent,
+      chatThreadId: null,
+    });
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', '');
+  });
+
+  it('returns 500 when the service throws', async () => {
+    mockDb.query.prds.findFirst.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate');
+
+    expect(res.status).toBe(500);
+  });
+});
+
+// ── GET /api/interviews/active-users ─────────────────────────────────────────
+
+describe('GET /api/interviews/active-users', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with the list of active users', async () => {
+    const activeUsers = [
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+      { oid: 'bob', displayName: 'Bob Jones', email: 'bob@example.com' },
+    ];
+    mockGetActiveUsers.mockResolvedValue(activeUsers);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
+    expect(mockGetActiveUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an empty array when there are no active users', async () => {
+    mockGetActiveUsers.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('returns 500 when the service throws', async () => {
+    mockGetActiveUsers.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).get('/api/interviews/active-users');
+
+    expect(res.status).toBe(500);
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/design-docs — enriched freeformContext ──
+
+describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformContext', () => {
+  const approvedPrdWithBacklog = {
+    ...prdSummary,
+    status: 'approved' as const,
+    content: 'PRD content',
+    backlogJson: { features: [{ title: 'Feature A', points: 3 }] },
+  };
+
+  const approvedPrdNoBacklog = {
+    ...prdSummary,
+    status: 'approved' as const,
+    content: 'PRD content',
+    backlogJson: null,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
+    mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockGetSkillConfig.mockResolvedValue(null);
+    mockGetDefaultModel.mockResolvedValue('global-default-model');
+    // Default: no design plan found
+    mockDb.query.designPlans.findFirst.mockResolvedValue(null);
+    mockFetchExistingPageContext.mockResolvedValue('');
+  });
+
+  it('always includes PRD content in freeformContext', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# PRD Content');
+    expect(freeformContext).toContain('PRD content');
+  });
+
+  it('includes backlog JSON in freeformContext when the PRD has a backlog', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdWithBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# Backlog');
+    expect(freeformContext).toContain('"features"');
+  });
+
+  it('omits the backlog section from freeformContext when the PRD has no backlog', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).not.toContain('# Backlog');
+  });
+
+  it('includes design plan features in freeformContext when a plan exists', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'Timecard Dashboard',
+          decision: 'new-page',
+          targetRoute: '/timecard',
+          designBrief: 'A new dashboard page for timecards',
+        },
+      ],
+    });
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('# Design Plan');
+    expect(freeformContext).toContain('Timecard Dashboard');
+    expect(freeformContext).toContain('new-page');
+    expect(freeformContext).toContain('/timecard');
+  });
+
+  it('proceeds and returns 201 when design plan lookup fails (graceful degradation)', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(res.status).toBe(201);
+    expect(mockCreateThread).toHaveBeenCalled();
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).not.toContain('# Design Plan');
+  });
+
+  it('always includes existing-code protection rules in freeformContext', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('CRITICAL — Existing Code Protection Rules');
+    expect(freeformContext).toContain('DO NOT modify');
+    expect(freeformContext).toContain('ONLY implement the NEW feature component');
+  });
+
+  it('calls fetchExistingPageContext for update-page features when a plan exists', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'Timecard Entry',
+          decision: 'update-page',
+          targetRoute: '/timecard/entry',
+        },
+      ],
+    });
+    mockFetchExistingPageContext.mockResolvedValue('// Existing React component code');
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockFetchExistingPageContext).toHaveBeenCalledWith('/timecard/entry', 'Timecard Entry');
+    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
+    expect(freeformContext).toContain('Existing Page Context');
+    expect(freeformContext).toContain('Existing React component code');
+  });
+
+  it('does not call fetchExistingPageContext for new-page features', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      prdId: 'prd-1',
+      features: [
+        {
+          featureName: 'New Dashboard',
+          decision: 'new-page',
+          targetRoute: '/new-dashboard',
+        },
+      ],
+    });
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(mockFetchExistingPageContext).not.toHaveBeenCalled();
+  });
+});

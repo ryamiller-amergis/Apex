@@ -63,6 +63,8 @@ jest.mock('drizzle-orm', () => ({
   inArray: jest.fn(),
   isNull: jest.fn(),
   isNotNull: jest.fn(),
+  relations: jest.fn().mockReturnValue({}),
+  count: jest.fn(),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({

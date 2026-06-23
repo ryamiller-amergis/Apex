@@ -40,18 +40,6 @@
   margin: 0;
 }
 
-.body {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  line-height: 1.55;
-  margin: 0;
-}
-
-.itemName {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
 .fieldGroup {
   display: flex;
   flex-direction: column;
@@ -120,7 +108,6 @@
   cursor: not-allowed;
 }
 
-/* Revision mode — accent blue */
 .btnConfirm {
   padding: 8px 18px;
   background: var(--accent-color);

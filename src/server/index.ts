@@ -1,3 +1,4 @@
+import './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -16,8 +17,15 @@ import wikiRoutes from './routes/wiki';
 import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
+import notificationRoutes from './routes/notifications';
+import reviewCommentRoutes from './routes/reviewComments';
+import deploymentOutcomesRouter from './routes/deploymentOutcomes';
+import designPrototypeRoutes from './routes/designPrototypes';
+import designPlanRoutes from './routes/designPlans';
+import pageScreenshotRoutes from './routes/pageScreenshots';
 import { mountAdoMcp } from './mcp/ado/express';
 import { ensureAuthenticated } from './middleware/auth';
+import { handleIncoming } from './services/teamsBotService';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
 import adminRouter from './routes/admin';
 import {
@@ -29,6 +37,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
+import platformAdminRouter from './routes/platformAdmin';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -70,6 +79,16 @@ app.use(passport.session());
 // Auth routes (no authentication required)
 app.use('/auth', authRoutes);
 
+// Telemetry config — unauthenticated so the frontend can init App Insights before login
+app.get('/api/telemetry-config', (_req, res) => {
+  res.json({
+    connectionString: process.env.APPLICATIONINSIGHTS_CONNECTION_STRING || null,
+  });
+});
+
+// Bot Framework messaging endpoint — Teams sends requests with its own auth, not session cookies
+app.post('/api/messages', (req, res) => handleIncoming(req, res));
+
 // Internal-only API routes: callable by the Cursor agent (running on the user's
 // machine, no browser session cookie) via two paths:
 //   1. Localhost dev shortcut — same-machine requests skip auth.
@@ -107,7 +126,14 @@ app.use('/api/skills', ensureAuthenticated, skillsRoutes);
 app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
+app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
+app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
+app.use('/api/design-plans', ensureAuthenticated, designPlanRoutes);
+app.use('/api/page-screenshots', ensureAuthenticated, pageScreenshotRoutes);
 app.use('/api/workitems', ensureAuthenticated, workitemsFromPrdRoutes);
+app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
+app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
+app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 
@@ -133,6 +159,19 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(__dirname, '../client/index.html'));
   });
 }
+
+// Global error-handling middleware — sends unhandled errors to App Insights
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const { telemetryClient } = require('./services/telemetry');
+  if (telemetryClient) {
+    telemetryClient.trackException({
+      exception: err instanceof Error ? err : new Error(String(err)),
+      properties: { path: req.path, method: req.method },
+    });
+  }
+  const status = err.status ?? 500;
+  res.status(status).json({ error: err.message ?? 'Internal server error' });
+});
 
 async function bootstrapAdmin(): Promise<void> {
   const bootstrapOid = process.env.BOOTSTRAP_ADMIN_OID;
@@ -173,10 +212,13 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
-  // Start the feature auto-complete background service
-  const featureAutoComplete = getFeatureAutoCompleteService();
-  featureAutoComplete.start();
-  console.log('Feature auto-complete service started');
+  // Start the feature auto-complete background service after a 2-minute delay
+  // to avoid bursting ADO calls at the same time as UAT auto-release on boot.
+  setTimeout(() => {
+    const featureAutoComplete = getFeatureAutoCompleteService();
+    featureAutoComplete.start();
+    console.log('Feature auto-complete service started');
+  }, 2 * 60 * 1000);
   
   // Start the UAT auto-release background service
   const uatAutoRelease = getUatAutoReleaseService();

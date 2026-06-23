@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { appPermissions, appRolePermissions, appRoles, appUserRoles, appUsers } from '../db/schema';
 import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
+import type { ActiveUser } from '../../shared/types/interview';
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
@@ -267,4 +268,20 @@ export async function upsertAppUser(
       target: appUsers.oid,
       set: { displayName, email, lastSeenAt: new Date().toISOString() },
     });
+}
+
+// ── getActiveUsers ─────────────────────────────────────────────────────────────
+
+export async function getActiveUsers(): Promise<ActiveUser[]> {
+  const rows = await db
+    .select({
+      oid: appUsers.oid,
+      displayName: appUsers.displayName,
+      email: appUsers.email,
+    })
+    .from(appUsers)
+    .where(isNotNull(appUsers.lastSeenAt))
+    .orderBy(asc(appUsers.displayName));
+
+  return rows;
 }

@@ -732,98 +732,6 @@
   flex-shrink: 0;
 }
 
-/* ── Diff rendering ────────────────────────────────────────────────────────── */
-
-.diffTable {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 0.82rem;
-  line-height: 1.55;
-  table-layout: fixed;
-}
-
-.diffLineNum {
-  width: 42px;
-  min-width: 42px;
-  padding: 1px 8px 1px 4px;
-  text-align: right;
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  user-select: none;
-  vertical-align: top;
-  border-right: 1px solid var(--border-color);
-}
-
-.diffLineContent {
-  padding: 1px 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-primary);
-}
-
-.diffLineAdded {
-  background: color-mix(in srgb, #22c55e 10%, var(--bg-primary));
-}
-
-.diffLineAdded .diffLineContent {
-  color: var(--text-primary);
-}
-
-.diffLineAdded .diffLineNum {
-  background: color-mix(in srgb, #22c55e 15%, var(--bg-primary));
-  color: #16a34a;
-}
-
-.diffLineRemoved {
-  background: color-mix(in srgb, #ef4444 10%, var(--bg-primary));
-}
-
-.diffLineRemoved .diffLineContent {
-  color: var(--text-primary);
-}
-
-.diffLineRemoved .diffLineNum {
-  background: color-mix(in srgb, #ef4444 15%, var(--bg-primary));
-  color: #dc2626;
-}
-
-.diffLineContext {
-  background: var(--bg-primary);
-}
-
-.diffPrefix {
-  user-select: none;
-  display: inline-block;
-  width: 14px;
-  color: var(--text-muted);
-  font-weight: 600;
-}
-
-.diffPrefixAdd {
-  color: #16a34a;
-}
-
-.diffPrefixRemove {
-  color: #dc2626;
-}
-
-/* ── Word-level highlights (GitHub style) ──────────────────────────────────── */
-
-/* Darker red chip on the red removed row */
-.wordRemoved {
-  background: color-mix(in srgb, #ef4444 40%, transparent);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-/* Darker green chip on the green added row */
-.wordAdded {
-  background: color-mix(in srgb, #22c55e 40%, transparent);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
 /* ── Gap-level diff view ─────────────────────────────────────────────────────── */
 
 .gapChangeWarning {
@@ -1031,4 +939,83 @@
 
 .fixingRetryBtn:hover {
   background: var(--accent-hover);
+}
+
+/* ── Mobile: full-screen overlay ─────────────────────────── */
+
+@media (max-width: 768px) {
+  .panel {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    background: var(--bg-primary);
+    border-radius: 0;
+    border: none;
+  }
+
+  .panelHeader {
+    padding: 10px 12px;
+  }
+
+  .stepper {
+    padding: 0 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .stepperTab {
+    padding: 8px 10px;
+  }
+
+  .gapChecklistItem {
+    padding: 12px 12px;
+  }
+
+  .sectionDiffHeader {
+    padding: 10px 12px;
+  }
+
+  .gapChecklistHeader {
+    padding: 10px 12px;
+  }
+
+  .sectionActionBar {
+    padding: 10px 12px;
+  }
+
+  .footer {
+    padding: 10px 12px;
+  }
+
+  .summaryView {
+    padding: 16px 12px;
+  }
+
+  .verdictBtn {
+    min-height: 44px;
+    padding: 6px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .panelHeader {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .gapChecklistItem {
+    padding: 10px 8px;
+  }
+
+  .summaryView {
+    padding: 12px 8px;
+    gap: 16px;
+  }
+
+  .footer {
+    padding: 8px 10px;
+    gap: 8px;
+  }
 }

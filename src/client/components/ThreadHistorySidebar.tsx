@@ -1,13 +1,35 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatThreadSummary } from '../../shared/types/chat';
+import { formatThreadHistoryLabel } from '../../shared/utils/threadHistoryLabel';
 import { useChatThreadList, useDeleteThread, useFlagThread } from '../hooks/useChatThreads';
 import styles from './ThreadHistorySidebar.module.css';
+
+const LS_HISTORY_WIDTH_KEY = 'historyPanelWidth';
+const MIN_WIDTH = 200;
+const MAX_WIDTH_RATIO = 0.45;
+const DEFAULT_WIDTH_RATIO = 0.20;
+
+function loadStoredWidth(): number | null {
+  try {
+    const v = localStorage.getItem(LS_HISTORY_WIDTH_KEY);
+    if (v) {
+      const n = parseInt(v, 10);
+      if (n >= MIN_WIDTH) return n;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function defaultWidth(): number {
+  return Math.max(MIN_WIDTH, Math.round(window.innerWidth * DEFAULT_WIDTH_RATIO));
+}
 
 interface ThreadHistorySidebarProps {
   activeThreadId: string | null;
   onSelectThread: (threadId: string) => void;
   onDeleteThread?: (threadId: string) => void;
   onClose: () => void;
+  project?: string;
   className?: string;
 }
 
@@ -23,6 +45,34 @@ function formatRelativeTime(isoString: string): string {
   return new Date(isoString).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+type DateGroup = 'Today' | 'Yesterday' | 'Last 7 Days' | 'Older';
+
+function groupThreadsByDate(threads: ChatThreadSummary[]): { label: DateGroup; threads: ChatThreadSummary[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 86_400_000);
+  const startOf7DaysAgo = new Date(startOfToday.getTime() - 7 * 86_400_000);
+
+  const groups: Record<DateGroup, ChatThreadSummary[]> = {
+    'Today': [],
+    'Yesterday': [],
+    'Last 7 Days': [],
+    'Older': [],
+  };
+
+  for (const thread of threads) {
+    const ts = new Date(thread.lastActivityAt).getTime();
+    if (ts >= startOfToday.getTime()) groups['Today'].push(thread);
+    else if (ts >= startOfYesterday.getTime()) groups['Yesterday'].push(thread);
+    else if (ts >= startOf7DaysAgo.getTime()) groups['Last 7 Days'].push(thread);
+    else groups['Older'].push(thread);
+  }
+
+  return (['Today', 'Yesterday', 'Last 7 Days', 'Older'] as DateGroup[])
+    .filter((label) => groups[label].length > 0)
+    .map((label) => ({ label, threads: groups[label] }));
+}
+
 const STATUS_DOT_CLASS: Record<string, string> = {
   idle: styles['dot--idle'],
   running: styles['dot--running'],
@@ -35,13 +85,52 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
   onSelectThread,
   onDeleteThread,
   onClose,
+  project,
   className,
 }) => {
-  const { data: threads = [], isLoading, error } = useChatThreadList(50);
+  const { data: threads = [], isLoading, error } = useChatThreadList(50, project);
   const deleteThread = useDeleteThread();
   const flagThread = useFlagThread();
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
+  const [width, setWidth] = useState<number>(() => loadStoredWidth() ?? defaultWidth());
+  const isDragging = useRef(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    startX.current = e.clientX;
+    startWidth.current = width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [width]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const maxW = Math.round(window.innerWidth * MAX_WIDTH_RATIO);
+      const newWidth = Math.min(maxW, Math.max(MIN_WIDTH, startWidth.current + (e.clientX - startX.current)));
+      setWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setWidth((w) => {
+        try { localStorage.setItem(LS_HISTORY_WIDTH_KEY, String(w)); } catch { /* ignore */ }
+        return w;
+      });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
 
   const visibleThreads = useMemo(
     () => (showFlaggedOnly ? threads.filter((t) => t.flagged) : threads),
@@ -67,7 +156,10 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
   };
 
   return (
-    <div className={`${styles.sidebar}${className ? ` ${className}` : ''}`}>
+    <div
+      className={`${styles.sidebar}${className ? ` ${className}` : ''}`}
+      style={{ width: `${width}px` }}
+    >
       <div className={styles.header}>
         <span className={styles['header-title']}>History</span>
         <div className={styles['header-actions']}>
@@ -107,18 +199,30 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
             {showFlaggedOnly ? 'No flagged conversations.' : 'No past conversations yet.'}
           </div>
         )}
-        {visibleThreads.map((thread) => (
-          <ThreadRow
-            key={thread.id}
-            thread={thread}
-            isActive={thread.id === activeThreadId}
-            isDeleting={pendingDeleteId === thread.id}
-            onSelect={onSelectThread}
-            onDelete={handleDelete}
-            onToggleFlag={handleToggleFlag}
-          />
+        {groupThreadsByDate(visibleThreads).map(({ label, threads: groupThreads }) => (
+          <React.Fragment key={label}>
+            <div className={styles['date-group-header']}>{label}</div>
+            {groupThreads.map((thread) => (
+              <ThreadRow
+                key={thread.id}
+                thread={thread}
+                isActive={thread.id === activeThreadId}
+                isDeleting={pendingDeleteId === thread.id}
+                onSelect={onSelectThread}
+                onDelete={handleDelete}
+                onToggleFlag={handleToggleFlag}
+              />
+            ))}
+          </React.Fragment>
         ))}
       </div>
+      <div
+        className={styles['resize-handle']}
+        onMouseDown={handleDragStart}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize history panel"
+      />
     </div>
   );
 };
@@ -139,20 +243,23 @@ const ThreadRow: React.FC<ThreadRowProps> = ({
   onSelect,
   onDelete,
   onToggleFlag,
-}) => (
+}) => {
+  const historyLabel = formatThreadHistoryLabel(thread);
+
+  return (
   <div className={`${styles.row} ${isActive ? styles['row--active'] : ''} ${isDeleting ? styles['row--deleting'] : ''}`}>
     <button
       className={styles['row-select']}
       onClick={() => onSelect(thread.id)}
       disabled={isDeleting}
       type="button"
-      aria-label={`Open thread: ${thread.title}`}
+      aria-label={`Open thread: ${historyLabel}`}
     >
       <span className={`${styles.dot} ${STATUS_DOT_CLASS[thread.status] ?? ''}`} />
       <span className={styles['row-body']}>
         <span className={styles['row-title']}>
           {thread.flagged && <span className={styles['row-flag-indicator']}>⚑</span>}
-          {thread.title}
+          {historyLabel}
         </span>
         <span className={styles['row-meta']}>
           {thread.kickoff.repo && (
@@ -195,4 +302,5 @@ const ThreadRow: React.FC<ThreadRowProps> = ({
       </button>
     </div>
   </div>
-);
+  );
+};

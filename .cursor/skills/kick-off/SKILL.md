@@ -72,6 +72,7 @@ Read and evaluate these project assets before writing any code or design doc:
 - `fullstack-node-bff` — load for any route, hook, or shared-type work
 - `postgresql-migrations` — load when a DB migration is needed
 - `rbac-management` — load when RBAC adds/removes/modifies permissions
+- `in-app-notifications` — load when the feature needs to send notifications to users
 
 > **Skill resolution note:** If the feature involves resolving which skill repo/branch to use for an AI agent session, use `useProjectSkillConfig` (from `src/client/hooks/useProjectSkillConfig.ts`) as the canonical source for repo + branch. Do not hardcode branch names or let users pick repos manually. The admin-managed `project_skill_settings` table (managed via `/admin/project-settings`) is the source of truth.
 
@@ -114,13 +115,23 @@ Create `design-docs/<kebab-case-feature-name>.md` using the template at [design-
 - Phase N+1 tasks all depend on Phase N being complete
 - Aim for 3-6 tasks per phase; phases beyond 6 tasks should be split
 
-Confirm the design doc with the user ("Here is the design doc — shall I proceed to decompose into tasks?") before moving to Phase 4.
+
+Confirm the design doc with the user ("Here is the design doc — does this look right?") before moving to Phase 4. Do **not** wait for a separate "decompose into tasks" request.
 
 ---
 
-## Phase 4: Task Decomposition for Multitask Mode
+## Phase 4: Task Decomposition for Multitask Mode (mandatory when applicable)
 
-For each `pending` todo in the design doc, produce a **subagent prompt block**. These are the prompts to paste into Cursor Multitask sessions.
+**Always run Phase 4** immediately after Phase 3 (or after Phase 2 when Phase 3 was skipped) when **any** of the following is true:
+
+- Scope is `medium` or `large`
+- The design doc has **2 or more** `pending` todos
+- Work spans **2 or more** layers (server, client, shared, db)
+- Tasks are grouped into **2 or more** implementation phases
+
+**Skip Phase 4** only when scope is `small`, type is not `new-feature`, and the work is a single focused change (1 todo, 1–3 files, one layer).
+
+When Phase 4 applies, produce **subagent prompt blocks for every `pending` todo in the design doc** — all phases, not just Phase 1. Group prompts by implementation phase and include dependency gating instructions for each phase group.
 
 **Subagent prompt structure:**
 
@@ -147,9 +158,11 @@ For each `pending` todo in the design doc, produce a **subagent prompt block**. 
 <paste the Context Block from Phase 2>
 ```
 
-**Dependency gating:** Explicitly label which phase each group of prompts belongs to. Tell the user:
+**Dependency gating:** Explicitly label which phase each group of prompts belongs to. For each phase group, tell the user:
 
-> "Run Phase 1 prompts in Multitask. Only proceed to Phase 2 after all Phase 1 subagents pass type-check and tests."
+> "Run Phase N prompts in Multitask. Only proceed to Phase N+1 after all Phase N subagents pass type-check and tests (Phase 6 gate)."
+
+**Deliverable:** The user should leave the kick-off session with copy-paste-ready Multitask prompts for Phase 1, plus clearly labeled Phase 2+ prompts to run after each gate passes. Do not stop after producing only Phase 1 prompts when multiple phases exist.
 
 ---
 
@@ -246,7 +259,7 @@ Copy and track per `/kick-off` session:
 [ ] Phase 1 — Interview complete; Scope Summary confirmed
 [ ] Phase 2 — Context Block produced
 [ ] Phase 3 — Design doc created at design-docs/<name>.md (or skipped for small)
-[ ] Phase 4 — Subagent prompts produced for Phase 1 tasks
+[ ] Phase 4 — Subagent prompts produced for all applicable phases (not just Phase 1)
 [ ] Phase 5 — TDD blocks embedded in each subagent prompt
 [ ] Phase 6 — Gate passed after each phase before dispatching next
 ```

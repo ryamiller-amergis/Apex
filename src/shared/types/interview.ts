@@ -8,8 +8,22 @@ export interface InterviewSummary {
   title: string;
   project: string;
   repo: string;
+  model?: string;
   status: InterviewStatus;
   prdCount: number;
+  prdOwnerId?: string;
+  prdOwnerName?: string;
+  designDocOwnerId?: string;
+  designDocOwnerName?: string;
+  designPrototypeOwnerId?: string;
+  designPrototypeOwnerName?: string;
+  testCaseOwnerId?: string;
+  testCaseOwnerName?: string;
+  /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
+  testCaseApproverIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -18,7 +32,7 @@ export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
 }
 
-export type PrdStatus = 'generating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface PrdSummary {
   id: string;
@@ -26,8 +40,11 @@ export interface PrdSummary {
   chatThreadId: string;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   project: string;
   title: string;
+  model?: string;
   status: PrdStatus;
   reviewerId?: string;
   reviewerName?: string;
@@ -35,11 +52,63 @@ export interface PrdSummary {
   reviewedAt?: string;
   createdAt: string;
   updatedAt: string;
+  latestTestCase?: TestCaseSummary | null;
+  validationScoreThreshold?: number | null;
 }
 
 export interface Prd extends PrdSummary {
   content: string;
   backlogJson?: unknown;
+  prdAssistantThreadId?: string | null;
+  proposedContent?: string | null;
+  proposedBacklogJson?: unknown;
+  /** Design doc approver user OIDs stored on the PRD; used to pre-assign reviewers when design docs are submitted. */
+  designDocApproverIds?: string[];
+  validationThreadId?: string | null;
+  validationScore?: number | null;
+  validationScorecard?: ValidationScorecard | null;
+  validationReportMd?: string | null;
+  validationPhase?: string | null;
+  fixBaseline?: PrdValidationBaseline | null;
+  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
+  prdValidationEnabled?: boolean;
+  /** Set while a single-comment Apex fix is in progress or awaiting review. */
+  fixCommentId?: string | null;
+}
+
+export type TestCaseStatus = 'generating' | 'ready' | 'failed';
+
+export interface TestCaseCoverageSummary {
+  totalCases: number;
+  pbisCovered: number;
+  acCovered: string;
+  brCovered: string;
+  gaps: number;
+}
+
+export type TestCaseValidationStatus = 'pending' | 'validating' | 'passed' | 'failed' | 'not_available';
+
+export interface TestCaseValidationSummary {
+  status: TestCaseValidationStatus;
+  failures?: string[];
+  checkedAt?: string;
+}
+
+export interface TestCaseSummary {
+  id: string;
+  prdId: string;
+  chatThreadId: string | null;
+  status: TestCaseStatus;
+  coverageSummary?: TestCaseCoverageSummary | null;
+  validationStatus?: TestCaseValidationStatus;
+  validationSummary?: TestCaseValidationSummary | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestCaseRecord extends TestCaseSummary {
+  testCasesJson?: unknown;
+  testCasesMd?: string | null;
 }
 
 export interface CreateInterviewRequest {
@@ -47,6 +116,15 @@ export interface CreateInterviewRequest {
   repo: string;
   title?: string;
   model?: string;
+  prdOwnerId?: string;
+  designDocOwnerId?: string;
+  designPrototypeOwnerId?: string;
+  testCaseOwnerId?: string;
+  /** Kick-off approver selections (user OIDs); persisted and inherited at submit. */
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
+  testCaseApproverIds?: string[];
 }
 
 export interface CreateInterviewResponse {
@@ -64,12 +142,13 @@ export interface CreatePrdResponse {
 }
 
 export interface ReviewPrdRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export interface ReviewPrdResponse {
   ok: boolean;
+  prdId?: string;
+  approved?: boolean;
   designDocId?: string;
 }
 
@@ -77,6 +156,7 @@ export function prdStatusLabel(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'Generating';
     case 'draft': return 'Draft';
+    case 'validating': return 'Validating';
     case 'pending_review': return 'Pending Review';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
@@ -87,6 +167,7 @@ export function prdBadgeClass(status: PrdStatus): string {
   switch (status) {
     case 'generating': return 'generating';
     case 'draft': return 'draft';
+    case 'validating': return 'validating';
     case 'pending_review': return 'pending-review';
     case 'approved': return 'approved';
     case 'revision_requested': return 'revision-requested';
@@ -116,6 +197,14 @@ export interface ValidationScorecardFeature {
   gaps: ValidationScorecardGap[];
 }
 
+export interface ValidationScorecardFile {
+  file: string;
+  filename?: string;
+  score: number;
+  verdict: string;
+  gaps: ValidationScorecardGap[];
+}
+
 export interface ValidationScorecard {
   slug: string;
   generated_at: string;
@@ -124,10 +213,12 @@ export interface ValidationScorecard {
   ready_threshold: number;
   is_ready: boolean;
   verdict: 'ready' | 'gaps' | 'significant_gaps';
-  features: ValidationScorecardFeature[];
-  cross_cutting_checks: Record<string, string>;
-  accepted_gaps: string[];
-  deferred_gaps: string[];
+  features?: ValidationScorecardFeature[];
+  /** PRD validation uses `files` array instead of `features`. */
+  files?: ValidationScorecardFile[];
+  cross_cutting_checks?: Record<string, string>;
+  accepted_gaps?: string[];
+  deferred_gaps?: string[];
 }
 
 export interface ContentSnapshot {
@@ -138,7 +229,14 @@ export interface ContentSnapshot {
   fixThreadId?: string;
 }
 
-export type DesignDocStatus = 'interviewing' | 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+export interface PrdValidationBaseline {
+  content: string;
+  backlogJson?: unknown;
+  capturedAt: string;
+  fixThreadId?: string;
+}
+
+export type DesignDocStatus = 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
@@ -146,7 +244,8 @@ export interface DesignDocSummary {
   prdTitle?: string;
   project: string;
   chatThreadId: string | null;
-  qaChatThreadId?: string | null;
+  designPrototypeId?: string | null;
+  featureIndex?: number | null;
   docAssistantThreadId?: string | null;
   validationThreadId?: string | null;
   validationScore?: number | null;
@@ -156,7 +255,10 @@ export interface DesignDocSummary {
   fixBaseline?: ContentSnapshot | null;
   authorId: string;
   authorName?: string;
+  ownerId?: string;
+  ownerName?: string;
   title: string;
+  model?: string;
   status: DesignDocStatus;
   reviewerId?: string;
   reviewerName?: string;
@@ -170,18 +272,20 @@ export interface DesignDoc extends DesignDocSummary {
   designContent: string;
   techSpecContent: string;
   assumptionsContent: string;
+  proposedDesignContent?: string | null;
+  proposedTechSpecContent?: string | null;
+  proposedAssumptionsContent?: string | null;
+  fixCommentId?: string | null;
 }
 
 export type CreateDesignDocResponse = { designDocId: string; threadId: string };
 
 export interface ReviewDesignDocRequest {
-  action: 'approve' | 'request_revision';
-  comment?: string;
+  action: 'approve';
 }
 
 export function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return 'Interviewing';
     case 'generating': return 'Generating';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
@@ -193,7 +297,6 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
 
 export function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
-    case 'interviewing': return 'interviewing';
     case 'generating': return 'generating';
     case 'validating': return 'validating';
     case 'draft': return 'draft';
@@ -208,6 +311,7 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
 export interface SelectedBacklogPBI {
   id: string;
   title: string;
+  type?: 'PBI' | 'TBI';
   description?: string;
   priority?: string;
   acceptanceCriteria?: Array<{ given?: string; when?: string; then?: string }>;
@@ -217,6 +321,7 @@ export interface SelectedBacklogPBI {
   definitionOfDone?: string[];
   outOfScope?: string[];
   dependsOn?: string[];
+  testCaseCount?: number;
 }
 
 export interface SelectedBacklogFeature {
@@ -226,6 +331,8 @@ export interface SelectedBacklogFeature {
   affectedPersonas?: string[];
   outOfScope?: string[];
   dependencies?: string[];
+  designDocId?: string;
+  designPrototypeId?: string;
   items?: SelectedBacklogPBI[];
 }
 
@@ -253,12 +360,48 @@ export interface CreatePrdAdoItemsRequest {
   selectedItems: { epics: SelectedBacklogEpic[] };
 }
 
+export interface CreatedAdoItem {
+  title: string;
+  adoId: number;
+  adoUrl: string;
+  /** Original backlog item ID (e.g. "pbi-1", "tbi-2") */
+  id?: string;
+  /** Original dependency references (backlog IDs or titles) */
+  dependsOn?: string[];
+  /** Resolved ADO work item IDs for each dependency */
+  dependsOnAdoIds?: number[];
+}
+
+export interface DependencyGraphNode {
+  adoId: number;
+  title: string;
+  type: 'Epic' | 'Feature' | 'PBI' | 'TBI';
+  /** ADO IDs this item must wait for before starting */
+  predecessorAdoIds: number[];
+}
+
 export interface CreatePrdAdoItemsResponse {
   success: boolean;
   created: {
-    epics: Array<{ title: string; adoId: number; adoUrl: string }>;
-    features: Array<{ title: string; adoId: number; adoUrl: string }>;
-    pbis: Array<{ title: string; adoId: number; adoUrl: string }>;
+    epics: CreatedAdoItem[];
+    features: CreatedAdoItem[];
+    pbis: CreatedAdoItem[];
+    tasks: CreatedAdoItem[];
+    testCases: CreatedAdoItem[];
   };
   totalCreated: number;
+  /**
+   * Dependency graph for all created PBIs/TBIs.
+   * Items with empty predecessorAdoIds can start immediately (async).
+   * Items with predecessors must wait for those to complete first (sync).
+   */
+  dependencyGraph?: DependencyGraphNode[];
+}
+
+// ── Active User (for owner assignment dropdowns) ─────────────────────────────
+
+export interface ActiveUser {
+  oid: string;
+  displayName: string | null;
+  email: string | null;
 }

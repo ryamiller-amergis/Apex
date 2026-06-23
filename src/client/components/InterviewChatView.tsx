@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, KeyboardEvent } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
@@ -8,6 +8,7 @@ import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
+import { useContextEstimate } from '../hooks/useContextEstimate';
 import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
 import {
   useInterview,
@@ -18,9 +19,12 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { SectionOwnerModal } from './SectionOwnerModal';
 import type { InterviewStatus } from '../../shared/types/interview';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { trackEvent, trackException } from '../services/telemetry';
+import { ReadAloudButton } from './ReadAloudButton';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -114,9 +118,10 @@ interface InterviewAgentMessageProps {
   isRunning: boolean;
   questionOffset?: number;
   interviewLocked?: boolean;
+  alreadyAnswered?: boolean;
 }
 
-const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false }) => {
+const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false }) => {
   const parts = parseAgentMessage(text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -125,7 +130,16 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
     for (const b of choiceBlocks) init[b.id] = { selected: null, freeform: '' };
     return init;
   });
-  const [sent, setSent] = useState(false);
+  // Initialize from `alreadyAnswered` so a previously-submitted question stays
+  // locked after a page reload (the submission state is otherwise only kept in
+  // ephemeral component state).
+  const [sent, setSent] = useState(alreadyAnswered);
+
+  // Lock the block if the thread later shows it was answered (e.g. when message
+  // history loads asynchronously after this component first mounts).
+  useEffect(() => {
+    if (alreadyAnswered) setSent(true);
+  }, [alreadyAnswered]);
 
   const allAnswered = choiceBlocks.every((b) => {
     const s = selections[b.id];
@@ -165,6 +179,9 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
   if (choiceBlocks.length === 0) {
     return (
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+        <div className={styles.bubbleActions}>
+          <ReadAloudButton text={text} />
+        </div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
     );
@@ -173,6 +190,9 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
   let questionCounter = questionOffset;
   return (
     <div className={styles.assistantBubble}>
+      <div className={styles.bubbleActions}>
+        <ReadAloudButton text={text} />
+      </div>
       {parts.map((part) => {
         if (part.type === 'markdown') {
           return (
@@ -222,6 +242,7 @@ const NewInterviewCompose: React.FC = () => {
   const [titleTouched, setTitleTouched] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -278,7 +299,7 @@ const NewInterviewCompose: React.FC = () => {
     setModel((current) => current === prevDefault ? newDefault : current);
   }, [skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if ((!text && attachments.length === 0) || isSending || !resolvedRepoName) return;
@@ -289,6 +310,13 @@ const NewInterviewCompose: React.FC = () => {
     }
     if (speech.isListening) speech.stop();
     setSendError(null);
+    setShowOwnerModal(true);
+  }, [input, title, attachments, isSending, resolvedRepoName, speech]);
+
+  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
+    const text = input.trim();
+    const trimmedTitle = title.trim();
+    if (!resolvedRepoName || !trimmedTitle) return;
     setIsSending(true);
     try {
       const threadResult = await startChat.mutateAsync({
@@ -306,6 +334,20 @@ const NewInterviewCompose: React.FC = () => {
         repo: resolvedRepoName,
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
+        model,
+        prdOwnerId: selections.prdOwnerId,
+        designDocOwnerId: selections.designDocOwnerId,
+        designPrototypeOwnerId: selections.designPrototypeOwnerId,
+        testCaseOwnerId: selections.testCaseOwnerId,
+        prdApproverIds: selections.prdApproverIds,
+        designDocApproverIds: selections.designDocApproverIds,
+        designPrototypeApproverIds: selections.designPrototypeApproverIds,
+        testCaseApproverIds: selections.testCaseApproverIds,
+      });
+      trackEvent('interview.started', {
+        interviewId: result.interviewId,
+        project: selectedProject,
+        repo: resolvedRepoName,
       });
       await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
         method: 'POST',
@@ -316,11 +358,14 @@ const NewInterviewCompose: React.FC = () => {
       clearAttachments();
       navigate(`/backlog/interview/${result.interviewId}`);
     } catch (err: unknown) {
+      trackException(err instanceof Error ? err : new Error(String(err)), {
+        context: 'interview.create',
+      });
       const msg = err instanceof Error ? err.message : 'Failed to start interview';
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, isSending, resolvedRepoName, resolvedBranch, selectedProject, grillSkill, startChat, createInterview, navigate, clearAttachments, speech, model]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, grillSkill, startChat, createInterview, navigate, clearAttachments, model]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -505,6 +550,20 @@ const NewInterviewCompose: React.FC = () => {
           Enter to send · Shift+Enter for new line · The <strong>{grillSkill?.name ?? 'grill-with-docs'}</strong> skill will guide this structured interview
         </p>
       </div>
+
+      {showOwnerModal && (
+        <SectionOwnerModal
+          project={selectedProject}
+          onConfirm={(selections) => {
+            setShowOwnerModal(false);
+            void handleCreateInterview(selections);
+          }}
+          onCancel={() => {
+            setShowOwnerModal(false);
+          }}
+          isSubmitting={isSending}
+        />
+      )}
     </div>
   );
 };
@@ -513,7 +572,7 @@ const NewInterviewCompose: React.FC = () => {
 
 const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const navigate = useNavigate();
-  const { can } = useAppShell();
+  const { can, userId, isAdmin } = useAppShell();
 
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
@@ -524,7 +583,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [wrapUpDismissed, setWrapUpDismissed] = useState(false);
+  const [showSendConfirm, setShowSendConfirm] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -562,11 +624,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const { data: chatThread } = useChatThread(interview?.chatThreadId ?? null);
 
-  const { messages, streamingText, status: threadStatus } = useChatStream(
+  const { messages, streamingText, status: threadStatus, isRetrying, retryReason } = useChatStream(
     interview?.chatThreadId ?? null,
+    {
+      initialMessages: chatThread?.messages,
+      initialStatus: chatThread?.status,
+    },
   );
 
   const isRunning = threadStatus === 'running';
+
+  const visibleMessagesForContext = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
+  const contextEstimate = useContextEstimate(
+    visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
+  );
 
   useEffect(() => {
     if (chatThread) {
@@ -597,9 +669,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     if ((!text && attachments.length === 0) || isRunning || isSending || !interview?.chatThreadId) return;
     if (speech.isListening) speech.stop();
     setInput('');
+    setSendError(null);
     setIsSending(true);
     try {
-      await fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
+      const res = await fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -609,7 +682,23 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           model,
         }),
       });
+      if (!res.ok) {
+        let msg = 'Failed to send message';
+        try {
+          const body = await res.json();
+          if (body?.error) msg = body.error;
+        } catch { /* use default msg */ }
+        setSendError(msg);
+        return;
+      }
       clearAttachments();
+    } catch (err: unknown) {
+      trackException(err instanceof Error ? err : new Error(String(err)), {
+        context: 'interview.send',
+        interviewId: id,
+      });
+      const msg = err instanceof Error ? err.message : 'Failed to send message';
+      setSendError(msg);
     } finally {
       setIsSending(false);
     }
@@ -621,6 +710,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       void handleSend();
     }
   }, [handleSend]);
+
+  const handleRetryLast = useCallback(() => {
+    if (!interview?.chatThreadId || isRunning) return;
+    const lastUserMsg = [...visibleMessagesForContext].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+    void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: lastUserMsg.text, model }),
+    });
+  }, [interview?.chatThreadId, isRunning, visibleMessagesForContext, model]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -685,10 +786,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         interviewId: id,
         chatThreadId: threadResult.threadId,
         title: interview.title,
+        model: prdModel,
       });
       navigate(`/backlog/prd/${prdResult.prdId}`);
-    } catch {
-      // non-fatal — user can retry
+    } catch (err: unknown) {
+      trackException(err instanceof Error ? err : new Error(String(err)), {
+        context: 'interview.generatePrd',
+        interviewId: id,
+      });
+      const msg = err instanceof Error ? err.message : 'Failed to generate PRD';
+      setSendError(msg);
     }
   }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
 
@@ -697,7 +804,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
   const canManage = can('interviews:manage');
-  const isLocked = interview.status !== 'in_progress';
+  const isAuthor = interview.authorId === userId;
+  const isReadOnlyViewer = !isAuthor && !isAdmin;
+  const isStatusLocked = interview.status !== 'in_progress';
+  const isChatLocked = isReadOnlyViewer || isStatusLocked;
 
   // Pre-compute cumulative question offset for each assistant message so Q-numbers
   // are globally sequential across the whole conversation rather than restarting at 1
@@ -711,6 +821,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       runningQCount += parts.filter((p): p is ChoiceBlock => p.type === 'choices').length;
     }
   }
+
+  // An agent message's choice block has already been answered if any user
+  // message follows it in the thread (submitting answers creates a user
+  // message). Used to persist the "Answers sent" lock across reloads.
+  let lastUserMsgIndex = -1;
+  visibleMessages.forEach((m, i) => {
+    if (m.role === 'user') lastUserMsgIndex = i;
+  });
 
   return (
     <div className={styles.container}>
@@ -751,7 +869,32 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span>{interview.project}</span>
               <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
+              {interview.model && (
+                <>
+                  <span className={styles.titleMetaSep}>·</span>
+                  <span>Model: {interview.model}</span>
+                </>
+              )}
             </div>
+            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
+              <div className={styles.ownerChips}>
+                {interview.prdOwnerName && (
+                  <span className={styles.ownerChip}>
+                    PRD: {interview.prdOwnerName}
+                  </span>
+                )}
+                {interview.designDocOwnerName && (
+                  <span className={styles.ownerChip}>
+                    Design Doc: {interview.designDocOwnerName}
+                  </span>
+                )}
+                {interview.designPrototypeOwnerName && (
+                  <span className={styles.ownerChip}>
+                    Design Prototype: {interview.designPrototypeOwnerName}
+                  </span>
+                )}
+              </div>
+            )}
             {interview.prds.length > 0 && (
               <div className={styles.titlePrdLinks}>
                 {interview.prds.map((prd) => (
@@ -873,15 +1016,43 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
+      {sendError && (
+        <div className={styles.sendError}>
+          {sendError}
+          <button
+            type="button"
+            className={styles.sendErrorDismiss}
+            onClick={() => setSendError(null)}
+            aria-label="Dismiss error"
+          >×</button>
+        </div>
+      )}
+
       <div className={styles.messages}>
         <div className={styles.messageList}>
-          {visibleMessages.map((msg) => {
+          {visibleMessages.map((msg, msgIndex) => {
             if (msg.role === 'tool') {
               return (
                 <div key={msg.id} className={styles.messageBubbleTool}>→ {msg.text}</div>
               );
             }
             if (msg.role === 'system') {
+              const isError = msg.text.startsWith('Error:');
+              if (isError && !isChatLocked) {
+                return (
+                  <div key={msg.id} className={styles.systemErrorMsg}>
+                    <span className={styles.systemErrorText}>{msg.text}</span>
+                    <button
+                      className={styles.retryBtn}
+                      onClick={() => handleRetryLast()}
+                      disabled={isRunning}
+                      type="button"
+                    >
+                      ↺ Try again
+                    </button>
+                  </div>
+                );
+              }
               return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
             }
             if (msg.role === 'user') {
@@ -896,7 +1067,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 key={msg.id}
                 text={msg.text}
                 onSend={(text) => {
-                  if (isLocked) return;
+                  if (isChatLocked) return;
                   setInput('');
                   void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
                     method: 'POST',
@@ -907,12 +1078,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 }}
                 isRunning={isRunning}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
-                interviewLocked={isLocked}
+                interviewLocked={isChatLocked}
+                alreadyAnswered={msgIndex < lastUserMsgIndex}
               />
             );
           })}
 
-          {isRunning && !streamingText && (
+          {isRetrying && (
+            <div className={styles.retryingIndicator}>
+              <span className={styles.retryingSpinner} />
+              {retryReason || 'Retrying…'}
+            </div>
+          )}
+
+          {isRunning && !streamingText && !isRetrying && (
             <div className={styles.typingIndicator}>
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
@@ -930,16 +1109,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {isLocked ? (
+      {isChatLocked ? (
         <div className={styles.lockedNotice} data-testid="locked-notice">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
             <path d="M5 7V5a3 3 0 0 1 6 0v2" />
           </svg>
           <span>
-            {interview.status === 'complete'
-              ? <>This interview is complete and the chat is closed.{interview.prds.length > 0 ? ' View the linked PRD above.' : ''}</>
-              : 'This interview is archived and the chat is read-only.'}
+            {isReadOnlyViewer && interview.status === 'in_progress'
+              ? "You are viewing another user's interview (read-only)."
+              : interview.status === 'complete'
+                ? <>This interview is complete and the chat is closed.{interview.prds.length > 0 ? ' View the linked PRD above.' : ''}</>
+                : 'This interview is archived and the chat is read-only.'}
           </span>
           {interview.status === 'complete' && canManage && interview.prds.length === 0 && (
             <button
@@ -954,6 +1135,78 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       ) : (
         <div className={styles.inputArea}>
+          <div className={styles.contextBar}>
+            <div
+              className={styles.contextBarTrack}
+              title={`Estimated context: ${contextEstimate.estimatedTokens.toLocaleString()} / ${contextEstimate.contextLimit.toLocaleString()} tokens`}
+            >
+              <div
+                className={`${styles.contextBarFill} ${contextEstimate.isCritical ? styles.contextBarFillCritical : contextEstimate.isWarning ? styles.contextBarFillWarn : ''}`}
+                style={{ width: `${contextEstimate.usagePercent}%` }}
+              />
+            </div>
+            <span className={`${styles.contextBarLabel} ${contextEstimate.isWarning ? styles.contextBarLabelWarn : ''}`}>
+              {contextEstimate.label} / {contextEstimate.contextLimit >= 1000 ? `${Math.round(contextEstimate.contextLimit / 1000)}k` : contextEstimate.contextLimit}
+              {contextEstimate.isWarning && ' ⚠'}
+            </span>
+          </div>
+
+          {contextEstimate.isCritical && (
+            <div className={styles.wrapUpBannerCritical}>
+              <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <div className={styles.wrapUpBody}>
+                <strong>Context window is nearly full.</strong> To ensure all your Q&amp;A is preserved in the PRD, we strongly recommend generating now.
+                <div className={styles.wrapUpActions}>
+                  <button
+                    className={styles.wrapUpGenerateBtn}
+                    onClick={() => void handleGeneratePrd()}
+                    disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
+                    type="button"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="1" width="10" height="14" rx="1.5" />
+                      <path d="M6 5h4M6 8h4M6 11h2" />
+                    </svg>
+                    Generate PRD Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && (
+            <div className={styles.wrapUpBannerWarn}>
+              <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <div className={styles.wrapUpBody}>
+                You've covered a lot of ground. Consider wrapping up the interview and generating your PRD to preserve all context.
+                <div className={styles.wrapUpActions}>
+                  <button
+                    className={styles.wrapUpGenerateBtn}
+                    onClick={() => void handleGeneratePrd()}
+                    disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
+                    type="button"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="1" width="10" height="14" rx="1.5" />
+                      <path d="M6 5h4M6 8h4M6 11h2" />
+                    </svg>
+                    Generate PRD Now
+                  </button>
+                  <button
+                    className={styles.wrapUpDismissBtn}
+                    onClick={() => setWrapUpDismissed(true)}
+                    type="button"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -1050,17 +1303,51 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   </svg>
                 </button>
               ) : (
-                <button
-                  className={styles.sendBtn}
-                  onClick={() => void handleSend()}
-                  disabled={(!input.trim() && attachments.length === 0) || isSending}
-                  type="button"
-                  aria-label="Send"
-                >
-                  <svg viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                  </svg>
-                </button>
+                <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>
+                  {showSendConfirm && (
+                    <div className={styles.sendConfirmOverlay}>
+                      <div className={styles.sendConfirmText}>
+                        The context window is nearly full. Sending more messages may degrade the agent's ability to process the conversation. Continue anyway?
+                      </div>
+                      <div className={styles.sendConfirmActions}>
+                        <button
+                          className={styles.sendConfirmNo}
+                          onClick={() => setShowSendConfirm(false)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className={styles.sendConfirmYes}
+                          onClick={() => {
+                            setShowSendConfirm(false);
+                            void handleSend();
+                          }}
+                          type="button"
+                        >
+                          Send anyway
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    className={styles.sendBtn}
+                    onClick={() => {
+                      if (contextEstimate.isCritical) {
+                        setShowSendConfirm(true);
+                      } else {
+                        void handleSend();
+                      }
+                    }}
+                    disabled={(!input.trim() && attachments.length === 0) || isSending}
+                    type="button"
+                    aria-label="Send"
+                  >
+                    <svg viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                    </svg>
+                  </button>
+                </div>
               )}
             </div>
             {speech.isListening && (
@@ -1092,9 +1379,15 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
 export const InterviewChatView: React.FC = () => {
   const location = useLocation();
+  const { can, isInAnyGroup } = useAppShell();
   const id = location.pathname.split('/').pop();
 
-  if (id === 'new') return <NewInterviewCompose />;
+  if (id === 'new') {
+    if (!can('interviews:manage') || !isInAnyGroup(['BA', 'Manager', 'Product-Owner'])) {
+      return <Navigate to="/backlog" replace />;
+    }
+    return <NewInterviewCompose />;
+  }
   if (!id) return null;
   return <ExistingInterviewView id={id} />;
 };

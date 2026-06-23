@@ -1,8 +1,40 @@
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 :root {
+  /* ── Responsive Breakpoints ──────────────────────
+     Phone:        max-width 480px
+     Tablet:       max-width 768px
+     Small desktop: max-width 1024px
+     Usage: @media (max-width: 768px) { ... }
+     ─────────────────────────────────────────────── */
+
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
@@ -652,5 +684,159 @@ body {
   color: var(--accent-color);
   border-bottom-color: var(--accent-color);
   font-weight: 600;
+}
+
+/* ── Responsive Utilities ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .hide-mobile { display: none !important; }
+}
+@media (min-width: 769px) {
+  .show-mobile-only { display: none !important; }
+}
+
+/* ── Header — Tablet ───────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 8px 12px;
+  }
+
+  .header-main {
+    gap: 8px;
+  }
+
+  .app-brand-text {
+    display: none;
+  }
+
+  .view-switcher {
+    gap: 4px;
+    padding: 2px;
+  }
+
+  .view-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  .header-controls {
+    gap: 8px;
+  }
+}
+
+/* ── Header — Phone ───────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .app-header {
+    padding: 8px;
+  }
+
+  .header-main {
+    gap: 4px;
+  }
+
+  .view-btn {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .header-controls {
+    gap: 4px;
+  }
+}
+
+/* ── Planning Tabs — Tablet ────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .planning-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 12px 0 12px;
+    scrollbar-width: none;
+  }
+
+  .planning-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-button {
+    padding: 8px 16px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+}
+
+/* ── Admin Tabs — Tablet ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .admin-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 12px 0;
+    scrollbar-width: none;
+  }
+
+  .admin-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-tab {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+}
+
+/* ── View Container Responsive ─────────────────────────────────────────── */
+
+/* ── Calendar View — Tablet ────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .calendar-view {
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+
+/* ── Planning View — Tablet ────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .planning-view {
+    padding: 0;
+  }
+
+  .planning-content {
+    padding: 8px;
+  }
+}
+
+/* ── Cloud Cost View — Tablet ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .cloudcost-view {
+    overflow-y: auto;
+  }
+}
+
+/* ── Backlog View — Tablet ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .backlog-view {
+    overflow-y: auto;
+  }
+}
+
+/* ── Admin Container — Tablet ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .admin-container {
+    overflow-y: auto;
+  }
+}
+
+/* ── Error Banner — Phone ──────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .error-banner {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+/* ── Loading Spinner — Phone ───────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .loading-spinner-container {
+    padding: 24px 16px;
+  }
 }
 

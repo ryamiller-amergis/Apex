@@ -9,6 +9,7 @@ jest.mock('../db/drizzle', () => {
   const makeInsertChain = () => ({
     values: jest.fn().mockReturnThis(),
     onConflictDoUpdate: jest.fn().mockReturnThis(),
+    onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
     returning: jest.fn().mockResolvedValue([]),
   });
 
@@ -23,6 +24,7 @@ jest.mock('../db/drizzle', () => {
 
   const makeSelectChain = () => ({
     from: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     limit: jest.fn().mockResolvedValue([]),
     orderBy: jest.fn().mockResolvedValue([]),
@@ -34,6 +36,13 @@ jest.mock('../db/drizzle', () => {
       update: jest.fn().mockImplementation(makeUpdateChain),
       delete: jest.fn().mockImplementation(makeDeleteChain),
       select: jest.fn().mockImplementation(makeSelectChain),
+      transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
+        const tx = {
+          delete: jest.fn().mockImplementation(makeDeleteChain),
+          insert: jest.fn().mockImplementation(makeInsertChain),
+        };
+        await fn(tx);
+      }),
     },
   };
 });
@@ -43,6 +52,11 @@ import {
   listSkillConfigs,
   upsertSkillConfig,
   deleteSkillConfig,
+  listApprovers,
+  listApproversForAllProjects,
+  listApproverGroupsForAllProjects,
+  setApprovers,
+  getApproversForDocument,
 } from '../services/projectSettingsService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -123,7 +137,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configRow]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
@@ -147,7 +161,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([{ ...configRow, updatedBy: undefined }]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig('proj-beta', 'org/repo', 'develop');
 
@@ -164,7 +178,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithModels]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -202,6 +216,45 @@ describe('upsertSkillConfig', () => {
     );
   });
 
+  it('persists defaultModel when provided', async () => {
+    const configWithDefault = { ...configRow, defaultModel: 'composer-2' };
+    const returningMock = jest.fn().mockResolvedValue([configWithDefault]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      'composer-2',
+    );
+
+    expect(result).toMatchObject({ defaultModel: 'composer-2' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultModel: 'composer-2' }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ defaultModel: 'composer-2' }),
+      }),
+    );
+  });
+
   it('stores null for model fields when not provided (omitted)', async () => {
     const configNoModels = {
       ...configRow,
@@ -212,7 +265,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configNoModels]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
 
@@ -234,7 +287,7 @@ describe('upsertSkillConfig', () => {
     const returningMock = jest.fn().mockResolvedValue([configWithValidation]);
     const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
 
     const result = await upsertSkillConfig(
       'proj-alpha',
@@ -247,10 +300,10 @@ describe('upsertSkillConfig', () => {
       undefined, // interviewModel
       undefined, // prdModel
       undefined, // designDocModel
-      undefined, // designDocQaSkillPath
-      undefined, // designDocQaModel
       undefined, // designDocAssistantSkillPath
       undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
       '.cursor/skills/validate/SKILL.md', // designDocValidationSkillPath
       'claude-3-opus', // designDocValidationModel
     );
@@ -274,6 +327,187 @@ describe('upsertSkillConfig', () => {
       }),
     );
   });
+
+  it('persists approvalMode when provided', async () => {
+    const configWithMode = { ...configRow, approvalMode: 'all_required' };
+    const returningMock = jest.fn().mockResolvedValue([configWithMode]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      'all_required', // approvalMode
+    );
+
+    expect(result).toMatchObject({ approvalMode: 'all_required' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalMode: 'all_required' }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ approvalMode: 'all_required' }),
+      }),
+    );
+  });
+
+  it('defaults approvalMode to any_one when not provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, approvalMode: 'any_one' }]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalMode: 'any_one' }),
+    );
+  });
+
+  it('persists quickMcpPills when provided', async () => {
+    const mcpPills = [
+      { label: 'SendGrid', mcpServerName: 'sendgrid', transport: 'stdio' as const, command: 'npx', args: ['-y', 'mcp-sendgrid-server'], env: { SENDGRID_API_KEY: '${SENDGRID_API_KEY}' } },
+      { label: 'Twilio Docs', mcpServerName: 'twilio-docs', transport: 'http' as const, url: 'https://mcp.twilio.com/docs' },
+    ];
+    const configWithMcpPills = { ...configRow, quickMcpPills: mcpPills };
+    const returningMock = jest.fn().mockResolvedValue([configWithMcpPills]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      undefined, // approvalMode
+      mcpPills,  // quickMcpPills
+    );
+
+    expect(result).toMatchObject({ quickMcpPills: mcpPills });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ quickMcpPills: mcpPills }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ quickMcpPills: mcpPills }),
+      }),
+    );
+  });
+
+  it('stores null for quickMcpPills when not provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, quickMcpPills: null }]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ quickMcpPills: null }),
+    );
+  });
+
+  it('persists test-case and PRD validation skill/model settings when provided', async () => {
+    const configWithQaSettings = {
+      ...configRow,
+      testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+      testCaseModel: 'gpt-5.5-test',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+      prdValidationModel: 'gpt-5.5-validation',
+    };
+    const returningMock = jest.fn().mockResolvedValue([configWithQaSettings]);
+    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
+    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+
+    const result = await upsertSkillConfig(
+      'proj-alpha',
+      'org/skills-repo',
+      'main',
+      'alice',
+      undefined, // interviewSkillPath
+      undefined, // prdSkillPath
+      undefined, // designDocSkillPath
+      undefined, // interviewModel
+      undefined, // prdModel
+      undefined, // designDocModel
+      undefined, // designDocAssistantSkillPath
+      undefined, // designDocAssistantModel
+      undefined, // designPrototypeSkillPath
+      undefined, // designPrototypeModel
+      undefined, // designDocValidationSkillPath
+      undefined, // designDocValidationModel
+      undefined, // quickSkillPills
+      undefined, // defaultModel
+      undefined, // approvalMode
+      undefined, // quickMcpPills
+      undefined, // prdAssistantSkillPath
+      undefined, // prdAssistantModel
+      undefined, // prdReviewBedrockModelId
+      undefined, // prdReviewBedrockMaxTokens
+      undefined, // designPrototypeBedrockModelId
+      undefined, // designPrototypeBedrockMaxTokens
+      undefined, // designPrototypeBedrockTimeoutMs
+      undefined, // designPrototypeRegenBedrockModelId
+      undefined, // designPrototypeRegenBedrockMaxTokens
+      '.cursor/skills/test-cases/SKILL.md',
+      'gpt-5.5-test',
+      '.cursor/skills/prd-validation/SKILL.md',
+      'gpt-5.5-validation',
+    );
+
+    expect(result).toMatchObject(configWithQaSettings);
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+        testCaseModel: 'gpt-5.5-test',
+        prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+        prdValidationModel: 'gpt-5.5-validation',
+      }),
+    );
+    expect(onConflictMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({
+          testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+          testCaseModel: 'gpt-5.5-test',
+          prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+          prdValidationModel: 'gpt-5.5-validation',
+        }),
+      }),
+    );
+  });
 });
 
 // ── deleteSkillConfig ──────────────────────────────────────────────────────────
@@ -289,5 +523,121 @@ describe('deleteSkillConfig', () => {
 
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(whereMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Approver management ───────────────────────────────────────────────────────
+
+const approverRow = {
+  id: 'appr-1',
+  project: 'proj-alpha',
+  userId: 'user-oid-1',
+  displayName: 'Alice Admin',
+  email: 'alice@example.com',
+  documentType: 'design_doc',
+  assignedBy: 'admin-oid',
+  assignedAt: '2026-01-01T00:00:00Z',
+};
+
+describe('listApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns approvers joined with user display data', async () => {
+    const whereMock = jest.fn().mockResolvedValue([approverRow]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApprovers('proj-alpha');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      project: 'proj-alpha',
+      userId: 'user-oid-1',
+      documentType: 'design_doc',
+      displayName: 'Alice Admin',
+    });
+  });
+});
+
+describe('listApproversForAllProjects', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('groups approvers by project', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([
+      approverRow,
+      { ...approverRow, id: 'appr-2', documentType: 'prd', userId: 'user-oid-2' },
+      { ...approverRow, id: 'appr-3', project: 'proj-beta', userId: 'user-oid-3' },
+    ]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproversForAllProjects();
+
+    expect(result['proj-alpha']).toHaveLength(2);
+    expect(result['proj-beta']).toHaveLength(1);
+  });
+
+  it('returns an empty object when no approvers exist', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproversForAllProjects();
+
+    expect(result).toEqual({});
+  });
+});
+
+describe('listApproverGroupsForAllProjects', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('groups approver groups by project', async () => {
+    const innerJoinMock = jest.fn().mockResolvedValue([
+      { project: 'proj-alpha', groupId: 'g1', groupName: 'QA', documentType: 'test_case' },
+      { project: 'proj-alpha', groupId: 'g2', groupName: 'BA', documentType: 'prd' },
+      { project: 'proj-beta', groupId: 'g3', groupName: 'QA', documentType: 'test_case' },
+    ]);
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await listApproverGroupsForAllProjects();
+
+    expect(result['proj-alpha']).toHaveLength(2);
+    expect(result['proj-beta']).toHaveLength(1);
+    expect(result['proj-alpha']![0]).toMatchObject({ groupName: 'QA', documentType: 'test_case' });
+  });
+});
+
+describe('setApprovers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('replaces approvers in a transaction and returns the new list', async () => {
+    const whereMock = jest.fn().mockResolvedValue([approverRow]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await setApprovers('proj-alpha', 'design_doc', ['user-oid-1'], 'admin-oid');
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(result).toHaveLength(1);
+    expect(result[0].documentType).toBe('design_doc');
+  });
+});
+
+describe('getApproversForDocument', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns approvers filtered by project and document type', async () => {
+    const whereMock = jest.fn().mockResolvedValue([{ ...approverRow, documentType: 'prd' }]);
+    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    mockDb.select.mockReturnValue({ from: fromMock });
+
+    const result = await getApproversForDocument('proj-alpha', 'prd');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].documentType).toBe('prd');
   });
 });

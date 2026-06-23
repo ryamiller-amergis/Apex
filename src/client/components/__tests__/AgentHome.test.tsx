@@ -1,15 +1,33 @@
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AgentHome } from '../AgentHome';
 
-// Wrap renders in a router since AgentHome uses useSearchParams
-const renderAgentHome = (props: { selectedProject: string }) =>
-  render(
-    <MemoryRouter>
-      <AgentHome {...props} />
-    </MemoryRouter>,
+let testQueryClient: QueryClient;
+
+function agentHomeTree(props: { selectedProject: string }) {
+  return (
+    <QueryClientProvider client={testQueryClient}>
+      <MemoryRouter>
+        <AgentHome {...props} />
+      </MemoryRouter>
+    </QueryClientProvider>
   );
+}
+
+// Wrap renders in a router since AgentHome uses useSearchParams
+const renderAgentHome = (props: { selectedProject: string }) => {
+  testQueryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(agentHomeTree(props));
+};
+
+const rerenderAgentHome = (
+  rerender: (ui: ReactElement) => void,
+  props: { selectedProject: string },
+) => rerender(agentHomeTree(props));
 import {
   useSkillList,
   useSkillRepos,
@@ -22,6 +40,9 @@ jest.mock('../../hooks/useChatThreads', () => ({
   useSkillRepos: jest.fn(),
   useStartChat: jest.fn(),
   useSkillList: jest.fn(),
+  useChatThreadList: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+  useDeleteThread: jest.fn(() => ({ mutate: jest.fn() })),
+  useFlagThread: jest.fn(() => ({ mutate: jest.fn() })),
 }));
 
 jest.mock('react-markdown', () => ({
@@ -53,6 +74,15 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
       { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
     ],
     isLoading: false,
+  })),
+}));
+
+jest.mock('../../hooks/useSpeechOutput', () => ({
+  useSpeechOutput: jest.fn(() => ({
+    speak: jest.fn(),
+    stop: jest.fn(),
+    isSpeaking: false,
+    isSpeechOutputSupported: true,
   })),
 }));
 
@@ -678,7 +708,7 @@ describe('AgentHome', () => {
         messages: [{ id: 'm1', role: 'agent' as const, text: 'Done', ts: '2026-01-01T00:00:00Z' }],
         prdReady: true,
       });
-      rerender(<MemoryRouter><AgentHome selectedProject="MaxView" /></MemoryRouter>);
+      rerenderAgentHome(rerender, { selectedProject: 'MaxView' });
 
       expect(screen.getByText('PRD is ready for review')).toBeInTheDocument();
       expect(screen.getByTestId('prd-preview-drawer')).toBeInTheDocument();
@@ -726,7 +756,7 @@ describe('AgentHome', () => {
         ...idleStream,
         status: 'running',
       });
-      rerender(<MemoryRouter><AgentHome selectedProject="MaxView" /></MemoryRouter>);
+      rerenderAgentHome(rerender, { selectedProject: 'MaxView' });
 
       fireEvent.click(screen.getByLabelText('Stop'));
 
@@ -750,6 +780,19 @@ describe('AgentHome', () => {
       renderAgentHome({ selectedProject: "MaxView" });
       // "Begin." is the auto-kickoff message and must not appear in the UI
       expect(screen.queryByText('Begin.')).toBeNull();
+    });
+
+    it('shows a Read Aloud button on agent messages', () => {
+      sessionStorage.setItem('agentHomeThreadId:MaxView', 'thread-123');
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [
+          { id: 'm1', role: 'agent' as const, text: 'Here is my response.', ts: '2026-01-01T00:01:00Z' },
+        ],
+      });
+
+      renderAgentHome({ selectedProject: 'MaxView' });
+      expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
     });
   });
 });

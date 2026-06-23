@@ -1,6 +1,10 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AdminRoles } from '../AdminRoles';
 
+jest.mock('../TeamsNotificationSettings', () => ({
+  TeamsNotificationSettings: () => null,
+}));
+
 // ── Mock the useRbac hooks ─────────────────────────────────────────────────────
 
 jest.mock('../../hooks/useRbac', () => ({

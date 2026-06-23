@@ -146,7 +146,7 @@ export const UiMockPreview: React.FC<UiMockPreviewProps> = ({
             <iframe
               className="ui-mock-preview__iframe"
               srcDoc={srcDoc}
-              sandbox="allow-same-origin"
+              sandbox="allow-scripts"
               title={`UI mock v${viewingVersion}`}
             />
           ) : (

@@ -9,6 +9,8 @@ export interface ChatMessage {
   toolName?: string;
   /** User-uploaded context files attached to this message */
   attachments?: ChatAttachmentMeta[];
+  /** When true, this message is an internal prompt and should not be shown in the UI */
+  hidden?: boolean;
 }
 
 export interface ChatAttachment {
@@ -41,6 +43,14 @@ export interface ChatThreadKickoff {
   transcript?: string;
   /** Additional freeform context */
   freeformContext?: string;
+  /** MCP pill selected on the home page — wires an external MCP server into this thread */
+  mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Identifies the type of assistant thread — controls system prompt behavior */
+  assistantType?: 'design-doc' | 'prd';
+  /** Human-readable label from the QuickSkillPill or QuickMcpPill selected on the home page */
+  pillLabel?: string;
+  /** Short description from the pill, used as a subtitle in the thread title */
+  pillDescription?: string;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
@@ -80,6 +90,7 @@ export type SseEventType =
   | 'tool_call'   // agent invoked a tool
   | 'status'      // thread status changed
   | 'error'       // run-level error
+  | 'retrying'    // server is transparently retrying a transient failure
   | 'done';       // turn completed
 
 export interface SseTokenEvent {
@@ -103,9 +114,18 @@ export interface SseStatusEvent {
   status: ChatThreadStatus;
 }
 
+export type SseErrorCode = 'transient' | 'rate_limit' | 'context_overflow' | 'auth' | 'fatal';
+
 export interface SseErrorEvent {
   type: 'error';
   error: string;
+  errorCode?: SseErrorCode;
+}
+
+export interface SseRetryingEvent {
+  type: 'retrying';
+  attempt: number;
+  maxAttempts: number;
 }
 
 export interface SseDoneEvent {
@@ -121,6 +141,7 @@ export type SseEvent =
   | SseToolCallEvent
   | SseStatusEvent
   | SseErrorEvent
+  | SseRetryingEvent
   | SseDoneEvent;
 
 // ── Thread summary (lightweight, no messages) ─────────────────────────────────
@@ -130,7 +151,9 @@ export interface ChatThreadSummary {
   userId: string;
   title: string;
   status: ChatThreadStatus;
-  kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath'>;
+  kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath' | 'pillLabel' | 'pillDescription'>;
+  /** First user prompt snippet for `{process} - {description}` history labels */
+  messagePreview?: string;
   flagged: boolean;
   flaggedAt?: string;
   createdAt: string;

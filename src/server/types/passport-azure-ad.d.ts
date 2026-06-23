@@ -13,6 +13,7 @@ declare module 'passport-azure-ad' {
     passReqToCallback?: boolean;
     scope?: string[];
     loggingLevel?: 'info' | 'warn' | 'error';
+    loggingNoPII?: boolean;
   }
 
   export class OIDCStrategy extends Strategy {

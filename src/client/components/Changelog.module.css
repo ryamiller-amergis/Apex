@@ -326,24 +326,82 @@
 
 /* Responsive */
 @media (max-width: 768px) {
+  .changelog-overlay {
+    padding: 0;
+  }
+
   .changelog-modal {
-    width: 95%;
-    max-height: 90vh;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    margin: 0;
+    top: 0;
+    left: 0;
+    transform: none;
   }
 
   .changelog-header {
-    padding: 20px;
+    padding: 16px;
   }
 
   .changelog-header h2 {
-    font-size: 24px;
+    font-size: 22px;
   }
 
   .changelog-entry-header {
-    padding: 16px;
+    padding: 14px;
   }
 
   .changelog-changes {
     padding: 0 16px 16px 16px;
+  }
+
+  .changelog-footer {
+    padding: 14px 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .changelog-content {
+    padding: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .changelog-header {
+    padding: 12px;
+  }
+
+  .changelog-header h2 {
+    font-size: 18px;
+  }
+
+  .changelog-subtitle {
+    font-size: 12px;
+  }
+
+  .changelog-entry-header {
+    padding: 12px;
+  }
+
+  .changelog-changes {
+    padding: 0 12px 12px 12px;
+  }
+
+  .changelog-title {
+    font-size: 15px;
+  }
+
+  .changelog-footer {
+    padding: 12px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .changelog-done-btn {
+    width: 100%;
+    text-align: center;
   }
 }

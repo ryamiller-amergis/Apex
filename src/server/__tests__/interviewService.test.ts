@@ -3,6 +3,16 @@
  * The Drizzle `db` instance is fully mocked so no real database is needed.
  */
 
+// ── Service mocks ─────────────────────────────────────────────────────────────
+
+jest.mock('../services/notificationService', () => ({
+  createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+}));
+
+jest.mock('../services/chatAgentService', () => ({
+  markAsInterviewThread: jest.fn(),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -51,6 +61,10 @@ import {
 } from '../services/interviewService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+
+const { createNotification: mockCreateNotification } = jest.requireMock('../services/notificationService') as {
+  createNotification: jest.Mock;
+};
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +139,139 @@ describe('createInterview', () => {
       expect.objectContaining({ title: 'Untitled Interview' }),
     );
   });
+
+  it('persists prdOwnerId and designDocOwnerId when provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-owners' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-abc',
+      prdOwnerId: 'user-prd',
+      designDocOwnerId: 'user-dd',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' }),
+    );
+  });
+
+  it('sends a PRD-owner notification when prdOwnerId is set', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-notif' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      title: 'Sprint Planning',
+      chatThreadId: 'thread-abc',
+      prdOwnerId: 'user-prd',
+    });
+
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-prd',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as PRD Owner',
+        link: '/backlog/interview/interview-notif',
+      }),
+    );
+  });
+
+  it('sends a Design Doc owner notification when designDocOwnerId is set', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-notif2' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      title: 'Sprint Planning',
+      chatThreadId: 'thread-abc',
+      designDocOwnerId: 'user-dd',
+    });
+
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-dd',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as Design Doc Owner',
+      }),
+    );
+  });
+
+  it('does not fail interview creation when notification dispatch rejects', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-fail-notif' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockCreateNotification.mockRejectedValue(new Error('SMTP unavailable'));
+
+    await expect(
+      createInterview({
+        userId: 'user-1',
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-abc',
+        prdOwnerId: 'user-prd',
+      }),
+    ).resolves.toMatchObject({ interviewId: 'interview-fail-notif', threadId: 'thread-abc' });
+  });
+
+  it('sends no notifications when no owner IDs are provided', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-no-owners' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({ userId: 'user-1', project: 'proj', repo: 'org/repo', chatThreadId: 't' });
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('sends reviewer notifications for each approver role', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-reviewers' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      title: 'Sprint Planning',
+      chatThreadId: 'thread-abc',
+      prdApproverIds: ['user-prd-rev'],
+      designDocApproverIds: ['user-dd-rev'],
+      designPrototypeApproverIds: ['user-proto-rev'],
+      testCaseApproverIds: ['user-qa-rev'],
+    });
+
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-prd-rev',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as PRD Reviewer',
+        link: '/backlog/interview/interview-reviewers',
+      }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-dd-rev',
+      expect.objectContaining({ title: 'Assigned as Design Doc Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-proto-rev',
+      expect.objectContaining({ title: 'Assigned as Design Prototype Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'user-qa-rev',
+      expect.objectContaining({ title: 'Assigned as QA Reviewer' }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledTimes(4);
+  });
 });
 
 // ── listInterviews ─────────────────────────────────────────────────────────────
@@ -144,7 +291,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([{ interviewId: 'interview-1', cnt: '2' }]),
       }));
 
-    const result = await listInterviews('user-1');
+    const result = await listInterviews({ authorId: 'user-1' });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -168,7 +315,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1');
+    const result = await listInterviews({ authorId: 'user-1' });
 
     expect(result[0].prdCount).toBe(0);
   });
@@ -185,7 +332,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-nobody');
+    const result = await listInterviews({ authorId: 'user-nobody' });
 
     expect(result).toEqual([]);
   });
@@ -204,7 +351,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-alpha' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-alpha' });
 
     expect(result).toHaveLength(1);
     expect(result[0].project).toBe('proj-alpha');
@@ -223,9 +370,34 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-nonexistent' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-nonexistent' });
 
     expect(result).toEqual([]);
+  });
+
+  it('includes prdOwnerId and designDocOwnerId in returned summaries', async () => {
+    const ownerRow = {
+      ...interviewRow,
+      prdOwnerId: 'user-prd',
+      designDocOwnerId: 'user-dd',
+    };
+
+    mockDb.select
+      .mockImplementationOnce(() => ({
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockResolvedValue([ownerRow]),
+      }))
+      .mockImplementationOnce(() => ({
+        from: jest.fn().mockReturnThis(),
+        groupBy: jest.fn().mockResolvedValue([]),
+      }));
+
+    const result = await listInterviews({ authorId: 'user-1' });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].prdOwnerId).toBe('user-prd');
+    expect(result[0].designDocOwnerId).toBe('user-dd');
   });
 
   it('can combine project and status filters', async () => {
@@ -242,7 +414,7 @@ describe('listInterviews', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       }));
 
-    const result = await listInterviews('user-1', { project: 'proj-alpha', status: 'complete' });
+    const result = await listInterviews({ authorId: 'user-1', project: 'proj-alpha', status: 'complete' });
 
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe('complete');
@@ -276,6 +448,51 @@ describe('getInterview', () => {
     const result = await getInterview('interview-missing');
 
     expect(result).toBeNull();
+  });
+
+  it('maps owner names from joined owner relations', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      prds: [],
+      prdOwnerId: 'user-prd',
+      prdOwner: { displayName: 'Alice PRD Owner' },
+      designDocOwnerId: 'user-dd',
+      designDocOwner: { displayName: 'Bob DD Owner' },
+      designPrototypeOwnerId: 'user-proto',
+      designPrototypeOwner: { displayName: 'Carol UX Owner' },
+    });
+
+    const result = await getInterview('interview-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.prdOwnerId).toBe('user-prd');
+    expect(result!.prdOwnerName).toBe('Alice PRD Owner');
+    expect(result!.designDocOwnerId).toBe('user-dd');
+    expect(result!.designDocOwnerName).toBe('Bob DD Owner');
+    expect(result!.designPrototypeOwnerId).toBe('user-proto');
+    expect(result!.designPrototypeOwnerName).toBe('Carol UX Owner');
+  });
+
+  it('returns undefined for owner name fields when owners are not set', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      prds: [],
+      prdOwnerId: null,
+      prdOwner: null,
+      designDocOwnerId: null,
+      designDocOwner: null,
+      designPrototypeOwnerId: null,
+      designPrototypeOwner: null,
+    });
+
+    const result = await getInterview('interview-1');
+
+    expect(result!.prdOwnerId).toBeUndefined();
+    expect(result!.prdOwnerName).toBeUndefined();
+    expect(result!.designDocOwnerId).toBeUndefined();
+    expect(result!.designDocOwnerName).toBeUndefined();
+    expect(result!.designPrototypeOwnerId).toBeUndefined();
+    expect(result!.designPrototypeOwnerName).toBeUndefined();
   });
 });
 

@@ -95,3 +95,37 @@
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+/* ── Mobile responsive ────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .work-item-card {
+    width: 100%;
+    padding: 8px;
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+  .work-item-card:hover {
+    transform: none;
+  }
+
+  .work-item-header {
+    gap: 4px;
+  }
+
+  .work-item-title {
+    font-size: 12px;
+    white-space: normal;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+  }
+
+  .work-item-card button,
+  .work-item-card a,
+  .work-item-card [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

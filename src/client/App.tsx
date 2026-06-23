@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -9,11 +9,14 @@ import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
-import { PlanningTabs } from './components/PlanningTabs';
+import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
 import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { NotificationProvider } from './contexts/NotificationContext';
+import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
+import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { DEFAULT_MODEL_ID } from './config/models';
 import './App.css';
@@ -33,14 +36,28 @@ const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
 const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
+const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototypeReviewView'));
+const DesignPlanReviewView = lazy(() => import('./components/DesignPlanReviewView'));
 const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ default: m.AdminRoles })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
+const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
+const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
+const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
-type PlanningTab = 'cycle-time' | 'dev-stats' | 'qa' | 'ai-analysis' | 'roadmap' | 'releases';
-
-const DEFAULT_PLANNING_TAB: PlanningTab = 'dev-stats';
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+
+/** Tabs visible in the tab bar, in display order — used for permission-aware default/fallback. */
+const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+
+const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
+  'cycle-time':  'planning:view',
+  'dev-stats':   'planning:devstats',
+  'qa':          'planning:qa',
+  'ai-analysis': 'planning:ai-analysis',
+  'roadmap':     'planning:roadmap',
+  'releases':    'planning:releases',
+};
 
 const isPlanningTab = (value: string | undefined): value is PlanningTab => (
   value !== undefined && PLANNING_TABS.includes(value as PlanningTab)
@@ -54,28 +71,31 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
-      : location.pathname === '/home'
-        ? 'home'
-        : location.pathname === '/calendar'
-          ? 'calendar'
-          : location.pathname.startsWith('/planning')
-            ? 'planning'
-            : location.pathname === '/cloud-cost'
-              ? 'cloudcost'
-              : location.pathname.startsWith('/backlog')
-                ? 'backlog'
-                : location.pathname.startsWith('/admin')
-                  ? 'admin'
-                  : 'calendar';
+      : location.pathname === '/platform-admin'
+        ? 'platform-admin'
+        : location.pathname === '/home'
+          ? 'home'
+          : location.pathname === '/calendar'
+            ? 'calendar'
+            : location.pathname.startsWith('/planning')
+              ? 'planning'
+              : location.pathname === '/cloud-cost'
+                ? 'cloudcost'
+                : location.pathname.startsWith('/backlog')
+                  ? 'backlog'
+                  : location.pathname === '/notifications'
+                    ? 'notifications'
+                    : location.pathname.startsWith('/admin')
+                    ? 'admin'
+                    : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
     : undefined;
-  const planningTab = isPlanningTab(planningTabSegment) ? planningTabSegment : DEFAULT_PLANNING_TAB;
 
   // Close the slide-out panel when landing on the home view — the full-page
   // AgentHome already provides the complete chat experience there.
@@ -89,6 +109,7 @@ function App() {
     isAuthenticated,
     authenticatedUser,
     can,
+    isSuperAdmin,
     permissionsLoaded,
     workItems,
     error,
@@ -119,26 +140,31 @@ function App() {
     handleFieldUpdate,
   } = useAppShell();
 
-  // Guard all gated routes: redirect to /home if the user lacks the required permission.
+  const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
+    : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
+
+  const { enabledViews } = useProjectMenuConfig(selectedProject);
+
+  // Guard all gated routes: redirect if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
   useEffect(() => {
     if (!permissionsLoaded) return;
-    if (currentView === 'admin'     && !can('admin:roles'))   navigate('/home');
-    if (currentView === 'calendar'  && !can('calendar:view')) navigate('/home');
-    if (currentView === 'planning'  && !can('planning:view')) navigate('/home');
-    if (currentView === 'cloudcost' && !can('cost:view'))     navigate('/home');
-    if (currentView === 'backlog'   && !can('interviews:view'))  navigate('/home');
-  }, [currentView, permissionsLoaded, can, navigate]);
-
-  // Auto-show changelog once per session when the user lands on /home with an
-  // unread version, unless they've opted out via showChangelogOnLogin.
-  const hasAutoShownChangelog = useRef(false);
-  useEffect(() => {
-    if (currentView === 'home' && hasUnreadChangelog && showChangelogOnLogin && !hasAutoShownChangelog.current) {
-      hasAutoShownChangelog.current = true;
-      setShowChangelog(true);
+    if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
+    if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
+    if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
+    if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
+    if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
+    if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
+    if (currentView === 'planning') {
+      if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
+        navigate('/home');
+      } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
+        const firstAccessible = VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
+        navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
+      }
     }
-  }, [currentView, hasUnreadChangelog, showChangelogOnLogin, setShowChangelog]);
+  }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
+
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
@@ -178,8 +204,50 @@ function App() {
             changeProject(project);
             changeAreaPath(project);
             navigate('/home');
+            fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
+              method: 'POST',
+              credentials: 'include',
+            }).catch(() => {});
           }}
+          isSuperAdmin={isSuperAdmin}
+          onOpenPlatformAdmin={() => navigate('/platform-admin')}
+          hasUnreadChangelog={hasUnreadChangelog}
+          showChangelogOnLogin={showChangelogOnLogin}
+          showChangelog={showChangelog}
+          onSetShowChangelog={setShowChangelog}
+          onMarkChangelogAsRead={handleMarkChangelogAsRead}
+          onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
+          user={authenticatedUser}
+          theme={theme}
+          onThemeChange={setThemeMode}
+          onLogout={handleLogout}
         />
+        <Changelog
+          isOpen={showChangelog}
+          onClose={() => setShowChangelog(false)}
+          onMarkAsRead={handleMarkChangelogAsRead}
+          showOnLogin={showChangelogOnLogin}
+          onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+        />
+      </ErrorBoundary>
+    );
+  }
+
+  if (currentView === 'platform-admin') {
+    if (!permissionsLoaded || !isSuperAdmin) return null;
+    return (
+      <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+        <Suspense fallback={<ViewSkeleton />}>
+          <PlatformAdmin
+            onBackToProjects={() => navigate('/')}
+            user={authenticatedUser}
+            theme={theme}
+            hasUnreadChangelog={hasUnreadChangelog}
+            onThemeChange={setThemeMode}
+            onOpenChangelog={() => setShowChangelog(true)}
+            onLogout={handleLogout}
+          />
+        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -187,6 +255,7 @@ function App() {
   return (
     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
       <DndProvider backend={HTML5Backend}>
+      <NotificationWrapper can={can}>
         <div className="app">
           {isLoading && currentView === 'calendar' && (
             <div className="loading-overlay">
@@ -211,6 +280,8 @@ function App() {
             user={authenticatedUser}
             hasUnreadChangelog={hasUnreadChangelog}
             can={can}
+            menuEnabledViews={enabledViews}
+            isSuperAdmin={isSuperAdmin}
             onNavigateHome={() => navigate('/home')}
             onNavigateProjects={() => navigate('/')}
             onNavigateCalendar={() => navigate('/calendar')}
@@ -295,12 +366,22 @@ function App() {
                     <InterviewChatView />
                   ) : location.pathname.startsWith('/backlog/prd/') ? (
                     <PrdReviewView />
+                  ) : location.pathname.startsWith('/backlog/design-prototypes/') ? (
+                    <DesignPrototypeReviewView />
+                  ) : location.pathname.startsWith('/backlog/design-plan/') ? (
+                    <DesignPlanReviewView />
                   ) : location.pathname.startsWith('/backlog/design-doc/') ? (
                     <DesignDocReviewView />
                   ) : (
                     <InterviewsDashboard />
                   )}
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'notifications' && can('notifications:view') ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <NotificationsPage />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'admin' && can('admin:roles') ? (
@@ -323,6 +404,13 @@ function App() {
                       Users
                     </button>
                     <button
+                      className={`admin-tab${location.pathname === '/admin/groups' ? ' admin-tab-active' : ''}`}
+                      onClick={() => navigate('/admin/groups')}
+                      type="button"
+                    >
+                      Groups
+                    </button>
+                    <button
                       className={`admin-tab${location.pathname === '/admin/project-settings' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/project-settings')}
                       type="button"
@@ -332,6 +420,8 @@ function App() {
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
+                  ) : location.pathname === '/admin/groups' ? (
+                    <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : (
@@ -345,6 +435,7 @@ function App() {
               <div className="planning-view">
                 <PlanningTabs
                   activeTab={planningTab}
+                  can={can}
                   onNavigate={(tab) => navigate(`/planning/${tab}`)}
                 />
                 <div className="planning-content">
@@ -419,13 +510,30 @@ function App() {
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}
           onSelectThread={(id) => setActiveThreadId(id || null)}
+          selectedProject={selectedProject}
           canStartNewChat={!!defaultAgentRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}
         />
+      </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>
   );
 }
+
+interface NotificationWrapperProps {
+  can: (key: string) => boolean;
+  children: React.ReactNode;
+}
+
+const NotificationWrapper: React.FC<NotificationWrapperProps> = ({ can, children }) => {
+  if (!can('notifications:view')) return <>{children}</>;
+  return (
+    <NotificationProvider>
+      {children}
+      <ToastContainer />
+    </NotificationProvider>
+  );
+};
 
 export default App;

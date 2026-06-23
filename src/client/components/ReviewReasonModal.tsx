@@ -1,46 +1,38 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import styles from './ReviewReasonModal.module.css';
 
-const revisionSchema = z.object({
-  reason: z.string().min(1, 'Revision notes are required'),
+const reasonSchema = z.object({
+  reason: z.string().min(1, 'A reason is required'),
 });
 
-type FormValues = z.infer<typeof revisionSchema>;
+type FormValues = z.infer<typeof reasonSchema>;
 
 interface ReviewReasonModalProps {
-  itemName: string;
-  docTypeName?: string;
-  isPending: boolean;
+  title: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  isPending?: boolean;
   onConfirm: (reason: string) => void;
   onCancel: () => void;
 }
 
-const COPY = {
-  title: (docType: string) => `Request ${docType} Revision`,
-  body: 'Describe what needs to change in',
-  placeholder: 'What needs to change?',
-  pendingLabel: 'Submitting…',
-  confirmLabel: 'Confirm',
-} as const;
-
 export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
-  itemName,
-  docTypeName = 'document',
-  isPending,
+  title,
+  placeholder = 'What needs to change?',
+  confirmLabel = 'Confirm',
+  isPending = false,
   onConfirm,
   onCancel,
 }) => {
-  const schema = useMemo(() => revisionSchema, []);
-
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(reasonSchema),
     defaultValues: { reason: '' },
   });
 
@@ -65,21 +57,13 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
       aria-labelledby="review-reason-title"
     >
       <form className={styles.card} onSubmit={handleSubmit(onSubmit)}>
-        <h2 className={styles.title} id="review-reason-title">
-          {COPY.title(docTypeName)}
-        </h2>
-
-        <p className={styles.body}>
-          {COPY.body}{' '}
-          <span className={styles.itemName}>&ldquo;{itemName}&rdquo;</span>.
-          This will be shown to the author.
-        </p>
+        <h2 className={styles.title} id="review-reason-title">{title}</h2>
 
         <div className={styles.fieldGroup}>
           <textarea
             className={`${styles.textarea} ${errors.reason ? styles.textareaError : ''}`}
             rows={4}
-            placeholder={COPY.placeholder}
+            placeholder={placeholder}
             autoFocus
             {...register('reason')}
           />
@@ -102,7 +86,7 @@ export const ReviewReasonModal: React.FC<ReviewReasonModalProps> = ({
             type="submit"
             disabled={isPending}
           >
-            {isPending ? COPY.pendingLabel : COPY.confirmLabel}
+            {confirmLabel}
           </button>
         </div>
       </form>

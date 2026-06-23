@@ -6,6 +6,12 @@ import type {
   ChatThread,
   ChatThreadSummary,
 } from '../../shared/types/chat';
+import {
+  formatProcessDescription,
+  firstUserMessagePreview,
+  normalizeMessagePreview,
+  skillPathToProcessLabel,
+} from '../../shared/utils/threadHistoryLabel';
 
 // ── upsertThread ──────────────────────────────────────────────────────────────
 
@@ -22,6 +28,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
       lastError: thread.lastError ?? null,
       savedWikiUrl: thread.savedWikiUrl ?? null,
       title: deriveTitle(thread),
+      activeRunId: thread.activeRunId ?? null,
       createdAt: thread.createdAt,
       lastActivityAt: thread.lastActivityAt,
     })
@@ -35,6 +42,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
         lastError: thread.lastError ?? null,
         savedWikiUrl: thread.savedWikiUrl ?? null,
         title: deriveTitle(thread),
+        activeRunId: thread.activeRunId ?? null,
         lastActivityAt: thread.lastActivityAt,
       },
     });
@@ -81,10 +89,20 @@ export async function insertMessage(
 
 export async function listThreadsByUser(
   userId: string,
-  opts?: { limit?: number; offset?: number },
+  opts?: { limit?: number; offset?: number; project?: string },
 ): Promise<ChatThreadSummary[]> {
   const limit = opts?.limit ?? 50;
   const offset = opts?.offset ?? 0;
+
+  const conditions = [
+    eq(chatThreads.userId, userId),
+    sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
+    sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
+  ];
+
+  if (opts?.project) {
+    conditions.push(sql`${chatThreads.kickoff}->>'project' = ${opts.project}`);
+  }
 
   const rows = await db
     .select({
@@ -97,13 +115,17 @@ export async function listThreadsByUser(
       flaggedAt: chatThreads.flaggedAt,
       createdAt: chatThreads.createdAt,
       lastActivityAt: chatThreads.lastActivityAt,
+      firstUserMessage: sql<string | null>`(
+        SELECT m.text FROM chat_messages m
+        WHERE m.thread_id = ${chatThreads.id}
+          AND m.role = 'user'
+          AND m.text <> 'Begin.'
+        ORDER BY m.ts ASC
+        LIMIT 1
+      )`.as('first_user_message'),
     })
     .from(chatThreads)
-    .where(and(
-      eq(chatThreads.userId, userId),
-      sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
-      sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
-    ))
+    .where(and(...conditions))
     .orderBy(desc(chatThreads.lastActivityAt))
     .limit(limit)
     .offset(offset);
@@ -117,9 +139,12 @@ export async function listThreadsByUser(
       project: row.kickoff?.project ?? '',
       repo: row.kickoff?.repo ?? '',
       skillPath: row.kickoff?.skillPath,
+      pillLabel: row.kickoff?.pillLabel,
+      pillDescription: row.kickoff?.pillDescription,
     },
     flagged: row.flagged,
     flaggedAt: row.flaggedAt ?? undefined,
+    messagePreview: normalizeMessagePreview(row.firstUserMessage) ?? undefined,
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   }));
@@ -164,6 +189,7 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     status: result.status as ChatThread['status'],
     kickoff: result.kickoff,
     cursorAgentId: result.cursorAgentId ?? undefined,
+    activeRunId: result.activeRunId ?? undefined,
     workspaceDir: result.workspaceDir ?? '',
     lastError: result.lastError ?? undefined,
     savedWikiUrl: result.savedWikiUrl ?? undefined,
@@ -195,19 +221,66 @@ export async function toggleFlag(
   return { flagged, flaggedAt };
 }
 
+// ── recovery helpers ──────────────────────────────────────────────────────────
+
+export interface StuckInterviewThread {
+  threadId: string;
+  interviewId: string;
+  activeRunId: string | null;
+}
+
+/**
+ * Find chat_threads stuck in 'running' status that are linked to an interview.
+ * Used by startup recovery to detect interview agents that died mid-flight.
+ */
+export async function findRunningInterviewThreads(): Promise<StuckInterviewThread[]> {
+  const rows = await db
+    .select({
+      threadId: chatThreads.id,
+      interviewId: interviews.id,
+      activeRunId: chatThreads.activeRunId,
+    })
+    .from(chatThreads)
+    .innerJoin(interviews, eq(interviews.chatThreadId, chatThreads.id))
+    .where(eq(chatThreads.status, 'running'));
+
+  return rows.map((r) => ({
+    threadId: r.threadId,
+    interviewId: r.interviewId,
+    activeRunId: r.activeRunId,
+  }));
+}
+
+/**
+ * Reset a thread from 'running' to 'idle' and clear its active_run_id.
+ * Used by startup recovery after hydrating a thread that was stuck.
+ */
+export async function clearStaleRun(threadId: string): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle', activeRunId: null })
+    .where(eq(chatThreads.id, threadId));
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function deriveTitle(thread: ChatThread): string {
-  if (thread.kickoff.skillPath) {
-    const parts = thread.kickoff.skillPath.split('/');
-    const skillFolder = parts[parts.length - 2] ?? parts[parts.length - 1] ?? 'Skill';
-    return skillFolder.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const promptPreview = firstUserMessagePreview(thread.messages);
+
+  // 1. Pill label + pill description or first user prompt
+  if (thread.kickoff.pillLabel) {
+    const desc = promptPreview || thread.kickoff.pillDescription?.trim();
+    return formatProcessDescription(thread.kickoff.pillLabel, desc || undefined);
   }
 
-  const firstUserMsg = thread.messages.find((m) => m.role === 'user');
-  if (firstUserMsg?.text) {
-    return firstUserMsg.text.slice(0, 80).replace(/\n/g, ' ').trim();
+  // 2. Skill folder name + first user prompt
+  if (thread.kickoff.skillPath) {
+    const process = skillPathToProcessLabel(thread.kickoff.skillPath);
+    return formatProcessDescription(process, promptPreview);
   }
+
+  // 3. Fall back to first user message
+  if (promptPreview) return promptPreview;
 
   return 'Free chat';
 }

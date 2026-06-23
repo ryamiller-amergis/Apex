@@ -3,6 +3,8 @@ import type {
   ProjectSkillConfig,
   UpsertProjectSkillConfigRequest,
   ProjectSkillConfigResponse,
+  ProjectApprover,
+  SetApproversRequest,
 } from '../../shared/types/projectSettings';
 import type { AppSetting } from '../../shared/types/appSettings';
 
@@ -126,13 +128,94 @@ export interface AvailableModel {
 
 export function useAvailableModels() {
   return useQuery<AvailableModel[]>({
-    queryKey: ['admin', 'available-models'],
+    queryKey: ['available-models'],
     queryFn: async () => {
-      const res = await fetch('/api/admin/available-models', { credentials: 'include' });
+      const res = await fetch('/api/available-models', { credentials: 'include' });
       if (!res.ok) throw new Error('Failed to fetch available models');
       const data = (await res.json()) as { models: AvailableModel[] };
       return data.models;
     },
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export interface BedrockModel {
+  id: string;
+  label: string;
+}
+
+export function useAvailableBedrockModels() {
+  return useQuery<BedrockModel[]>({
+    queryKey: ['available-bedrock-models'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/available-bedrock-models', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch available Bedrock models');
+      const data = (await res.json()) as { models: BedrockModel[] };
+      return data.models;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+export interface ProjectApproversResponse {
+  approvers: ProjectApprover[];
+  approverGroups: Array<{ groupId: string; groupName: string; documentType: string }>;
+}
+
+export function useProjectApprovers(project: string | null) {
+  return useQuery<ProjectApproversResponse>({
+    queryKey: ['admin', 'project-approvers', project],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/admin/project-settings/${encodeURIComponent(project!)}/approvers`,
+        { credentials: 'include' },
+      );
+      if (!res.ok) throw new Error('Failed to fetch approvers');
+      return res.json() as Promise<ProjectApproversResponse>;
+    },
+    enabled: !!project,
+    staleTime: 60_000,
+  });
+}
+
+export function useSetProjectApprovers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      project,
+      designDocApprovers,
+      prdApprovers,
+      designDocApproverGroups,
+      prdApproverGroups,
+      designPrototypeApprovers,
+      designPrototypeApproverGroups,
+      testCaseApprovers,
+      testCaseApproverGroups,
+    }: SetApproversRequest) => {
+      const res = await fetch(
+        `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
+        {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            designDocApprovers,
+            prdApprovers,
+            designDocApproverGroups,
+            prdApproverGroups,
+            designPrototypeApprovers,
+            designPrototypeApproverGroups,
+            testCaseApprovers,
+            testCaseApproverGroups,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error('Failed to save approvers');
+      return res.json();
+    },
+    onSuccess: (_, { project }) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-approvers', project] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
+    },
   });
 }

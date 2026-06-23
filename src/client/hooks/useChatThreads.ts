@@ -23,10 +23,14 @@ export function useChatThreads() {
   });
 }
 
-export function useChatThreadList(limit = 50) {
+export function useChatThreadList(limit = 50, project?: string | null) {
   return useQuery<ChatThreadSummary[]>({
-    queryKey: ['chat-thread-list', limit],
-    queryFn: () => apiFetch(`/api/chat/threads?limit=${limit}`),
+    queryKey: ['chat-thread-list', limit, project],
+    queryFn: () =>
+      apiFetch(
+        `/api/chat/threads?limit=${limit}${project ? `&project=${encodeURIComponent(project)}` : ''}`,
+      ),
+    enabled: !!project,
     staleTime: 30_000,
   });
 }
@@ -67,6 +71,7 @@ export function useSendMessage(threadId: string) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chat-thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
     },
   });
 }
@@ -97,9 +102,9 @@ export function useDeleteThread() {
   return useMutation<{ ok: boolean }, Error, string>({
     mutationFn: (id) => apiFetch(`/api/chat/threads/${id}`, { method: 'DELETE' }),
     onSuccess: (_data, id) => {
-      // Remove the deleted thread from the list cache immediately (optimistic)
-      queryClient.setQueryData<ChatThreadSummary[]>(
-        ['chat-thread-list', 50],
+      // Remove the deleted thread from all list caches (any project/limit combo)
+      queryClient.setQueriesData<ChatThreadSummary[]>(
+        { queryKey: ['chat-thread-list'] },
         (prev) => (prev ? prev.filter((t) => t.id !== id) : []),
       );
       // Drop the full-thread cache entry so it can't be loaded again
@@ -122,8 +127,8 @@ export function useFlagThread() {
         body: JSON.stringify({ flagged }),
       }),
     onSuccess: (data, { threadId }) => {
-      queryClient.setQueryData<ChatThreadSummary[]>(
-        ['chat-thread-list', 50],
+      queryClient.setQueriesData<ChatThreadSummary[]>(
+        { queryKey: ['chat-thread-list'] },
         (prev) =>
           prev?.map((t) =>
             t.id === threadId

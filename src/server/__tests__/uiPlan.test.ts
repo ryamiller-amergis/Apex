@@ -257,37 +257,59 @@ describe('API route smoke: /backlog/derive-feature-plan-from-epic', () => {
 
 describe('generate-pbi-view with plan context', () => {
   it('route resolves plan correctly and only fails at Bedrock boundary', async () => {
-    // We can't invoke Bedrock in tests, but we can verify the route
-    // correctly resolves the plan and doesn't throw before the Bedrock call.
-    // The expected failure is a connection/auth error, not an internal TypeError.
-    const app = createTestApp();
-    const now = new Date().toISOString();
-    const plan: UiSurfacePlan = {
-      scope: 'feature',
-      decision: 'update-page',
-      targetPageRoute: '/timecards',
-      targetPageTitle: 'Time Cards',
-      subTabs: ['Pending', 'Approved'],
-      primaryComponents: ['DataTable'],
-      rationale: 'Test plan.',
-      pbiContributions: [
-        { pbiId: 'pbi-1', pbiTitle: 'Add filter', contributionType: 'filter', targetArea: 'toolbar', summary: 'Adds a filter.' },
-      ],
-      planVersion: 1,
-      status: 'draft',
-      createdAt: now,
-      updatedAt: now,
-    };
-    const doc = {
-      epics: [],
-      features: [{ id: 'feat-1', parentId: undefined, workItemType: 'Feature', title: 'My Feature', status: 'Draft', uiSurfacePlan: plan }],
-      pbis: [{ id: 'pbi-1', parentId: 'feat-1', workItemType: 'PBI', title: 'Add filter', status: 'Draft' }],
-    };
-    const res = await request(app)
-      .post('/api/backlog/generate-pbi-view')
-      .send({ featureId: 'feat-1', pbiId: 'pbi-1', document: doc, project: 'test', areaPath: 'test' });
-    // Bedrock is not available in test env → expect 500 (or 422 if model error is thrown cleanly)
-    // The key assertion is that it did NOT fail with 400 (bad request) or throw internally before Bedrock.
-    expect([500, 422, 503]).toContain(res.status);
+    // Verify the route resolves the feature plan and reaches the Bedrock call.
+    // The design-system catalog fetch and the Bedrock client are stubbed so the
+    // test is deterministic and fast: the only failure point is the (stubbed)
+    // Bedrock boundary, never a 400 or an internal error before it.
+    const designSystemService = await import('../services/designSystemService');
+    const bedrockService = await import('../services/bedrockService');
+    const catalogSpy = jest
+      .spyOn(designSystemService, 'getDesignSystemCatalog')
+      .mockResolvedValue({} as any);
+    const bedrockSpy = jest
+      .spyOn(bedrockService, 'generateUiMockVariantsFromBedrock')
+      .mockRejectedValue(new Error('Bedrock unavailable in test env'));
+
+    try {
+      const app = createTestApp();
+      const now = new Date().toISOString();
+      const plan: UiSurfacePlan = {
+        scope: 'feature',
+        decision: 'update-page',
+        targetPageRoute: '/timecards',
+        targetPageTitle: 'Time Cards',
+        subTabs: ['Pending', 'Approved'],
+        primaryComponents: ['DataTable'],
+        rationale: 'Test plan.',
+        pbiContributions: [
+          { pbiId: 'pbi-1', pbiTitle: 'Add filter', contributionType: 'filter', targetArea: 'toolbar', summary: 'Adds a filter.' },
+        ],
+        planVersion: 1,
+        status: 'draft',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const doc = {
+        epics: [],
+        features: [{ id: 'feat-1', parentId: undefined, workItemType: 'Feature', title: 'My Feature', status: 'Draft', uiSurfacePlan: plan }],
+        pbis: [{ id: 'pbi-1', parentId: 'feat-1', workItemType: 'PBI', title: 'Add filter', status: 'Draft' }],
+      };
+      const res = await request(app)
+        .post('/api/backlog/generate-pbi-view')
+        .send({ featureId: 'feat-1', pbiId: 'pbi-1', document: doc, project: 'test', areaPath: 'test' });
+
+      // Reaching the (stubbed) Bedrock call means the plan resolved and the route
+      // surfaced a 5xx rather than a 400/internal error before the boundary.
+      expect([500, 422, 503]).toContain(res.status);
+      expect(bedrockSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          featurePlan: expect.objectContaining({ targetPageRoute: '/timecards' }),
+        }),
+        1,
+      );
+    } finally {
+      catalogSpy.mockRestore();
+      bedrockSpy.mockRestore();
+    }
   });
 });

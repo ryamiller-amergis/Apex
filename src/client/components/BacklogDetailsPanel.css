@@ -2398,3 +2398,87 @@
   line-height: 1.5;
   color: var(--text-secondary);
 }
+
+/* ── Mobile: full-screen overlay ─────────────────────────── */
+
+@media (max-width: 768px) {
+  .backlog-details-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    left: 0;
+    right: 0;
+    border-left: none;
+    box-shadow: none;
+  }
+
+  .backlog-resize-handle {
+    display: none;
+  }
+
+  .bdp-close-btn {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+
+  .bdp-header {
+    padding: 12px 12px 10px 12px;
+  }
+
+  .bdp-title {
+    font-size: 15px;
+  }
+
+  .bdp-body {
+    padding: 12px 12px 24px;
+  }
+
+  .bdp-meta-row {
+    gap: 12px;
+  }
+
+  .bdp-modal-overlay {
+    padding: 12px;
+  }
+
+  .bdp-modal {
+    max-width: 100%;
+  }
+
+  .bdp-modal--generate {
+    max-width: 100%;
+  }
+
+  .bdp-modal--generate-feature {
+    max-width: 100%;
+  }
+
+  .bdp-modal--delete {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .bdp-header {
+    padding: 10px 10px 8px 10px;
+  }
+
+  .bdp-title {
+    font-size: 14px;
+  }
+
+  .bdp-body {
+    padding: 10px 8px 20px;
+  }
+
+  .bdp-section {
+    margin-bottom: 16px;
+  }
+
+  .bdp-modal-overlay {
+    padding: 8px;
+  }
+}

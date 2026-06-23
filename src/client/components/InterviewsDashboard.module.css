@@ -49,6 +49,36 @@
   border-bottom-color: var(--accent-color);
 }
 
+.ownerFilters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.ownerPill {
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ownerPill:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.ownerPill.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+}
+
 .filters {
   display: flex;
   align-items: center;
@@ -227,6 +257,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .cardDate {
@@ -360,6 +392,36 @@
   font-weight: 400;
 }
 
+.groupProgressRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.groupProgressBar {
+  flex: 1;
+  height: 4px;
+  background: var(--border-color, #e2e8f0);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 48px;
+  max-width: 120px;
+}
+
+.groupProgressFill {
+  height: 100%;
+  background: var(--color-success, #22c55e);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.groupProgressLabel {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .expandChevron {
   width: 14px;
   height: 14px;
@@ -421,6 +483,10 @@
   line-height: 1.5;
 }
 
+.startButtonWrap {
+  display: inline-block;
+}
+
 .startButton {
   padding: 9px 18px;
   background: var(--accent-color);
@@ -430,11 +496,16 @@
   font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background 0.2s ease, opacity 0.2s ease;
 }
 
-.startButton:hover {
+.startButton:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.startButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .modal {
@@ -561,4 +632,84 @@
   font-size: 0.82rem;
   color: var(--error-color);
   margin-top: 8px;
+}
+
+/* ── Responsive: narrow phones ─────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .dashboard {
+    padding: 16px;
+  }
+
+  .header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .heading {
+    font-size: 1.25rem;
+  }
+
+  .filtersRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .searchWrap {
+    flex-shrink: 1;
+    width: 100%;
+  }
+
+  .searchInput {
+    width: 100%;
+  }
+
+  .searchInput:focus {
+    width: 100%;
+  }
+
+  .filters {
+    width: 100%;
+  }
+
+  .filterPill {
+    flex: 1;
+    text-align: center;
+  }
+
+  .tabs {
+    gap: 0;
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 8px 12px;
+    font-size: 0.82rem;
+  }
+
+  .card {
+    padding: 12px;
+    gap: 6px;
+  }
+
+  .cardFooter {
+    padding-top: 8px;
+  }
+
+  .groupCardChildren {
+    grid-template-columns: 1fr;
+    padding: 0 12px 12px;
+  }
+
+  .emptyState {
+    padding: 32px 16px;
+  }
+
+  .modalCard {
+    padding: 20px;
+    margin: 0 12px;
+  }
 }

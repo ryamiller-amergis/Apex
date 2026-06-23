@@ -1,20 +1,20 @@
 ---
 name: update-changelog
-description: Update public/CHANGELOG.json and bump CURRENT_VERSION in useAppShell.ts based on local git changes. Use when the user asks to update the changelog, bump the version, document what changed, write release notes, or prepare a release. Triggers on phrases like "update the changelog", "bump the version", "what changed", "write release notes", or "prepare a release".
+description: Update public/CHANGELOG.json and add a migration that syncs the current changelog version into app_settings based on local git changes. Use when the user asks to update the changelog, bump the version, document what changed, write release notes, or prepare a release. Triggers on phrases like "update the changelog", "bump the version", "what changed", "write release notes", or "prepare a release".
 ---
 
 # Update Changelog
 
-Analyze local git changes, draft changelog entries, bump the semver version, and update both source files.
+Analyze local git changes, draft changelog entries, bump the semver version, and update the changelog plus the database sync migration.
 
 ## Files to update
 
 | File | Purpose |
 |------|---------|
 | `public/CHANGELOG.json` | Prepend new version entry at the top of the array |
-| `src/client/hooks/useAppShell.ts` | Update the `CURRENT_VERSION` constant |
+| `migrations/<timestamp>_sync-changelog-version-<version>.sql` | Upsert `app_settings.current_changelog_version` during deployment |
 
-> **Note:** `docs/CHANGELOG_WORKFLOW.md` incorrectly references `App.tsx` — the constant actually lives in `useAppShell.ts`.
+> **Note:** Older docs/scripts may reference a `CURRENT_VERSION` constant in `App.tsx` or `useAppShell.ts`. That constant is no longer part of the live changelog flow. The current release version comes from the top entry in `public/CHANGELOG.json` and is synced to Postgres via migration.
 
 ---
 
@@ -49,9 +49,13 @@ Read the output and identify:
 | Any new `feature`, no breaking | **minor** (x.Y.0) |
 | Only `improvement` / `bugfix` | **patch** (x.y.Z) |
 
-Read the current version from `src/client/hooks/useAppShell.ts`:
-```typescript
-const CURRENT_VERSION = '1.12.0'; // bump this
+Read the current version from the first entry in `public/CHANGELOG.json`:
+```json
+[
+  {
+    "version": "1.25.0"
+  }
+]
 ```
 
 Calculate the new version. When in doubt, ask the user to confirm before writing.
@@ -81,7 +85,7 @@ Group logically related changes into a single entry with a clear `title` (3-6 wo
 
 ---
 
-## Step 4 — Write the files
+## Step 4 — Write the changelog
 
 ### `public/CHANGELOG.json`
 
@@ -103,21 +107,61 @@ Prepend the new entry at position `[0]`. Do **not** remove existing entries.
 ]
 ```
 
-### `src/client/hooks/useAppShell.ts`
+## Step 4b — Sync version to database
 
-Update only the one constant:
+After writing `public/CHANGELOG.json`, add a migration that updates the server-side `app_settings` row during deployment. This lets the pipeline sync the version without requiring an authenticated admin HTTP session.
 
-```typescript
-const CURRENT_VERSION = '<new-version>';
+Create a migration named like:
+
+```text
+migrations/<YYYYMMDDHHMMSS>_sync-changelog-version-<new-version-with-dashes>.sql
 ```
+
+**Get the filename from the helper — do not guess:**
+
+```bash
+node scripts/next-migration-timestamp.mjs sync-changelog-version-<new-version-with-dashes>
+# → migrations/20260618140200_sync-changelog-version-1-28-0.sql
+```
+
+Create that path and write the SQL into it.
+
+See `.cursor/skills/postgresql-migrations/SKILL.md` for ordering rules. Never rename a changelog sync migration after it has been applied.
+
+Example for version `1.26.0`:
+
+```sql
+-- Up Migration
+
+INSERT INTO app_settings (key, value, updated_by, updated_at)
+VALUES ('current_changelog_version', '<new-version>', 'system-migration', NOW())
+ON CONFLICT (key) DO UPDATE
+SET
+  value = EXCLUDED.value,
+  updated_by = EXCLUDED.updated_by,
+  updated_at = EXCLUDED.updated_at;
+
+-- Down Migration
+
+UPDATE app_settings
+SET
+  value = '<previous-version>',
+  updated_by = 'system-migration',
+  updated_at = NOW()
+WHERE key = 'current_changelog_version'
+  AND value = '<new-version>';
+```
+
+Use the previous top changelog version for `<previous-version>` so rollback returns the app to the prior release announcement.
 
 ---
 
 ## Step 5 — Verify
 
 1. Confirm JSON is valid (no trailing commas, correct brackets).
-2. Confirm the version string in `useAppShell.ts` matches the top entry in `CHANGELOG.json`.
-3. Tell the user what version was set and show them the drafted entry for approval before writing, if the scope is large or ambiguous.
+2. Confirm the top `CHANGELOG.json` version matches the migration's `current_changelog_version` value.
+3. Confirm the migration down step points back to the previous top changelog version.
+4. Tell the user what version was set and show them the drafted entry for approval before writing, if the scope is large or ambiguous.
 
 ---
 

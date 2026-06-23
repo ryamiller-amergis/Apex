@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage, SseEvent, ChatThreadStatus } from '../../shared/types/chat';
+import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, ChatThreadStatus } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 
 interface ChatStreamState {
@@ -9,6 +9,10 @@ interface ChatStreamState {
   isConnected: boolean;
   prdReady: boolean;
   backlogReady: boolean;
+  /** True when the server is retrying a transient/rate-limited error */
+  isRetrying: boolean;
+  /** Human-readable reason shown during retry (e.g. "Rate limited, retrying…") */
+  retryReason: string | null;
 }
 
 interface UseChatStreamOptions {
@@ -29,10 +33,20 @@ export function useChatStream(
   const [isConnected, setIsConnected] = useState(false);
   const [prdReady, setPrdReady] = useState(options.initialPrdReady ?? false);
   const [backlogReady, setBacklogReady] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryReason, setRetryReason] = useState<string | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const retryTimeoutRef = useRef<number | null>(null);
+
+  const clearRetryTimeout = useCallback(() => {
+    if (retryTimeoutRef.current !== null) {
+      window.clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  }, []);
 
   const reset = useCallback(() => {
     setMessages(options.initialMessages ?? []);
@@ -41,8 +55,11 @@ export function useChatStream(
     setIsConnected(false);
     setPrdReady(options.initialPrdReady ?? false);
     setBacklogReady(false);
+    setIsRetrying(false);
+    setRetryReason(null);
     streamBufferRef.current = '';
-  }, [options.initialMessages, options.initialStatus, options.initialPrdReady]);
+    clearRetryTimeout();
+  }, [options.initialMessages, options.initialStatus, options.initialPrdReady, clearRetryTimeout]);
 
   useEffect(() => {
     // Always reset derived state (streaming buffer, prdReady, backlogReady) when
@@ -78,14 +95,18 @@ export function useChatStream(
         case 'token': {
           streamBufferRef.current += event.text;
           setStreamingText(streamBufferRef.current);
+          setIsRetrying(false);
+          setRetryReason(null);
+          clearRetryTimeout();
           break;
         }
         case 'message': {
-          // Commit the full message, clear the streaming buffer
           streamBufferRef.current = '';
           setStreamingText('');
+          setIsRetrying(false);
+          setRetryReason(null);
+          clearRetryTimeout();
           setMessages((prev) => {
-            // Avoid duplicates if the server re-sends on reconnect
             const exists = prev.some((m) => m.id === event.message.id);
             return exists ? prev : [...prev, event.message];
           });
@@ -106,7 +127,50 @@ export function useChatStream(
           setStatus(event.status);
           break;
         }
+        case 'retrying': {
+          const retryEvent = event as SseRetryingEvent;
+          setIsRetrying(true);
+          setRetryReason(`Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`);
+          clearRetryTimeout();
+          break;
+        }
         case 'error': {
+          const errorEvent = event as SseErrorEvent;
+          const code = errorEvent.errorCode;
+
+          if (code === 'transient' || code === 'rate_limit') {
+            const reason = code === 'rate_limit' ? 'Rate limited, retrying…' : 'Retrying…';
+            setIsRetrying(true);
+            setRetryReason(reason);
+            clearRetryTimeout();
+            const errorText = errorEvent.error;
+            retryTimeoutRef.current = window.setTimeout(() => {
+              setIsRetrying(false);
+              setRetryReason(null);
+              const fallbackMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'system',
+                text: `Error: ${errorText}`,
+                ts: new Date().toISOString(),
+              };
+              setMessages((prev) => [...prev, fallbackMsg]);
+              setStatus('error');
+            }, 5000);
+            break;
+          }
+
+          if (code === 'auth') {
+            const authMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'system',
+              text: 'Session expired, please refresh the page.',
+              ts: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, authMsg]);
+            setStatus('error');
+            break;
+          }
+
           const errMsg: ChatMessage = {
             id: uuidv4(),
             role: 'system',
@@ -120,6 +184,9 @@ export function useChatStream(
         case 'done': {
           streamBufferRef.current = '';
           setStreamingText('');
+          setIsRetrying(false);
+          setRetryReason(null);
+          clearRetryTimeout();
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);
           break;
@@ -131,8 +198,9 @@ export function useChatStream(
       es.close();
       esRef.current = null;
       setIsConnected(false);
+      clearRetryTimeout();
     };
-  }, [threadId, reset]);
+  }, [threadId, reset]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { messages, streamingText, status, isConnected, prdReady, backlogReady };
+  return { messages, streamingText, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };
 }

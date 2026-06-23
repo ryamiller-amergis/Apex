@@ -6,6 +6,7 @@ import {
   useInterview,
   usePrdList,
   usePrd,
+  usePrdTestCases,
   useCreateInterview,
   useUpdateInterviewStatus,
   useUpdateInterviewTitle,
@@ -26,8 +27,17 @@ import {
   useReviewDesignDoc,
   useDeleteDesignDoc,
   useSyncDesignDoc,
-  useGenerateDesignDoc,
   useReopenPrd,
+  useActiveUsers,
+  usePrdValidationReport,
+  useCreatePrdValidationThread,
+  useCancelPrdValidation,
+  useRefreshPrdValidation,
+  useMarkPrdValidationReady,
+  useFixPrdValidation,
+  useAcceptFixPrdValidation,
+  useRevertPrdSection,
+  useGenerateTestCases,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -133,6 +143,20 @@ describe('useInterviewList', () => {
     );
   });
 
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useInterviewList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
+      expect.any(Object),
+    );
+  });
+
   it('surfaces fetch errors', async () => {
     mockFetchError(500, { error: 'Server error' });
     const { wrapper } = createWrapper();
@@ -201,6 +225,20 @@ describe('usePrdList', () => {
       expect.any(Object),
     );
   });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => usePrdList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
+      expect.any(Object),
+    );
+  });
 });
 
 // ── usePrd ─────────────────────────────────────────────────────────────────────
@@ -231,6 +269,95 @@ describe('usePrd', () => {
   });
 });
 
+// ── usePrdTestCases ───────────────────────────────────────────────────────────
+
+describe('usePrdTestCases', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/interviews/prds/:prdId/test-cases and returns the latest record', async () => {
+    const testCaseRecord = {
+      id: 'tc-1',
+      prdId: 'prd-1',
+      chatThreadId: 'thread-tc',
+      status: 'ready',
+      testCasesJson: { suites: [] },
+      testCasesMd: '# Test Cases',
+      coverageSummary: {
+        totalCases: 3,
+        pbisCovered: 1,
+        acCovered: '2/2',
+        brCovered: '1/1',
+        gaps: 0,
+      },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    };
+    mockFetchOk(testCaseRecord);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => usePrdTestCases('prd-1'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({
+      id: 'tc-1',
+      coverageSummary: expect.objectContaining({ totalCases: 3 }),
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/test-cases',
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch test cases when prdId is null', async () => {
+    mockFetchOk(null);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => usePrdTestCases(null), { wrapper });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ── useActiveUsers ─────────────────────────────────────────────────────────────
+
+describe('useActiveUsers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches /api/interviews/active-users and returns the list', async () => {
+    const users = [
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+      { oid: 'bob', displayName: 'Bob Jones', email: 'bob@example.com' },
+    ];
+    mockFetchOk(users);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toHaveLength(2);
+    expect(result.current.data![0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/active-users',
+      expect.any(Object),
+    );
+  });
+
+  it('returns an empty list when no active users exist', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([]);
+  });
+});
+
 // ── useCreateInterview ─────────────────────────────────────────────────────────
 
 describe('useCreateInterview', () => {
@@ -253,6 +380,28 @@ describe('useCreateInterview', () => {
       '/api/interviews',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('includes prdOwnerId and designDocOwnerId in the POST body when provided', async () => {
+    mockFetchOk({ interviewId: 'interview-new', threadId: 'thread-new' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCreateInterview(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        prdOwnerId: 'user-prd',
+        designDocOwnerId: 'user-dd',
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(callBody).toMatchObject({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' });
   });
 
   it('surfaces errors from the API', async () => {
@@ -424,7 +573,11 @@ describe('useSubmitPrd', () => {
     const { result } = renderHook(() => useSubmitPrd(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('prd-1');
+      result.current.mutate({
+        prdId: 'prd-1',
+        prdApproverIds: ['approver-1'],
+        designDocApproverIds: ['approver-2'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -485,21 +638,6 @@ describe('useReviewPrd', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when requesting revision', async () => {
-    mockFetchOk({ ok: true });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useReviewPrd(), { wrapper });
-
-    await act(async () => {
-      result.current.mutate({ prdId: 'prd-1', action: 'request_revision', comment: 'Needs more work' });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs more work' });
-  });
 });
 
 // ── useSyncPrd ─────────────────────────────────────────────────────────────────
@@ -547,6 +685,167 @@ describe('useReopenPrd', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/interviews/prds/prd-1/reopen',
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+});
+
+// ── PRD validation hooks ──────────────────────────────────────────────────────
+
+describe('PRD validation hooks', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches the PRD validation report while validation is running', async () => {
+    mockFetchOk({ markdown: '# Validation Report' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => usePrdValidationReport('prd-1', 'validation-thread-1', 'validating'),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({ markdown: '# Validation Report' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/report',
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch the PRD validation report outside validating status', async () => {
+    mockFetchOk({ markdown: '# Validation Report' });
+    const { wrapper } = createWrapper();
+
+    renderHook(
+      () => usePrdValidationReport('prd-1', 'validation-thread-1', 'draft'),
+      { wrapper },
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('POSTs to create a PRD validation thread', async () => {
+    mockFetchOk({ threadId: 'validation-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCreatePrdValidationThread(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation-thread',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to cancel PRD validation', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCancelPrdValidation(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to refresh PRD validation results', async () => {
+    mockFetchOk({ ok: true, score: 92, is_ready: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRefreshPrdValidation(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({ score: 92, is_ready: true });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/refresh',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to mark PRD validation ready', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useMarkPrdValidationReady(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/validation/mark-ready',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to start and accept PRD validation fixes', async () => {
+    mockFetchOk({ threadId: 'fix-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result: fixResult } = renderHook(() => useFixPrdValidation(), { wrapper });
+
+    await act(async () => {
+      fixResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(fixResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/fix-validation',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    mockFetchOk({ ok: true });
+    const { result: acceptResult } = renderHook(() => useAcceptFixPrdValidation(), { wrapper });
+
+    await act(async () => {
+      acceptResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(acceptResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      '/api/interviews/prds/prd-1/fix-validation/accept',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('PATCHes to revert the PRD validation baseline', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRevertPrdSection(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/revert-section',
+      expect.objectContaining({ method: 'PATCH' }),
     );
   });
 });
@@ -609,6 +908,20 @@ describe('useDesignDocList', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('project=proj-alpha'),
+      expect.any(Object),
+    );
+  });
+
+  it('includes author=me query param when filter is provided', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useDesignDocList({ author: 'me' }), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('author=me'),
       expect.any(Object),
     );
   });
@@ -703,7 +1016,10 @@ describe('useSubmitDesignDoc', () => {
     const { result } = renderHook(() => useSubmitDesignDoc(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('dd-1');
+      result.current.mutate({
+        designDocId: 'dd-1',
+        approverIds: ['approver-1'],
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -764,21 +1080,6 @@ describe('useReviewDesignDoc', () => {
     expect(callBody).toMatchObject({ action: 'approve' });
   });
 
-  it('includes a comment when requesting revision', async () => {
-    mockFetchOk({ ok: true });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useReviewDesignDoc(), { wrapper });
-
-    await act(async () => {
-      result.current.mutate({ designDocId: 'dd-1', action: 'request_revision', comment: 'Needs work' });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(callBody).toMatchObject({ action: 'request_revision', comment: 'Needs work' });
-  });
 });
 
 // ── useDeleteDesignDoc ────────────────────────────────────────────────────────
@@ -830,26 +1131,56 @@ describe('useSyncDesignDoc', () => {
   });
 });
 
-// ── useGenerateDesignDoc ──────────────────────────────────────────────────────
+// useGenerateDesignDoc removed — Q&A phase removed
 
-describe('useGenerateDesignDoc', () => {
+// ── useGenerateTestCases ──────────────────────────────────────────────────────
+
+describe('useGenerateTestCases', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('POSTs to /api/interviews/design-docs/:id/generate', async () => {
-    mockFetchOk({ ok: true });
+  it('POSTs to /api/interviews/prds/:prdId/test-cases/generate', async () => {
+    mockFetchOk({ started: true });
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useGenerateDesignDoc(), { wrapper });
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('dd-1');
+      result.current.mutate('prd-1');
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/interviews/design-docs/dd-1/generate',
+      '/api/interviews/prds/prd-1/test-cases/generate',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('exposes started:true in mutation data', async () => {
+    mockFetchOk({ started: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual({ started: true });
+  });
+
+  it('enters error state on HTTP failure', async () => {
+    mockFetchError(422, { error: 'PRD content and backlog must exist' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useGenerateTestCases(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
   });
 });

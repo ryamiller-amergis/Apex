@@ -68,7 +68,9 @@ export interface UpdateRoleRequest {
 export interface MyPermissionsResponse {
   permissions: string[];
   roles: string[];
+  groups: string[];
   userId: string;
+  isSuperAdmin: boolean;
   changelogUnread: boolean;
   showChangelogOnLogin: boolean;
 }

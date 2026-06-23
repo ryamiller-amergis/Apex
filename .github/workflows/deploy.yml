@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -38,7 +40,17 @@ jobs:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
         run: npm run build
 
+      - name: Detect migration changes
+        id: migration_changes
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/ci/has-migration-changes.mjs
+
       - name: Run database migrations
+        if: steps.migration_changes.outputs.has_migration_changes == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up
@@ -49,7 +61,14 @@ jobs:
           cp -r dist/* deploy/dist/
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
+          cp -r scripts deploy/
           cd deploy
+          # NOTE: do NOT use --ignore-scripts here. Native deps such as sqlite3
+          # (pulled in transitively by @cursor/sdk) rely on their install script
+          # to download the prebuilt node_sqlite3.node binary. Skipping scripts
+          # produces "Could not locate the bindings file" at runtime. The
+          # postinstall esbuild-wasm patch is a safe no-op in this package
+          # because esbuild-wasm is a devDependency and is omitted here.
           npm ci --omit=dev
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
@@ -134,7 +153,14 @@ jobs:
               AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
               AWS_REGION="${{ secrets.AWS_REGION }}" \
               BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}" \
-              DATABASE_URL="${{ secrets.DATABASE_URL }}"
+              BEDROCK_UI_MOCK_MODEL_ID="${{ secrets.BEDROCK_UI_MOCK_MODEL_ID }}" \
+              BEDROCK_UI_MOCK_MAX_TOKENS="32000" \
+              MAXVIEW_DS_PROJECT="MaxView" \
+              MAXVIEW_DS_REPO="MaxView" \
+              MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
 
           # Bypass npm start/package.json resolution issues by setting an explicit startup command.
           # Using an absolute path ensures it works even if the current working directory isn't wwwroot.

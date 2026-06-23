@@ -3,6 +3,8 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
+import { markAsInterviewThread } from './chatAgentService';
+import { createNotification } from './notificationService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -20,6 +22,15 @@ export async function createInterview(opts: {
   repo: string;
   title?: string;
   chatThreadId: string;
+  model?: string;
+  prdOwnerId?: string;
+  designDocOwnerId?: string;
+  designPrototypeOwnerId?: string;
+  testCaseOwnerId?: string;
+  prdApproverIds?: string[];
+  designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
+  testCaseApproverIds?: string[];
 }): Promise<{ interviewId: string; threadId: string }> {
   const [row] = await db
     .insert(interviews)
@@ -29,18 +40,113 @@ export async function createInterview(opts: {
       title: opts.title ?? 'Untitled Interview',
       project: opts.project,
       repo: opts.repo,
+      model: opts.model ?? null,
       status: 'in_progress',
+      prdOwnerId: opts.prdOwnerId ?? null,
+      designDocOwnerId: opts.designDocOwnerId ?? null,
+      designPrototypeOwnerId: opts.designPrototypeOwnerId ?? null,
+      testCaseOwnerId: opts.testCaseOwnerId ?? null,
+      prdApproverIds: opts.prdApproverIds ?? null,
+      designDocApproverIds: opts.designDocApproverIds ?? null,
+      designPrototypeApproverIds: opts.designPrototypeApproverIds ?? null,
+      testCaseApproverIds: opts.testCaseApproverIds ?? null,
     })
     .returning({ id: interviews.id });
 
-  return { interviewId: row.id, threadId: opts.chatThreadId };
+  markAsInterviewThread(opts.chatThreadId);
+
+  const interviewId = row.id;
+  const interviewTitle = opts.title ?? 'Untitled Interview';
+
+  try {
+    const notificationPromises: Promise<void>[] = [];
+
+    if (opts.prdOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.prdOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as PRD Owner',
+          body: `You were assigned as PRD owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (opts.designDocOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.designDocOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Design Doc Owner',
+          body: `You were assigned as Design Doc owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (opts.designPrototypeOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.designPrototypeOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Design Prototype Owner',
+          body: `You were assigned as Design Prototype owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (opts.testCaseOwnerId) {
+      notificationPromises.push(
+        createNotification(opts.testCaseOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Test Case Owner',
+          body: `You were assigned as Test Case owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    const interviewLink = `/backlog/interview/${interviewId}`;
+    const reviewerAssignments: Array<{ userIds: string[] | undefined; title: string; role: string }> = [
+      { userIds: opts.prdApproverIds, title: 'Assigned as PRD Reviewer', role: 'PRD reviewer' },
+      { userIds: opts.designDocApproverIds, title: 'Assigned as Design Doc Reviewer', role: 'Design Doc reviewer' },
+      { userIds: opts.designPrototypeApproverIds, title: 'Assigned as Design Prototype Reviewer', role: 'Design Prototype reviewer' },
+      { userIds: opts.testCaseApproverIds, title: 'Assigned as QA Reviewer', role: 'QA reviewer' },
+    ];
+    for (const { userIds, title, role } of reviewerAssignments) {
+      for (const userId of userIds ?? []) {
+        notificationPromises.push(
+          createNotification(userId, {
+            type: 'user-action',
+            title,
+            body: `You were assigned as ${role} for the interview "${interviewTitle}".`,
+            link: interviewLink,
+          }).then(() => undefined),
+        );
+      }
+    }
+
+    if (notificationPromises.length > 0) {
+      const results = await Promise.allSettled(notificationPromises);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('[interviewService] Section-owner notification failed:', result.reason);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[interviewService] Notification dispatch error:', err);
+  }
+
+  return { interviewId, threadId: opts.chatThreadId };
 }
 
 export async function listInterviews(
-  userId: string,
-  filters?: { status?: InterviewStatus; project?: string },
+  filters?: { status?: InterviewStatus; project?: string; authorId?: string },
 ): Promise<InterviewSummary[]> {
-  const conditions = [eq(interviews.authorId, userId)];
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (filters?.authorId) {
+    conditions.push(eq(interviews.authorId, filters.authorId));
+  }
   if (filters?.status) {
     conditions.push(eq(interviews.status, filters.status));
   }
@@ -56,12 +162,21 @@ export async function listInterviews(
       title: interviews.title,
       project: interviews.project,
       repo: interviews.repo,
+      model: interviews.model,
       status: interviews.status,
+      prdOwnerId: interviews.prdOwnerId,
+      designDocOwnerId: interviews.designDocOwnerId,
+      designPrototypeOwnerId: interviews.designPrototypeOwnerId,
+      testCaseOwnerId: interviews.testCaseOwnerId,
+      prdApproverIds: interviews.prdApproverIds,
+      designDocApproverIds: interviews.designDocApproverIds,
+      designPrototypeApproverIds: interviews.designPrototypeApproverIds,
+      testCaseApproverIds: interviews.testCaseApproverIds,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
     .from(interviews)
-    .where(and(...conditions))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(interviews.updatedAt));
 
   const prdCounts = await db
@@ -78,8 +193,17 @@ export async function listInterviews(
     title: row.title,
     project: row.project,
     repo: row.repo,
+    model: row.model ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: prdCountMap.get(row.id) ?? 0,
+    prdOwnerId: row.prdOwnerId ?? undefined,
+    designDocOwnerId: row.designDocOwnerId ?? undefined,
+    designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
+    testCaseOwnerId: row.testCaseOwnerId ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
+    designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
+    testCaseApproverIds: row.testCaseApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -88,7 +212,7 @@ export async function listInterviews(
 export async function getInterview(id: string): Promise<Interview | null> {
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, id),
-    with: { prds: true },
+    with: { prds: true, prdOwner: true, designDocOwner: true, designPrototypeOwner: true, testCaseOwner: true },
   });
 
   if (!row) return null;
@@ -100,6 +224,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     authorId: p.authorId,
     project: p.project,
     title: p.title,
+    model: p.model ?? undefined,
     status: p.status as PrdStatus,
     reviewerId: p.reviewerId ?? undefined,
     reviewComment: p.reviewComment ?? undefined,
@@ -115,8 +240,21 @@ export async function getInterview(id: string): Promise<Interview | null> {
     title: row.title,
     project: row.project,
     repo: row.repo,
+    model: row.model ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: row.prds.length,
+    prdOwnerId: row.prdOwnerId ?? undefined,
+    prdOwnerName: row.prdOwner?.displayName ?? undefined,
+    designDocOwnerId: row.designDocOwnerId ?? undefined,
+    designDocOwnerName: row.designDocOwner?.displayName ?? undefined,
+    designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
+    designPrototypeOwnerName: row.designPrototypeOwner?.displayName ?? undefined,
+    testCaseOwnerId: row.testCaseOwnerId ?? undefined,
+    testCaseOwnerName: row.testCaseOwner?.displayName ?? undefined,
+    prdApproverIds: row.prdApproverIds ?? undefined,
+    designDocApproverIds: row.designDocApproverIds ?? undefined,
+    designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
+    testCaseApproverIds: row.testCaseApproverIds ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,

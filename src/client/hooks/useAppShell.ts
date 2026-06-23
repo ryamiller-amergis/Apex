@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
-import { azureCostService } from '../services/azureCostService';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
@@ -59,7 +58,9 @@ export function useAppShell() {
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -105,7 +106,9 @@ export function useAppShell() {
         if (d) {
           setPermissions(d.permissions);
           setRoles(d.roles);
+          setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
+          setIsSuperAdmin(d.isSuperAdmin ?? false);
           setHasUnreadChangelog(d.changelogUnread);
           setShowChangelogOnLogin(d.showChangelogOnLogin);
         }
@@ -154,11 +157,6 @@ export function useAppShell() {
         queryFn: () => fetch(`/api/releases/epics?project=${enc(selectedProject)}&areaPath=${enc(selectedAreaPath)}`, { credentials: 'include' }).then(r => r.ok ? r.json() : []),
         staleTime: 5 * 60 * 1000,
       });
-      const stagger = window.setTimeout(() => {
-        queryClient.prefetchQuery({ queryKey: ['azureSubscriptions'], queryFn: () => azureCostService.getSubscriptionsWithResourceGroups(), staleTime: 10 * 60 * 1000 });
-        queryClient.prefetchQuery({ queryKey: ['azureDashboard'], queryFn: () => azureCostService.getDashboardData(5), staleTime: 5 * 60 * 1000 });
-      }, 600);
-      return () => window.clearTimeout(stagger);
     }, 2000);
     return () => window.clearTimeout(delay);
   }, [isAuthenticated, loading, selectedProject, selectedAreaPath, queryClient]);
@@ -215,7 +213,12 @@ export function useAppShell() {
     setPendingDueDateChange(null);
   }, [pendingDueDateChange, updateDueDate]);
 
-  const can = useCallback((key: string) => permissions.includes(key), [permissions]);
+  const can = useCallback((key: string) => isSuperAdmin || permissions.includes(key), [isSuperAdmin, permissions]);
+
+  const isInAnyGroup = useCallback(
+    (names: string[]) => isSuperAdmin || roles.includes('admin') || groups.some(g => names.includes(g)),
+    [isSuperAdmin, roles, groups],
+  );
 
   const handleMarkChangelogAsRead = useCallback(() => {
     setHasUnreadChangelog(false);
@@ -254,10 +257,13 @@ export function useAppShell() {
     authenticatedUser,
     permissions,
     roles,
+    groups,
     userId,
     permissionsLoaded,
     can,
-    isAdmin: roles.includes('admin'),
+    isInAnyGroup,
+    isSuperAdmin,
+    isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
     loading,
     error,

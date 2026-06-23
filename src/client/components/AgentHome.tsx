@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -16,8 +17,10 @@ import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
-import type { QuickSkillPill } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
+import { useContextEstimate } from '../hooks/useContextEstimate';
 import { BrandLogo } from './BrandLogo';
+import { ReadAloudButton } from './ReadAloudButton';
 import styles from './AgentHome.module.css';
 
 interface AgentHomeProps {
@@ -79,15 +82,6 @@ async function copyTextToClipboard(text: string): Promise<void> {
   document.execCommand('copy');
   document.body.removeChild(textarea);
 }
-
-const DEFAULT_CONTEXT_TOKEN_LIMIT = 200_000;
-const MODEL_CONTEXT_TOKEN_LIMITS: Record<string, number> = {
-  'composer-2': 200_000,
-  'claude-opus-4-6': 200_000,
-  'claude-sonnet-4-6': 200_000,
-  'gpt-5.5': 200_000,
-  'gemini-3.1-pro': 1_000_000,
-};
 
 // ── ToolIcon ───────────────────────────────────────────────────────────────────
 
@@ -329,6 +323,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, que
       </div>
       <div className={styles.agentBubblePanel}>
         <div className={`${styles.bubbleActions} ${styles.agentBubbleActions}`}>
+          <ReadAloudButton text={msg.text} />
           <MessageCopyButton text={msg.text} label="Copy agent response" />
         </div>
         {parts.map((part) => {
@@ -441,11 +436,13 @@ function MessageBubble({
 
 export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const [input, setInput] = useState('');
   // Prefer the URL param (direct links) then sessionStorage (survives SPA
   // navigation where App.tsx resets the URL to /home without query params).
+  const sessionStorageKey = `agentHomeThreadId:${selectedProject}`;
   const [threadId, setThreadId] = useState<string | null>(
-    () => searchParams.get('thread') ?? sessionStorage.getItem('agentHomeThreadId') ?? null,
+    () => searchParams.get('thread') ?? sessionStorage.getItem(sessionStorageKey) ?? null,
   );
   const [showHistory, setShowHistory] = useState(false);
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
@@ -460,6 +457,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const [selectedSkillPath, setSelectedSkillPath] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
+  const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
 
   // PRD state
   const [showPrdPreview, setShowPrdPreview] = useState(false);
@@ -495,6 +493,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const resolvedRepoName = skillConfig?.skillRepo ?? defaultRepo?.name ?? null;
 
   const quickSkillPills = skillConfig?.quickSkillPills ?? [];
+  const quickMcpPills = skillConfig?.quickMcpPills ?? [];
 
   const { data: skills = [] } = useSkillList(
     selectedProject || null,
@@ -513,23 +512,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
 
   const hasPrd = prdReady;
 
-  const contextTokenLimit = MODEL_CONTEXT_TOKEN_LIMITS[model] ?? DEFAULT_CONTEXT_TOKEN_LIMIT;
-  const estimatedTokens = useMemo(() => {
-    const messageChars = visibleMessages.reduce((sum, message) => {
-      const attachmentChars = message.attachments?.reduce(
-        (attachmentSum, attachment) => attachmentSum + attachment.size,
-        0,
-      ) ?? 0;
-      return sum + message.text.length + attachmentChars;
-    }, 0);
-    const draftChars = input.length + attachments.reduce((sum, attachment) => sum + attachment.content.length, 0);
-    const streamChars = streamingText.length;
-    return Math.ceil((messageChars + draftChars + streamChars) / 4);
-  }, [visibleMessages, input, attachments, streamingText]);
-  const contextPercent = Math.min(100, Math.round((estimatedTokens / contextTokenLimit) * 100));
-  const contextLabel = estimatedTokens >= 1000
-    ? `${Math.round(estimatedTokens / 1000)}k`
-    : `${estimatedTokens}`;
+  const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
+  const {
+    estimatedTokens,
+    contextLimit: contextTokenLimit,
+    usagePercent: contextPercent,
+    label: contextLabel,
+  } = useContextEstimate(visibleMessages, input, streamingText, model, draftAttachmentChars);
 
   const slashQuery = useMemo(() => {
     const m = input.match(/^\/(.*)$/s);
@@ -552,6 +541,16 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
       setModel(globalDefaultModel.value);
     }
   }, [globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear thread when the project changes and the loaded thread belongs to a different project
+  const prevProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    if (prevProjectRef.current !== selectedProject) {
+      prevProjectRef.current = selectedProject;
+      setThreadId(sessionStorage.getItem(sessionStorageKey) ?? null);
+      setSeedMessages([]);
+    }
+  }, [selectedProject, sessionStorageKey]);
 
   // Scroll messages to bottom
   useEffect(() => {
@@ -660,11 +659,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   useEffect(() => {
     setSearchParams(threadId ? { thread: threadId } : {}, { replace: true });
     if (threadId) {
-      sessionStorage.setItem('agentHomeThreadId', threadId);
+      sessionStorage.setItem(sessionStorageKey, threadId);
     } else {
-      sessionStorage.removeItem('agentHomeThreadId');
+      sessionStorage.removeItem(sessionStorageKey);
     }
-  }, [threadId, setSearchParams]);
+  }, [threadId, setSearchParams, sessionStorageKey]);
 
   // On first mount, if a ?thread=<id> param was present, reload that thread's
   // message history so the UI is immediately usable without re-fetching.
@@ -793,12 +792,16 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             skillPath: effectiveSkillPath,
             freeformContext,
             model,
+            ...(selectedMcpPill ? { mcpPill: selectedMcpPill } : {}),
+            pillLabel: selectedQuickSkill?.label ?? selectedMcpPill?.label ?? undefined,
+            pillDescription: (selectedQuickSkill?.description ?? selectedMcpPill?.description) ?? undefined,
           },
           skipAutoKickoff: !skillSlugOnlyKickoff,
         });
         activeThreadId = result.threadId;
         setThreadId(activeThreadId);
         setSelectedQuickSkill(null);
+        setSelectedMcpPill(null);
       }
 
       // For new threads the skill is baked into the kickoff system prompt, so a bare
@@ -854,11 +857,12 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
         const errorBody = await response.json().catch(() => ({}));
         throw new Error((errorBody as { error?: string }).error ?? `HTTP ${response.status}`);
       }
+      void queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
       clearAttachments();
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, model, clearAttachments, isListening]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -911,6 +915,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
     setSelectedSkillPath(null);
     setSelectedSkillName(null);
     setSelectedQuickSkill(null);
+    setSelectedMcpPill(null);
     clearAttachments();
     setShowPrdPreview(false);
     setInitialPrdReady(false);
@@ -933,7 +938,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   }, []);
 
   const isCompose = !threadId;
-  const needsSkillSelection = isCompose && quickSkillPills.length > 0 && !selectedQuickSkill;
+  const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
+  const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName);
 
   // ── Shared input area ────────────────────────────────────────────────────────
@@ -1102,6 +1108,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
           onSelectThread={handleSelectThread}
           onDeleteThread={(id) => { if (id === threadId) { setSeedMessages([]); setThreadId(null); } }}
           onClose={() => setShowHistory(false)}
+          project={selectedProject}
         />
       )}
       {isCompose ? (
@@ -1141,6 +1148,28 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
                   onClick={() => {
                     const isDeselect = selectedQuickSkill?.skillPath === pill.skillPath;
                     setSelectedQuickSkill(isDeselect ? null : pill);
+                    setSelectedMcpPill(null);
+                    setModel(
+                      isDeselect
+                        ? (globalDefaultModel?.value ?? DEFAULT_MODEL_ID)
+                        : (pill.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID),
+                    );
+                  }}
+                >
+                  {pill.label}
+                </button>
+              ))}
+              {quickMcpPills.map((pill) => (
+                <button
+                  key={pill.mcpServerName}
+                  type="button"
+                  className={`${styles.pill} ${styles.pillClickable} ${styles.pillMcp} ${
+                    selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.pillSelected : ''
+                  }`}
+                  onClick={() => {
+                    const isDeselect = selectedMcpPill?.mcpServerName === pill.mcpServerName;
+                    setSelectedMcpPill(isDeselect ? null : pill);
+                    setSelectedQuickSkill(null);
                     setModel(
                       isDeselect
                         ? (globalDefaultModel?.value ?? DEFAULT_MODEL_ID)
@@ -1158,6 +1187,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
                 {selectedQuickSkill.description
                   || skills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
                   || `Skill: ${selectedQuickSkill.label}`}
+              </div>
+            )}
+            {selectedMcpPill && (
+              <div className={styles.pillDescription}>
+                {selectedMcpPill.description || `MCP: ${selectedMcpPill.label}`}
               </div>
             )}
 

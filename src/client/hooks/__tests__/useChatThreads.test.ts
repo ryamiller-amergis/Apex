@@ -69,46 +69,66 @@ describe('useChatThreadList', () => {
     mockFetchOk([threadSummary, threadSummary2]);
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useChatThreadList(), { wrapper });
+    const { result } = renderHook(() => useChatThreadList(50, 'TestProject'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toHaveLength(2);
     expect(result.current.data![0].id).toBe('thread-1');
   });
 
-  it('calls /api/chat/threads with the default limit', async () => {
+  it('calls /api/chat/threads with project param', async () => {
     mockFetchOk([]);
     const { wrapper } = createWrapper();
 
-    renderHook(() => useChatThreadList(), { wrapper });
+    renderHook(() => useChatThreadList(50, 'MyProject'), { wrapper });
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/chat/threads?limit=50',
+        '/api/chat/threads?limit=50&project=MyProject',
         expect.objectContaining({ credentials: 'include' }),
       ),
     );
   });
 
-  it('calls /api/chat/threads with a custom limit', async () => {
+  it('calls /api/chat/threads with a custom limit and project', async () => {
     mockFetchOk([]);
     const { wrapper } = createWrapper();
 
-    renderHook(() => useChatThreadList(10), { wrapper });
+    renderHook(() => useChatThreadList(10, 'TestProject'), { wrapper });
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/chat/threads?limit=10',
+        '/api/chat/threads?limit=10&project=TestProject',
         expect.objectContaining({ credentials: 'include' }),
       ),
     );
+  });
+
+  it('is disabled when project is not provided', () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useChatThreadList(50), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('is disabled when project is null', () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useChatThreadList(50, null), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('surfaces an error when the API returns a non-ok response', async () => {
     mockFetchError(500, { error: 'Internal Server Error' });
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useChatThreadList(), { wrapper });
+    const { result } = renderHook(() => useChatThreadList(50, 'TestProject'), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('Internal Server Error');
@@ -118,7 +138,7 @@ describe('useChatThreadList', () => {
     mockFetchError(503, {});
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useChatThreadList(), { wrapper });
+    const { result } = renderHook(() => useChatThreadList(50, 'TestProject'), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('HTTP 503');

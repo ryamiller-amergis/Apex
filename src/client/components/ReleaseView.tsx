@@ -1,6 +1,82 @@
 import React, { useState, useEffect } from 'react';
 import { WorkItem, ReleaseMetrics, Deployment, DeploymentEnvironment } from '../types/workitem';
+import { useDeploymentOutcomes } from '../hooks/useDeploymentOutcomes';
+import type { DeploymentResult } from '../../shared/types/deploymentOutcome';
+import { DeploymentOutcomeModal } from './DeploymentOutcomeModal';
+import { DeploymentOutcomeReport } from './DeploymentOutcomeReport';
 import './ReleaseView.css';
+
+const RESULT_CONFIG: Record<DeploymentResult, { className: string; label: string; icon: string }> = {
+  success:  { className: 'result-success',  label: 'Success',  icon: '✓' },
+  downtime: { className: 'result-downtime', label: 'Downtime', icon: '⚠' },
+  rollback: { className: 'result-rollback', label: 'Rollback', icon: '↩' },
+};
+
+const OutcomeBadge: React.FC<{
+  releaseVersion: string;
+  deployedAt?: string;
+  onManage: (releaseVersion: string, deployedAt?: string) => void;
+}> = ({ releaseVersion, deployedAt, onManage }) => {
+  const { data: outcomes } = useDeploymentOutcomes(releaseVersion);
+  const [showDetails, setShowDetails] = useState(false);
+
+  if (!outcomes || outcomes.length === 0) {
+    return (
+      <button
+        type="button"
+        className="result-badge result-none result-badge-button"
+        onClick={(e) => { e.stopPropagation(); onManage(releaseVersion, deployedAt); }}
+        title="Add deployment outcome"
+      >
+        + Add
+      </button>
+    );
+  }
+
+  const latest = outcomes[0];
+  const config = RESULT_CONFIG[latest.result];
+
+  return (
+    <span style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className={`result-badge result-badge-button ${config.className}`}
+        onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
+        title={`${config.label} – click for details`}
+      >
+        {config.icon} {config.label}
+      </button>
+      {showDetails && (
+        <div className="result-details-popover" onClick={(e) => e.stopPropagation()}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Deployment Outcome</div>
+          <div style={{ marginBottom: 4 }}>
+            <strong>Result:</strong> {config.icon} {config.label}
+          </div>
+          {latest.downtimeMinutes != null && latest.downtimeMinutes > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              <strong>Downtime:</strong> {latest.downtimeMinutes} min
+            </div>
+          )}
+          {latest.details && (
+            <div style={{ marginBottom: 4 }}>
+              <strong>Details:</strong> {latest.details}
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+            Reported {new Date(latest.reportedAt).toLocaleDateString()}
+          </div>
+          <button
+            type="button"
+            className="result-manage-btn"
+            onClick={(e) => { e.stopPropagation(); onManage(releaseVersion, deployedAt); }}
+          >
+            Manage outcome
+          </button>
+        </div>
+      )}
+    </span>
+  );
+};
 
 interface ReleaseViewProps {
   workItems: WorkItem[];
@@ -61,6 +137,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [loadingNestedChildren, setLoadingNestedChildren] = useState<Set<number>>(new Set());
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [showOutcomeModal, setShowOutcomeModal] = useState(false);
+  const [outcomeReleaseVersion, setOutcomeReleaseVersion] = useState<string>('');
+  const [outcomeDeployedAt, setOutcomeDeployedAt] = useState<string | undefined>(undefined);
+  const [showReport, setShowReport] = useState(false);
 
   // Fetch all release versions on mount
   useEffect(() => {
@@ -292,6 +372,18 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     } catch (error) {
       console.error('Error updating release:', error);
     }
+  };
+
+  const handleOpenOutcomeModal = (releaseVersion: string, deployedAt?: string) => {
+    setOutcomeReleaseVersion(releaseVersion);
+    setOutcomeDeployedAt(deployedAt);
+    setShowOutcomeModal(true);
+  };
+
+  const handleCloseOutcomeModal = () => {
+    setShowOutcomeModal(false);
+    setOutcomeReleaseVersion('');
+    setOutcomeDeployedAt(undefined);
   };
 
   const handleOpenEditModal = (epic: any) => {
@@ -701,6 +793,12 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             </div>
           </div>
           <div className="release-actions">
+            <button
+              className="btn-view-report"
+              onClick={() => setShowReport(!showReport)}
+            >
+              {showReport ? '← Back to Releases' : 'View Report'}
+            </button>
             <button 
               className="btn-create-release"
               onClick={() => setShowNewReleaseModal(true)}
@@ -711,6 +809,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
         </div>
       </div>
 
+      {showReport ? (
+        <DeploymentOutcomeReport onClose={() => setShowReport(false)} />
+      ) : (
+      <>
       {/* Release Epics Data Grid */}
       <div className="release-epics-grid">
         {loadingEpics ? (
@@ -740,6 +842,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 <th className="sortable-th" onClick={() => handleSort('description')}>
                   Description <span className="sort-indicator">{sortColumn === 'description' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
+                <th>Result</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -798,6 +901,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     </div>
                   </td>
                   <td>
+                    <OutcomeBadge releaseVersion={epic.version} deployedAt={epic.targetDate || undefined} onManage={handleOpenOutcomeModal} />
+                  </td>
+                  <td>
                     <div className="actions-cell">
                       <button 
                         className="btn-action-menu" 
@@ -826,6 +932,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                           >
                             🔗 Link Items
                           </button>
+                          <button
+                            className="action-menu-item"
+                            onClick={() => {
+                              handleOpenOutcomeModal(epic.version, epic.targetDate || undefined);
+                              setOpenActionMenuId(null);
+                            }}
+                          >
+                            📊 Deployment Outcome
+                          </button>
                           <button 
                             className="action-menu-item"
                             onClick={() => {
@@ -852,7 +967,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 </tr>
                 {expandedRows.has(epic.id) && (
                   <tr className="expanded-row">
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="expanded-content">
                           <div className="expanded-header">
                             <div className="expanded-title">
@@ -1154,12 +1269,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 )}
               </div>
             </div>
-            <button 
-              className="btn-deploy"
-              onClick={() => setShowDeploymentModal(true)}
-            >
-              Record Deployment
-            </button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button 
+                className="btn-deploy"
+                onClick={() => setShowDeploymentModal(true)}
+              >
+                Record Deployment
+              </button>
+            </div>
           </div>
 
           {/* Release Notes */}
@@ -1218,6 +1335,8 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
       {loading && (
         <div className="loading-message">Loading release details...</div>
+      )}
+      </>
       )}
 
       {/* Deployment Modal */}
@@ -1445,6 +1564,16 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
           </div>
         </div>
       )}
+      {/* Outcome Modal */}
+      {showOutcomeModal && outcomeReleaseVersion && (
+        <DeploymentOutcomeModal
+          isOpen={showOutcomeModal}
+          onClose={handleCloseOutcomeModal}
+          releaseVersion={outcomeReleaseVersion}
+          deployedAt={outcomeDeployedAt}
+        />
+      )}
+
       {/* Delete Confirmation Modal */}
       {showDeleteConfirmModal && deletingEpicId && (
         <div className="modal-overlay" onClick={() => !isDeleting && setShowDeleteConfirmModal(false)}>
