@@ -6,6 +6,21 @@
   overflow: hidden;
 }
 
+.tabArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tabAreaFullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: var(--bg-primary);
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -371,12 +386,47 @@
 
 .tabs {
   display: flex;
+  align-items: center;
   gap: 2px;
   border-bottom: 1px solid var(--border-color);
   padding: 8px 12px 0;
   background: var(--bg-secondary);
   flex-shrink: 0;
   margin-top: 10px;
+}
+
+.tabFullscreenBtn {
+  margin-left: auto;
+  margin-bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.tabFullscreenBtn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tabFullscreenBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.tabFullscreenBtnActive {
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  border-color: var(--accent-color);
 }
 
 .tab {
@@ -928,6 +978,13 @@
   display: none;
 }
 
+.designDocRow {
+  margin: 4px 12px 0;
+  border: 1px solid color-mix(in srgb, var(--success-color) 30%, var(--border-color));
+  border-radius: 8px;
+  overflow: hidden;
+}
+
 .designDocBanner {
   display: flex;
   align-items: center;
@@ -951,6 +1008,14 @@
 .designDocBannerText {
   color: var(--text-secondary);
   font-size: 0.79rem;
+  white-space: nowrap;
+}
+
+.designDocLinks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
   flex: 1;
   min-width: 0;
 }
@@ -1524,6 +1589,10 @@
   .bannerRow {
     flex-direction: column;
     margin: 5px 16px 0;
+  }
+
+  .designDocRow {
+    margin: 4px 16px 0;
   }
 
   .designDocBanner {
