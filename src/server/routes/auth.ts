@@ -17,7 +17,14 @@ const azureAdConfig: any = {
   allowHttpForRedirectUrl: process.env.NODE_ENV !== 'production',
   validateIssuer: true,
   passReqToCallback: false,
-  scope: ['profile', 'openid', 'email', 'User.Read'],
+  // offline_access ensures Azure AD issues a refresh token. The refresh token is
+  // later redeemed (see adoUserToken.ts) for an Azure DevOps-scoped access token so
+  // ADO writes act as the logged-in user. The ADO scope is intentionally NOT requested
+  // here: mixing a resource "/.default" scope with Graph scopes in one interactive
+  // request is rejected by Azure AD. Admin consent for the ADO user_impersonation
+  // permission already authorizes the app, so the refresh token can be exchanged for
+  // an ADO token without listing it at login.
+  scope: ['profile', 'openid', 'email', 'offline_access', 'User.Read'],
   loggingLevel: 'info' as const,
   loggingNoPII: true,
 };
