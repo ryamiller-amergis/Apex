@@ -75,7 +75,7 @@ describe('AzureDevOpsService', () => {
     it('should throw error when required env variables are missing', () => {
       delete process.env.ADO_ORG;
       expect(() => new AzureDevOpsService()).toThrow(
-        'Missing required environment variables: ADO_ORG and ADO_PAT must be provided'
+        'Missing required environment variable: ADO_ORG must be provided'
       );
     });
   });
