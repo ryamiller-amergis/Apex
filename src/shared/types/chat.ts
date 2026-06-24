@@ -7,6 +7,8 @@ export interface ChatMessage {
   ts: string;
   /** For tool messages: the tool name that was called */
   toolName?: string;
+  /** For tool messages: the raw input payload passed to the tool */
+  toolInput?: Record<string, unknown>;
   /** User-uploaded context files attached to this message */
   attachments?: ChatAttachmentMeta[];
   /** When true, this message is an internal prompt and should not be shown in the UI */
@@ -51,6 +53,10 @@ export interface ChatThreadKickoff {
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */
   pillDescription?: string;
+  /** Development workbench mode — agent works on a real repo checkout */
+  mode?: 'development';
+  /** Work item ID driving the development session */
+  workItemId?: number;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
@@ -88,6 +94,8 @@ export type SseEventType =
   | 'token'       // partial text from the agent
   | 'message'     // complete agent message (role + full text)
   | 'tool_call'   // agent invoked a tool
+  | 'thinking'    // model thinking/reasoning text
+  | 'tool_status' // tool execution progress (running/completed/error)
   | 'status'      // thread status changed
   | 'error'       // run-level error
   | 'retrying'    // server is transparently retrying a transient failure
@@ -135,10 +143,27 @@ export interface SseDoneEvent {
   backlogReady?: boolean;
 }
 
+export interface SseThinkingEvent {
+  type: 'thinking';
+  text: string;
+  durationMs?: number;
+}
+
+export interface SseToolStatusEvent {
+  type: 'tool_status';
+  toolName: string;
+  callId: string;
+  status: 'running' | 'completed' | 'error';
+  args?: unknown;
+  result?: string;
+}
+
 export type SseEvent =
   | SseTokenEvent
   | SseMessageEvent
   | SseToolCallEvent
+  | SseThinkingEvent
+  | SseToolStatusEvent
   | SseStatusEvent
   | SseErrorEvent
   | SseRetryingEvent

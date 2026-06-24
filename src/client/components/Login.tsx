@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
+import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import styles from './Login.module.css';
 
@@ -77,7 +78,7 @@ export const Login: React.FC = () => {
     <div className={styles['login-container']}>
       <div className={styles['login-card']}>
         <div className={styles['login-logo']}>
-          <BrandLogo tone="inverse" />
+          <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} />
         </div>
         <p>Sign in with your Amergis account to continue.</p>
         <button className={styles['login-button']} onClick={handleLogin}>

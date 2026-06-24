@@ -1,10 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, ChatThreadStatus } from '../../shared/types/chat';
+import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, SseThinkingEvent, SseToolStatusEvent, ChatThreadStatus } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
+
+export interface ToolProgress {
+  callId: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'error';
+  args?: unknown;
+  result?: string;
+  ts: number;
+}
 
 interface ChatStreamState {
   messages: ChatMessage[];
   streamingText: string;
+  thinkingText: string;
+  toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
   prdReady: boolean;
@@ -29,6 +40,8 @@ export function useChatStream(
 ): ChatStreamState {
   const [messages, setMessages] = useState<ChatMessage[]>(options.initialMessages ?? []);
   const [streamingText, setStreamingText] = useState('');
+  const [thinkingText, setThinkingText] = useState('');
+  const [toolProgress, setToolProgress] = useState<ToolProgress[]>([]);
   const [status, setStatus] = useState<ChatThreadStatus>(options.initialStatus ?? 'idle');
   const [isConnected, setIsConnected] = useState(false);
   const [prdReady, setPrdReady] = useState(options.initialPrdReady ?? false);
@@ -51,6 +64,8 @@ export function useChatStream(
   const reset = useCallback(() => {
     setMessages(options.initialMessages ?? []);
     setStreamingText('');
+    setThinkingText('');
+    setToolProgress([]);
     setStatus(options.initialStatus ?? 'idle');
     setIsConnected(false);
     setPrdReady(options.initialPrdReady ?? false);
@@ -103,6 +118,8 @@ export function useChatStream(
         case 'message': {
           streamBufferRef.current = '';
           setStreamingText('');
+          setThinkingText('');
+          setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -113,14 +130,33 @@ export function useChatStream(
           break;
         }
         case 'tool_call': {
-          const toolMsg: ChatMessage = {
-            id: uuidv4(),
-            role: 'tool',
-            text: `→ ${event.toolName}`,
-            toolName: event.toolName,
-            ts: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, toolMsg]);
+          setThinkingText('');
+          break;
+        }
+        case 'thinking': {
+          const thinkingEvent = event as SseThinkingEvent;
+          setThinkingText(thinkingEvent.text);
+          break;
+        }
+        case 'tool_status': {
+          const toolStatusEvent = event as SseToolStatusEvent;
+          setToolProgress((prev) => {
+            const existing = prev.findIndex((t) => t.callId === toolStatusEvent.callId);
+            const entry: ToolProgress = {
+              callId: toolStatusEvent.callId,
+              toolName: toolStatusEvent.toolName,
+              status: toolStatusEvent.status,
+              args: toolStatusEvent.args,
+              result: toolStatusEvent.result,
+              ts: Date.now(),
+            };
+            if (existing >= 0) {
+              const next = [...prev];
+              next[existing] = entry;
+              return next;
+            }
+            return [...prev, entry];
+          });
           break;
         }
         case 'status': {
@@ -184,6 +220,8 @@ export function useChatStream(
         case 'done': {
           streamBufferRef.current = '';
           setStreamingText('');
+          setThinkingText('');
+          setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -202,5 +240,5 @@ export function useChatStream(
     };
   }, [threadId, reset]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { messages, streamingText, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };
+  return { messages, streamingText, thinkingText, toolProgress, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };
 }

@@ -71,6 +71,28 @@ export const attachmentsRelations = relations(chatMessageAttachments, ({ one }) 
   }),
 }));
 
+// ── Dev Sessions ──────────────────────────────────────────────────────────────
+
+export const devSessions = pgTable('dev_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workItemId: integer('work_item_id').notNull(),
+  project: text('project').notNull(),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull(),
+  branchName: text('branch_name'),
+  status: text('status').notNull().default('setting_up'),
+  setupError: text('setup_error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const devSessionsRelations = relations(devSessions, ({ one }) => ({
+  chatThread: one(chatThreads, {
+    fields: [devSessions.chatThreadId],
+    references: [chatThreads.id],
+  }),
+}));
+
 // ── RBAC Tables ───────────────────────────────────────────────────────────────
 
 export const appUsers = pgTable('app_users', {
@@ -441,6 +463,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
   designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
   prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
+  developmentSkillPath: text('development_skill_path'),
+  developmentModel: text('development_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),

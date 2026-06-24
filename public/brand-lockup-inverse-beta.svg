@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" fill="none">
+  <rect x="10" y="10" width="76" height="76" rx="20" fill="#1F2937"/>
+  <path d="M20 72L43 22H56L34 72H20Z" fill="#7C8CFF"/>
+  <path d="M52 22L78 72H61L43 38L52 22Z" fill="#7C8CFF" opacity="0.9"/>
+  <path d="M40 72L49 54L58 72H40Z" fill="#111827"/>
+  <text x="106" y="44" fill="#F9FAFB" font-size="34" font-weight="800" font-family="system-ui, -apple-system, sans-serif" letter-spacing="-0.03em">Apex</text>
+  <rect x="106" y="54" width="52" height="18" rx="4" fill="#7C8CFF"/>
+  <text x="132" y="67" text-anchor="middle" fill="#111827" font-size="10" font-weight="700" font-family="system-ui, -apple-system, sans-serif" letter-spacing="0.1em">BETA</text>
+  <text x="106" y="84" fill="#7C8CFF" font-size="11" font-weight="700" font-family="system-ui, -apple-system, sans-serif" letter-spacing="0.08em">PLANNING TO DELIVERY</text>
+</svg>

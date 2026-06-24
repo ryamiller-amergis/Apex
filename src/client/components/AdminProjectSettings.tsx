@@ -259,6 +259,7 @@ const SKILL_FIELDS = [
   { key: 'testCaseSkillPath' as const, label: 'Test Case Skill', desc: 'Generates QA test cases after PRD generation', emptyLabel: 'None (skip test-case generation)' },
   { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
   { key: 'prdValidationSkillPath' as const, label: 'PRD Validation Skill', desc: 'Validates PRD spec after all artifacts are ready', emptyLabel: 'None (skip PRD validation)' },
+  { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -269,6 +270,7 @@ const MODEL_FIELDS = [
   { key: 'testCaseModel' as const, label: 'Test Case Model' },
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
   { key: 'prdValidationModel' as const, label: 'PRD Validation Model' },
+  { key: 'developmentModel' as const, label: 'Development Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -431,6 +433,7 @@ interface EditState {
   testCaseSkillPath: string;
   designDocValidationSkillPath: string;
   prdValidationSkillPath: string;
+  developmentSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
@@ -439,6 +442,7 @@ interface EditState {
   testCaseModel: string;
   designDocValidationModel: string;
   prdValidationModel: string;
+  developmentModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -460,8 +464,10 @@ const emptyEdit = (): EditState => ({
   project: '', skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
+  developmentSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
+  developmentModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -602,6 +608,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       testCaseSkillPath: config.testCaseSkillPath ?? '',
       designDocValidationSkillPath: config.designDocValidationSkillPath ?? '',
       prdValidationSkillPath: config.prdValidationSkillPath ?? '',
+      developmentSkillPath: config.developmentSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
@@ -610,6 +617,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       testCaseModel: config.testCaseModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
       prdValidationModel: config.prdValidationModel ?? '',
+      developmentModel: config.developmentModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -662,6 +670,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           testCaseSkillPath: edit.testCaseSkillPath || null,
           designDocValidationSkillPath: edit.designDocValidationSkillPath || null,
           prdValidationSkillPath: edit.prdValidationSkillPath || null,
+          developmentSkillPath: edit.developmentSkillPath || null,
           interviewModel: edit.interviewModel || null,
           prdModel: edit.prdModel || null,
           designDocModel: edit.designDocModel || null,
@@ -670,6 +679,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           testCaseModel: edit.testCaseModel || null,
           designDocValidationModel: edit.designDocValidationModel || null,
           prdValidationModel: edit.prdValidationModel || null,
+          developmentModel: edit.developmentModel || null,
           defaultModel: edit.defaultModel || null,
           prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
           prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

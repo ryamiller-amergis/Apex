@@ -19,6 +19,7 @@ import { useAppShell } from './hooks/useAppShell';
 import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { DEFAULT_MODEL_ID } from './config/models';
+import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -45,6 +46,8 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
+const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
+const DevSessionView = lazy(() => import('./components/DevSessionView').then(m => ({ default: m.DevSessionView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -72,7 +75,7 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -92,6 +95,8 @@ function App() {
                     ? 'notifications'
                     : location.pathname.startsWith('/admin')
                     ? 'admin'
+                    : location.pathname.startsWith('/my-work')
+                    ? 'my-work'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -106,10 +111,17 @@ function App() {
     }
   }, [currentView]);
 
+  useEffect(() => {
+    const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!favicon) return;
+    favicon.href = IS_BETA_RELEASE ? '/favicon-beta.svg' : '/favicon.svg';
+  }, []);
+
   const {
     isAuthenticated,
     authenticatedUser,
     can,
+    isInAnyGroup,
     isSuperAdmin,
     permissionsLoaded,
     workItems,
@@ -156,6 +168,7 @@ function App() {
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
+    if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -275,12 +288,13 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin'}
+            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work'}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
             hasUnreadChangelog={hasUnreadChangelog}
             can={can}
+            isInAnyGroup={isInAnyGroup}
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
             onNavigateHome={() => navigate('/home')}
@@ -289,6 +303,7 @@ function App() {
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateMyWork={() => navigate('/my-work')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
@@ -436,6 +451,18 @@ function App() {
                     <AdminNotifications />
                   ) : (
                     <AdminRoles />
+                  )}
+                </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'my-work' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <div className="my-work-view">
+                  {location.pathname.startsWith('/my-work/session/') ? (
+                    <DevSessionView />
+                  ) : (
+                    <DevWorkbenchView />
                   )}
                 </div>
               </Suspense>

@@ -125,16 +125,36 @@ describe('useChatStream', () => {
     expect(result.current.messages).toHaveLength(1);
   });
 
-  it('adds a synthetic tool_call message', () => {
+  it('clears thinkingText on tool_call without adding a message', () => {
     const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'thinking', text: 'Planning next step…' });
+    });
+    expect(result.current.thinkingText).toBe('Planning next step…');
+
     act(() => {
       lastES!.emit('message', { type: 'tool_call', toolName: 'list_files' });
     });
-    expect(result.current.messages).toHaveLength(1);
-    const toolMsg = result.current.messages[0];
-    expect(toolMsg.role).toBe('tool');
-    expect(toolMsg.text).toBe('→ list_files');
-    expect(toolMsg.toolName).toBe('list_files');
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.thinkingText).toBe('');
+  });
+
+  it('tracks tool_status events in toolProgress', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', {
+        type: 'tool_status',
+        callId: 'call-1',
+        toolName: 'list_files',
+        status: 'running',
+      });
+    });
+    expect(result.current.toolProgress).toHaveLength(1);
+    expect(result.current.toolProgress[0]).toMatchObject({
+      callId: 'call-1',
+      toolName: 'list_files',
+      status: 'running',
+    });
   });
 
   it('updates status on status event', () => {

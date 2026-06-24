@@ -532,6 +532,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdValidationModel
       undefined,   // designPlanBedrockModelId
       undefined,   // designPlanBedrockMaxTokens
+      undefined,   // developmentSkillPath
+      undefined,   // developmentModel
       undefined,   // prdValidationScoreThreshold
     );
   });
@@ -607,6 +609,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdValidationModel
       undefined,   // designPlanBedrockModelId
       undefined,   // designPlanBedrockMaxTokens
+      undefined,   // developmentSkillPath
+      undefined,   // developmentModel
       undefined,   // prdValidationScoreThreshold
     );
   });
@@ -662,6 +666,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdValidationModel
       undefined,   // designPlanBedrockModelId
       undefined,   // designPlanBedrockMaxTokens
+      undefined,   // developmentSkillPath
+      undefined,   // developmentModel
       undefined,   // prdValidationScoreThreshold
     );
   });
@@ -715,6 +721,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,               // prdValidationModel
       undefined,               // designPlanBedrockModelId
       undefined,               // designPlanBedrockMaxTokens
+      undefined,               // developmentSkillPath
+      undefined,               // developmentModel
       undefined,               // prdValidationScoreThreshold
     );
   });
@@ -767,6 +775,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,                            // prdValidationModel
       undefined,                            // designPlanBedrockModelId
       undefined,                            // designPlanBedrockMaxTokens
+      undefined,                            // developmentSkillPath
+      undefined,                            // developmentModel
       undefined,                            // prdValidationScoreThreshold
     );
   });
@@ -814,6 +824,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,   // prdValidationModel
       undefined,   // designPlanBedrockModelId
       undefined,   // designPlanBedrockMaxTokens
+      undefined,   // developmentSkillPath
+      undefined,   // developmentModel
       undefined,   // prdValidationScoreThreshold
     );
   });
@@ -865,6 +877,8 @@ describe('PUT /api/admin/project-settings/:project', () => {
       undefined,         // prdValidationModel
       undefined,         // designPlanBedrockModelId
       undefined,         // designPlanBedrockMaxTokens
+      undefined,         // developmentSkillPath
+      undefined,         // developmentModel
       undefined,         // prdValidationScoreThreshold
     );
   });

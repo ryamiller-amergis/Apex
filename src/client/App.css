@@ -183,9 +183,25 @@ body {
 }
 
 .app-brand-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 1rem;
   font-weight: 800;
   letter-spacing: -0.03em;
+}
+
+.app-brand-beta {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
 }
 
 .header-controls {
@@ -564,6 +580,14 @@ body {
   overflow: hidden;
 }
 
+.my-work-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .planning-tabs {
   display: flex;
   gap: 4px;
@@ -814,6 +838,13 @@ body {
 /* ── Backlog View — Tablet ─────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .backlog-view {
+    overflow-y: auto;
+  }
+}
+
+/* ── My Work View — Tablet ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .my-work-view {
     overflow-y: auto;
   }
 }
