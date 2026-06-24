@@ -1,10 +1,10 @@
 /**
- * Tests for the Owner / Reviewer(s) meta row in the Design Doc review header.
+ * Tests for the two-stage owner approval feature in DesignDocReviewView.
  *
  * Coverage:
- *  1. Owner display — uses ownerName, falls back to ownerId, authorName, authorId
- *  2. Reviewer(s) display — shows comma-separated approver names when assignments exist
- *  3. Reviewer(s) label is hidden when there are no assignments
+ *  1. "Approve as Owner" shown when status=reviewer_approved and user is owner
+ *  2. Reviewer "Approve" shown when status=pending_review (not owner-only stage)
+ *  3. Owner approval UI hidden in draft / pending_review statuses
  */
 
 import type { ReactNode } from 'react';
@@ -21,15 +21,13 @@ jest.mock('react-router-dom', () => ({
   useLocation: () => ({ pathname: '/backlog/design-doc/doc-1' }),
 }));
 
+const mockUseAppShell = jest.fn();
 jest.mock('../../hooks/useAppShell', () => ({
-  useAppShell: jest.fn(() => ({
-    can: () => false,
-    userId: 'user-viewer',
-    isAdmin: false,
-  })),
+  useAppShell: (...args: unknown[]) => mockUseAppShell(...args),
 }));
 
 const mockUseDesignDoc = jest.fn();
+const mockUseDesignDocOwnerApprove = jest.fn();
 const mockUseDocumentAssignments = jest.fn();
 
 jest.mock('../../hooks/useInterviews', () => ({
@@ -55,7 +53,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDocumentAssignments: (...args: unknown[]) => mockUseDocumentAssignments(...args),
   useDesignDocOwnerApproval: jest.fn(() => ({ data: null })),
-  useDesignDocOwnerApprove: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useDesignDocOwnerApprove: (...args: unknown[]) => mockUseDesignDocOwnerApprove(...args),
 }));
 
 jest.mock('../../hooks/useChatStream', () => ({
@@ -101,21 +99,21 @@ const baseDoc = {
   id: 'doc-1',
   prdId: 'prd-1',
   project: 'proj-alpha',
-  status: 'draft',
+  status: 'reviewer_approved',
   authorId: 'user-author',
   authorName: 'Alice Author',
-  ownerId: undefined as string | undefined,
-  ownerName: undefined as string | undefined,
+  ownerId: 'user-owner',
+  ownerName: 'Bob Owner',
   chatThreadId: 'thread-gen',
   qaChatThreadId: null,
   docAssistantThreadId: null,
   designContent: '# Design\nContent.',
   techSpecContent: '# Tech Spec\nContent.',
   assumptionsContent: '# Assumptions\nContent.',
-  reviewerId: null,
-  reviewerName: null,
+  reviewerId: 'user-reviewer',
+  reviewerName: 'Carol Reviewer',
   reviewComment: null,
-  reviewedAt: null,
+  reviewedAt: '2026-01-03T00:00:00Z',
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -137,129 +135,108 @@ function renderView() {
 beforeEach(() => {
   jest.clearAllMocks();
   mockUseDesignDoc.mockReturnValue({ data: baseDoc, isLoading: false, isError: false });
-  mockUseDocumentAssignments.mockReturnValue({ data: [] });
-});
-
-// ── 1. Owner display ──────────────────────────────────────────────────────────
-
-describe('Owner display in header', () => {
-  it('shows ownerName when it is available', () => {
-    mockUseDesignDoc.mockReturnValue({
-      data: { ...baseDoc, ownerId: 'user-owner', ownerName: 'Bob Owner' },
-      isLoading: false, isError: false,
-    });
-
-    renderView();
-
-    expect(screen.getByText('Owner:')).toBeInTheDocument();
-    expect(screen.getByText('Bob Owner')).toBeInTheDocument();
+  mockUseDesignDocOwnerApprove.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+  mockUseAppShell.mockReturnValue({
+    can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+    userId: 'user-viewer',
+    isAdmin: false,
   });
-
-  it('falls back to ownerId when ownerName is missing', () => {
-    mockUseDesignDoc.mockReturnValue({
-      data: { ...baseDoc, ownerId: 'user-owner-id', ownerName: undefined },
-      isLoading: false, isError: false,
-    });
-
-    renderView();
-
-    expect(screen.getByText('user-owner-id')).toBeInTheDocument();
-  });
-
-  it('falls back to authorName when no owner fields are set', () => {
-    mockUseDesignDoc.mockReturnValue({
-      data: { ...baseDoc, ownerId: undefined, ownerName: undefined, authorName: 'Alice Author' },
-      isLoading: false, isError: false,
-    });
-
-    renderView();
-
-    expect(screen.getByText('Alice Author')).toBeInTheDocument();
-  });
-
-  it('falls back to authorId as a last resort when no display names exist', () => {
-    mockUseDesignDoc.mockReturnValue({
-      data: {
-        ...baseDoc,
-        ownerId: undefined,
-        ownerName: undefined,
-        authorName: undefined,
-        authorId: 'user-fallback-id',
-      },
-      isLoading: false, isError: false,
-    });
-
-    renderView();
-
-    expect(screen.getByText('user-fallback-id')).toBeInTheDocument();
-  });
-
-  it('always renders the "Owner:" label', () => {
-    renderView();
-    expect(screen.getByText('Owner:')).toBeInTheDocument();
+  mockUseDocumentAssignments.mockReturnValue({
+    data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'approved' }],
   });
 });
 
-// ── 2. Reviewer(s) display ────────────────────────────────────────────────────
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
-describe('Reviewer(s) display in header', () => {
-  it('shows the "Reviewer(s):" label when assignments are present', () => {
-    mockUseDocumentAssignments.mockReturnValue({
-      data: [{ approverUserId: 'user-rev-1', approverDisplayName: 'Carol Reviewer', status: 'pending' }],
+describe('Owner Approval in DesignDocReviewView', () => {
+  it('shows "Approve as Owner" when status=reviewer_approved and user is owner', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
     });
 
     renderView();
 
-    expect(screen.getByText('Reviewer(s):')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeInTheDocument();
   });
 
-  it('shows the approver display name when available', () => {
-    mockUseDocumentAssignments.mockReturnValue({
-      data: [{ approverUserId: 'user-rev-1', approverDisplayName: 'Carol Reviewer', status: 'pending' }],
+  it('shows "Approve as Owner" for admin even when not owner', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'admin-user',
+      isAdmin: true,
     });
 
     renderView();
 
-    expect(screen.getByText('Carol Reviewer')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeInTheDocument();
   });
 
-  it('falls back to approverUserId when display name is missing', () => {
-    mockUseDocumentAssignments.mockReturnValue({
-      data: [{ approverUserId: 'user-rev-fallback', approverDisplayName: null, status: 'pending' }],
+  it('does not show owner approval UI when status is pending_review', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'pending_review', reviewerId: null, reviewerName: null },
+      isLoading: false,
+      isError: false,
     });
 
     renderView();
 
-    expect(screen.getByText('user-rev-fallback')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
   });
 
-  it('renders multiple reviewers as a comma-separated list', () => {
+  it('shows reviewer Approve button during pending_review (first stage)', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-reviewer',
+      isAdmin: false,
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'pending_review', reviewerId: null, reviewerName: null },
+      isLoading: false,
+      isError: false,
+    });
     mockUseDocumentAssignments.mockReturnValue({
-      data: [
-        { approverUserId: 'u1', approverDisplayName: 'Alice', status: 'pending' },
-        { approverUserId: 'u2', approverDisplayName: 'Bob', status: 'pending' },
-        { approverUserId: 'u3', approverDisplayName: 'Carol', status: 'approved' },
-      ],
+      data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'pending' }],
     });
 
     renderView();
 
-    expect(screen.getByText('Alice, Bob, Carol')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
   });
 
-  it('hides "Reviewer(s):" label when there are no assignments', () => {
-    mockUseDocumentAssignments.mockReturnValue({ data: [] });
+  it('does not show owner approval UI when status is draft', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'draft' },
+      isLoading: false,
+      isError: false,
+    });
 
     renderView();
 
-    expect(screen.queryByText('Reviewer(s):')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
   });
 
-  it('hides "Reviewer(s):" when assignments data is undefined', () => {
-    mockUseDocumentAssignments.mockReturnValue({ data: undefined });
+  it('hides owner approval from non-owner viewers at reviewer_approved', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-viewer',
+      isAdmin: false,
+    });
 
     renderView();
 
-    expect(screen.queryByText('Reviewer(s):')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
   });
 });

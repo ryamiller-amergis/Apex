@@ -18,7 +18,7 @@ import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 
-const VALID_STATUSES: DesignDocStatus[] = ['generating', 'validating', 'draft', 'pending_review', 'approved', 'revision_requested'];
+const VALID_STATUSES: DesignDocStatus[] = ['generating', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -218,7 +218,7 @@ export async function updateDesignDocContent(
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
     throw forbidden('Only the author can edit design doc content');
   }
-  if (row.status === 'approved') throw conflict('Approved design docs cannot be edited');
+  if (row.status === 'approved' || row.status === 'reviewer_approved') throw conflict('Approved design docs cannot be edited');
 
   const updates: Partial<typeof designDocs.$inferInsert> = {
     updatedAt: new Date().toISOString(),
@@ -249,7 +249,7 @@ export async function submitForReview(
   if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
     throw forbidden('Only the author can submit for review');
   }
-  if (row.status !== 'draft' && row.status !== 'revision_requested') {
+  if (row.status !== 'draft' && row.status !== 'pending_review' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit design doc from status '${row.status}'`);
   }
   if (!row.designContent && !row.techSpecContent && !row.assumptionsContent) {
@@ -260,9 +260,11 @@ export async function submitForReview(
   if ((!effectiveApproverIds || effectiveApproverIds.length === 0) && row.prdId) {
     const prd = await db.query.prds.findFirst({
       where: eq(prds.id, row.prdId),
-      columns: { interviewId: true },
+      columns: { interviewId: true, designDocApproverIds: true },
     });
-    if (prd?.interviewId) {
+    if (prd?.designDocApproverIds && prd.designDocApproverIds.length > 0) {
+      effectiveApproverIds = prd.designDocApproverIds;
+    } else if (prd?.interviewId) {
       const interview = await db.query.interviews.findFirst({
         where: eq(interviews.id, prd.interviewId),
         columns: { designDocApproverIds: true },
@@ -360,7 +362,7 @@ export async function reviewDesignDoc(
   await db
     .update(designDocs)
     .set({
-      status: 'approved',
+      status: 'reviewer_approved',
       reviewerId,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -987,9 +989,8 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
       clearInterval(interval);
       activeValidationWatchers.delete(designDocId);
       console.warn(`[validationWatcher] Timed out (designDocId=${designDocId})`);
-      // Reset stuck 'validating' status so the user can re-run
       await db.update(designDocs)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
       return;
     }
@@ -1014,12 +1015,12 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
       if (isThreadIdle(validationThreadId)) {
         clearInterval(interval);
         activeValidationWatchers.delete(designDocId);
-        console.warn(`[validationWatcher] Agent completed/errored without scorecard — resetting to draft (designDocId=${designDocId} threadId=${validationThreadId})`);
+        console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);
         // #region agent log
-        try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:watcher:agent-error-reset',message:'agent completed without scorecard, resetting to draft',data:{designDocId,validationThreadId,attempts},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
+        try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:watcher:agent-error-reset',message:'agent completed without scorecard, setting to pending_review',data:{designDocId,validationThreadId,attempts},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
         // #endregion
         await db.update(designDocs)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
           .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
       }
       return;
@@ -1116,7 +1117,7 @@ export async function syncValidationResult(
   scorecard: ValidationScorecard,
   reportMd?: string,
 ): Promise<void> {
-  const newStatus: DesignDocStatus | undefined = scorecard.is_ready ? 'pending_review' : 'draft';
+  const newStatus: DesignDocStatus = 'pending_review';
   const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
   const updates: Partial<typeof designDocs.$inferInsert> = {
     validationScore: Math.round(scorecard.overall_score),
@@ -1202,7 +1203,7 @@ export async function triggerFixValidation(
   const doc = await getDesignDoc(designDocId);
   if (!doc) throw notFound('Design doc not found');
 
-  if (doc.status !== 'draft' && doc.status !== 'revision_requested') {
+  if (doc.status !== 'draft' && doc.status !== 'pending_review' && doc.status !== 'revision_requested') {
     throw conflict(`Cannot fix validation from status '${doc.status}'`);
   }
   if (!doc.validationScorecard) {

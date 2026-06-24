@@ -1,6 +1,6 @@
 import { eq, and, asc, desc, inArray, lt, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds } from '../db/schema';
+import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import type { DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
@@ -917,7 +917,7 @@ export async function reviewPrototype(
   await db
     .update(designPrototypes)
     .set({
-      status: action === 'approve' ? 'approved' : 'revision_requested',
+      status: action === 'approve' ? 'reviewer_approved' : 'revision_requested',
       reviewerId,
       reviewComment: comment ?? null,
       reviewedAt: now,
@@ -925,9 +925,28 @@ export async function reviewPrototype(
     })
     .where(eq(designPrototypes.id, prototypeId));
 
-  if (action === 'approve') {
-    triggerDesignDocForPrototype(prototypeId, proto.featureIndex).catch(err => {
-      console.error(`[designPrototypeService] triggerDesignDocForPrototype failed (prototypeId=${prototypeId})`, err);
+  // Record in document_approver_assignments so the Approvals modal reflects real status.
+  const existingAssignment = await db.select({ id: documentApproverAssignments.id })
+    .from(documentApproverAssignments)
+    .where(and(
+      eq(documentApproverAssignments.documentId, proto.prdId),
+      eq(documentApproverAssignments.documentType, 'design_prototype'),
+      eq(documentApproverAssignments.approverUserId, reviewerId),
+    ))
+    .limit(1);
+
+  if (existingAssignment.length > 0) {
+    await db.update(documentApproverAssignments)
+      .set({ status: action === 'approve' ? 'approved' : 'revision_requested', respondedAt: now })
+      .where(eq(documentApproverAssignments.id, existingAssignment[0].id));
+  } else {
+    await db.insert(documentApproverAssignments).values({
+      documentId: proto.prdId,
+      documentType: 'design_prototype',
+      approverUserId: reviewerId,
+      assignedBy: reviewerId,
+      status: action === 'approve' ? 'approved' : 'revision_requested',
+      respondedAt: now,
     });
   }
 }

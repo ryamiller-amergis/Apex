@@ -74,6 +74,7 @@ function prdStatusLabel(status: PrdStatus): string {
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
+    case 'reviewer_approved': return 'Awaiting Owner Approval';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
   }
@@ -95,6 +96,7 @@ function designDocBadgeClass(status: DesignDocStatus): string {
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
+    case 'reviewer_approved': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
@@ -106,6 +108,7 @@ function designDocStatusLabel(status: DesignDocStatus): string {
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
+    case 'reviewer_approved': return 'Awaiting Owner Approval';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
   }
@@ -127,6 +130,7 @@ function prototypeBadgeClass(status: DesignPrototypeStatus): string {
     case 'pending_review': return styles.badgePendingReview;
     case 'revision_requested': return styles.badgeRevisionRequested;
     case 'regenerating': return styles.badgeGenerating;
+    case 'reviewer_approved': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
   }
 }
@@ -138,6 +142,7 @@ function prototypeStatusLabel(status: DesignPrototypeStatus): string {
     case 'pending_review': return 'Pending Review';
     case 'revision_requested': return 'Revision Requested';
     case 'regenerating': return 'Regenerating…';
+    case 'reviewer_approved': return 'Awaiting Owner Approval';
     case 'approved': return 'Approved';
   }
 }
@@ -538,7 +543,7 @@ type OwnerFilter = 'all' | 'mine';
 export const InterviewsDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { can, isInAnyGroup, selectedProject } = useAppShell();
+  const { can, isInAnyGroup, selectedProject, permissionsLoaded } = useAppShell();
 
   const rawTab = searchParams.get('tab');
   const initialTab: TabId =
@@ -597,7 +602,7 @@ export const InterviewsDashboard: React.FC = () => {
   });
 
   const canManage = can('interviews:manage');
-  const canStartInterview = canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+  const canStartInterview = permissionsLoaded && canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
 
   const filteredInterviews = interviewSearch.trim()
     ? interviews.filter((iv) => iv.title.toLowerCase().includes(interviewSearch.toLowerCase()))

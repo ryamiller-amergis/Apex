@@ -1379,10 +1379,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
 export const InterviewChatView: React.FC = () => {
   const location = useLocation();
-  const { can, isInAnyGroup } = useAppShell();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
   const id = location.pathname.split('/').pop();
 
   if (id === 'new') {
+    if (!permissionsLoaded) return null;
     if (!can('interviews:manage') || !isInAnyGroup(['BA', 'Manager', 'Product-Owner'])) {
       return <Navigate to="/backlog" replace />;
     }

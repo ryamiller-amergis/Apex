@@ -32,7 +32,7 @@ export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
 }
 
-export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'approved' | 'revision_requested';
+export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
 
 export interface PrdSummary {
   id: string;
@@ -158,6 +158,7 @@ export function prdStatusLabel(status: PrdStatus): string {
     case 'draft': return 'Draft';
     case 'validating': return 'Validating';
     case 'pending_review': return 'Pending Review';
+    case 'reviewer_approved': return 'Pending Review';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
   }
@@ -169,6 +170,7 @@ export function prdBadgeClass(status: PrdStatus): string {
     case 'draft': return 'draft';
     case 'validating': return 'validating';
     case 'pending_review': return 'pending-review';
+    case 'reviewer_approved': return 'pending-review';
     case 'approved': return 'approved';
     case 'revision_requested': return 'revision-requested';
   }
@@ -236,7 +238,7 @@ export interface PrdValidationBaseline {
   fixThreadId?: string;
 }
 
-export type DesignDocStatus = 'generating' | 'validating' | 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+export type DesignDocStatus = 'generating' | 'validating' | 'draft' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
@@ -290,6 +292,7 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
+    case 'reviewer_approved': return 'Reviewer Approved';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
   }
@@ -301,6 +304,7 @@ export function designDocBadgeClass(status: DesignDocStatus): string {
     case 'validating': return 'validating';
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';
+    case 'reviewer_approved': return 'reviewer-approved';
     case 'approved': return 'approved';
     case 'revision_requested': return 'revision-requested';
   }

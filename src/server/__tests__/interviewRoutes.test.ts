@@ -29,6 +29,17 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/designDocService');
 jest.mock('../services/documentApprovalService');
+jest.mock('../services/ownerApprovalService', () => ({
+  getOwnerApproval: jest.fn(),
+  isDocumentOwner: jest.fn(),
+  recordOwnerApproval: jest.fn(),
+}));
+jest.mock('../utils/rbacHelpers', () => ({
+  isAdminUser: jest.fn().mockResolvedValue(false),
+}));
+jest.mock('../services/designPlanService', () => ({
+  generateDesignPlan: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn().mockResolvedValue(null),
 }));
@@ -52,7 +63,20 @@ jest.mock('../db/drizzle', () => ({
     query: {
       prds: { findFirst: jest.fn() },
       designPlans: { findFirst: jest.fn() },
+      designDocs: { findFirst: jest.fn() },
     },
+    update: jest.fn().mockReturnValue({
+      set: jest.fn().mockReturnValue({
+        where: jest.fn().mockResolvedValue(undefined),
+      }),
+    }),
+    select: jest.fn().mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnValue({
+          limit: jest.fn().mockResolvedValue([]),
+        }),
+      }),
+    }),
   },
 }));
 
@@ -136,10 +160,24 @@ const {
   getAssignments: mockGetAssignments,
   getAvailableApprovers: mockGetAvailableApprovers,
   reassignApprovers: mockReassignApprovers,
+  isApprovalComplete: mockIsApprovalComplete,
 } = jest.requireMock('../services/documentApprovalService') as {
   getAssignments: jest.Mock;
   getAvailableApprovers: jest.Mock;
   reassignApprovers: jest.Mock;
+  isApprovalComplete: jest.Mock;
+};
+
+const {
+  isDocumentOwner: mockIsDocumentOwner,
+  recordOwnerApproval: mockRecordOwnerApproval,
+} = jest.requireMock('../services/ownerApprovalService') as {
+  isDocumentOwner: jest.Mock;
+  recordOwnerApproval: jest.Mock;
+};
+
+const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
+  isAdminUser: jest.Mock;
 };
 
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
@@ -158,7 +196,10 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
     query: {
       prds: { findFirst: jest.Mock };
       designPlans: { findFirst: jest.Mock };
+      designDocs: { findFirst: jest.Mock };
     };
+    update: jest.Mock;
+    select: jest.Mock;
   };
 };
 
@@ -598,7 +639,12 @@ describe('POST /api/interviews/prds/:prdId/submit', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', { prdApproverIds: [], designDocApproverIds: [] });
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', {
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      qaApproverIds: [],
+    });
   });
 
   it('propagates 409 conflict from service', async () => {
@@ -1086,6 +1132,124 @@ describe('POST /api/interviews/design-docs/:id/review', () => {
       .send({ action: 'approve' });
 
     expect(res.status).toBe(403);
+  });
+});
+
+// ── POST /api/interviews/prds/:prdId/owner-approve ────────────────────────────
+
+describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsDocumentOwner.mockResolvedValue(true);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+    mockGetAssignments.mockResolvedValue([{ status: 'approved' }]);
+    mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+  });
+
+  it('returns 200 when owner approves a pending_review PRD after reviewers complete', async () => {
+    mockPrdService.getPrd.mockResolvedValue({
+      ...prd,
+      status: 'pending_review',
+      interviewId: 'interview-1',
+      project: 'proj-alpha',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockRecordOwnerApproval).toHaveBeenCalledWith('prd-1', 'prd', 'user-test', 'approved', undefined);
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('returns 409 when reviewers have not completed approval', async () => {
+    mockPrdService.getPrd.mockResolvedValue({
+      ...prd,
+      status: 'pending_review',
+      interviewId: 'interview-1',
+      project: 'proj-alpha',
+    });
+    mockIsApprovalComplete.mockResolvedValue({ complete: false, mode: 'all_required' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Reviewers must approve/);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when non-owner tries to owner-approve', async () => {
+    mockIsDocumentOwner.mockResolvedValue(false);
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'pending_review' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Only the document owner/);
+  });
+
+  it('returns 409 when PRD is not in pending_review', async () => {
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'draft' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Cannot owner-approve PRD/);
+  });
+});
+
+// ── POST /api/interviews/design-docs/:id/owner-approve ──────────────────────
+
+describe('POST /api/interviews/design-docs/:id/owner-approve', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsDocumentOwner.mockResolvedValue(true);
+    mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'reviewer_approved' });
+  });
+
+  it('returns 200 when owner approves a reviewer_approved design doc', async () => {
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockRecordOwnerApproval).toHaveBeenCalledWith('dd-1', 'design_doc', 'user-test', 'approved', undefined);
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('returns 409 when design doc is still pending_review', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'pending_review' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Reviewers must approve the design doc/);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when non-owner tries to owner-approve', async () => {
+    mockIsDocumentOwner.mockResolvedValue(false);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Only the document owner/);
   });
 });
 

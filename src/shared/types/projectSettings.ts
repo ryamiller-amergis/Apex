@@ -194,4 +194,5 @@ export interface ProjectSkillConfigResponse {
   defaultModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  approvalMode?: ApprovalMode;
 }

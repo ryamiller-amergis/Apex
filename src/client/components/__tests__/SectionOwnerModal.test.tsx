@@ -7,11 +7,13 @@ import { SectionOwnerModal } from '../SectionOwnerModal';
 jest.mock('../../hooks/useInterviews', () => ({
   useActiveUsers: jest.fn(),
   useAvailableApproverPool: jest.fn(),
+  useInterviewGroupsWithMembers: jest.fn(),
 }));
 
-import { useActiveUsers, useAvailableApproverPool } from '../../hooks/useInterviews';
+import { useActiveUsers, useAvailableApproverPool, useInterviewGroupsWithMembers } from '../../hooks/useInterviews';
 const mockUseActiveUsers = useActiveUsers as jest.Mock;
 const mockUseApproverPool = useAvailableApproverPool as jest.Mock;
+const mockUseInterviewGroupsWithMembers = useInterviewGroupsWithMembers as jest.Mock;
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -59,6 +61,7 @@ describe('SectionOwnerModal', () => {
   beforeEach(() => {
     mockUseActiveUsers.mockReturnValue({ data: activeUsers, isLoading: false });
     mockUseApproverPool.mockReturnValue({ data: { individuals: [], groups: [] }, isLoading: false });
+    mockUseInterviewGroupsWithMembers.mockReturnValue({ data: [], isLoading: false });
   });
 
   afterEach(() => {

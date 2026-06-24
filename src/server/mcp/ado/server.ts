@@ -18,7 +18,8 @@ import {
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
 import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
-import { resolveComment } from '../../services/reviewCommentService';
+import { resolvePrdCommentWithApply } from '../../services/prdService';
+import { addTestCaseToPrd } from '../../services/testCaseService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
@@ -72,12 +73,55 @@ export async function handleResolvePrdComment(params: {
     return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
   }
   try {
-    await resolveComment(params.commentId, thread.userId);
+    await resolvePrdCommentWithApply(params.commentId, thread.userId);
     console.log(`[MCP] resolve_prd_comment: resolved comment ${params.commentId}`);
     return { content: [{ type: 'text', text: JSON.stringify({ ok: true, commentId: params.commentId }) }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] resolve_prd_comment: FAILED ${params.commentId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
+export async function handleAddTestCase(params: {
+  threadId: string;
+  prdId: string;
+  pbiId: string;
+  acceptanceCriteriaIndex?: number;
+  title: string;
+  steps: string[];
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  try {
+    const result = await addTestCaseToPrd({
+      prdId: params.prdId,
+      pbiId: params.pbiId,
+      title: params.title,
+      steps: params.steps,
+      acceptanceCriteriaIndex: params.acceptanceCriteriaIndex,
+    });
+    console.log(
+      `[MCP] add_test_case: added ${result.testCaseId} to pbi ${params.pbiId} for prd ${params.prdId}`,
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            testCaseId: result.testCaseId,
+            pbiId: params.pbiId,
+            totalCases: result.totalCases,
+          }),
+        },
+      ],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] add_test_case: FAILED for prd ${params.prdId} pbi ${params.pbiId} — ${message}`);
     return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
@@ -291,6 +335,30 @@ export function createAdoMcpServer(): McpServer {
       commentId: z.string().describe('The ID of the comment to resolve (from the Review Comments section in kickoff-context.md)'),
     },
     async (params) => handleResolvePrdComment(params),
+  );
+
+  server.tool(
+    'add_test_case',
+    'Add a single REAL QA test case (with steps) to the current PRD, attached to a specific backlog item (PBI). ' +
+    'Use this when the user asks you to add, write, or author a test case — not just to increase a count. ' +
+    'The case is appended to the matching test suite, backlog test-case counts are recomputed, and the coverage summary is updated.',
+    {
+      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
+      prdId: z.string().describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
+      pbiId: z.string().describe('The backlog item (PBI) ID the test case validates, e.g. "PBI-1"'),
+      title: z.string().describe('A concise, descriptive title for the test case'),
+      steps: z
+        .array(z.string())
+        .min(1)
+        .describe('Ordered test steps, one action per array entry'),
+      acceptanceCriteriaIndex: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Optional zero-based index of the acceptance criterion this case traces to'),
+    },
+    async (params) => handleAddTestCase(params),
   );
 
   // ── Wiki namespace ──────────────────────────────────────────────────────────

@@ -636,6 +636,193 @@ export async function syncTestCaseOutput(
   return true;
 }
 
+type TestCaseStepObject = { order?: number; action: string; expected?: string };
+type TestCaseStepInput = string | TestCaseStepObject;
+
+export interface AddTestCaseInput {
+  prdId: string;
+  pbiId: string;
+  title: string;
+  steps: TestCaseStepInput[];
+  acceptanceCriteriaIndex?: number;
+}
+
+export interface AddTestCaseResult {
+  testCaseId: string;
+  rowId: string;
+  totalCases: number;
+}
+
+function normalizeSteps(steps: TestCaseStepInput[]): TestCaseStepObject[] {
+  return steps
+    .map((step, index): TestCaseStepObject | null => {
+      if (typeof step === 'string') {
+        const action = step.trim();
+        return action ? { order: index + 1, action } : null;
+      }
+      const record = asRecord(step);
+      const action = stringFrom(record?.action)?.trim();
+      if (!action) return null;
+      const order = numberFrom(record?.order) ?? index + 1;
+      const expected = stringFrom(record?.expected) ?? undefined;
+      return expected ? { order, action, expected } : { order, action };
+    })
+    .filter((step): step is TestCaseStepObject => step !== null);
+}
+
+function suiteMatchesPbi(suite: Record<string, unknown>, pbiId: string): boolean {
+  const id =
+    stringFrom(suite.pbiId) ??
+    stringFrom(suite.pbi_id) ??
+    stringFrom(suite.workItemId) ??
+    stringFrom(suite.work_item_id) ??
+    stringFrom(suite.id);
+  return id === pbiId;
+}
+
+/**
+ * Append a real test case (with steps) into the latest test_cases row for a PRD,
+ * matching the JSON shape consumed by the BacklogViewer (suites -> testCases with
+ * id/title/steps and optional traceability.acceptanceCriteriaIndex).
+ *
+ * Recomputes the coverage summary and re-applies backlog test-case counts, keeping
+ * the test_cases row and prds.backlog_json consistent (mirroring syncTestCaseOutput).
+ *
+ * If no test_cases row exists yet for the PRD, a fresh one is created with status
+ * 'ready' (chosen over erroring so the assistant can seed the very first manual case).
+ */
+export async function addTestCaseToPrd(
+  input: AddTestCaseInput
+): Promise<AddTestCaseResult> {
+  const title = input.title?.trim();
+  if (!title) throw new Error('A test case title is required');
+  if (!input.pbiId) throw new Error('A pbiId is required');
+
+  const steps = normalizeSteps(input.steps ?? []);
+  if (steps.length === 0) throw new Error('At least one test case step is required');
+
+  const existing = await getTestCases(input.prdId);
+
+  // Clone (or seed) the test-cases JSON so we never mutate the stored object in place.
+  const root: Record<string, unknown> = existing?.testCasesJson
+    ? (cloneJson(existing.testCasesJson) as Record<string, unknown>)
+    : {};
+
+  const suites: unknown[] = Array.isArray(root.suites)
+    ? (root.suites as unknown[])
+    : [];
+  root.suites = suites;
+
+  let suite = suites
+    .map(asRecord)
+    .find((s): s is Record<string, unknown> => !!s && suiteMatchesPbi(s, input.pbiId));
+  if (!suite) {
+    suite = { pbiId: input.pbiId, testCases: [] };
+    suites.push(suite);
+  }
+
+  const caseArrayKey =
+    !Array.isArray(suite.testCases) && Array.isArray(suite.test_cases)
+      ? 'test_cases'
+      : 'testCases';
+  const cases: unknown[] = Array.isArray(suite[caseArrayKey])
+    ? (suite[caseArrayKey] as unknown[])
+    : [];
+  suite[caseArrayKey] = cases;
+
+  const testCaseId = `${input.pbiId}-TC-${cases.length + 1}`;
+  const newCase: Record<string, unknown> = {
+    id: testCaseId,
+    title,
+    steps,
+  };
+  if (typeof input.acceptanceCriteriaIndex === 'number') {
+    newCase.traceability = {
+      acceptanceCriteriaIndex: input.acceptanceCriteriaIndex,
+    };
+  }
+  cases.push(newCase);
+  suite.testCaseCount = cases.length;
+
+  // Keep any embedded coverage summary's total in sync so the recompute below is
+  // accurate (extractCoverageSummary prefers a cached totalCases when present).
+  const totalCases = countCaseLikeItems(root);
+  const embeddedSummary =
+    asRecord(root.coverageSummary) ??
+    asRecord(root.coverage_summary) ??
+    asRecord(root.summary);
+  if (embeddedSummary) {
+    if ('totalCases' in embeddedSummary) embeddedSummary.totalCases = totalCases;
+    if ('total_cases' in embeddedSummary) embeddedSummary.total_cases = totalCases;
+  }
+
+  const coverageSummary = extractCoverageSummary(root);
+  const now = new Date().toISOString();
+
+  let rowId: string;
+  if (existing) {
+    rowId = existing.id;
+    await db
+      .update(testCases)
+      .set({
+        testCasesJson: root as any,
+        coverageSummary: coverageSummary ?? null,
+        updatedAt: now,
+      })
+      .where(eq(testCases.id, existing.id));
+  } else {
+    const [inserted] = await db
+      .insert(testCases)
+      .values({
+        prdId: input.prdId,
+        status: 'ready',
+        testCasesJson: root as any,
+        coverageSummary: coverageSummary ?? null,
+      })
+      .returning({ id: testCases.id });
+    rowId = inserted.id;
+  }
+
+  // Re-apply backlog test-case counts the same way syncTestCaseOutput does.
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.id, input.prdId),
+    columns: { backlogJson: true },
+  });
+  const updatedBacklog = applyTestCaseCountsToBacklog(prdRow?.backlogJson, root);
+  if (updatedBacklog !== null) {
+    await db
+      .update(prds)
+      .set({ backlogJson: updatedBacklog as any, updatedAt: now })
+      .where(eq(prds.id, input.prdId));
+  }
+
+  console.log(
+    `[testCase] Added test case ${testCaseId} to suite ${input.pbiId} (prdId=${input.prdId}, rowId=${rowId})`
+  );
+
+  return { testCaseId, rowId, totalCases };
+}
+
+/** Re-apply test-case suite counts onto the live PRD backlog JSON after backlog edits. */
+export async function syncPrdBacklogTestCaseCounts(prdId: string): Promise<void> {
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { backlogJson: true },
+  });
+  if (!prdRow?.backlogJson) return;
+
+  const record = await getTestCases(prdId);
+  if (!record?.testCasesJson) return;
+
+  const enriched = applyTestCaseCountsToBacklog(prdRow.backlogJson, record.testCasesJson);
+  if (enriched == null) return;
+
+  await db
+    .update(prds)
+    .set({ backlogJson: enriched as any, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+}
+
 export async function getTestCases(
   prdId: string
 ): Promise<TestCaseRecord | null> {

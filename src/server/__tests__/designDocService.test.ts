@@ -118,11 +118,13 @@ const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers'
 
 const {
   assignApprovers: mockAssignApprovers,
+  recordApproverResponse: mockRecordApproverResponse,
   isAssignedApprover: mockIsAssignedApprover,
   isApprovalComplete: mockIsApprovalComplete,
   notifyApproversDocumentReady: mockNotifyApproversDocumentReady,
 } = jest.requireMock('../services/documentApprovalService') as {
   assignApprovers: jest.Mock;
+  recordApproverResponse: jest.Mock;
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
   notifyApproversDocumentReady: jest.Mock;
@@ -376,6 +378,14 @@ describe('updateDesignDocContent', () => {
       message: 'Approved design docs cannot be edited',
     });
   });
+
+  it('throws 409 when trying to edit a reviewer_approved design doc awaiting owner sign-off', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'reviewer_approved' }));
+
+    await expect(updateDesignDocContent('doc-1', 'user-1', { designContent: 'x' })).rejects.toMatchObject({
+      message: 'Approved design docs cannot be edited',
+    });
+  });
 });
 
 // ── submitForReview ────────────────────────────────────────────────────────────
@@ -419,12 +429,15 @@ describe('submitForReview', () => {
     expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
   });
 
-  it('throws 409 when design doc is already pending_review', async () => {
+  it('allows resubmit when design doc is already pending_review', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'pending_review' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
 
-    await expect(submitForReview('doc-1', 'user-1')).rejects.toMatchObject({
-      message: expect.stringContaining("Cannot submit design doc from status 'pending_review'"),
-    });
+    await submitForReview('doc-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
   });
 
   it('throws 409 when design doc is already approved', async () => {
@@ -511,7 +524,7 @@ describe('reviewDesignDoc', () => {
 
   const pendingDoc = makeDocRow({ status: 'pending_review', authorId: 'user-author' });
 
-  it('approves a pending_review design doc', async () => {
+  it('transitions a pending_review design doc to reviewer_approved (owner approval is separate)', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
@@ -520,8 +533,9 @@ describe('reviewDesignDoc', () => {
     await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
+      expect.objectContaining({ status: 'reviewer_approved', reviewerId: 'user-reviewer' }),
     );
+    expect(setMock).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
   });
 
   it('throws 400 for invalid review action', async () => {
@@ -589,7 +603,7 @@ describe('reviewDesignDoc', () => {
     await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
+      expect.objectContaining({ status: 'reviewer_approved' }),
     );
   });
 
@@ -748,7 +762,7 @@ describe('syncValidationResult', () => {
     );
   });
 
-  it('sets status to pending_review when scorecard.is_ready is true', async () => {
+  it('sets status to pending_review after validation completes (ready scorecard)', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
@@ -762,7 +776,7 @@ describe('syncValidationResult', () => {
     );
   });
 
-  it('sets status to draft when scorecard.is_ready is false', async () => {
+  it('sets status to pending_review after validation completes (gaps remain)', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
@@ -772,7 +786,7 @@ describe('syncValidationResult', () => {
     await syncValidationResult('doc-1', scorecard as any);
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
+      expect.objectContaining({ status: 'pending_review' }),
     );
   });
 
@@ -926,7 +940,7 @@ describe('reviewDesignDoc (approve with validation gate)', () => {
     await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
+      expect.objectContaining({ status: 'reviewer_approved', reviewerId: 'user-reviewer' }),
     );
   });
 });
@@ -1018,7 +1032,7 @@ describe('notifyApproversDocumentReady integration', () => {
     expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('doc-1', 'design_doc');
   });
 
-  it('syncValidationResult does NOT notify approvers when scorecard.is_ready is false', async () => {
+  it('syncValidationResult notifies approvers when validation transitions to pending_review', async () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
@@ -1039,7 +1053,7 @@ describe('notifyApproversDocumentReady integration', () => {
 
     await syncValidationResult('doc-1', scorecard as any);
 
-    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+    expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('doc-1', 'design_doc');
   });
 
   it('syncDesignDocContent notifies approvers when finalStatus is pending_review', async () => {
@@ -1091,11 +1105,11 @@ describe('reviewDesignDoc (admin override & designated approver)', () => {
 
     expect(mockIsApprovalComplete).not.toHaveBeenCalled();
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
+      expect.objectContaining({ status: 'reviewer_approved' }),
     );
   });
 
-  it('designated approver with green validation transitions to approved', async () => {
+  it('designated approver with green validation transitions to reviewer_approved', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDocWithValidation);
     mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
     mockIsAssignedApprover.mockResolvedValue(true);
@@ -1108,7 +1122,7 @@ describe('reviewDesignDoc (admin override & designated approver)', () => {
     await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
+      expect.objectContaining({ status: 'reviewer_approved', reviewerId: 'user-reviewer' }),
     );
   });
 
@@ -1121,6 +1135,40 @@ describe('reviewDesignDoc (admin override & designated approver)', () => {
 
     await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
 
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+});
+
+// ── Two-stage design doc approval workflow ────────────────────────────────────
+
+describe('two-stage design doc approval workflow', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('reviewer approval leaves doc in reviewer_approved until owner acts', async () => {
+    const pendingDoc = makeDocRow({ status: 'pending_review', authorId: 'user-author' });
+    mockDb.query.designDocs.findFirst.mockResolvedValue(pendingDoc);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(mockRecordApproverResponse).toHaveBeenCalledWith('doc-1', 'design_doc', 'user-reviewer', 'approved');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'reviewer_approved' }));
+    expect(setMock).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+  });
+
+  it('records partial reviewer response without status change when quorum is incomplete', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'pending_review', authorId: 'user-author' }));
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: false, mode: 'all_required' });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(mockRecordApproverResponse).toHaveBeenCalled();
     expect(mockDb.update).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,7 @@ jest.mock('../services/prdService', () => ({
   deletePrd: jest.fn(),
   createPrdAdoWorkItems: jest.fn(),
   syncPrdAdoStatus: jest.fn(),
+  applyProposedPrdChanges: jest.fn().mockResolvedValue({ applied: true }),
 }));
 
 jest.mock('../services/reviewCommentService', () => ({
@@ -112,7 +113,10 @@ jest.mock('../db/drizzle', () => {
 
 // ── Typed mock references ─────────────────────────────────────────────────────
 
-const { getPrd: mockGetPrd } = jest.requireMock('../services/prdService') as { getPrd: jest.Mock };
+const { getPrd: mockGetPrd, applyProposedPrdChanges: mockApplyProposedPrdChanges } = jest.requireMock('../services/prdService') as {
+  getPrd: jest.Mock;
+  applyProposedPrdChanges: jest.Mock;
+};
 // Capture permission calls from route registration (before any clearAllMocks)
 let permissionsRequestedAtLoad: string[] = [];
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
@@ -339,42 +343,17 @@ describe('POST /api/interviews/prds/:prdId/apply-proposed', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRequirePermission.mockImplementation((..._keys: string[]) => (_req: any, _res: any, next: any) => next());
-    mockDb.update.mockImplementation(() => ({
-      set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockResolvedValue(undefined),
-    }));
-    mockDb.execute.mockResolvedValue(undefined);
-    // Default: no fixCommentId — bulk resolution path
-    mockDb.query.prds.findFirst.mockResolvedValue(null);
+    mockApplyProposedPrdChanges.mockResolvedValue({ applied: true });
   });
 
-  it('atomically promotes proposed content via raw SQL and returns { ok: true }', async () => {
+  it('delegates to applyProposedPrdChanges and returns { ok: true }', async () => {
     const res = await request(buildApp()).post('/api/interviews/prds/prd-1/apply-proposed');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    // Route uses db.execute(sql`UPDATE prds ...`) — not db.update — for the atomic promotion
-    expect(mockDb.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it('auto-resolves open comments after applying proposed content', async () => {
-    const mockSet = jest.fn().mockReturnThis();
-    const mockWhere = jest.fn().mockResolvedValue(undefined);
-    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
-
-    await request(buildApp()).post('/api/interviews/prds/prd-1/apply-proposed');
-
-    expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'resolved', resolvedBy: 'user-test' }),
-    );
-  });
-
-  it('returns 200 even when the PRD id does not match any row (atomic SQL is a no-op)', async () => {
-    // The route no longer calls getPrd; the raw SQL UPDATE simply affects 0 rows if not found.
-    const res = await request(buildApp()).post('/api/interviews/prds/missing/apply-proposed');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(mockApplyProposedPrdChanges).toHaveBeenCalledWith('prd-1', {
+      resolvedBy: 'user-test',
+    });
   });
 });
 

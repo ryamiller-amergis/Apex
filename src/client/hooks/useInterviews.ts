@@ -22,11 +22,15 @@ import type {
 } from '../../shared/types/interview';
 import type {
   DocumentApproverAssignment,
+  DocumentOwnerApproval,
+  OwnerApprovalDocumentType,
+  OwnerApproveRequest,
   SubmitDesignDocForReviewRequest,
   SubmitForReviewRequest,
 } from '../../shared/types/approvals';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
+import type { GroupWithMembers } from '../../shared/types/groups';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -214,6 +218,20 @@ export function useActiveUsers() {
   });
 }
 
+export function useInterviewGroupsWithMembers(project: string | null) {
+  return useQuery<GroupWithMembers[]>({
+    queryKey: ['interview-groups', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/interviews/groups-with-members?project=${encodeURIComponent(project)}`
+        : '/api/interviews/groups-with-members';
+      return apiFetch(url);
+    },
+    enabled: !!project,
+    staleTime: 60_000,
+  });
+}
+
 // ── Interview mutations ────────────────────────────────────────────────────────
 
 // ── Approver queries ──────────────────────────────────────────────────────────
@@ -262,6 +280,8 @@ export function useReassignApprovers() {
       documentType: 'prd' | 'design_doc';
       approverUserIds: string[];
       designDocApproverIds?: string[];
+      designPrototypeApproverIds?: string[];
+      qaApproverIds?: string[];
     }
   >({
     mutationFn: ({
@@ -269,6 +289,8 @@ export function useReassignApprovers() {
       documentType,
       approverUserIds,
       designDocApproverIds,
+      designPrototypeApproverIds,
+      qaApproverIds,
     }) => {
       const endpoint =
         documentType === 'prd'
@@ -281,6 +303,12 @@ export function useReassignApprovers() {
           approverUserIds,
           ...(documentType === 'prd' && designDocApproverIds !== undefined
             ? { designDocApproverIds }
+            : {}),
+          ...(documentType === 'prd' && designPrototypeApproverIds !== undefined
+            ? { designPrototypeApproverIds }
+            : {}),
+          ...(documentType === 'prd' && qaApproverIds !== undefined
+            ? { qaApproverIds }
             : {}),
         }),
       });
@@ -296,11 +324,11 @@ export function useReassignApprovers() {
 
 export function useDocumentAssignments(
   documentId: string | null,
-  documentType: 'prd' | 'design_doc'
+  documentType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case'
 ) {
   const endpoint =
-    documentType === 'prd'
-      ? `/api/interviews/prds/${documentId}/assignments`
+    documentType === 'prd' || documentType === 'test_case' || documentType === 'design_prototype'
+      ? `/api/interviews/prds/${documentId}/assignments?documentType=${documentType}`
       : `/api/interviews/design-docs/${documentId}/assignments`;
   return useQuery<DocumentApproverAssignment[]>({
     queryKey: ['document-assignments', documentId, documentType],
@@ -504,6 +532,29 @@ export function useReviewPrd() {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
       qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
+export function useReviewTestCases() {
+  const qc = useQueryClient();
+  return useMutation<
+    { approved: boolean },
+    Error,
+    { prdId: string; status: 'approved' }
+  >({
+    mutationFn: ({ prdId, ...body }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/test-cases/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      qc.invalidateQueries({
+        queryKey: ['document-assignments', prdId, 'test_case'],
+      });
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['prds'] });
     },
   });
 }
@@ -943,6 +994,7 @@ export function useApplyProposedPrd(prdId: string) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
       qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
       qc.invalidateQueries({
         queryKey: ['unresolved-comment-count', 'prd', prdId],
@@ -1094,6 +1146,73 @@ export function useSyncPrdAdoStatus(prdId: string | null) {
       if (data.cleared > 0 && prdId) {
         qc.invalidateQueries({ queryKey: ['prd', prdId] });
       }
+    },
+  });
+}
+
+// ── Owner Approval (two-stage) ───────────────────────────────────────────────
+
+export function useOwnerApproval(prdId: string | null, documentType: OwnerApprovalDocumentType) {
+  return useQuery<DocumentOwnerApproval | null>({
+    queryKey: ['owner-approval', prdId, documentType],
+    queryFn: () =>
+      apiFetch(`/api/interviews/prds/${prdId}/owner-approval?documentType=${documentType}`),
+    enabled: !!prdId,
+    staleTime: 30_000,
+  });
+}
+
+export function useOwnerApprove(prdId: string | null, documentType: OwnerApprovalDocumentType) {
+  const qc = useQueryClient();
+
+  const routeSuffix = documentType === 'prd'
+    ? 'owner-approve'
+    : documentType === 'test_case'
+      ? 'test-cases/owner-approve'
+      : 'design-prototypes/owner-approve';
+
+  return useMutation<{ ok: boolean }, Error, OwnerApproveRequest>({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/prds/${prdId}/${routeSuffix}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['owner-approval', prdId, documentType] });
+      if (documentType === 'design_prototype') {
+        qc.invalidateQueries({ queryKey: ['prototypes'] });
+      }
+    },
+  });
+}
+
+// ── Design Doc Owner Approval ─────────────────────────────────────────────────
+
+export function useDesignDocOwnerApproval(designDocId: string | null) {
+  return useQuery<DocumentOwnerApproval | null>({
+    queryKey: ['design-doc-owner-approval', designDocId],
+    queryFn: () =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/owner-approval`),
+    enabled: !!designDocId,
+    staleTime: 30_000,
+  });
+}
+
+export function useDesignDocOwnerApprove(designDocId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, OwnerApproveRequest>({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/owner-approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-doc-owner-approval', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
     },
   });
 }

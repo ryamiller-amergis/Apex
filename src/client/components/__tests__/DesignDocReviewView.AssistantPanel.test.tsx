@@ -54,6 +54,8 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDocumentAssignments: jest.fn(() => ({ data: [{ approverUserId: 'user-reviewer', status: 'pending' }] })),
+  useDesignDocOwnerApproval: jest.fn(() => ({ data: null })),
+  useDesignDocOwnerApprove: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
 }));
 
 const mockUseChatStream = jest.fn();

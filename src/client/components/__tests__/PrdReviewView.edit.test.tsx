@@ -85,6 +85,14 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDocumentAssignments: jest.fn(() => ({ data: [] })),
   useGenerateTestCases: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreateDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useOwnerApprove: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOwnerApproval: jest.fn(() => ({ data: null })),
+  useActiveUsers: jest.fn(() => ({ data: [] })),
+  useReviewTestCases: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+}));
+
+jest.mock('../../hooks/useProjectSkillConfig', () => ({
+  useProjectSkillConfig: jest.fn(() => ({ data: { approvalMode: 'any_one' } })),
 }));
 
 jest.mock('../../hooks/useReviewComments', () => ({
@@ -108,9 +116,15 @@ jest.mock('../AnnotationLayer', () => ({
 }));
 jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../BacklogViewer', () => ({ BacklogViewer: () => null }));
+jest.mock('../ReviewerApprovalChecklist', () => ({ ReviewerApprovalChecklist: () => null }));
 jest.mock('../CreateAdoItemsModal', () => ({ CreateAdoItemsModal: () => null }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+function openEditFromMenu() {
+  fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /^Edit$/i }));
+}
 
 function renderView() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -141,16 +155,15 @@ describe('PrdReviewView – Edit tab removed / modal added', () => {
     // We confirm the Edit action opens a dialog – tested below.
   });
 
-  it('renders an Edit button in the header area', () => {
+  it('renders an Edit action in the header overflow menu', () => {
     renderView();
-    const editBtn = screen.getByRole('button', { name: /^edit$/i });
-    expect(editBtn).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
+    expect(screen.getByRole('menuitem', { name: /^Edit$/i })).toBeInTheDocument();
   });
 
-  it('clicking the Edit button opens a modal dialog containing the full PRD content', () => {
+  it('clicking the Edit action opens a modal dialog containing the full PRD content', () => {
     renderView();
-    const editBtn = screen.getByRole('button', { name: /^edit$/i });
-    fireEvent.click(editBtn);
+    openEditFromMenu();
     const dialog = screen.getByRole('dialog');
     expect(dialog).toBeInTheDocument();
     // The dialog should contain a textarea with the PRD content
@@ -162,7 +175,7 @@ describe('PrdReviewView – Edit tab removed / modal added', () => {
 
   it('saving the modal calls updatePrdContent with the modified content', async () => {
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    openEditFromMenu();
 
     const dialog = screen.getByRole('dialog');
     const textarea = within(dialog).getByRole('textbox');
@@ -181,7 +194,7 @@ describe('PrdReviewView – Edit tab removed / modal added', () => {
 
   it('cancelling the modal closes it without calling updatePrdContent', () => {
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    openEditFromMenu();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     const dialog = screen.getByRole('dialog');

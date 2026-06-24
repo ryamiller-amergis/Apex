@@ -245,6 +245,31 @@ describe('React Query invalidation when agent run completes', () => {
     });
   });
 
+  it('invalidates the prd-test-cases query when isRunning goes true → false', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+
+    const { rerender } = render(
+      <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'idle' });
+    act(() => {
+      rerender(
+        <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
+      );
+    });
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['prd-test-cases', 'prd-test-1'] }),
+      );
+    });
+  });
+
   it('does NOT invalidate when the agent was never running (idle → idle)', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');

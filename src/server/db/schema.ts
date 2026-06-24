@@ -5,7 +5,7 @@ import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, V
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
-import type { ApprovalMode } from '../../shared/types/approvals';
+import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 
@@ -742,3 +742,25 @@ export const pageScreenshots = pgTable('page_screenshots', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+// ── Document Owner Approvals ──────────────────────────────────────────────────
+
+export const documentOwnerApprovals = pgTable('document_owner_approvals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  documentId: uuid('document_id').notNull(),
+  documentType: text('document_type').notNull(),
+  ownerUserId: text('owner_user_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  status: text('status').$type<OwnerApprovalStatus>().notNull().default('pending'),
+  comment: text('comment'),
+  respondedAt: timestamp('responded_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.documentId, t.documentType),
+}));
+
+export const documentOwnerApprovalsRelations = relations(documentOwnerApprovals, ({ one }) => ({
+  owner: one(appUsers, {
+    fields: [documentOwnerApprovals.ownerUserId],
+    references: [appUsers.oid],
+  }),
+}));

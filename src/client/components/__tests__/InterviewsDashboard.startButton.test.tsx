@@ -101,6 +101,25 @@ describe('InterviewsDashboard — Start New Interview button', () => {
     });
   });
 
+  describe('platform admin (super admin) without group membership', () => {
+    beforeEach(() => {
+      (useAppShell as jest.Mock).mockReturnValue(
+        makeShell({
+          isSuperAdmin: true,
+          isAdmin: true,
+          isInAnyGroup: jest.fn(() => true),
+          groups: [],
+          roles: ['admin'],
+        }),
+      );
+    });
+
+    it('enables the start button', () => {
+      renderDashboard();
+      expect(screen.getByRole('button', { name: /start new interview/i })).not.toBeDisabled();
+    });
+  });
+
   describe('user has interviews:manage but is NOT in an allowed group', () => {
     beforeEach(() => {
       (useAppShell as jest.Mock).mockReturnValue(

@@ -58,6 +58,9 @@
 .summaryPbi .summaryCount {
   color: #0891b2;
 }
+.summaryTestCases .summaryCount {
+  color: var(--success-color);
+}
 
 .summaryDivider {
   width: 1px;

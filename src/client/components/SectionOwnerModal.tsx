@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useActiveUsers, useAvailableApproverPool } from '../hooks/useInterviews';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useActiveUsers, useAvailableApproverPool, useInterviewGroupsWithMembers } from '../hooks/useInterviews';
 import type { ActiveUser } from '../../shared/types/interview';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import styles from './SectionOwnerModal.module.css';
@@ -268,10 +268,39 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   const [testCaseApproverIds, setTestCaseApproverIds] = useState<string[]>([]);
 
   const { data: users = [], isLoading } = useActiveUsers();
+  const { data: groupsWithMembers = [], isLoading: groupsLoading } = useInterviewGroupsWithMembers(project);
   const { data: prdPool, isLoading: prdPoolLoading } = useAvailableApproverPool(project, 'prd', false);
   const { data: ddPool, isLoading: ddPoolLoading } = useAvailableApproverPool(project, 'design_doc', false);
   const { data: protoPool, isLoading: protoPoolLoading } = useAvailableApproverPool(project, 'design_prototype', false);
   const { data: qaPool, isLoading: qaPoolLoading } = useAvailableApproverPool(project, 'test_case', false);
+
+  const OWNER_GROUP_MAP: Record<string, string[]> = useMemo(() => ({
+    prd: ['BA', 'Product-Owner'],
+    designDoc: ['Developer'],
+    designPrototype: ['UI/UX'],
+    testCase: ['QA'],
+  }), []);
+
+  const usersFromGroups = useCallback((groupNames: string[]): ActiveUser[] => {
+    const seen = new Set<string>();
+    const result: ActiveUser[] = [];
+    for (const g of groupsWithMembers) {
+      if (groupNames.includes(g.name)) {
+        for (const m of g.members) {
+          if (!seen.has(m.userId)) {
+            seen.add(m.userId);
+            result.push({ oid: m.userId, displayName: m.displayName, email: m.email });
+          }
+        }
+      }
+    }
+    return result.length > 0 ? result : users;
+  }, [groupsWithMembers, users]);
+
+  const prdOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.prd), [usersFromGroups, OWNER_GROUP_MAP]);
+  const ddOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designDoc), [usersFromGroups, OWNER_GROUP_MAP]);
+  const protoOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designPrototype), [usersFromGroups, OWNER_GROUP_MAP]);
+  const qaOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.testCase), [usersFromGroups, OWNER_GROUP_MAP]);
 
   const togglePrdApprover = useCallback((id: string) => {
     setPrdApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -376,12 +405,12 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               <label className={styles.label} htmlFor="so-prd-owner">
                 PRD Owner (BA) *
               </label>
-              {isLoading ? (
+              {isLoading || groupsLoading ? (
                 <span className={styles.loadingText}>Loading users…</span>
               ) : (
                 <UserCombobox
                   id="so-prd-owner"
-                  users={users}
+                  users={prdOwnerUsers}
                   selectedId={prdOwnerId}
                   onSelect={setPrdOwnerId}
                   placeholder="Search by name or email…"
@@ -394,12 +423,12 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               <label className={styles.label} htmlFor="so-dd-owner">
                 Design Doc Owner (Developer) *
               </label>
-              {isLoading ? (
+              {isLoading || groupsLoading ? (
                 <span className={styles.loadingText}>Loading users…</span>
               ) : (
                 <UserCombobox
                   id="so-dd-owner"
-                  users={users}
+                  users={ddOwnerUsers}
                   selectedId={designDocOwnerId}
                   onSelect={setDesignDocOwnerId}
                   placeholder="Search by name or email…"
@@ -412,12 +441,12 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               <label className={styles.label} htmlFor="so-proto-owner">
                 Design Prototype Owner (UI/UX) *
               </label>
-              {isLoading ? (
+              {isLoading || groupsLoading ? (
                 <span className={styles.loadingText}>Loading users…</span>
               ) : (
                 <UserCombobox
                   id="so-proto-owner"
-                  users={users}
+                  users={protoOwnerUsers}
                   selectedId={designPrototypeOwnerId}
                   onSelect={setDesignPrototypeOwnerId}
                   placeholder="Search by name or email…"
@@ -430,12 +459,12 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               <label className={styles.label} htmlFor="so-qa-owner">
                 Test Case Owner (QA) *
               </label>
-              {isLoading ? (
+              {isLoading || groupsLoading ? (
                 <span className={styles.loadingText}>Loading users…</span>
               ) : (
                 <UserCombobox
                   id="so-qa-owner"
-                  users={users}
+                  users={qaOwnerUsers}
                   selectedId={testCaseOwnerId}
                   onSelect={setTestCaseOwnerId}
                   placeholder="Search by name or email…"
