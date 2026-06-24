@@ -14,7 +14,6 @@ import {
   useRemoveRole,
 } from '../hooks/useRbac';
 import type { AppPermission, RoleWithPermissions } from '../../shared/types/rbac';
-import { TeamsNotificationSettings } from './TeamsNotificationSettings';
 import styles from './AdminRoles.module.css';
 
 // ── Schemas ───────────────────────────────────────────────────────────────
@@ -595,7 +594,6 @@ export const AdminRoles: React.FC = () => {
         />
       )}
 
-      <TeamsNotificationSettings />
     </div>
   );
 };

@@ -42,6 +42,7 @@ const AdminRoles = lazy(() => import('./components/AdminRoles').then(m => ({ def
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
+const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
@@ -417,6 +418,13 @@ function App() {
                     >
                       Project Settings
                     </button>
+                    <button
+                      className={`admin-tab${location.pathname === '/admin/notifications' ? ' admin-tab-active' : ''}`}
+                      onClick={() => navigate('/admin/notifications')}
+                      type="button"
+                    >
+                      Notifications
+                    </button>
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers />
@@ -424,6 +432,8 @@ function App() {
                     <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
+                  ) : location.pathname === '/admin/notifications' ? (
+                    <AdminNotifications />
                   ) : (
                     <AdminRoles />
                   )}

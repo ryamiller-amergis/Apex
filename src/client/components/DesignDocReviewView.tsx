@@ -38,7 +38,7 @@ import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
-import type { DesignDocStatus, ValidationScorecardGap } from '../../shared/types/interview';
+import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
 import {
   designDocHasProposedChanges,
   isDesignDocSingleCommentFixPending,
@@ -153,6 +153,74 @@ function statusLabel(status: DesignDocStatus): string {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
+
+// ── Document outline (table of contents) helpers ──────────────────────────────
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+function nodeToText(node: React.ReactNode): string {
+  if (node == null || node === false) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(nodeToText).join('');
+  if (React.isValidElement(node)) return nodeToText((node.props as { children?: React.ReactNode }).children);
+  return '';
+}
+
+interface OutlineItem {
+  id: string;
+  text: string;
+  level: number;
+}
+
+function buildOutline(markdown: string): OutlineItem[] {
+  if (!markdown) return [];
+  const items: OutlineItem[] = [];
+  let inFence = false;
+  for (const raw of markdown.split('\n')) {
+    const line = raw.trimEnd();
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const match = /^(#{1,3})\s+(.+?)\s*#*$/.exec(line);
+    if (!match) continue;
+    const level = match[1].length;
+    const text = match[2].replace(/[*_`]/g, '').trim();
+    if (!text) continue;
+    items.push({ id: slugify(text), text, level });
+  }
+  return items;
+}
+
+const PinIcon: React.FC = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M6 2h4M7 2v4.5L4.5 9.5h7L9 6.5V2M8 9.5V14" />
+  </svg>
+);
+
+const SplitIcon: React.FC = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="1" y="2" width="6" height="12" rx="1" />
+    <rect x="9" y="2" width="6" height="12" rx="1" />
+  </svg>
+);
+
+const MIN_PINNED_WIDTH = 320;
+const MAX_PINNED_WIDTH = 760;
+const DEFAULT_PINNED_WIDTH = 440;
+
+const MIN_SPLIT_PERCENT = 0.20; // right pane minimum 20 % of center
+const MAX_SPLIT_PERCENT = 0.75; // right pane maximum 75 % of center
+const DEFAULT_SPLIT_PERCENT = 0.50; // 50 / 50
 
 function buildMermaidThemeVariables(source: HTMLElement | null): Record<string, string> {
   const styles = window.getComputedStyle(source ?? document.body);
@@ -724,7 +792,227 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   );
 };
 
+// ── Validation Side Panel ─────────────────────────────────────────────────────
 
+interface ValidationSidePanelProps {
+  score: number | null | undefined;
+  scorecard: ValidationScorecard | null | undefined;
+  reportMarkdown: string | null | undefined;
+  isValidating: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+  markdownComponents: Components;
+}
+
+function scoreColor(s: number): string {
+  if (s >= 90) return 'var(--success-color)';
+  if (s >= 70) return '#d97706';
+  return 'var(--error-color)';
+}
+
+function scoreBarBg(s: number): string {
+  if (s >= 90) return 'rgba(34,197,94,0.2)';
+  if (s >= 70) return 'rgba(245,158,11,0.2)';
+  return 'rgba(239,68,68,0.12)';
+}
+
+function gapResolutionDot(resolution: ValidationScorecardGap['resolution']): string {
+  switch (resolution) {
+    case 'filled': return styles.valGapDotFilled;
+    case 'accepted': return styles.valGapDotAccepted;
+    case 'deferred': return styles.valGapDotDeferred;
+    default: return styles.valGapDotPending;
+  }
+}
+
+const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
+  score,
+  scorecard,
+  reportMarkdown,
+  isValidating,
+  collapsed,
+  onToggle,
+  markdownComponents,
+}) => {
+  const [reportExpanded, setReportExpanded] = useState(false);
+
+  const features: ValidationScorecardFeature[] = scorecard?.features ?? [];
+  const allGaps: ValidationScorecardGap[] = features.flatMap((f) => f.gaps);
+  const pendingCount = allGaps.filter((g) => g.resolution === 'pending').length;
+
+  const avgSection = (key: 'design_score' | 'tech_spec_score' | 'assumptions_score') =>
+    features.length
+      ? Math.round(features.reduce((sum, f) => sum + f[key], 0) / features.length)
+      : null;
+
+  const sectionRows: Array<{ label: string; key: 'design_score' | 'tech_spec_score' | 'assumptions_score' }> = [
+    { label: 'Design', key: 'design_score' },
+    { label: 'Tech Spec', key: 'tech_spec_score' },
+    { label: 'Assumptions', key: 'assumptions_score' },
+  ];
+
+  return (
+    <div
+      className={`${styles.valPanel} ${collapsed ? styles.valPanelCollapsed : ''}`}
+      style={score !== null && score !== undefined ? { borderTopColor: scoreColor(score) } : undefined}
+    >
+      {collapsed ? (
+        /* Collapsed strip — shows score badge vertically + expand button */
+        <div className={styles.valPanelStrip}>
+          <button
+            className={styles.valPanelStripBtn}
+            onClick={onToggle}
+            type="button"
+            aria-expanded={false}
+            aria-label="Expand validation panel"
+            title="Expand validation panel"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 4L6 8l4 4" />
+            </svg>
+          </button>
+
+          {isValidating && !score && (
+            <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+          )}
+
+          {score !== null && score !== undefined && (
+            <span
+              className={styles.valPanelStripScore}
+              style={{ color: scoreColor(score) }}
+              title={`Validation score: ${score}%`}
+            >
+              {score}<span className={styles.valPanelStripPct}>%</span>
+            </span>
+          )}
+
+          <span className={styles.valPanelStripLabel}>Validation</span>
+        </div>
+      ) : (
+        /* Expanded header */
+        <button
+          className={styles.valPanelHeader}
+          onClick={onToggle}
+          type="button"
+          aria-expanded={true}
+          aria-label="Collapse validation panel"
+        >
+          <svg className={styles.valPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+          <span className={styles.valPanelTitle}>Validation</span>
+          {isValidating && !score && (
+            <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+          )}
+          {score !== null && score !== undefined && (
+            <span
+              className={styles.valPanelScoreBadge}
+              style={{ background: scoreBarBg(score), color: scoreColor(score) }}
+            >
+              {score}%
+            </span>
+          )}
+        </button>
+      )}
+
+      {!collapsed && (
+        <div className={styles.valPanelBody}>
+          {isValidating && !scorecard && (
+            <div className={styles.valPanelValidating}>
+              <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+              <span>Validation in progress…</span>
+            </div>
+          )}
+
+          {features.length > 0 && (
+            <div className={styles.valPanelSection}>
+              <div className={styles.valPanelSectionLabel}>Section Scores</div>
+              {sectionRows.map(({ label, key }) => {
+                const avg = avgSection(key);
+                if (avg === null) return null;
+                return (
+                  <div key={key} className={styles.valPanelScoreRow}>
+                    <span className={styles.valPanelScoreRowLabel}>{label}</span>
+                    <div className={styles.valPanelBar}>
+                      <div
+                        className={styles.valPanelBarFill}
+                        style={{ width: `${avg}%`, background: scoreColor(avg) }}
+                      />
+                    </div>
+                    <span className={styles.valPanelScoreRowPct} style={{ color: scoreColor(avg) }}>{avg}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {allGaps.length > 0 && (
+            <div className={styles.valPanelSection}>
+              <div className={styles.valPanelSectionLabel}>
+                Gaps{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}
+              </div>
+              {features.map((feature) =>
+                feature.gaps.map((gap) => (
+                  <div key={gap.id} className={`${styles.valPanelGapCard} ${gap.resolution === 'pending' ? styles.valPanelGapCardPending : styles.valPanelGapCardResolved}`}>
+                    <div className={styles.valPanelGapCardHeader}>
+                      <span className={`${styles.valPanelGapDot} ${gapResolutionDot(gap.resolution)}`} />
+                      <span className={styles.valPanelGapDesc}>{gap.description}</span>
+                    </div>
+                    <div className={styles.valPanelGapMeta}>
+                      {feature.feature_title} · {gap.section} · {gap.score}/3
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {reportMarkdown && (
+            <div className={styles.valPanelSection}>
+              <button
+                className={styles.valPanelReportToggle}
+                onClick={() => setReportExpanded((v) => !v)}
+                type="button"
+                aria-expanded={reportExpanded}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  style={{ transform: reportExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }}
+                >
+                  <path d="M6 4l4 4-4 4" />
+                </svg>
+                Full Report
+              </button>
+              {reportExpanded && (
+                <div className={styles.valPanelReportBody}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {reportMarkdown}
+                  </ReactMarkdown>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!scorecard && !reportMarkdown && !isValidating && (
+            <div className={styles.valPanelEmpty}>No validation data yet.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 
 export const DesignDocReviewView: React.FC = () => {
@@ -823,6 +1111,15 @@ export const DesignDocReviewView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
   const markdownComponents: Components = {
+    h1({ children, ...props }) {
+      return <h1 id={slugify(nodeToText(children))} {...props}>{children}</h1>;
+    },
+    h2({ children, ...props }) {
+      return <h2 id={slugify(nodeToText(children))} {...props}>{children}</h2>;
+    },
+    h3({ children, ...props }) {
+      return <h3 id={slugify(nodeToText(children))} {...props}>{children}</h3>;
+    },
     code({ className, children, ...props }) {
       const language = /language-(\w+)/.exec(className ?? '')?.[1];
       const code = String(children).replace(/\n$/, '');
@@ -891,6 +1188,27 @@ export const DesignDocReviewView: React.FC = () => {
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
+
+  // ── 3-zone workspace layout state (outline rail + center + pinned pane) ──────
+  const [pinnedTab, setPinnedTab] = useState<TabId | null>(null);
+  const [pinnedWidth, setPinnedWidth] = useState(DEFAULT_PINNED_WIDTH);
+  const [isDraggingPinned, setIsDraggingPinned] = useState(false);
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  const centerScrollRef = useRef<HTMLDivElement | null>(null);
+  const pinnedDragStartXRef = useRef(0);
+  const pinnedDragStartWidthRef = useRef(DEFAULT_PINNED_WIDTH);
+
+  // Validation side panel (always-present right column)
+  const [validationPanelCollapsed, setValidationPanelCollapsed] = useState(false);
+
+  // Center split pane (Design + Tech Spec side by side)
+  const [splitTab, setSplitTab] = useState<Exclude<TabId, 'validation'> | null>(null);
+  const [splitPercent, setSplitPercent] = useState(DEFAULT_SPLIT_PERCENT);
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const splitDragStartXRef = useRef(0);
+  const splitDragStartPercentRef = useRef(DEFAULT_SPLIT_PERCENT);
+  const tabContentSplitRef = useRef<HTMLDivElement>(null);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
@@ -1146,6 +1464,142 @@ export const DesignDocReviewView: React.FC = () => {
     }
   }, [fixFlow.phase]);
 
+  // ── Workspace layout handlers ────────────────────────────────────────────
+  // Selecting a tab brings it to the center pane; if it was pinned, unpin it so
+  // the same section never shows in both places at once.
+  const selectTab = useCallback((tab: TabId) => {
+    setActiveTab(tab);
+    setPinnedTab((prev) => (prev === tab ? null : prev));
+  }, []);
+
+  // Pinning a tab sends it to the right-hand reference pane. If the pinned tab
+  // is currently active in the center, move the center to another available tab.
+  const handlePinTab = useCallback((tab: TabId) => {
+    setPinnedTab((prev) => (prev === tab ? null : tab));
+    setActiveTab((cur) => {
+      if (cur !== tab) return cur;
+      const order: TabId[] = ['design', 'tech-spec', 'assumptions', 'validation'];
+      const next = order.find((o) => o !== tab && (o !== 'validation' || !!doc?.validationThreadId));
+      return next ?? cur;
+    });
+  }, [doc?.validationThreadId]);
+
+  const handleOutlineClick = useCallback((id: string) => {
+    const container = centerScrollRef.current;
+    if (!container) return;
+    const el = container.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setActiveHeadingId(id);
+    }
+  }, []);
+
+  const handlePinnedResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    pinnedDragStartXRef.current = e.clientX;
+    pinnedDragStartWidthRef.current = pinnedWidth;
+    setIsDraggingPinned(true);
+  }, [pinnedWidth]);
+
+  useEffect(() => {
+    if (!isDraggingPinned) return;
+    const onMove = (e: MouseEvent) => {
+      const delta = pinnedDragStartXRef.current - e.clientX;
+      const next = Math.min(MAX_PINNED_WIDTH, Math.max(MIN_PINNED_WIDTH, pinnedDragStartWidthRef.current + delta));
+      setPinnedWidth(next);
+    };
+    const onUp = () => setIsDraggingPinned(false);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [isDraggingPinned]);
+
+  const handleSplitTab = useCallback((tab: Exclude<TabId, 'validation'>) => {
+    setSplitTab((prev) => (prev === tab ? null : tab));
+    // If the chosen tab is currently active in center, swap center to the other content tab
+    setActiveTab((cur) => {
+      if (cur !== tab) return cur;
+      const order: Array<Exclude<TabId, 'validation'>> = ['design', 'tech-spec', 'assumptions'];
+      return order.find((o) => o !== tab) ?? cur;
+    });
+  }, []);
+
+  const handleSplitResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    splitDragStartXRef.current = e.clientX;
+    splitDragStartPercentRef.current = splitPercent;
+    setIsDraggingSplit(true);
+  }, [splitPercent]);
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+    const onMove = (e: MouseEvent) => {
+      const container = tabContentSplitRef.current;
+      if (!container) return;
+      const containerWidth = container.getBoundingClientRect().width;
+      if (containerWidth === 0) return;
+      // Right pane starts where the mouse divides the container.
+      // Mouse position relative to container right edge = new right pane width.
+      const containerRight = container.getBoundingClientRect().right;
+      const rightWidth = containerRight - e.clientX;
+      const newPercent = Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, rightWidth / containerWidth));
+      setSplitPercent(newPercent);
+    };
+    const onUp = () => setIsDraggingSplit(false);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [isDraggingSplit]);
+
+  // Scrollspy: highlight the outline entry for the topmost visible heading.
+  useEffect(() => {
+    const container = centerScrollRef.current;
+    if (!container) return;
+    const headings = Array.from(container.querySelectorAll('h1[id], h2[id], h3[id]')) as HTMLElement[];
+    if (headings.length === 0) {
+      setActiveHeadingId(null);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length > 0) setActiveHeadingId((visible[0].target as HTMLElement).id);
+      },
+      { root: container, rootMargin: '0px 0px -70% 0px', threshold: 0 },
+    );
+    headings.forEach((h) => observer.observe(h));
+    return () => observer.disconnect();
+  }, [
+    activeTab,
+    pinnedTab,
+    editingTab,
+    designEdit,
+    techSpecEdit,
+    assumptionsEdit,
+    doc?.designContent,
+    doc?.techSpecContent,
+    doc?.assumptionsContent,
+    validationReport?.markdown,
+    doc?.validationReportMd,
+  ]);
+
+  // Auto-initialise the workspace layout the first time the doc loads:
+  // pin Validation Report to the right panel and split Tech Spec into the center.
+  const didInitLayoutRef = useRef(false);
+  useEffect(() => {
+    if (!doc || didInitLayoutRef.current) return;
+    didInitLayoutRef.current = true;
+    if (doc.techSpecContent) setSplitTab('tech-spec');
+  }, [doc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // When the validation report first appears while the doc is still validating,
   // auto-trigger a score refresh so the DB/status update happens without user action.
   const didAutoRefreshRef = useRef(false);
@@ -1368,6 +1822,60 @@ export const DesignDocReviewView: React.FC = () => {
     'tech-spec': 'Write the technical spec in Markdown…',
     assumptions: 'Write the shared assumptions in Markdown…',
     validation: '',
+  };
+
+  const outline = buildOutline(tabContent[activeTab] ?? '');
+
+  const renderValidationReport = () => {
+    const reportMarkdown = validationReport?.markdown ?? doc.validationReportMd ?? null;
+    if (doc.status === 'validating' && !reportMarkdown) {
+      return (
+        <div className={styles.validationReportEmpty}>
+          <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          <div className={styles.validatingBannerTitle}>Validation in progress…</div>
+          <div className={styles.validationReportEmptySub}>
+            The validation agent is reviewing your design doc. The score will appear automatically when the agent finishes.
+          </div>
+        </div>
+      );
+    }
+    if (reportMarkdown) {
+      return (
+        <div className={styles.preview}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+            {reportMarkdown}
+          </ReactMarkdown>
+        </div>
+      );
+    }
+    return (
+      <div className={styles.validationReportEmpty}>
+        <div className={styles.validatingBannerTitle}>No validation report yet</div>
+        <div className={styles.validationReportEmptySub}>
+          The validation agent hasn't produced a report for this doc yet. Results will appear here automatically when available.
+        </div>
+      </div>
+    );
+  };
+
+  const renderTabPreview = (tab: TabId) => {
+    if (tab === 'validation') return renderValidationReport();
+    const content =
+      tab === 'design' ? doc.designContent :
+      tab === 'tech-spec' ? doc.techSpecContent :
+      doc.assumptionsContent;
+    if (!content) {
+      return <div className={styles.emptyPreview}>No content yet.</div>;
+    }
+    return (
+      <div className={styles.preview}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {normalizeMermaidBlocks(content)}
+        </ReactMarkdown>
+      </div>
+    );
   };
 
   return (
@@ -1702,7 +2210,7 @@ export const DesignDocReviewView: React.FC = () => {
                   </button>
                   <button
                     className={styles.failureBannerBtnSecondary}
-                    onClick={() => setActiveTab('validation')}
+                    onClick={() => setValidationPanelCollapsed(false)}
                     type="button"
                   >
                     Review Report
@@ -1753,164 +2261,244 @@ export const DesignDocReviewView: React.FC = () => {
                   proposedAssumptionsContent={doc.proposedAssumptionsContent}
                 />
               )}
-              <div className={styles.tabs}>
-                {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
-                  <button
-                    key={t}
-                    className={`${styles.tab} ${activeTab === t ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
-                    onClick={() => setActiveTab(t)}
-                    type="button"
-                  >
-                    {tabLabel[t]}
-                    {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
-                  </button>
-                ))}
-                {hasValidationTab && (
-                  <button
-                    className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
-                    onClick={() => setActiveTab('validation')}
-                    type="button"
-                  >
-                    {tabLabel['validation']}
-                    {doc.status === 'validating' && !validationReport?.markdown && !doc.validationReportMd && (
-                      <svg
-                        className={styles.spinIcon}
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        style={{ width: 10, height: 10, marginLeft: 5 }}
-                        aria-label="Validation in progress"
-                      >
-                        <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
+              <div className={styles.workspace}>
+                <div className={`${styles.outlineRail} ${outlineCollapsed ? styles.outlineRailCollapsed : ''}`}>
+                  <div className={styles.outlineHeader}>
+                    {!outlineCollapsed && <span className={styles.outlineTitle}>Outline</span>}
+                    <button
+                      className={styles.outlineToggle}
+                      onClick={() => setOutlineCollapsed((v) => !v)}
+                      title={outlineCollapsed ? 'Expand outline' : 'Collapse outline'}
+                      aria-label={outlineCollapsed ? 'Expand outline' : 'Collapse outline'}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        {outlineCollapsed ? <path d="M6 4l4 4-4 4" /> : <path d="M10 4L6 8l4 4" />}
                       </svg>
-                    )}
-                  </button>
-                )}
-                {canEdit && activeTab !== 'validation' && (
-                  <button
-                    className={styles.tabEditBtn}
-                    onClick={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
-                    type="button"
-                  >
-                    {editingTab === activeTab ? 'Cancel Edit' : 'Edit'}
-                  </button>
-                )}
-              </div>
-
-              <div className={styles.tabContent}>
-                {activeTab === 'validation' ? (
-                  (() => {
-                    const reportMarkdown = validationReport?.markdown ?? doc.validationReportMd ?? null;
-                    if (doc.status === 'validating' && !reportMarkdown) {
-                      return (
-                        <div className={styles.validationReportEmpty}>
-                          <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                          </svg>
-                          <div className={styles.validatingBannerTitle}>Validation in progress…</div>
-                          <div className={styles.validationReportEmptySub}>
-                            The validation agent is reviewing your design doc. The score will appear automatically when the agent finishes.
-                          </div>
-                        </div>
-                      );
-                    }
-                    if (reportMarkdown) {
-                      return (
-                        <div className={styles.preview}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                            {reportMarkdown}
-                          </ReactMarkdown>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div className={styles.validationReportEmpty}>
-                        <div className={styles.validatingBannerTitle}>No validation report yet</div>
-                        <div className={styles.validationReportEmptySub}>
-                          The validation agent hasn't produced a report for this doc yet. Results will appear here automatically when available.
-                        </div>
-                      </div>
-                    );
-                  })()
-                ) : (
-                  <div className={styles.contentWithSidebar}>
-                    <div className={styles.contentMain}>
-                      {doc.status === 'validating' && (
-                        <div className={styles.validatingBanner}>
-                          <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
-                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                          </svg>
-                          <div className={styles.validatingBannerText}>
-                            <div className={styles.validatingBannerTitle}>Validation in progress</div>
-                            <div className={styles.validatingBannerSub}>
-                              The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {showCommentLayer && editingTab !== activeTab ? (
-                        <AnnotationLayer
-                          sectionKey={activeSectionKey}
-                          comments={activeSectionComments}
-                          activeCommentId={activeCommentId}
-                          onAddComment={handleAddComment}
-                          onCommentClick={handleCommentClick}
-                        >
-                          <ContentPane
-                            content={tabContent[activeTab]}
-                            isEditing={false}
-                            editValue=""
-                            isDirty={false}
-                            isSaving={false}
-                            canEdit={canEdit}
-                            placeholder={tabPlaceholder[activeTab]}
-                            markdownComponents={markdownComponents}
-                            onEditChange={() => {}}
-                            onSave={() => {}}
-                            onDiscard={() => {}}
-                          />
-                        </AnnotationLayer>
+                    </button>
+                  </div>
+                  {!outlineCollapsed && (
+                    <nav className={styles.outlineList}>
+                      {outline.length === 0 ? (
+                        <div className={styles.outlineEmpty}>No sections</div>
                       ) : (
-                        <ContentPane
-                          content={tabContent[activeTab]}
-                          isEditing={editingTab === activeTab}
-                          editValue={
-                            activeTab === 'design' ? designEdit :
-                            activeTab === 'tech-spec' ? techSpecEdit :
-                            assumptionsEdit
-                          }
-                          isDirty={dirtyTabs.has(activeTab)}
-                          isSaving={updateContent.isPending}
-                          canEdit={canEdit}
-                          placeholder={tabPlaceholder[activeTab]}
-                          markdownComponents={markdownComponents}
-                          onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
-                          onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
-                          onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
-                        />
+                        outline.map((item, idx) => (
+                          <button
+                            key={`${item.id}-${idx}`}
+                            className={`${styles.outlineItem} ${styles[`outlineLevel${item.level}` as keyof typeof styles]} ${activeHeadingId === item.id ? styles.outlineItemActive : ''}`}
+                            onClick={() => handleOutlineClick(item.id)}
+                            title={item.text}
+                            type="button"
+                          >
+                            {item.text}
+                          </button>
+                        ))
                       )}
-                    </div>
-                    {showCommentLayer && (
-                      <ReviewCommentSidebar
-                        comments={reviewComments}
-                        activeCommentId={activeCommentId}
-                        currentUserId={userId ?? ''}
-                        documentAuthorUserId={doc.authorId}
-                        onCommentClick={handleCommentClick}
-                        onReply={(commentId, body) => void handleCommentReply(commentId, body)}
-                        onResolve={(commentId) => resolveComment.mutate(commentId)}
-                        onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
-                        onDelete={(commentId) => deleteComment.mutate(commentId)}
-                        onFixWithAi={canEdit ? () => void handleFixAllCommentsWithAi() : undefined}
-                        isFixingWithAi={isBulkCommentFixing}
-                        fixAiError={fixDesignDocWithAi.error?.message}
-                        onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
-                        fixingCommentId={fixingCommentId}
-                      />
+                    </nav>
+                  )}
+                </div>
+
+                <div className={styles.workspaceCenter}>
+                  <div className={styles.tabs}>
+                    {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
+                      <div key={t} className={styles.tabWrap}>
+                        <button
+                          className={`${styles.tab} ${activeTab === t ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
+                          onClick={() => selectTab(t)}
+                          type="button"
+                        >
+                          {tabLabel[t]}
+                          {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
+                        </button>
+                        {activeTab !== t && (
+                          <button
+                            className={`${styles.tabSplitBtn} ${splitTab === t ? styles.tabSplitBtnActive : ''}`}
+                            onClick={() => handleSplitTab(t as Exclude<TabId, 'validation'>)}
+                            title={splitTab === t ? 'Close split view' : 'Open side by side'}
+                            aria-label={splitTab === t ? 'Close split view' : 'Open side by side'}
+                            type="button"
+                          >
+                            <SplitIcon />
+                          </button>
+                        )}
+                        <button
+                          className={`${styles.tabPinBtn} ${pinnedTab === t ? styles.tabPinBtnActive : ''}`}
+                          onClick={() => handlePinTab(t)}
+                          title={pinnedTab === t ? 'Unpin from side panel' : 'Pin to side panel'}
+                          aria-label={pinnedTab === t ? 'Unpin from side panel' : 'Pin to side panel'}
+                          type="button"
+                        >
+                          <PinIcon />
+                        </button>
+                      </div>
+                    ))}
+                    {canEdit && activeTab !== 'validation' && (
+                      <button
+                        className={styles.tabEditBtn}
+                        onClick={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
+                        type="button"
+                      >
+                        {editingTab === activeTab ? 'Cancel Edit' : 'Edit'}
+                      </button>
                     )}
+                  </div>
+
+                  <div ref={tabContentSplitRef} className={`${styles.tabContent} ${splitTab ? styles.tabContentSplit : ''}`}>
+                    {/* Primary / left content */}
+                    <div
+                      ref={centerScrollRef}
+                      className={splitTab ? styles.centerSplitLeft : styles.centerSingleContent}
+                    >
+                      <div className={styles.contentWithSidebar}>
+                          <div className={styles.contentMain}>
+                            {doc.status === 'validating' && (
+                              <div className={styles.validatingBanner}>
+                                <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
+                                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                                </svg>
+                                <div className={styles.validatingBannerText}>
+                                  <div className={styles.validatingBannerTitle}>Validation in progress</div>
+                                  <div className={styles.validatingBannerSub}>
+                                    The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            {showCommentLayer && editingTab !== activeTab ? (
+                              <AnnotationLayer
+                                sectionKey={activeSectionKey}
+                                comments={activeSectionComments}
+                                activeCommentId={activeCommentId}
+                                onAddComment={handleAddComment}
+                                onCommentClick={handleCommentClick}
+                              >
+                                <ContentPane
+                                  content={tabContent[activeTab]}
+                                  isEditing={false}
+                                  editValue=""
+                                  isDirty={false}
+                                  isSaving={false}
+                                  canEdit={canEdit}
+                                  placeholder={tabPlaceholder[activeTab]}
+                                  markdownComponents={markdownComponents}
+                                  onEditChange={() => {}}
+                                  onSave={() => {}}
+                                  onDiscard={() => {}}
+                                />
+                              </AnnotationLayer>
+                            ) : (
+                              <ContentPane
+                                content={tabContent[activeTab]}
+                                isEditing={editingTab === activeTab}
+                                editValue={
+                                  activeTab === 'design' ? designEdit :
+                                  activeTab === 'tech-spec' ? techSpecEdit :
+                                  assumptionsEdit
+                                }
+                                isDirty={dirtyTabs.has(activeTab)}
+                                isSaving={updateContent.isPending}
+                                canEdit={canEdit}
+                                placeholder={tabPlaceholder[activeTab]}
+                                markdownComponents={markdownComponents}
+                                onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
+                                onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
+                                onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
+                              />
+                            )}
+                          </div>
+                          {showCommentLayer && (
+                            <ReviewCommentSidebar
+                              comments={reviewComments}
+                              activeCommentId={activeCommentId}
+                              currentUserId={userId ?? ''}
+                              documentAuthorUserId={doc.authorId}
+                              onCommentClick={handleCommentClick}
+                              onReply={(commentId, body) => void handleCommentReply(commentId, body)}
+                              onResolve={(commentId) => resolveComment.mutate(commentId)}
+                              onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                              onDelete={(commentId) => deleteComment.mutate(commentId)}
+                              onFixWithAi={canEdit ? () => void handleFixAllCommentsWithAi() : undefined}
+                              isFixingWithAi={isBulkCommentFixing}
+                              fixAiError={fixDesignDocWithAi.error?.message}
+                              onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
+                              fixingCommentId={fixingCommentId}
+                            />
+                          )}
+                        </div>
+                    </div>
+
+                    {/* Center split: secondary pane (e.g. Design + Tech Spec side by side) */}
+                    {splitTab && (
+                      <>
+                        <div
+                          className={`${styles.centerSplitDivider} ${isDraggingSplit ? styles.centerSplitDividerDragging : ''}`}
+                          onMouseDown={handleSplitResizeMouseDown}
+                          role="separator"
+                          aria-orientation="vertical"
+                          aria-label="Resize split"
+                        />
+                        <div className={styles.centerSplitRight} style={{ width: `calc(${splitPercent * 100}% - 2px)` }}>
+                          <div className={styles.centerSplitRightHeader}>
+                            <span className={styles.centerSplitRightTitle}>{tabLabel[splitTab]}</span>
+                            <button
+                              className={styles.centerSplitRightClose}
+                              onClick={() => setSplitTab(null)}
+                              type="button"
+                              title="Close split view"
+                              aria-label="Close split view"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                                <path d="M1 1l12 12M13 1L1 13" />
+                              </svg>
+                            </button>
+                          </div>
+                          <div className={styles.centerSplitRightBody}>
+                            {renderTabPreview(splitTab)}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {hasValidationTab && (
+                  <ValidationSidePanel
+                    score={doc.validationScore}
+                    scorecard={doc.validationScorecard}
+                    reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
+                    isValidating={doc.status === 'validating'}
+                    collapsed={validationPanelCollapsed}
+                    onToggle={() => setValidationPanelCollapsed((v) => !v)}
+                    markdownComponents={markdownComponents}
+                  />
+                )}
+
+                {pinnedTab && (
+                  <div className={styles.pinnedPane} style={{ width: pinnedWidth }}>
+                    <div
+                      className={`${styles.pinnedResizeHandle} ${isDraggingPinned ? styles.pinnedResizeHandleDragging : ''}`}
+                      onMouseDown={handlePinnedResizeMouseDown}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize pinned panel"
+                    />
+                    <div className={styles.pinnedHeader}>
+                      <span className={styles.pinnedTitle}>{tabLabel[pinnedTab]}</span>
+                      <button
+                        className={styles.pinnedClose}
+                        onClick={() => setPinnedTab(null)}
+                        title="Unpin"
+                        aria-label="Unpin"
+                        type="button"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                          <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className={styles.pinnedBody}>
+                      {renderTabPreview(pinnedTab)}
+                    </div>
                   </div>
                 )}
               </div>

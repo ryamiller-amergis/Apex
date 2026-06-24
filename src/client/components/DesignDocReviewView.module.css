@@ -2061,3 +2061,676 @@
     max-width: none;
   }
 }
+
+/* ── 3-zone workspace (outline rail · center · pinned pane) ───────────────── */
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspaceCenter {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Center content fills its pane — outline rail + split pane handle spacing */
+.workspaceCenter .preview {
+  max-width: 100%;
+}
+
+/* ── Outline rail ─────────────────────────────────────────────────────────── */
+
+.outlineRail {
+  width: 232px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+.outlineRailCollapsed {
+  width: 40px;
+}
+
+.outlineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.outlineTitle {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.outlineToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.outlineToggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.outlineToggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.outlineList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 6px;
+  overflow-y: auto;
+}
+
+.outlineItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.15s ease;
+}
+
+.outlineItem:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.outlineItemActive {
+  color: var(--accent-color);
+  border-left-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  font-weight: 600;
+}
+
+.outlineLevel1 {
+  padding-left: 10px;
+  font-weight: 600;
+}
+
+.outlineLevel2 {
+  padding-left: 18px;
+}
+
+.outlineLevel3 {
+  padding-left: 28px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.outlineEmpty {
+  padding: 10px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ── Tab icon controls (pin + split) ─────────────────────────────────────── */
+
+.tabWrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tabPinBtn,
+.tabSplitBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: -4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.tabWrap:hover .tabPinBtn,
+.tabWrap:hover .tabSplitBtn {
+  opacity: 0.7;
+}
+
+.tabPinBtn:hover,
+.tabSplitBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+  opacity: 1;
+}
+
+.tabPinBtnActive,
+.tabSplitBtnActive {
+  opacity: 1;
+  color: var(--accent-color);
+}
+
+.tabPinBtn svg,
+.tabSplitBtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── Pinned reference pane ────────────────────────────────────────────────── */
+
+.pinnedPane {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  min-width: 0;
+}
+
+.pinnedResizeHandle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  transition: background 0.15s ease;
+}
+
+.pinnedResizeHandle:hover,
+.pinnedResizeHandleDragging {
+  background: color-mix(in srgb, var(--accent-color) 40%, transparent);
+}
+
+.pinnedHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.pinnedTitle {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pinnedClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pinnedClose:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.pinnedBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+
+/* ── Validation side panel (permanent right column) ─────────────────────── */
+
+.valPanel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-color);
+  border-top: 3px solid transparent;
+  background: var(--bg-primary);
+  overflow: hidden;
+  transition: width 0.2s ease, border-top-color 0.3s ease;
+}
+
+.valPanelCollapsed {
+  width: 48px;
+}
+
+/* Collapsed vertical strip */
+.valPanelStrip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 16px;
+  gap: 10px;
+  width: 100%;
+}
+
+.valPanelStripBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.valPanelStripBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+}
+
+.valPanelStripBtn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Score displayed vertically in collapsed strip */
+.valPanelStripScore {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 1.1rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.valPanelStripPct {
+  font-size: 0.65rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.valPanelStripLabel {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Expanded header */
+.valPanelHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.valPanelHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.valPanelChevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.valPanelTitle {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.valPanelScoreBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.valPanelSpinner {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--accent-color);
+  animation: spinValidation 0.9s linear infinite;
+}
+
+@keyframes spinValidation {
+  to { transform: rotate(360deg); }
+}
+
+.valPanelBody {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.valPanelSection {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.valPanelSectionLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* Section score bars */
+.valPanelScoreRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.valPanelScoreRowLabel {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.valPanelBar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.valPanelBarFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.valPanelScoreRowPct {
+  font-size: 0.72rem;
+  font-weight: 600;
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Gap cards — matching prototype pbiCard style */
+.valPanelGapCard {
+  padding: 9px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 7px;
+  background: var(--bg-secondary);
+}
+
+.valPanelGapCardPending {
+  border-left: 3px solid #d97706;
+}
+
+.valPanelGapCardResolved {
+  border-left: 3px solid var(--success-color);
+  opacity: 0.75;
+}
+
+.valPanelGapCardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.valPanelGapDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.valGapDotPending { background: #d97706; }
+.valGapDotFilled  { background: var(--success-color); }
+.valGapDotAccepted { background: var(--text-muted); }
+.valGapDotDeferred { background: var(--text-muted); }
+
+.valPanelGapDesc {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.valPanelGapMeta {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding-left: 15px;
+}
+
+/* Full report toggle */
+.valPanelReportToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s ease;
+}
+
+.valPanelReportToggle:hover {
+  color: var(--accent-color);
+}
+
+.valPanelReportToggle svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.valPanelReportBody {
+  margin-top: 10px;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  overflow-x: auto;
+}
+
+.valPanelValidating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.valPanelEmpty {
+  padding: 16px 14px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ── Center split (Design + Tech Spec side by side) ──────────────────────── */
+
+/* When split is active, tabContent becomes a flex row;
+   each column handles its own scroll and padding. */
+.tabContentSplit {
+  display: flex !important;
+  flex-direction: row !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+
+/* Single-content wrapper — preserves existing scroll + padding behaviour
+   when no split is active (matches the original .tabContent styles). */
+.centerSingleContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.centerSplitLeft {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.centerSplitDivider {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border-color);
+  transition: background 0.15s ease;
+  position: relative;
+}
+
+.centerSplitDivider:hover,
+.centerSplitDividerDragging {
+  background: color-mix(in srgb, var(--accent-color) 60%, var(--border-color));
+}
+
+.centerSplitRight {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-color);
+  min-width: 0;
+  background: var(--bg-secondary);
+}
+
+.centerSplitRightHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.centerSplitRightTitle {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.centerSplitRightClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.centerSplitRightClose:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.centerSplitRightBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 18px;
+}
+
+@media (max-width: 1024px) {
+  .outlineRail {
+    display: none;
+  }
+
+  .pinnedPane {
+    max-width: 50vw;
+  }
+
+  .centerSplitRight {
+    max-width: 45vw;
+  }
+}
