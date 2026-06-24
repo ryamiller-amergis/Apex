@@ -14,6 +14,7 @@ import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { adoWriteFromToken } from '../services/adoFactory';
 import { listDesignDocs } from '../services/designDocService';
 import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
@@ -766,6 +767,7 @@ export async function createPrdAdoWorkItems(
   prdId: string,
   userId: string,
   req: CreatePrdAdoItemsRequest,
+  adoBearerToken?: string | null,
 ): Promise<CreatePrdAdoItemsResponse> {
   const prd = await getPrd(prdId);
   if (!prd) throw notFound('PRD not found');
@@ -819,7 +821,10 @@ export async function createPrdAdoWorkItems(
   // Flat list of features from the backlog for design-doc matching
   const backlogFeatures = extractFeatures(prd.backlogJson);
 
-  const adoService = new AzureDevOpsService(req.project, req.areaPath);
+  // Attribute the ADO work items to the logged-in user (hard-fail in production if
+  // no per-user token; PAT fallback in non-production). Token is resolved at the
+  // route layer and threaded in.
+  const adoService = adoWriteFromToken(adoBearerToken ?? null, req.project, req.areaPath);
 
   const response: CreatePrdAdoItemsResponse = {
     success: true,

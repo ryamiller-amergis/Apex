@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { getAdoTokenForUser } from '../services/adoUserToken';
+import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
 import { eq, and, sql } from 'drizzle-orm';
@@ -479,9 +481,13 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
 router.post('/prds/:prdId/ado-work-items', requirePermission('workitems:write'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const result = await createPrdAdoWorkItems(req.params.prdId, userId, req.body);
+    const adoBearerToken = await getAdoTokenForUser(req);
+    const result = await createPrdAdoWorkItems(req.params.prdId, userId, req.body, adoBearerToken);
     res.status(201).json(result);
   } catch (err: any) {
+    if (isAdoUserAuthError(err)) {
+      return res.status(403).json({ error: err.message });
+    }
     if (err.message?.includes('not found') || err.message?.includes('must be approved') || err.message?.includes('design doc')) {
       return res.status(422).json({ error: err.message });
     }

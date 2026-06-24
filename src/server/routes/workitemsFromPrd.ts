@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { AzureDevOpsService } from '../services/azureDevOps';
+import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { getWikiPage } from '../services/wikiCatalog';
 
 const router = Router();
@@ -47,7 +47,7 @@ router.post('/from-prd', async (req: Request, res: Response) => {
       // Non-fatal: proceed without the link
     }
 
-    const adoService = new AzureDevOpsService(body.project, body.areaPath);
+    const adoService = await adoWriteForRequest(req, body.project, body.areaPath);
     const created: { title: string; id: number; url: string }[] = [];
 
     // Title → ADO ID and local backlog ID → ADO ID (for parent/predecessor linking)
@@ -83,6 +83,9 @@ router.post('/from-prd', async (req: Request, res: Response) => {
 
     res.status(201).json({ created });
   } catch (err: any) {
+    if (isAdoUserAuthError(err)) {
+      return res.status(403).json({ error: err.message });
+    }
     console.error('[workitems/from-prd] error:', err.message);
     res.status(500).json({ error: err.message ?? 'Failed to create work items' });
   }

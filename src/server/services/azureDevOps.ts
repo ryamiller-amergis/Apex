@@ -12,7 +12,7 @@ export class AzureDevOpsService {
   private areaPath: string;
   private readonly WORK_ITEM_BATCH_SIZE = 200;
 
-  constructor(project?: string, areaPath?: string) {
+  constructor(project?: string, areaPath?: string, opts?: { bearerToken?: string }) {
     const orgUrl = process.env.ADO_ORG;
     const pat = process.env.ADO_PAT;
     const defaultProject = process.env.ADO_PROJECT || '';
@@ -22,14 +22,27 @@ export class AzureDevOpsService {
     this.project = project || defaultProject;
     this.areaPath = areaPath || defaultAreaPath;
 
-    if (!orgUrl || !pat) {
+    if (!orgUrl) {
       throw new Error(
-        'Missing required environment variables: ADO_ORG and ADO_PAT must be provided'
+        'Missing required environment variable: ADO_ORG must be provided'
       );
     }
 
     this.organization = orgUrl;
-    const authHandler = azdev.getPersonalAccessTokenHandler(pat);
+    // When a per-user bearer token is supplied, authenticate as the logged-in
+    // Azure AD user so ADO CreatedBy/ChangedBy reflect that person. Otherwise fall
+    // back to the shared service PAT (reads, background jobs, local dev).
+    let authHandler;
+    if (opts?.bearerToken) {
+      authHandler = azdev.getBearerHandler(opts.bearerToken);
+    } else {
+      if (!pat) {
+        throw new Error(
+          'Missing required environment variables: ADO_ORG and ADO_PAT must be provided'
+        );
+      }
+      authHandler = azdev.getPersonalAccessTokenHandler(pat);
+    }
     // Configure with longer timeout for revision queries (default is 30s, increase to 120s)
     const options = {
       socketTimeout: 120000, // 120 seconds

@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { adoWriteForRequest, adoWritePreferUser, isAdoUserAuthError } from '../services/adoFactory';
 import { generateBacklogId } from '../../shared/utils/backlogId';
 import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
@@ -259,10 +260,13 @@ router.patch('/workitems/:id/due-date', async (req: Request, res: Response) => {
         .json({ error: 'Invalid date format. Use YYYY-MM-DD' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.updateDueDate(id, dueDate, reason);
     res.json({ success: true });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error updating due date:', error);
     res.status(500).json({ error: 'Failed to update due date' });
   }
@@ -282,10 +286,13 @@ router.patch('/workitems/:id/field', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Field name is required' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.updateWorkItemField(id, field, value);
     res.json({ success: true });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error updating work item field:', error);
     res.status(500).json({ error: 'Failed to update work item field' });
   }
@@ -1062,10 +1069,13 @@ router.patch('/releases/:epicId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid epic ID' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.updateReleaseEpic(epicId, title, startDate, targetDate, description, status);
     res.json({ success: true });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error updating release epic:', error);
     res.status(500).json({ error: 'Failed to update release epic' });
   }
@@ -1085,10 +1095,13 @@ router.post('/releases/:epicId/link', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'workItemIds array is required' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.linkWorkItemsToEpic(epicId, workItemIds);
     res.json({ success: true, linkedCount: workItemIds.length });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error linking work items:', error);
     res.status(500).json({ error: 'Failed to link work items' });
   }
@@ -1108,10 +1121,13 @@ router.post('/api/releases/:epicId/unlink', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'workItemIds array is required' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.unlinkWorkItemsFromEpic(epicId, workItemIds);
     res.json({ success: true, unlinkedCount: workItemIds.length });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error unlinking work items:', error);
     res.status(500).json({ error: 'Failed to unlink work items' });
   }
@@ -1131,10 +1147,13 @@ router.post('/releases/:epicId/link-related', async (req: Request, res: Response
       return res.status(400).json({ error: 'workItemIds array is required' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.linkWorkItemsToRelease(epicId, workItemIds);
     res.json({ success: true, linkedCount: workItemIds.length });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error linking related items:', error);
     res.status(500).json({ error: 'Failed to link related items' });
   }
@@ -1160,7 +1179,7 @@ router.post('/releases/:epicId/unlink-related', async (req: Request, res: Respon
     }
 
     console.log(`[unlink-related] Creating AzureDevOpsService with project: ${project}, areaPath: ${areaPath}`);
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     
     console.log(`[unlink-related] Calling unlinkWorkItemsFromRelease...`);
     await adoService.unlinkWorkItemsFromRelease(epicId, workItemIds);
@@ -1168,6 +1187,9 @@ router.post('/releases/:epicId/unlink-related', async (req: Request, res: Respon
     console.log(`[unlink-related] Successfully unlinked ${workItemIds.length} items from epic ${epicId}`);
     res.json({ success: true, unlinkedCount: workItemIds.length });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('[unlink-related] Error unlinking related items:', error);
     console.error('[unlink-related] Error stack:', error.stack);
     res.status(500).json({ error: 'Failed to unlink related items', details: error.message });
@@ -1203,10 +1225,13 @@ router.delete('/releases/:epicId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid epic ID' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.deleteWorkItem(epicId);
     res.json({ success: true, deletedEpicId: epicId });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error deleting release epic:', error);
     res.status(500).json({ error: 'Failed to delete release epic' });
   }
@@ -1276,7 +1301,7 @@ router.post('/releases/:version/tag', async (req: Request, res: Response) => {
       description?: string;
     };
     
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     
     // Create release Epic
     const epicId = await adoService.createReleaseEpic(version, startDate, targetDate, description);
@@ -1290,6 +1315,9 @@ router.post('/releases/:version/tag', async (req: Request, res: Response) => {
     
     res.json({ success: true, epicId, taggedCount: workItemIds?.length || 0 });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error creating release:', error);
     res.status(500).json({ error: 'Failed to create release' });
   }
@@ -1306,11 +1334,14 @@ router.delete('/releases/:version/tag/:workItemId', async (req: Request, res: Re
       return res.status(400).json({ error: 'Invalid work item ID' });
     }
     
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.removeReleaseTag(workItemId, version);
     
     res.json({ success: true });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error removing release tag:', error);
     res.status(500).json({ error: 'Failed to remove release tag' });
   }
@@ -1595,7 +1626,7 @@ router.post('/backlog/create-ado-items', async (req: Request, res: Response) => 
       };
     });
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     const result = await adoService.createBacklogItemsInADO(epic, featuresWithFigma, pbisWithFigma);
 
     // Tag any newly-created feature ADO items that have an approved AI-generated UI mock
@@ -1622,6 +1653,9 @@ router.post('/backlog/create-ado-items', async (req: Request, res: Response) => 
       pbiMap: result.pbiMap,
     });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error creating ADO backlog items:', error);
     res.status(500).json({ error: 'Failed to create ADO backlog items', details: error.message });
   }
@@ -1678,7 +1712,7 @@ router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) 
     const featureWithFigma = { ...feature, figmaUrl: featureFigmaUrl };
     const pbiWithFigma = { ...pbi, figmaUrl: pbiFigmaUrl };
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     const result = await adoService.createSinglePbiInADO(featureWithFigma, pbiWithFigma, parentEpicAdoId);
 
     // Tag the feature ADO item if it has an approved AI-generated UI mock
@@ -1701,6 +1735,9 @@ router.post('/backlog/create-pbi-ado-item', async (req: Request, res: Response) 
       featureAdoUrl: result.featureAdoUrl,
     });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error creating ADO PBI:', error);
     res.status(500).json({ error: 'Failed to create ADO PBI', details: error.message });
   }
@@ -1753,7 +1790,7 @@ router.post('/backlog/create-feature-ado-item', async (req: Request, res: Respon
       };
     });
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     const result = await adoService.createSingleFeatureInADO(
       { ...feature, figmaUrl: featureFigmaUrl },
       eligiblePBIsWithFigma,
@@ -1776,6 +1813,9 @@ router.post('/backlog/create-feature-ado-item', async (req: Request, res: Respon
       pbiMap: result.pbiMap,
     });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error creating ADO Feature:', error);
     res.status(500).json({ error: 'Failed to create ADO Feature', details: error.message });
   }
@@ -3235,7 +3275,7 @@ router.post('/backlog/update-figma-url', async (req: Request, res: Response) => 
       }
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWritePreferUser(req, project, areaPath);
     const docs = await adoService.getDraftBacklogDocs() as any[];
     const doc = docs.find((d: any) => d.path === pagePath);
     if (!doc) {
@@ -3328,7 +3368,7 @@ router.post('/backlog/mark-design-ready', async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'featureId and pagePath are required' });
     }
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     const docs = await adoService.getDraftBacklogDocs() as any[];
     const doc = docs.find((d: any) => d.path === pagePath);
     if (!doc) {
@@ -3387,6 +3427,9 @@ router.post('/backlog/mark-design-ready', async (req: Request, res: Response) =>
 
     res.json({ success: true, featureId, pbiId: pbiId ?? null, designReadyAt: now });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error marking design ready:', error);
     res.status(500).json({ error: 'Failed to mark design ready', details: error.message });
   }
@@ -3436,7 +3479,7 @@ router.delete('/backlog/item', async (req: Request, res: Response) => {
     }
 
     // Save updated document to wiki
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.updateDraftBacklogDoc(pagePath, updatedDoc);
 
     // Optionally delete from ADO
@@ -3453,6 +3496,9 @@ router.delete('/backlog/item', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error deleting backlog item:', error);
     if (error.message?.startsWith('WIKI_CONFLICT')) {
       return res.status(409).json({ error: error.message });
@@ -3492,7 +3538,7 @@ router.post('/backlog/unlink-ado-item', async (req: Request, res: Response) => {
     );
     const updatedDoc = { ...document, [arrayKey]: updatedItems };
 
-    const adoService = new AzureDevOpsService(project, areaPath);
+    const adoService = await adoWriteForRequest(req, project, areaPath);
     await adoService.updateDraftBacklogDoc(pagePath, updatedDoc);
 
     // Delete from ADO — best-effort; wiki save already committed
@@ -3508,6 +3554,9 @@ router.post('/backlog/unlink-ado-item', async (req: Request, res: Response) => {
 
     res.json({ success: true, updatedDoc });
   } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error unlinking ADO item:', error);
     if (error.message?.startsWith('WIKI_CONFLICT')) {
       return res.status(409).json({ error: error.message });
