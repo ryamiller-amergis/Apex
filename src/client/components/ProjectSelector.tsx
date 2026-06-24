@@ -8,6 +8,7 @@ import {
   useMyProjectAccessRequests,
   useRequestableProjectCatalog,
 } from '../hooks/usePlatformAdmin';
+import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { ChangelogBanner } from './ChangelogBanner';
 import { UserMenu } from './UserMenu';
@@ -71,7 +72,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
       <div className={styles.header}>
         <div className={styles.logoMark}>
-          <BrandLogo />
+          <BrandLogo beta={IS_BETA_RELEASE} />
         </div>
         <p className={styles.subtitle}>Select a project to start planning</p>
         <div className={styles.actions}>

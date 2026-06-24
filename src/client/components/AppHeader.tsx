@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
@@ -14,7 +15,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -23,6 +24,7 @@ interface AppHeaderProps {
   } | null;
   hasUnreadChangelog: boolean;
   can: (key: string) => boolean;
+  isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
   onNavigateHome: () => void;
@@ -31,6 +33,7 @@ interface AppHeaderProps {
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
+  onNavigateMyWork?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -44,6 +47,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
   hasUnreadChangelog,
   can,
+  isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
   onNavigateHome,
@@ -52,6 +56,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigatePlanning,
   onNavigateCloudCost,
   onNavigateBacklog,
+  onNavigateMyWork,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -82,12 +87,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Planning', view: 'planning', permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
+    { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
   const visibleNavItems = navItems.filter((item) => {
     if (item.view === 'home') return true;
     if (item.view === 'admin') return can('admin:roles');
+    if (item.view === 'my-work') {
+      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+    }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
     return true;
@@ -108,8 +117,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           aria-label="Select an Apex project"
           title="Select project"
         >
-          <BrandLogo variant="mark" className="app-brand-mark" />
-          <span className="app-brand-text">Apex</span>
+          <BrandLogo variant="mark" className="app-brand-mark" beta={IS_BETA_RELEASE} />
+          <span className="app-brand-text">
+            Apex
+            {IS_BETA_RELEASE && <span className="app-brand-beta">BETA</span>}
+          </span>
         </button>
 
         {isMobile ? (
@@ -165,7 +177,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             aria-label="Mobile navigation"
           >
             <div className={styles['mobile-nav-header']}>
-              <BrandLogo variant="mark" className="app-brand-mark" />
+              <BrandLogo variant="mark" className="app-brand-mark" beta={IS_BETA_RELEASE} />
               <button
                 className={styles['close-btn']}
                 onClick={closeMenu}

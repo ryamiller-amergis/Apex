@@ -418,6 +418,9 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
 }
 
 function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
+  if (kickoff.mode === 'development') {
+    return buildDevelopmentPrompt(kickoff);
+  }
   if (!kickoff.skillPath) {
     return buildFreeChatPrompt(kickoff);
   }
@@ -483,6 +486,53 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
       ``,
       `# Additional MCP server: \`${pill.mcpServerName}\``,
       pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools when helpful.`,
+    );
+  }
+
+  return parts.join('\n');
+}
+
+function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
+  const branch = kickoff.branch ?? 'main';
+  const parts: string[] = [
+    `# Development workspace`,
+    `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo on branch \`${branch}\`.`,
+    `You can read, edit, and create files directly. All changes are local — do NOT push, create PRs, or run git push.`,
+    ``,
+    `# Session context`,
+    `  project: "${kickoff.project}"`,
+    `  repo:    "${kickoff.repo}"`,
+    `  branch:  "${branch}"`,
+    `  work item: ${kickoff.workItemId ?? '(none)'}`,
+    ``,
+    `# Available MCP tools (via \`ado-skills\` server)`,
+    `- \`get_skill\`        — load a SKILL.md from the repo`,
+    `- \`list_repo_dir\`    — browse repo directory structure`,
+    `- \`get_skill_file\`   — read any file from the repo`,
+    `- \`search_repo_code\` — search code in the repo`,
+    ``,
+    `# Your task`,
+    `You are implementing work item #${kickoff.workItemId}. Your job:`,
+    `1. If a development skill path is configured, call \`get_skill\` to load it and follow its instructions.`,
+    `2. Otherwise, read the work item context and implement the required changes directly in this checkout.`,
+    `3. Edit files directly using the built-in file tools (Write/Edit). The cwd is the repo root.`,
+    `4. Do NOT push changes, create branches, or run git commands. All your edits will be captured as a diff.`,
+    `5. Focus on clean, working code that addresses the work item requirements.`,
+    ``,
+    `# Important constraints`,
+    `- This IS a real repo checkout — you can read any project file directly from disk.`,
+    `- Do NOT run \`git push\`, \`git commit\`, or create pull requests.`,
+    `- Write clean, production-quality code.`,
+    `- Follow existing project conventions you observe in the codebase.`,
+  ];
+
+  if (kickoff.skillPath) {
+    parts.push(
+      ``,
+      `# Development skill`,
+      `A development skill has been configured. Load it first:`,
+      `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
+      `Follow the skill's instructions for implementing this work item.`,
     );
   }
 
@@ -647,20 +697,21 @@ export function getAgentHealthStats(): AgentHealthStats {
 export async function createThread(
   userId: string,
   kickoff: ChatThreadKickoff,
-  options?: { skipAutoKickoff?: boolean; kickoffMessage?: string },
+  options?: { skipAutoKickoff?: boolean; kickoffMessage?: string; workspaceDirOverride?: string },
 ): Promise<ChatThread> {
   ensureDirs();
 
   const threadId = uuidv4();
-  const workspaceDir = path.join(WORKSPACE_BASE, threadId);
+  const workspaceDir = options?.workspaceDirOverride ?? path.join(WORKSPACE_BASE, threadId);
 
   // Resolve branch
   const branch = kickoff.branch ?? 'main';
   const resolvedKickoff = { ...kickoff, branch };
 
-  // Create a minimal workspace — skills are fetched via MCP (ADO API), not from disk.
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  injectKickoffFiles(workspaceDir, resolvedKickoff, threadId);
+  if (!options?.workspaceDirOverride) {
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    injectKickoffFiles(workspaceDir, resolvedKickoff, threadId);
+  }
 
   const thread: ChatThread = {
     id: threadId,
@@ -1263,13 +1314,64 @@ export async function sendMessage(
                   broadcast(state, { type: 'token', text: block.text });
                 }
                 if (block.type === 'tool_use') {
-                  broadcast(state, {
-                    type: 'tool_call',
+                  // Snapshot reasoning text accumulated before this tool call
+                  if (agentTextBuffer.trim()) {
+                    const reasoningMsg: ChatMessage = {
+                      id: uuidv4(),
+                      role: 'agent',
+                      text: agentTextBuffer.trim(),
+                      ts: new Date().toISOString(),
+                      toolName: '_reasoning',
+                    };
+                    state.thread.messages.push(reasoningMsg);
+                    broadcast(state, { type: 'message', message: reasoningMsg });
+                    pgInsertMessage(threadId, reasoningMsg).catch(() => {});
+                    agentTextBuffer = '';
+                  }
+
+                  const toolMsg: ChatMessage = {
+                    id: uuidv4(),
+                    role: 'tool',
+                    text: `→ ${block.name}`,
                     toolName: block.name,
-                    input: block.input,
-                  });
+                    toolInput: block.input as Record<string, unknown>,
+                    ts: new Date().toISOString(),
+                  };
+                  state.thread.messages.push(toolMsg);
+                  broadcast(state, { type: 'tool_call', toolName: block.name, input: block.input });
+                  broadcast(state, { type: 'message', message: toolMsg });
+                  pgInsertMessage(threadId, toolMsg).catch(() => {});
                 }
               }
+            } else if (event.type === 'thinking') {
+              const thinkingText = (event as any).text ?? '';
+              if (thinkingText) {
+                const thinkingMsg: ChatMessage = {
+                  id: uuidv4(),
+                  role: 'agent',
+                  text: thinkingText,
+                  ts: new Date().toISOString(),
+                  toolName: '_thinking',
+                };
+                state.thread.messages.push(thinkingMsg);
+                broadcast(state, { type: 'message', message: thinkingMsg });
+                pgInsertMessage(threadId, thinkingMsg).catch(() => {});
+              }
+              broadcast(state, {
+                type: 'thinking',
+                text: thinkingText,
+                durationMs: (event as any).thinking_duration_ms,
+              });
+            } else if (event.type === 'tool_call') {
+              const tc = event as any;
+              broadcast(state, {
+                type: 'tool_status',
+                toolName: tc.name ?? '',
+                callId: tc.call_id ?? '',
+                status: tc.status ?? 'running',
+                args: tc.args,
+                result: typeof tc.result === 'string' ? tc.result?.slice(0, 500) : undefined,
+              });
             }
           }
         } catch (streamErr) {

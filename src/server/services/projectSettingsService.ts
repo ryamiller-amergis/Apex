@@ -60,6 +60,8 @@ export async function upsertSkillConfig(
   prdValidationModel?: string | null,
   designPlanBedrockModelId?: string | null,
   designPlanBedrockMaxTokens?: number | null,
+  developmentSkillPath?: string | null,
+  developmentModel?: string | null,
   prdValidationScoreThreshold?: number | null,
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
@@ -98,6 +100,8 @@ export async function upsertSkillConfig(
       designPrototypeRegenBedrockMaxTokens: designPrototypeRegenBedrockMaxTokens ?? null,
       designPlanBedrockModelId: designPlanBedrockModelId ?? null,
       designPlanBedrockMaxTokens: designPlanBedrockMaxTokens ?? null,
+      developmentSkillPath: developmentSkillPath ?? null,
+      developmentModel: developmentModel ?? null,
       prdValidationScoreThreshold: prdValidationScoreThreshold ?? null,
       quickSkillPills: quickSkillPills ?? null,
       quickMcpPills: quickMcpPills ?? null,
@@ -138,6 +142,8 @@ export async function upsertSkillConfig(
         designPrototypeRegenBedrockMaxTokens: designPrototypeRegenBedrockMaxTokens ?? null,
         designPlanBedrockModelId: designPlanBedrockModelId ?? null,
         designPlanBedrockMaxTokens: designPlanBedrockMaxTokens ?? null,
+        developmentSkillPath: developmentSkillPath ?? null,
+        developmentModel: developmentModel ?? null,
         prdValidationScoreThreshold: prdValidationScoreThreshold ?? null,
         quickSkillPills: quickSkillPills ?? null,
         quickMcpPills: quickMcpPills ?? null,

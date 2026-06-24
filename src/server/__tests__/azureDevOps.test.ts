@@ -693,4 +693,89 @@ describe('AzureDevOpsService', () => {
       );
     });
   });
+
+  describe('getWorkItemsAssignedToUser', () => {
+    it('queries active Features, PBIs, TBIs, and Bugs assigned to the user', async () => {
+      const service = new AzureDevOpsService('MaxView');
+
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItems: [{ id: 101 }, { id: 102 }],
+      });
+
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 101,
+          fields: {
+            'System.Title': 'Login feature',
+            'System.WorkItemType': 'Feature',
+            'System.State': 'In Progress',
+            'System.AssignedTo': { uniqueName: 'jane@example.com' },
+            'System.AreaPath': 'MaxView\\Team',
+            'System.IterationPath': 'MaxView\\Sprint 1',
+          },
+        },
+        {
+          id: 102,
+          fields: {
+            'System.Title': 'Fix crash',
+            'System.WorkItemType': 'Bug',
+            'System.State': 'New',
+            'System.AssignedTo': { uniqueName: 'jane@example.com' },
+          },
+        },
+      ]);
+
+      const result = await service.getWorkItemsAssignedToUser('Jane Developer', 'MaxView');
+
+      expect(mockWitApi.queryByWiql).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.stringContaining("[System.AssignedTo] = 'Jane Developer'"),
+        }),
+        { project: 'MaxView' },
+      );
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).toContain("[System.WorkItemType] IN ('Feature', 'Product Backlog Item', 'Technical Backlog Item', 'Bug')");
+      expect(wiql).toContain("[System.State] NOT IN ('Done', 'Closed', 'Removed')");
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({
+        id: 101,
+        title: 'Login feature',
+        workItemType: 'Feature',
+        state: 'In Progress',
+        assignedTo: 'jane@example.com',
+        project: 'MaxView',
+        areaPath: 'MaxView\\Team',
+        iterationPath: 'MaxView\\Sprint 1',
+      });
+      expect(result[1]).toMatchObject({
+        id: 102,
+        title: 'Fix crash',
+        workItemType: 'Bug',
+      });
+    });
+
+    it('escapes single quotes in display names', async () => {
+      const service = new AzureDevOpsService('MaxView');
+
+      mockWitApi.queryByWiql.mockResolvedValue({ workItems: [] });
+
+      await service.getWorkItemsAssignedToUser("O'Brien", 'MaxView');
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).toContain("[System.AssignedTo] = 'O''Brien'");
+    });
+
+    it('omits active-state filter when activeOnly is false', async () => {
+      const service = new AzureDevOpsService('MaxView');
+
+      mockWitApi.queryByWiql.mockResolvedValue({ workItems: [] });
+
+      await service.getWorkItemsAssignedToUser('Jane Developer', 'MaxView', { activeOnly: false });
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).not.toContain("[System.State] NOT IN");
+    });
+  });
 });

@@ -5485,6 +5485,72 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Returns work items assigned to the given user email in the specified project.
+   */
+  async getWorkItemsAssignedToUser(
+    displayName: string,
+    project: string,
+    opts?: { activeOnly?: boolean },
+  ): Promise<import('../../shared/types/devWorkbench').AssignedWorkItem[]> {
+    const activeOnly = opts?.activeOnly ?? true;
+    console.log(`=== getWorkItemsAssignedToUser START === displayName=${displayName} project=${project} activeOnly=${activeOnly}`);
+    return retryWithBackoff(async () => {
+      const escaped = displayName.replace(/'/g, "''");
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = '${escaped}' AND [System.TeamProject] = '${project}'`;
+      wiql += ` AND [System.WorkItemType] IN ('Feature', 'Product Backlog Item', 'Technical Backlog Item', 'Bug')`;
+      if (activeOnly) {
+        wiql += ` AND [System.State] NOT IN ('Done', 'Closed', 'Removed')`;
+      }
+
+      const result = await this.queryWorkItemsByWiql({
+        wiql,
+        fields: [
+          'System.Id',
+          'System.Title',
+          'System.WorkItemType',
+          'System.State',
+          'System.AssignedTo',
+          'System.AreaPath',
+          'System.IterationPath',
+        ],
+        maxResults: 200,
+      });
+
+      const items = result.items.map((wi) => ({
+        id: wi.id,
+        title: (wi.fields['System.Title'] ?? '') as string,
+        workItemType: (wi.fields['System.WorkItemType'] ?? '') as string,
+        state: (wi.fields['System.State'] ?? '') as string,
+        assignedTo: (wi.fields['System.AssignedTo']?.uniqueName ?? wi.fields['System.AssignedTo'] ?? '') as string,
+        project,
+        areaPath: (wi.fields['System.AreaPath'] ?? undefined) as string | undefined,
+        iterationPath: (wi.fields['System.IterationPath'] ?? undefined) as string | undefined,
+      }));
+
+      console.log(`=== getWorkItemsAssignedToUser END === found ${items.length} items`);
+      return items;
+    });
+  }
+
+  /**
+   * Returns the default branch for a repository in the given project.
+   */
+  async getDefaultBranch(repo: string, project: string): Promise<string> {
+    console.log(`=== getDefaultBranch START === repo=${repo} project=${project}`);
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const repository = await gitApi.getRepository(repo, project);
+      if (!repository?.defaultBranch) {
+        console.log(`=== getDefaultBranch END === repository or defaultBranch not found, returning 'main'`);
+        return 'main';
+      }
+      const branch = repository.defaultBranch.replace(/^refs\/heads\//, '');
+      console.log(`=== getDefaultBranch END === branch=${branch}`);
+      return branch;
+    });
+  }
+
+  /**
    * Check which of the provided ADO work item IDs still exist.
    * Returns the subset that are confirmed deleted/missing in ADO.
    */
