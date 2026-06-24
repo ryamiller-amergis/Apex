@@ -1,5 +1,60 @@
 [
   {
+    "version": "1.30.0",
+    "date": "2026-06-24",
+    "title": "Owner Approval & Review Workflow",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "PRDs, design docs, and design prototypes now require a two-step approval: assigned reviewers approve first, then the document owner gives final approval before the item is marked approved"
+      },
+      {
+        "type": "feature",
+        "description": "The PRD review header includes an Approvals panel showing reviewer and owner approval status across PRD, Design Doc, Design Prototype, and QA review groups"
+      },
+      {
+        "type": "feature",
+        "description": "Interview kickoff now requires selecting Design Prototype and QA reviewers alongside PRD and Design Doc reviewers, and those selections are used automatically when submitting for review"
+      },
+      {
+        "type": "feature",
+        "description": "QA reviewers can approve generated test cases during PRD review without waiting for the full PRD approval cycle"
+      },
+      {
+        "type": "improvement",
+        "description": "Section owner pickers on interview kickoff are filtered by role group — BA/Product Owner for PRD, Developer for design docs, UI/UX for prototypes, and QA for test cases"
+      },
+      {
+        "type": "improvement",
+        "description": "The backlog summary bar now shows the total generated test case count alongside features and PBIs"
+      },
+      {
+        "type": "improvement",
+        "description": "PRD review actions are consolidated into a header overflow menu for a cleaner toolbar"
+      },
+      {
+        "type": "improvement",
+        "description": "Local dev login offers persona buttons for Developer, BA, Manager, Product Owner, QA, and UI/UX so you can test role-specific flows without SSO"
+      },
+      {
+        "type": "bugfix",
+        "description": "Inline review comment highlights no longer jump to the wrong occurrence when the same text appears multiple times in a section"
+      },
+      {
+        "type": "bugfix",
+        "description": "Resolved review comments no longer re-anchor after document edits"
+      },
+      {
+        "type": "bugfix",
+        "description": "The PRD assistant now refreshes generated test cases automatically after a run that adds or updates test cases"
+      },
+      {
+        "type": "bugfix",
+        "description": "Start New Interview no longer briefly appears enabled before group permissions finish loading"
+      }
+    ]
+  },
+  {
     "version": "1.29.0",
     "date": "2026-06-22",
     "title": "Group-Based Interview Access Control",

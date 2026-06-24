@@ -216,8 +216,12 @@ export function useAppShell() {
   const can = useCallback((key: string) => isSuperAdmin || permissions.includes(key), [isSuperAdmin, permissions]);
 
   const isInAnyGroup = useCallback(
-    (names: string[]) => isSuperAdmin || roles.includes('admin') || groups.some(g => names.includes(g)),
-    [isSuperAdmin, roles, groups],
+    (names: string[]) =>
+      isSuperAdmin ||
+      permissions.includes('admin:roles') ||
+      roles.includes('admin') ||
+      groups.some((g) => names.includes(g)),
+    [isSuperAdmin, permissions, roles, groups],
   );
 
   const handleMarkChangelogAsRead = useCallback(() => {

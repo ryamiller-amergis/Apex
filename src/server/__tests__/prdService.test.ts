@@ -94,6 +94,14 @@ jest.mock('../services/documentValidationService', () => ({
   stopDocumentValidationWatcher: jest.fn(),
 }));
 
+jest.mock('../services/aiCompletionNotifier', () => ({
+  notifyAiCompletion: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/notificationService', () => ({
+  createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+}));
+
 jest.mock('../services/testCaseService', () => ({
   getTestCases: jest.fn().mockResolvedValue({
     id: 'tc-1',
@@ -232,6 +240,10 @@ const { listDesignDocs: mockListDesignDocs } = jest.requireMock('../services/des
 
 const { extractFeatures: mockExtractFeatures } = jest.requireMock('../services/designPrototypeService') as {
   extractFeatures: jest.Mock;
+};
+
+const { createNotification: mockCreateNotification } = jest.requireMock('../services/notificationService') as {
+  createNotification: jest.Mock;
 };
 
 const readyTestCase = {
@@ -716,17 +728,16 @@ describe('reviewPrd', () => {
 
   const pendingPrd = makePrdRow({ status: 'pending_review', authorId: 'user-author' });
 
-  it('approves a pending_review PRD', async () => {
+  it('approves a pending_review PRD without changing status', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
 
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    const result = await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
 
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
-    );
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
   });
 
   it('throws 400 for invalid review action', async () => {
@@ -786,16 +797,11 @@ describe('reviewPrd', () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
     mockIsAssignedApprover.mockResolvedValue(false);
     mockIsAdminUser.mockResolvedValue(true);
-    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
 
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    const result = await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
 
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
-    );
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
   });
 
   it('does not transition to approved if isApprovalComplete returns false', async () => {
@@ -810,57 +816,45 @@ describe('reviewPrd', () => {
     expect(mockDb.update).not.toHaveBeenCalled();
   });
 
-  it('transitions to approved when isApprovalComplete returns true', async () => {
+  it('notifies owner but does not change status when isApprovalComplete returns true', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
     mockIsAssignedApprover.mockResolvedValue(true);
     mockIsAdminUser.mockResolvedValue(false);
     mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
 
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    const result = await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
 
     expect(mockRecordApproverResponse).toHaveBeenCalled();
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
-    );
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
   });
 
   it('admin approval bypasses isApprovalComplete check entirely', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
     mockIsAssignedApprover.mockResolvedValue(false);
     mockIsAdminUser.mockResolvedValue(true);
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
 
-    await reviewPrd('prd-1', 'user-admin', { action: 'approve' });
+    const result = await reviewPrd('prd-1', 'user-admin', { action: 'approve' });
 
     expect(mockIsApprovalComplete).not.toHaveBeenCalled();
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
-    );
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
   });
 
-  it('designated approver approval transitions PRD to approved (any_one mode)', async () => {
+  it('designated approver approval stays at pending_review (any_one mode)', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
     mockIsAssignedApprover.mockResolvedValue(true);
     mockIsAdminUser.mockResolvedValue(false);
     mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
 
-    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    const result = await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
 
     expect(mockRecordApproverResponse).toHaveBeenCalledWith(
       'prd-1', 'prd', 'user-reviewer', 'approved',
     );
     expect(mockIsApprovalComplete).toHaveBeenCalledWith('prd-1', 'prd', 'proj-alpha');
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved', reviewerId: 'user-reviewer' }),
-    );
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
   });
 
   it('blocks approval when readiness has coverage gaps', async () => {
@@ -883,6 +877,80 @@ describe('reviewPrd', () => {
       status: 409,
     });
     expect(mockRecordApproverResponse).not.toHaveBeenCalled();
+  });
+
+  it('notifies PRD owner when approval completes', async () => {
+    const prdWithInterview = makePrdRow({ status: 'pending_review', authorId: 'user-author', interviewId: 'interview-1', title: 'My Feature PRD' });
+    mockDb.query.prds.findFirst.mockResolvedValue(prdWithInterview);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+
+    // Mock the select chain used by getPrdOwnerId
+    const selectLimitMock = jest.fn().mockResolvedValue([{ prdOwnerId: 'user-owner' }]);
+    mockDb.select.mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnValue({
+          limit: selectLimitMock,
+        }),
+      }),
+    });
+
+    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+
+    // Allow fire-and-forget promise to settle
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockCreateNotification).toHaveBeenCalledWith('user-owner', expect.objectContaining({
+      type: 'user-action',
+      title: 'PRD is pending your final approval',
+      link: '/backlog/prd/prd-1',
+    }));
+  });
+
+  it('does not notify owner when approval is incomplete (early return)', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'pending_review', authorId: 'user-author' }));
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: false, mode: 'all_required' });
+
+    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+});
+
+// ── Two-stage PRD approval workflow ───────────────────────────────────────────
+
+describe('two-stage PRD approval workflow', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const pendingPrd = makePrdRow({ status: 'pending_review', authorId: 'user-author' });
+
+  it('reviewer approval keeps PRD at pending_review for owner final sign-off', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+
+    const result = await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+
+    expect(mockRecordApproverResponse).toHaveBeenCalledWith('prd-1', 'prd', 'user-reviewer', 'approved');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ approved: false });
+  });
+
+  it('does not notify owner until reviewer quorum is complete', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(pendingPrd);
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsApprovalComplete.mockResolvedValue({ complete: false, mode: 'all_required' });
+
+    await reviewPrd('prd-1', 'user-reviewer', { action: 'approve' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 });
 

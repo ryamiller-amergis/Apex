@@ -352,6 +352,88 @@
   cursor: not-allowed;
 }
 
+.actionMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.actionMenuPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.actionMenuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.actionMenuItem:hover:not(:disabled),
+.actionMenuItemActive {
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+  color: var(--accent-color);
+}
+
+.actionMenuItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.actionMenuItemDanger {
+  color: var(--error-color);
+}
+
+.actionMenuItemDanger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+  color: var(--error-color);
+}
+
+.actionMenuIcon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.actionMenuIcon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.actionMenuLabel {
+  flex: 1;
+  min-width: 0;
+}
+
 .btnApprove {
   composes: actionBtn;
   background: var(--success-color);
@@ -1424,11 +1506,8 @@
 
 .editModal {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -16,7 +16,7 @@ import {
   useResolvePrototypeComment,
   useUpdatePrototypeHtml,
 } from '../hooks/useDesignPrototypes';
-import { useDesignDocsByPrd } from '../hooks/useInterviews';
+import { useDesignDocsByPrd, usePrd, useInterview, useOwnerApprove } from '../hooks/useInterviews';
 import { UiMockPreview } from './UiMockPreview';
 import { ReviewReasonModal } from './ReviewReasonModal';
 import {
@@ -36,6 +36,7 @@ function badgeClass(status: DesignPrototypeSummary['status']): string {
     case 'pending_review': return styles.badgePendingReview;
     case 'revision_requested': return styles.badgeRevisionRequested;
     case 'regenerating': return styles.badgeRegenerating;
+    case 'reviewer_approved': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
   }
 }
@@ -50,6 +51,10 @@ const DesignPrototypeReviewView: React.FC = () => {
   const { data: prototypes = [], isLoading: isLoadingList } = usePrototypesForPrd(prdId);
   const { data: prototypeAssignments = [] } = usePrototypeAssignments(prdId);
   const { data: relatedDesignDocs = [] } = useDesignDocsByPrd(prdId);
+  const { data: prdData } = usePrd(prdId);
+  const { data: interviewData } = useInterview(prdData?.interviewId ?? null);
+  const ownerApproveProto = useOwnerApprove(prdId, 'design_prototype');
+  const isDesignPrototypeOwner = interviewData?.designPrototypeOwnerId === userId;
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const selectedProto = prototypes[selectedIndex] ?? null;
@@ -141,6 +146,16 @@ const DesignPrototypeReviewView: React.FC = () => {
       },
     );
   }, [selectedProto, prototypes, review, navigate, prdId]);
+
+  const handleOwnerApprove = useCallback(() => {
+    ownerApproveProto.mutate({ status: 'approved' }, {
+      onSuccess: () => navigate(`/backlog/prd/${prdId}`),
+    });
+  }, [ownerApproveProto, navigate, prdId]);
+
+  const handleOwnerRevision = useCallback(() => {
+    ownerApproveProto.mutate({ status: 'revision_requested', comment: 'Revision requested by owner' });
+  }, [ownerApproveProto]);
 
   const handleRequestRevision = useCallback((comment: string) => {
     if (!selectedProto) return;
@@ -434,6 +449,29 @@ const DesignPrototypeReviewView: React.FC = () => {
                     Approve
                   </button>
                 </>
+              )}
+              {selectedProto?.status === 'reviewer_approved' && (isDesignPrototypeOwner || isAdmin) && (
+                <>
+                  <button
+                    className={`${styles.btnPrimary} ${styles.btnApprove}`}
+                    onClick={handleOwnerApprove}
+                    disabled={ownerApproveProto.isPending}
+                  >
+                    Approve as Owner
+                  </button>
+                  <button
+                    className={`${styles.btnSecondary} ${styles.btnRevision}`}
+                    onClick={handleOwnerRevision}
+                    disabled={ownerApproveProto.isPending}
+                  >
+                    Request Revision
+                  </button>
+                </>
+              )}
+              {selectedProto?.status === 'reviewer_approved' && !isDesignPrototypeOwner && !isAdmin && (
+                <span className={`${styles.badge} ${styles.badgePendingReview}`}>
+                  Awaiting Owner Approval
+                </span>
               )}
               {selectedProto?.status === 'approved' && (
                 <>

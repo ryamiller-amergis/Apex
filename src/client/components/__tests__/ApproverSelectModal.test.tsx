@@ -20,21 +20,51 @@ const mockPool = {
 function setupDefaultMocks(overrides?: {
   prd?: { data?: typeof mockPool; isLoading?: boolean };
   dd?: { data?: typeof mockPool; isLoading?: boolean };
+  dp?: { data?: typeof mockPool; isLoading?: boolean };
+  qa?: { data?: typeof mockPool; isLoading?: boolean };
 }) {
   (useAvailableApproverPool as jest.Mock).mockImplementation(
-    (_project: string, docType: 'prd' | 'design_doc') => {
+    (_project: string, docType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case') => {
       if (docType === 'prd') {
         return {
           data: overrides?.prd?.data ?? mockPool,
           isLoading: overrides?.prd?.isLoading ?? false,
         };
       }
+      if (docType === 'design_doc') {
+        return {
+          data: overrides?.dd?.data ?? mockPool,
+          isLoading: overrides?.dd?.isLoading ?? false,
+        };
+      }
+      if (docType === 'design_prototype') {
+        return {
+          data: overrides?.dp?.data ?? mockPool,
+          isLoading: overrides?.dp?.isLoading ?? false,
+        };
+      }
       return {
-        data: overrides?.dd?.data ?? mockPool,
-        isLoading: overrides?.dd?.isLoading ?? false,
+        data: overrides?.qa?.data ?? mockPool,
+        isLoading: overrides?.qa?.isLoading ?? false,
       };
     },
   );
+}
+
+function selectApproverInSection(sectionIndex: number, name: string) {
+  const sections = screen.getAllByText('Individuals');
+  const section = sections[sectionIndex].closest('div')!.parentElement!;
+  const chip = Array.from(section.querySelectorAll('button')).find(
+    (b) => b.textContent?.includes(name),
+  )!;
+  fireEvent.click(chip);
+}
+
+function selectAllPrdReviewers() {
+  selectApproverInSection(0, 'Alice');
+  selectApproverInSection(1, 'Bob');
+  selectApproverInSection(2, 'Charlie');
+  selectApproverInSection(3, 'Alice');
 }
 
 const baseProps = {
@@ -115,18 +145,7 @@ describe('ApproverSelectModal — selection behavior', () => {
   it('enables confirm button when requirements met', () => {
     render(<ApproverSelectModal {...baseProps} documentType="prd" />);
 
-    const sections = screen.getAllByText('Individuals');
-    const prdSection = sections[0].closest('div')!.parentElement!;
-    const prdChip = Array.from(prdSection.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Alice'),
-    )!;
-    fireEvent.click(prdChip);
-
-    const ddSection = sections[1].closest('div')!.parentElement!;
-    const ddChip = Array.from(ddSection.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Bob'),
-    )!;
-    fireEvent.click(ddChip);
+    selectAllPrdReviewers();
 
     const confirmBtn = screen.getByRole('button', { name: /submit for review/i });
     expect(confirmBtn).toBeEnabled();
@@ -141,30 +160,21 @@ describe('ApproverSelectModal — callbacks', () => {
     setupDefaultMocks();
   });
 
-  it('calls onConfirm with prdApproverIds and designDocApproverIds for PRD type', () => {
+  it('calls onConfirm with all reviewer ids for PRD type', () => {
     const onConfirm = jest.fn();
     render(
       <ApproverSelectModal {...baseProps} documentType="prd" onConfirm={onConfirm} />,
     );
 
-    const sections = screen.getAllByText('Individuals');
-    const prdSection = sections[0].closest('div')!.parentElement!;
-    const prdChip = Array.from(prdSection.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Alice'),
-    )!;
-    fireEvent.click(prdChip);
-
-    const ddSection = sections[1].closest('div')!.parentElement!;
-    const ddChip = Array.from(ddSection.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Bob'),
-    )!;
-    fireEvent.click(ddChip);
+    selectAllPrdReviewers();
 
     fireEvent.click(screen.getByRole('button', { name: /submit for review/i }));
 
     expect(onConfirm).toHaveBeenCalledWith({
       prdApproverIds: ['u1'],
       designDocApproverIds: ['u2'],
+      designPrototypeApproverIds: ['u3'],
+      qaApproverIds: ['u1'],
     });
   });
 

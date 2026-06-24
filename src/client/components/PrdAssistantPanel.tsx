@@ -41,11 +41,13 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const isRunning = threadStatus === 'running';
   const wasRunningRef = useRef(false);
 
-  // When the assistant finishes a run, invalidate the PRD and review comments
-  // so the main pane picks up any changes from update_prd / resolve_prd_comment.
+  // When the assistant finishes a run, invalidate the PRD, generated test
+  // cases, and review comments so the main pane picks up any changes from
+  // update_prd / add_test_case / resolve_prd_comment without a manual reload.
   useEffect(() => {
     if (wasRunningRef.current && !isRunning) {
       void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
       void qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
       void qc.invalidateQueries({ queryKey: ['unresolved-comment-count', 'prd', prdId] });
     }

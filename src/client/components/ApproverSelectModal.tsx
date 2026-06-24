@@ -6,11 +6,19 @@ import styles from './ApproverSelectModal.module.css';
 interface ApproverSelectModalProps {
   documentType: 'prd' | 'design_doc';
   project: string;
-  onConfirm: (selections: { prdApproverIds?: string[]; designDocApproverIds?: string[]; approverIds?: string[] }) => void;
+  onConfirm: (selections: {
+    prdApproverIds?: string[];
+    designDocApproverIds?: string[];
+    designPrototypeApproverIds?: string[];
+    qaApproverIds?: string[];
+    approverIds?: string[];
+  }) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
   initialPrdApproverIds?: string[];
   initialDesignDocApproverIds?: string[];
+  initialDesignPrototypeApproverIds?: string[];
+  initialQaApproverIds?: string[];
   initialApproverIds?: string[];
   confirmLabel?: string;
   excludeSelf?: boolean;
@@ -31,6 +39,8 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
   isSubmitting = false,
   initialPrdApproverIds,
   initialDesignDocApproverIds,
+  initialDesignPrototypeApproverIds,
+  initialQaApproverIds,
   initialApproverIds,
   confirmLabel,
   excludeSelf = true,
@@ -38,12 +48,20 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
 }) => {
   const { data: prdPool, isLoading: prdLoading } = useAvailableApproverPool(project, 'prd', excludeSelf);
   const { data: ddPool, isLoading: ddLoading } = useAvailableApproverPool(project, 'design_doc', excludeSelf);
+  const { data: dpPool, isLoading: dpLoading } = useAvailableApproverPool(project, 'design_prototype', excludeSelf);
+  const { data: qaPool, isLoading: qaLoading } = useAvailableApproverPool(project, 'test_case', excludeSelf);
 
   const [selectedPrdApprovers, setSelectedPrdApprovers] = useState<Set<string>>(
     () => new Set(initialPrdApproverIds ?? []),
   );
   const [selectedDdApprovers, setSelectedDdApprovers] = useState<Set<string>>(
     () => new Set(initialDesignDocApproverIds ?? initialApproverIds ?? []),
+  );
+  const [selectedDpApprovers, setSelectedDpApprovers] = useState<Set<string>>(
+    () => new Set(initialDesignPrototypeApproverIds ?? []),
+  );
+  const [selectedQaApprovers, setSelectedQaApprovers] = useState<Set<string>>(
+    () => new Set(initialQaApproverIds ?? []),
   );
 
   useEffect(() => {
@@ -72,25 +90,48 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
     });
   }, []);
 
+  const toggleDp = useCallback((id: string) => {
+    setSelectedDpApprovers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleQa = useCallback((id: string) => {
+    setSelectedQaApprovers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const handleConfirm = useCallback(() => {
     if (documentType === 'prd') {
       onConfirm({
         prdApproverIds: [...selectedPrdApprovers],
         designDocApproverIds: [...selectedDdApprovers],
+        designPrototypeApproverIds: [...selectedDpApprovers],
+        qaApproverIds: [...selectedQaApprovers],
       });
     } else {
       onConfirm({
         approverIds: [...selectedDdApprovers],
       });
     }
-  }, [documentType, selectedPrdApprovers, selectedDdApprovers, onConfirm]);
+  }, [documentType, selectedPrdApprovers, selectedDdApprovers, selectedDpApprovers, selectedQaApprovers, onConfirm]);
 
   const isPrdSection = documentType === 'prd';
 
   const canConfirm =
     (allowEmpty ||
       (isPrdSection
-        ? selectedPrdApprovers.size > 0 && selectedDdApprovers.size > 0
+        ? selectedPrdApprovers.size > 0 &&
+          selectedDdApprovers.size > 0 &&
+          selectedDpApprovers.size > 0 &&
+          selectedQaApprovers.size > 0
         : selectedDdApprovers.size > 0)) && !isSubmitting;
 
   const renderGroupedChips = (
@@ -207,10 +248,24 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
           {renderGroupedChips(ddPool, ddLoading, selectedDdApprovers, toggleDd)}
         </div>
 
+        {isPrdSection && (
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Design Prototype Reviewers</h3>
+            {renderGroupedChips(dpPool, dpLoading, selectedDpApprovers, toggleDp)}
+          </div>
+        )}
+
+        {isPrdSection && (
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>QA Reviewers</h3>
+            {renderGroupedChips(qaPool, qaLoading, selectedQaApprovers, toggleQa)}
+          </div>
+        )}
+
         {!canConfirm && !isSubmitting && (
           <p className={styles.validationHint}>
             {isPrdSection
-              ? 'Select at least one PRD reviewer and one Design Doc reviewer'
+              ? 'Select at least one reviewer in each section'
               : 'Select at least one reviewer'}
           </p>
         )}

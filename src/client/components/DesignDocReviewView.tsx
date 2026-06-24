@@ -26,6 +26,8 @@ import {
   useReassignApprovers,
   useFixDesignDocWithAi,
   useFixDesignDocCommentWithAi,
+  useDesignDocOwnerApproval,
+  useDesignDocOwnerApprove,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useChatStream } from '../hooks/useChatStream';
@@ -130,6 +132,7 @@ function statusBadgeClass(status: DesignDocStatus): string {
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
+    case 'reviewer_approved': return styles.badgePendingReview;
     case 'approved': return styles.badgeApproved;
     case 'revision_requested': return styles.badgeRevisionRequested;
   }
@@ -141,6 +144,7 @@ function statusLabel(status: DesignDocStatus): string {
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
+    case 'reviewer_approved': return 'Reviewer Approved';
     case 'approved': return 'Approved';
     case 'revision_requested': return 'Revision Requested';
   }
@@ -889,6 +893,8 @@ export const DesignDocReviewView: React.FC = () => {
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
+  useDesignDocOwnerApproval(id);
+  const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
   const isGenerating = !!doc && doc.status === 'generating' && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
@@ -939,10 +945,15 @@ export const DesignDocReviewView: React.FC = () => {
     setEditingTab(null);
   }, [doc]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!id) return;
-    setShowApproverModal(true);
-  }, [id]);
+    await submitDoc.mutateAsync({
+      designDocId: id,
+      approverIds: assignments.length > 0
+        ? assignments.map((a) => a.approverUserId)
+        : [],
+    });
+  }, [id, assignments, submitDoc]);
 
   const handleApproverConfirm = useCallback(async (selections: { approverIds?: string[] }) => {
     if (!id) return;
@@ -972,6 +983,11 @@ export const DesignDocReviewView: React.FC = () => {
     if (!id) return;
     await reviewDoc.mutateAsync({ designDocId: id, action: 'approve' });
   }, [id, reviewDoc]);
+
+  const handleOwnerApprove = useCallback(async () => {
+    if (!id) return;
+    await ownerApproveMutation.mutateAsync({ status: 'approved' });
+  }, [id, ownerApproveMutation]);
 
   const handleMarkValidationReady = useCallback(async () => {
     if (!id) return;
@@ -1260,15 +1276,17 @@ export const DesignDocReviewView: React.FC = () => {
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
   const isAuthor = doc.authorId === userId;
+  const isOwner = doc.ownerId === userId;
   const validationBlocking = doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
-  const isReviewer = canReview && (!isAuthor || isAdmin);
+  const isReviewer = canReview && (!isAuthor || isAdmin) && !isOwner;
   const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
-  const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved';
-  const canUseAssistant = (isReviewer || isAdmin) &&
-    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+  const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
+  const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
+  const canUseAssistant = (isReviewer || isOwner || isAdmin) &&
+    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
   const apexFixRunningBanner = (() => {
@@ -1293,14 +1311,14 @@ export const DesignDocReviewView: React.FC = () => {
     return null;
   })();
   const isBulkCommentFixing = bulkCommentFixRunning || fixDesignDocWithAi.isPending;
-  const canWriteAssistant = canEdit || canPerformReview;
+  const canWriteAssistant = canEdit || canPerformReview || isOwner;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
 
   const showCommentLayer =
-    (doc.status === 'pending_review' || doc.status === 'revision_requested') &&
-    (canPerformReview || isAuthor || isAdmin);
+    (doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested') &&
+    (canPerformReview || isOwner || isAuthor || isAdmin);
 
   const tabToSectionKey: Record<string, ReviewSectionKey> = {
     'design': 'design',
@@ -1312,7 +1330,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const showFixBanner =
     validationBlocking &&
-    (doc.status === 'draft' || doc.status === 'revision_requested') &&
+    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') &&
     fixFlow.phase === 'idle';
 
   const pendingGapCount = (() => {
@@ -1444,7 +1462,7 @@ export const DesignDocReviewView: React.FC = () => {
             <>
               {canUseAssistant && <span className={styles.actionDivider} />}
               {hasAnyContent &&
-                (doc.status === 'draft' || doc.status === 'revision_requested') && (
+                (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void createValidationThread.mutateAsync(doc.id)}
@@ -1533,6 +1551,22 @@ export const DesignDocReviewView: React.FC = () => {
                   type="button"
                 >
                   Approve
+                </button>
+              </div>
+            </>
+          )}
+
+          {showOwnerApproveButton && (
+            <>
+              <span className={styles.actionDivider} />
+              <div className={styles.reviewControls}>
+                <button
+                  className={styles.btnApprove}
+                  onClick={() => void handleOwnerApprove()}
+                  disabled={ownerApproveMutation.isPending}
+                  type="button"
+                >
+                  Approve as Owner
                 </button>
               </div>
             </>

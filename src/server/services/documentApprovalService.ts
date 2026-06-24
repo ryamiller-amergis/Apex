@@ -22,14 +22,13 @@ import type { ProjectApprover, ApproverPoolResponse } from '../../shared/types/p
  * For `design_prototype`, the `documentId` is the PRD id — prototypes are
  * reviewed as a set on the per-PRD prototype review screen.
  */
-type DocumentType = 'prd' | 'design_doc' | 'design_prototype';
+type DocumentType = 'prd' | 'design_doc' | 'design_prototype' | 'test_case';
 
 async function getProjectForDocument(
   documentId: string,
   documentType: DocumentType,
 ): Promise<string> {
-  // design_prototype assignments key off the PRD id, so they resolve via prds too.
-  if (documentType === 'prd' || documentType === 'design_prototype') {
+  if (documentType === 'prd' || documentType === 'design_prototype' || documentType === 'test_case') {
     const rows = await db
       .select({ project: prds.project })
       .from(prds)
@@ -48,7 +47,7 @@ async function getProjectForDocument(
 }
 
 async function getDocumentTitle(documentId: string, documentType: DocumentType): Promise<string> {
-  if (documentType === 'prd' || documentType === 'design_prototype') {
+  if (documentType === 'prd' || documentType === 'design_prototype' || documentType === 'test_case') {
     const rows = await db.select({ title: prds.title }).from(prds).where(eq(prds.id, documentId)).limit(1);
     return rows[0]?.title ?? 'Untitled PRD';
   }
@@ -69,6 +68,8 @@ function assignmentNotificationCopy(
         title: 'You have been assigned as a design prototype reviewer',
         link: `/backlog/design-prototypes/${documentId}`,
       };
+    case 'test_case':
+      return { title: 'You have been assigned as a QA reviewer', link: `/backlog/prd/${documentId}` };
     case 'design_doc':
     default:
       return { title: 'You have been assigned as a design doc approver', link: `/backlog/design-doc/${documentId}` };
@@ -329,7 +330,7 @@ export async function getAvailableApprovers(
 
 export async function getAvailableApproverPool(
   project: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ApproverPoolResponse> {
   const pool = await getApproverPool(project, documentType);
@@ -364,7 +365,7 @@ export async function propagateDesignDocApprovers(
 
 export async function notifyApproversDocumentReady(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: DocumentType,
 ): Promise<void> {
   const assignments = await getAssignments(documentId, documentType);
   const pendingApprovers = assignments
@@ -374,17 +375,25 @@ export async function notifyApproversDocumentReady(
   if (pendingApprovers.length === 0) return;
 
   const docTitle = await getDocumentTitle(documentId, documentType);
+
+  const notifTitle =
+    documentType === 'prd' ? 'A PRD is ready for your review'
+    : documentType === 'test_case' ? 'Test cases are ready for your QA review'
+    : documentType === 'design_prototype' ? 'A design prototype is ready for your review'
+    : 'A design doc is ready for your review';
+
+  const notifLink =
+    documentType === 'prd' || documentType === 'test_case' ? `/backlog/prd/${documentId}`
+    : documentType === 'design_prototype' ? `/backlog/design-prototypes/${documentId}`
+    : `/backlog/design-doc/${documentId}`;
+
   await Promise.allSettled(
     pendingApprovers.map((userId) =>
       createNotification(userId, {
         type: 'user-action',
-        title: documentType === 'prd'
-          ? 'A PRD is ready for your review'
-          : 'A design doc is ready for your review',
+        title: notifTitle,
         body: `"${docTitle}" is now pending review`,
-        link: documentType === 'prd'
-          ? `/backlog/prd/${documentId}`
-          : `/backlog/design-doc/${documentId}`,
+        link: notifLink,
       }),
     ),
   );

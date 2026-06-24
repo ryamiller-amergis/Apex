@@ -1401,6 +1401,11 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
     () => extractGeneratedTestCasesByPbi(testCasesJson),
     [testCasesJson]
   );
+  const totalTestCases = useMemo(() => {
+    let count = 0;
+    for (const cases of testCasesByPbi.values()) count += cases.length;
+    return count;
+  }, [testCasesByPbi]);
   const businessRulesById = useMemo(
     () =>
       buildBusinessRulesById(
@@ -1515,6 +1520,13 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
               <span className={styles.summaryCount}>{totalPbis}</span>
               <span className={styles.summaryLabel}>
                 PBI{totalPbis !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className={styles.summaryDivider} />
+            <div className={`${styles.summaryItem} ${styles.summaryTestCases}`}>
+              <span className={styles.summaryCount}>{totalTestCases}</span>
+              <span className={styles.summaryLabel}>
+                Test Case{totalTestCases !== 1 ? 's' : ''}
               </span>
             </div>
             {data.personas && data.personas.length > 0 && (

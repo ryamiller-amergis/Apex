@@ -1,0 +1,82 @@
+.checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+  margin-top: 8px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.groupLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.groupHint {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.groupSubtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.statusApproved {
+  color: var(--success-color);
+}
+
+.statusPending {
+  color: var(--border-color);
+}
+
+.statusRevision {
+  color: var(--error-color);
+}
+
+.rowName {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.rowDate {
+  font-size: 11px;
+  color: var(--text-muted);
+}

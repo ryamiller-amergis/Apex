@@ -1,8 +1,8 @@
 import fs from 'fs';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { prds, appUsers, chatThreads, interviews, testCases, designDocs, designPrototypes } from '../db/schema';
+import { prds, appUsers, chatThreads, interviews, testCases, designDocs, designPrototypes, reviewComments, documentApproverAssignments } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
@@ -10,6 +10,7 @@ import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdReques
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -33,7 +34,7 @@ import {
   type DocumentValidationAdapter,
 } from './documentValidationService';
 
-const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'approved', 'revision_requested'];
+const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -82,6 +83,25 @@ async function getPrdOwnerId(interviewId: string | null): Promise<string | null>
     .where(eq(interviews.id, interviewId))
     .limit(1);
   return rows[0]?.prdOwnerId ?? null;
+}
+
+async function notifyOwnerPendingApproval(
+  prdId: string,
+  title: string,
+  interviewId: string | null,
+): Promise<void> {
+  try {
+    const ownerId = await getPrdOwnerId(interviewId);
+    if (!ownerId) return;
+    await createNotification(ownerId, {
+      type: 'user-action',
+      title: 'PRD is pending your final approval',
+      body: `"${title}" has passed reviewer approval and needs your approval`,
+      link: `/backlog/prd/${prdId}`,
+    });
+  } catch (err) {
+    console.error(`[notifyOwnerPendingApproval] Failed (prdId=${prdId}):`, err);
+  }
 }
 
 async function resolveOwnerEmail(oid: string | null | undefined): Promise<string | undefined> {
@@ -307,7 +327,12 @@ export async function updatePrdBacklog(
 export async function submitForReview(
   id: string,
   requestingUserId: string,
-  opts?: { prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[] },
+  opts?: {
+    prdApproverIds?: string[];
+    designDocApproverIds?: string[];
+    designPrototypeApproverIds?: string[];
+    qaApproverIds?: string[];
+  },
 ): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
@@ -337,11 +362,12 @@ export async function submitForReview(
   let effectivePrdApproverIds = opts?.prdApproverIds;
   let effectiveDdApproverIds = opts?.designDocApproverIds;
   let effectivePrototypeApproverIds = opts?.designPrototypeApproverIds;
+  let effectiveQaApproverIds = opts?.qaApproverIds;
 
   if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
     const interview = await db.query.interviews.findFirst({
       where: eq(interviews.id, row.interviewId),
-      columns: { prdApproverIds: true, designDocApproverIds: true, designPrototypeApproverIds: true },
+      columns: { prdApproverIds: true, designDocApproverIds: true, designPrototypeApproverIds: true, testCaseApproverIds: true },
     });
     if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
       effectivePrdApproverIds = interview.prdApproverIds;
@@ -351,6 +377,9 @@ export async function submitForReview(
     }
     if (!effectivePrototypeApproverIds || effectivePrototypeApproverIds.length === 0) {
       effectivePrototypeApproverIds = interview?.designPrototypeApproverIds ?? undefined;
+    }
+    if (!effectiveQaApproverIds || effectiveQaApproverIds.length === 0) {
+      effectiveQaApproverIds = interview?.testCaseApproverIds ?? undefined;
     }
   }
 
@@ -373,6 +402,10 @@ export async function submitForReview(
 
   if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
     await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
+  }
+
+  if (effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
+    await assignApprovers(id, 'test_case', effectiveQaApproverIds, requestingUserId);
   }
 }
 
@@ -450,9 +483,28 @@ export async function reviewPrd(
   }
 
   const admin = await isAdminUser(reviewerId);
-  const assigned = await isAssignedApprover(id, 'prd', reviewerId);
+  let assigned = await isAssignedApprover(id, 'prd', reviewerId);
   if (!assigned && !admin) {
-    throw forbidden('You are not an assigned approver for this PRD');
+    if (row.interviewId) {
+      const interview = await db.query.interviews.findFirst({
+        where: eq(interviews.id, row.interviewId),
+        columns: { prdApproverIds: true },
+      });
+      if (interview?.prdApproverIds?.includes(reviewerId)) {
+        await db.insert(documentApproverAssignments)
+          .values(interview.prdApproverIds.map((uid) => ({
+            documentId: id,
+            documentType: 'prd' as const,
+            approverUserId: uid,
+            assignedBy: reviewerId,
+          })))
+          .onConflictDoNothing();
+        assigned = true;
+      }
+    }
+    if (!assigned) {
+      throw forbidden('You are not an assigned approver for this PRD');
+    }
   }
 
   if (assigned) {
@@ -466,17 +518,11 @@ export async function reviewPrd(
     }
   }
 
-  await db
-    .update(prds)
-    .set({
-      status: 'approved',
-      reviewerId,
-      reviewedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(prds.id, id));
+  notifyOwnerPendingApproval(id, row.title, row.interviewId).catch((err) =>
+    console.error(`[reviewPrd] Failed to notify owner (prdId=${id}):`, err),
+  );
 
-  return { approved: opts.action === 'approve' };
+  return { approved: false };
 }
 
 export async function syncPrdContent(
@@ -1186,6 +1232,108 @@ export async function deletePrd(id: string, requestingUserId: string): Promise<v
 
 // Ensure assertValidPrdStatus is used (suppress unused warning)
 void assertValidPrdStatus;
+
+/**
+ * Promote proposed PRD content/backlog to live, resolve related review comments,
+ * sync backlog test-case counts, and re-run validation when configured.
+ */
+export async function applyProposedPrdChanges(
+  prdId: string,
+  options: { resolvedBy: string; fixCommentId?: string | null },
+): Promise<{ applied: boolean }> {
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: {
+      proposedContent: true,
+      proposedBacklogJson: true,
+      fixCommentId: true,
+    },
+  });
+  if (!prdRow) throw notFound('PRD not found');
+
+  const hasProposed =
+    prdRow.proposedContent != null || prdRow.proposedBacklogJson != null;
+  if (!hasProposed) return { applied: false };
+
+  const fixCommentId =
+    options.fixCommentId !== undefined ? options.fixCommentId : prdRow.fixCommentId;
+  const backlogWillUpdate = prdRow.proposedBacklogJson != null;
+
+  await db.execute(sql`
+    UPDATE prds
+    SET content = COALESCE(proposed_content, content),
+        backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+        proposed_content = NULL,
+        proposed_backlog_json = NULL,
+        fix_comment_id = NULL,
+        updated_at = NOW()
+    WHERE id = ${prdId}
+  `);
+
+  if (backlogWillUpdate) {
+    const { syncPrdBacklogTestCaseCounts } = await import('./testCaseService');
+    await syncPrdBacklogTestCaseCounts(prdId);
+  }
+
+  const now = new Date().toISOString();
+  if (fixCommentId) {
+    await db
+      .update(reviewComments)
+      .set({ status: 'resolved', resolvedBy: options.resolvedBy, resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(reviewComments.id, fixCommentId),
+          eq(reviewComments.documentId, prdId),
+          eq(reviewComments.documentType, 'prd'),
+          eq(reviewComments.status, 'open'),
+        ),
+      );
+  } else {
+    await db
+      .update(reviewComments)
+      .set({ status: 'resolved', resolvedBy: options.resolvedBy, resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(reviewComments.documentId, prdId),
+          eq(reviewComments.documentType, 'prd'),
+          eq(reviewComments.status, 'open'),
+        ),
+      );
+  }
+
+  void autoStartPrdValidation(prdId).catch((err) =>
+    console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
+  );
+
+  return { applied: true };
+}
+
+/** Resolve a PRD review comment, applying any pending proposed edits first. */
+export async function resolvePrdCommentWithApply(
+  commentId: string,
+  resolvedBy: string,
+): Promise<void> {
+  const comment = await db.query.reviewComments.findFirst({
+    where: eq(reviewComments.id, commentId),
+  });
+  if (!comment) throw notFound('Comment not found');
+
+  if (comment.documentType !== 'prd') {
+    const { resolveComment } = await import('./reviewCommentService');
+    await resolveComment(commentId, resolvedBy);
+    return;
+  }
+
+  const { applied } = await applyProposedPrdChanges(comment.documentId, {
+    resolvedBy,
+    fixCommentId: commentId,
+  });
+
+  if (!applied) {
+    const { resolveComment } = await import('./reviewCommentService');
+    await resolveComment(commentId, resolvedBy);
+  }
+}
 
 // ── PRD Validation ────────────────────────────────────────────────────────────
 

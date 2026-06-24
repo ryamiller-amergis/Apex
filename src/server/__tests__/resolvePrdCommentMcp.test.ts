@@ -10,8 +10,8 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn(),
 }));
 
-jest.mock('../services/reviewCommentService', () => ({
-  resolveComment: jest.fn(),
+jest.mock('../services/prdService', () => ({
+  resolvePrdCommentWithApply: jest.fn(),
 }));
 
 // ── Imports ───────────────────────────────────────────────────────────────────
@@ -19,7 +19,9 @@ jest.mock('../services/reviewCommentService', () => ({
 import { handleResolvePrdComment } from '../mcp/ado/server';
 
 const { getThread: mockGetThread } = jest.requireMock('../services/chatAgentService') as { getThread: jest.Mock };
-const { resolveComment: mockResolveComment } = jest.requireMock('../services/reviewCommentService') as { resolveComment: jest.Mock };
+const { resolvePrdCommentWithApply: mockResolvePrdCommentWithApply } = jest.requireMock('../services/prdService') as {
+  resolvePrdCommentWithApply: jest.Mock;
+};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -41,18 +43,18 @@ describe('handleResolvePrdComment', () => {
     expect(parsed.error).toMatch(/thread not found/i);
   });
 
-  it('calls resolveComment with commentId and userId from thread', async () => {
+  it('calls resolvePrdCommentWithApply with commentId and userId from thread', async () => {
     mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
-    mockResolveComment.mockResolvedValue(undefined);
+    mockResolvePrdCommentWithApply.mockResolvedValue(undefined);
 
     await handleResolvePrdComment({ threadId: 'thread-1', commentId: 'comment-abc' });
 
-    expect(mockResolveComment).toHaveBeenCalledWith('comment-abc', 'user-1');
+    expect(mockResolvePrdCommentWithApply).toHaveBeenCalledWith('comment-abc', 'user-1');
   });
 
   it('returns { ok: true, commentId } on success', async () => {
     mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
-    mockResolveComment.mockResolvedValue(undefined);
+    mockResolvePrdCommentWithApply.mockResolvedValue(undefined);
 
     const result = await handleResolvePrdComment({ threadId: 'thread-1', commentId: 'comment-xyz' });
 
@@ -60,9 +62,9 @@ describe('handleResolvePrdComment', () => {
     expect(parsed).toEqual({ ok: true, commentId: 'comment-xyz' });
   });
 
-  it('returns error message when resolveComment throws', async () => {
+  it('returns error message when resolvePrdCommentWithApply throws', async () => {
     mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
-    mockResolveComment.mockRejectedValue(new Error('Comment not found'));
+    mockResolvePrdCommentWithApply.mockRejectedValue(new Error('Comment not found'));
 
     const result = await handleResolvePrdComment({ threadId: 'thread-1', commentId: 'bad-comment' });
 

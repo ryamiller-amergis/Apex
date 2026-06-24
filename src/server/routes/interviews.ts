@@ -8,7 +8,7 @@ import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
 import { eq, and, sql } from 'drizzle-orm';
-import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable } from '../db/schema';
+import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
 import { getComments } from '../services/reviewCommentService';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
@@ -43,6 +43,7 @@ import {
   triggerFixPrdValidation,
   acceptFixPrdValidation,
   revertPrdSection,
+  applyProposedPrdChanges,
 } from '../services/prdService';
 import {
   acceptFixValidation,
@@ -66,7 +67,7 @@ import {
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getApproverPool, getSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
-import { getAssignments, getAvailableApprovers, reassignApprovers } from '../services/documentApprovalService';
+import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
 import { getTestCases, triggerTestCaseGeneration } from '../services/testCaseService';
@@ -126,6 +127,17 @@ router.get('/active-users', requirePermission('interviews:manage'), async (req, 
   try {
     const users = await getActiveUsers();
     res.json(users);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/groups-with-members', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const { listGroupsWithMembers } = await import('../services/groupService');
+    const groups = await listGroupsWithMembers(project);
+    res.json(groups);
   } catch (err) {
     next(err);
   }
@@ -253,13 +265,17 @@ router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async
 router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { prdApproverIds, designDocApproverIds } = req.body as {
+    const { prdApproverIds, designDocApproverIds, designPrototypeApproverIds, qaApproverIds } = req.body as {
       prdApproverIds?: string[];
       designDocApproverIds?: string[];
+      designPrototypeApproverIds?: string[];
+      qaApproverIds?: string[];
     };
     await submitForReview(req.params.prdId, userId, {
       prdApproverIds: prdApproverIds ?? [],
       designDocApproverIds: designDocApproverIds ?? [],
+      designPrototypeApproverIds: designPrototypeApproverIds ?? [],
+      qaApproverIds: qaApproverIds ?? [],
     });
     res.json({ ok: true });
   } catch (err) {
@@ -300,6 +316,45 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
     }
 
     res.json({ ok: true, prdId: req.params.prdId, approved });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/test-cases/review', requirePermission('prds:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { prdId } = req.params;
+
+    let assigned = await isAssignedApprover(prdId, 'test_case', userId);
+    const admin = await isAdminUser(userId);
+    if (!assigned && !admin) {
+      const prd = await getPrd(prdId);
+      if (prd?.interviewId) {
+        const interview = await db.select({ testCaseApproverIds: interviewsTable.testCaseApproverIds })
+          .from(interviewsTable)
+          .where(eq(interviewsTable.id, prd.interviewId))
+          .limit(1);
+        if (interview[0]?.testCaseApproverIds?.includes(userId)) {
+          await db.insert(documentApproverAssignments)
+            .values(interview[0].testCaseApproverIds.map((uid) => ({
+              documentId: prdId,
+              documentType: 'test_case' as const,
+              approverUserId: uid,
+              assignedBy: userId,
+            })))
+            .onConflictDoNothing();
+          assigned = true;
+        }
+      }
+      if (!assigned) {
+        res.status(403).json({ error: 'You are not an assigned QA approver for this PRD' });
+        return;
+      }
+    }
+
+    await recordApproverResponse(prdId, 'test_case', userId, 'approved');
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -535,6 +590,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         '',
         '- To update PRD content: call `update_prd` with section="content" and the full revised markdown.',
         '- To update the backlog: call `update_prd` with section="backlog" and the full revised JSON string.',
+        '- To add a REAL QA test case (with steps) for a backlog item: call `add_test_case` with `pbiId`, a `title`, an ordered `steps` array, and optionally `acceptanceCriteriaIndex`. Use this whenever the user asks you to add or write a test case — do NOT just bump a count via `update_prd`.',
         '- Always pass `threadId: "' + threadId + '"` and `prdId: "' + req.params.prdId + '"` when calling the tool.',
         '',
         'After you call `update_prd`, the changes will appear as a proposed diff that the PRD owner can review and accept or reject.',
@@ -632,51 +688,7 @@ router.post('/prds/:prdId/apply-proposed', requirePermission('interviews:manage'
     const userId = getUserId(req);
     const prdId = req.params.prdId;
 
-    // Read the fixCommentId before the atomic update so we know which comment to resolve.
-    const prdRow = await db.query.prds.findFirst({
-      where: eq(prdsTable.id, prdId),
-      columns: { fixCommentId: true },
-    });
-    const fixCommentId = prdRow?.fixCommentId ?? null;
-
-    // Atomic update: copy proposed → live, clear proposed + fixCommentId columns.
-    await db.execute(sql`
-      UPDATE prds
-      SET content = COALESCE(proposed_content, content),
-          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
-          proposed_content = NULL,
-          proposed_backlog_json = NULL,
-          fix_comment_id = NULL,
-          updated_at = NOW()
-      WHERE id = ${prdId}
-    `);
-
-    // Resolve only the triggering comment (single fix) or all open comments (bulk fix).
-    const now = new Date().toISOString();
-    if (fixCommentId) {
-      await db
-        .update(reviewCommentsTable)
-        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
-        .where(
-          and(
-            eq(reviewCommentsTable.id, fixCommentId),
-            eq(reviewCommentsTable.documentId, prdId),
-            eq(reviewCommentsTable.documentType, 'prd'),
-            eq(reviewCommentsTable.status, 'open'),
-          ),
-        );
-    } else {
-      await db
-        .update(reviewCommentsTable)
-        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
-        .where(
-          and(
-            eq(reviewCommentsTable.documentId, prdId),
-            eq(reviewCommentsTable.documentType, 'prd'),
-            eq(reviewCommentsTable.status, 'open'),
-          ),
-        );
-    }
+    await applyProposedPrdChanges(prdId, { resolvedBy: userId });
 
     res.json({ ok: true });
   } catch (err) {
@@ -1483,7 +1495,10 @@ router.delete('/design-docs/:id', requirePermission('interviews:manage'), async 
 
 router.get('/prds/:prdId/assignments', requirePermission('interviews:view'), async (req, res, next) => {
   try {
-    const assignments = await getAssignments(req.params.prdId, 'prd');
+    const dt = req.query.documentType as string | undefined;
+    const documentType: 'prd' | 'test_case' | 'design_prototype' =
+      dt === 'test_case' ? 'test_case' : dt === 'design_prototype' ? 'design_prototype' : 'prd';
+    const assignments = await getAssignments(req.params.prdId, documentType);
     res.json(assignments);
   } catch (err) {
     next(err);
@@ -1501,7 +1516,11 @@ router.get('/design-docs/:id/assignments', requirePermission('interviews:view'),
 
 router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    const { approverUserIds, designDocApproverIds } = req.body as { approverUserIds?: string[]; designDocApproverIds?: string[] };
+    const { approverUserIds, designDocApproverIds, qaApproverIds } = req.body as {
+      approverUserIds?: string[];
+      designDocApproverIds?: string[];
+      qaApproverIds?: string[];
+    };
     if (!approverUserIds || !Array.isArray(approverUserIds)) {
       res.status(400).json({ error: 'approverUserIds is required and must be an array' });
       return;
@@ -1520,6 +1539,9 @@ router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), a
     if (Array.isArray(designDocApproverIds)) {
       await updatePrdDesignDocApprovers(req.params.prdId, designDocApproverIds);
     }
+    if (Array.isArray(qaApproverIds)) {
+      await reassignApprovers(req.params.prdId, 'test_case', qaApproverIds, userId);
+    }
     const assignments = await reassignApprovers(req.params.prdId, 'prd', approverUserIds, userId);
     res.json(assignments);
   } catch (err) {
@@ -1537,6 +1559,63 @@ router.put('/design-docs/:id/assignments', requirePermission('admin:roles'), asy
     const userId = getUserId(req);
     const assignments = await reassignApprovers(req.params.id, 'design_doc', approverUserIds, userId);
     res.json(assignments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Design Doc Owner Approval (two-stage) ────────────────────────────────────
+
+router.get('/design-docs/:id/owner-approval', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const approval = await getOwnerApproval(req.params.id, 'design_doc');
+    res.json(approval);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const docId = req.params.id;
+    const { status, comment } = req.body as OwnerApproveRequest;
+
+    const admin = await isAdminUser(userId);
+    const isOwner = await isDocumentOwner(docId, 'design_doc', userId);
+    if (!isOwner && !admin) {
+      res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+
+    const doc = await db.query.designDocs.findFirst({
+      where: eq(designDocsTable.id, docId),
+      columns: { id: true, status: true },
+    });
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    if (doc.status !== 'reviewer_approved') {
+      res.status(409).json({ error: 'Reviewers must approve the design doc before the owner can give final approval' });
+      return;
+    }
+
+    await recordOwnerApproval(docId, 'design_doc', userId, status, comment);
+
+    if (status === 'approved') {
+      await db.update(designDocsTable).set({
+        status: 'approved',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(designDocsTable.id, docId));
+    } else {
+      await db.update(designDocsTable).set({
+        status: 'revision_requested',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(designDocsTable.id, docId));
+    }
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -1919,6 +1998,154 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     });
     startPrdWatcher(result.prdId, chatThreadId);
     res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Owner Approval (two-stage) ────────────────────────────────────────────────
+
+import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../services/ownerApprovalService';
+import { triggerDesignDocForPrototype } from '../services/designPrototypeService';
+import type { OwnerApproveRequest, OwnerApprovalDocumentType } from '../../shared/types/approvals';
+
+router.get('/prds/:prdId/owner-approval', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const documentType = (req.query.documentType as OwnerApprovalDocumentType) ?? 'prd';
+    const approval = await getOwnerApproval(req.params.prdId, documentType);
+    res.json(approval);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { prdId } = req.params;
+    const { status, comment } = req.body as OwnerApproveRequest;
+
+    const admin = await isAdminUser(userId);
+    const isOwner = await isDocumentOwner(prdId, 'prd', userId);
+    if (!isOwner && !admin) {
+      res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+
+    const prd = await getPrd(prdId);
+    if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
+    if (prd.status !== 'pending_review') {
+      res.status(409).json({ error: `Cannot owner-approve PRD from status '${prd.status}'` });
+      return;
+    }
+
+    if (status === 'approved' && !admin) {
+      const { complete } = await isApprovalComplete(prdId, 'prd', prd.project);
+      if (!complete) {
+        res.status(409).json({ error: 'Reviewers must approve the PRD before the owner can give final approval' });
+        return;
+      }
+      const existingAssignments = await getAssignments(prdId, 'prd');
+      if (existingAssignments.length === 0 && prd.interviewId) {
+        const interview = await db.select({ prdApproverIds: interviewsTable.prdApproverIds })
+          .from(interviewsTable)
+          .where(eq(interviewsTable.id, prd.interviewId))
+          .limit(1);
+        if (interview[0]?.prdApproverIds && interview[0].prdApproverIds.length > 0) {
+          res.status(409).json({ error: 'Reviewers must approve the PRD before the owner can give final approval' });
+          return;
+        }
+      }
+    }
+
+    await recordOwnerApproval(prdId, 'prd', userId, status, comment);
+
+    if (status === 'approved') {
+      await db.update(prdsTable).set({
+        status: 'approved',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(prdsTable.id, prdId));
+
+      generateDesignPlan(prdId).catch(err => {
+        console.error('[owner-approve] Design plan generation failed:', err);
+      });
+    } else {
+      await db.update(prdsTable).set({
+        status: 'revision_requested',
+        reviewComment: comment ?? null,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(prdsTable.id, prdId));
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/test-cases/owner-approve', requirePermission('prds:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { prdId } = req.params;
+    const { status, comment } = req.body as OwnerApproveRequest;
+
+    const admin = await isAdminUser(userId);
+    const isOwner = await isDocumentOwner(prdId, 'test_case', userId);
+    if (!isOwner && !admin) {
+      res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+
+    await recordOwnerApproval(prdId, 'test_case', userId, status, comment);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('design-prototypes:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { prdId } = req.params;
+    const { status, comment } = req.body as OwnerApproveRequest;
+
+    const admin = await isAdminUser(userId);
+    const isOwner = await isDocumentOwner(prdId, 'design_prototype', userId);
+    if (!isOwner && !admin) {
+      res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+
+    const proto = await db.query.designPrototypes.findFirst({
+      where: and(eq(designPrototypesTable.prdId, prdId), eq(designPrototypesTable.status, 'reviewer_approved')),
+      columns: { id: true, featureIndex: true },
+    });
+
+    if (!proto) {
+      res.status(409).json({ error: 'No design prototype awaiting owner approval' });
+      return;
+    }
+
+    await recordOwnerApproval(prdId, 'design_prototype', userId, status, comment);
+
+    if (status === 'approved') {
+      await db.update(designPrototypesTable).set({
+        status: 'approved',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(designPrototypesTable.id, proto.id));
+
+      triggerDesignDocForPrototype(proto.id, proto.featureIndex).catch(err => {
+        console.error(`[ownerApproval] triggerDesignDocForPrototype failed (prototypeId=${proto.id})`, err);
+      });
+    } else {
+      await db.update(designPrototypesTable).set({
+        status: 'revision_requested',
+        reviewComment: comment ?? null,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(designPrototypesTable.id, proto.id));
+    }
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

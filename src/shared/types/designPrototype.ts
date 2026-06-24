@@ -4,6 +4,7 @@ export type DesignPrototypeStatus =
   | 'pending_review'
   | 'revision_requested'
   | 'regenerating'
+  | 'reviewer_approved'
   | 'approved';
 
 export interface DesignPrototypeHistoryEntry {
@@ -109,6 +110,7 @@ export function designPrototypeStatusLabel(status: DesignPrototypeStatus): strin
     case 'pending_review': return 'Pending Review';
     case 'revision_requested': return 'Revision Requested';
     case 'regenerating': return 'Regenerating';
+    case 'reviewer_approved': return 'Awaiting Owner Approval';
     case 'approved': return 'Approved';
   }
 }
@@ -120,6 +122,7 @@ export function designPrototypeBadgeClass(status: DesignPrototypeStatus): string
     case 'pending_review': return 'pending-review';
     case 'revision_requested': return 'revision-requested';
     case 'regenerating': return 'regenerating';
+    case 'reviewer_approved': return 'pending-review';
     case 'approved': return 'approved';
   }
 }

@@ -43,7 +43,7 @@ function findStrippedMatch(
   return { start, end };
 }
 
-function buildTextSelector(
+export function buildTextSelector(
   selectedText: string,
   containerText: string,
   anchorOffset: number,
@@ -96,10 +96,15 @@ function getTextOffset(container: Node, targetNode: Node, targetOffset: number):
 
 /**
  * Locate the position of a selector's exact text within the container's
- * full text content. Falls back through: exact offset → anywhere match →
- * prefix+suffix fuzzy locate.
+ * full text content. Falls back through: exact offset → prefix+suffix context
+ * → first-occurrence match.
+ *
+ * Context (prefix+suffix) is preferred over a bare `indexOf(exact)` so that a
+ * non-unique selection (e.g. "External User" appearing more than once)
+ * re-anchors to the originally selected span instead of latching onto the first
+ * matching occurrence after surrounding text changes (issue #3).
  */
-function anchorSelector(containerText: string, selector: TextSelector): { start: number; end: number } | null {
+export function anchorSelector(containerText: string, selector: TextSelector): { start: number; end: number } | null {
   const { exact, prefix, suffix, start: hintStart } = selector;
 
   // 1. Try at the hinted offset first
@@ -111,23 +116,18 @@ function anchorSelector(containerText: string, selector: TextSelector): { start:
     return { start: hintStart, end: hintStart + exact.length };
   }
 
-  // 2. Search for exact text anywhere
-  const idx = containerText.indexOf(exact);
-  if (idx >= 0) {
-    return { start: idx, end: idx + exact.length };
-  }
-
-  // 3. Fuzzy-locate via prefix + suffix context
+  // 2. Prefer prefix + suffix context so the originally selected occurrence is
+  //    respected even when the same text appears elsewhere.
   if (prefix) {
     const prefixIdx = containerText.indexOf(prefix);
     if (prefixIdx >= 0) {
       const candidateStart = prefixIdx + prefix.length;
       const candidateEnd = candidateStart + exact.length;
-      if (candidateEnd <= containerText.length) {
-        const candidate = containerText.slice(candidateStart, candidateEnd);
-        if (candidate === exact) {
-          return { start: candidateStart, end: candidateEnd };
-        }
+      if (
+        candidateEnd <= containerText.length &&
+        containerText.slice(candidateStart, candidateEnd) === exact
+      ) {
+        return { start: candidateStart, end: candidateEnd };
       }
     }
   }
@@ -137,13 +137,19 @@ function anchorSelector(containerText: string, selector: TextSelector): { start:
     if (suffixIdx >= 0) {
       const candidateEnd = suffixIdx;
       const candidateStart = candidateEnd - exact.length;
-      if (candidateStart >= 0) {
-        const candidate = containerText.slice(candidateStart, candidateEnd);
-        if (candidate === exact) {
-          return { start: candidateStart, end: candidateEnd };
-        }
+      if (
+        candidateStart >= 0 &&
+        containerText.slice(candidateStart, candidateEnd) === exact
+      ) {
+        return { start: candidateStart, end: candidateEnd };
       }
     }
+  }
+
+  // 3. Last resort: first occurrence anywhere.
+  const idx = containerText.indexOf(exact);
+  if (idx >= 0) {
+    return { start: idx, end: idx + exact.length };
   }
 
   return null;
@@ -233,6 +239,10 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
     if (!containerText) return;
 
     for (const comment of comments) {
+      // Skip resolved comments: once resolved, a highlight must not re-anchor
+      // (and possibly jump to a different matching occurrence) after edits.
+      if (comment.status === 'resolved') continue;
+
       const anchor = anchorSelector(containerText, comment.selector);
       if (!anchor) continue;
 

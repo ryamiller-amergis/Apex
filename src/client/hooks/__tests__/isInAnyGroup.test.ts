@@ -2,21 +2,23 @@
  * Unit tests for the isInAnyGroup logic extracted from useAppShell.
  *
  * The hook computes isInAnyGroup as:
- *   (names: string[]) => isSuperAdmin || isAdmin || groups.some(g => names.includes(g))
- *
- * where isAdmin = isSuperAdmin || roles.includes('admin')
+ *   (names) => isSuperAdmin || permissions includes admin:roles || roles includes admin || group match
  *
  * These tests verify the pure logic independently of React rendering.
  */
 
 function makeIsInAnyGroup(opts: {
   isSuperAdmin: boolean;
+  permissions?: string[];
   roles: string[];
   groups: string[];
 }) {
-  const { isSuperAdmin, roles, groups } = opts;
-  const isAdmin = isSuperAdmin || roles.includes('admin');
-  return (names: string[]) => isSuperAdmin || isAdmin || groups.some(g => names.includes(g));
+  const { isSuperAdmin, permissions = [], roles, groups } = opts;
+  return (names: string[]) =>
+    isSuperAdmin ||
+    permissions.includes('admin:roles') ||
+    roles.includes('admin') ||
+    groups.some((g) => names.includes(g));
 }
 
 describe('isInAnyGroup logic', () => {
@@ -30,6 +32,16 @@ describe('isInAnyGroup logic', () => {
     const isInAnyGroup = makeIsInAnyGroup({ isSuperAdmin: false, roles: ['admin'], groups: [] });
     expect(isInAnyGroup(['BA', 'Manager', 'Product-Owner'])).toBe(true);
     expect(isInAnyGroup([])).toBe(true);
+  });
+
+  it('returns true for a user with admin:roles permission regardless of groups', () => {
+    const isInAnyGroup = makeIsInAnyGroup({
+      isSuperAdmin: false,
+      permissions: ['admin:roles'],
+      roles: ['member'],
+      groups: [],
+    });
+    expect(isInAnyGroup(['BA', 'Manager', 'Product-Owner'])).toBe(true);
   });
 
   it('returns true when the user is in a matching group', () => {

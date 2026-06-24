@@ -1,6 +1,8 @@
 import express from 'express';
 import passport from 'passport';
 import { OIDCStrategy } from 'passport-azure-ad';
+import { DEV_MOCK_USER_BY_ID, DEV_MOCK_USERS } from '../../shared/constants/devMockUsers';
+import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { upsertAppUser } from '../services/rbacService';
 import { resolvePendingAssignments } from '../services/pendingAssignmentService';
 
@@ -190,17 +192,26 @@ router.get('/status', (req, res) => {
 // Dev-only: mock login for local development without Azure AD
 if (process.env.NODE_ENV !== 'production') {
   router.get('/dev-login-available', (_req, res) => {
-    res.json({ available: true });
+    res.json({
+      available: true,
+      personas: DEV_MOCK_USERS.map(({ id, label, displayName }) => ({ id, label, displayName })),
+    });
   });
 
   router.post('/dev-login', (req, res) => {
+    const persona = (req.body?.persona ?? 'developer') as DevMockPersonaId;
+    const personaUser = DEV_MOCK_USER_BY_ID.get(persona);
+    if (!personaUser) {
+      return res.status(400).json({ error: `Unknown dev persona: ${persona}` });
+    }
+
     const mockUser = {
       profile: {
-        oid: 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
-        sub: 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
-        displayName: 'Dev User',
-        upn: 'dev@localhost',
-        email: 'dev@localhost',
+        oid: personaUser.oid,
+        sub: personaUser.oid,
+        displayName: personaUser.displayName,
+        upn: personaUser.email,
+        email: personaUser.email,
       },
       accessToken: 'mock-access-token',
       refreshToken: 'mock-refresh-token',
@@ -211,13 +222,17 @@ if (process.env.NODE_ENV !== 'production') {
         console.error('Dev login error:', err);
         return res.status(500).json({ error: 'Dev login failed' });
       }
-      console.log('[dev-login] Mock user logged in');
+      console.log(`[dev-login] Mock user logged in as ${personaUser.label}`);
       upsertAppUser(
         mockUser.profile.oid,
         mockUser.profile.displayName,
         mockUser.profile.upn
       ).catch((e) => console.error('upsertAppUser failed:', e));
-      res.json({ ok: true });
+      resolvePendingAssignments(
+        mockUser.profile.oid,
+        mockUser.profile.upn
+      ).catch((e) => console.error('resolvePendingAssignments failed:', e));
+      res.json({ ok: true, persona: personaUser.id });
     });
   });
 }

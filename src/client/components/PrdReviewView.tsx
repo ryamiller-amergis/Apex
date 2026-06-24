@@ -12,8 +12,8 @@ import {
   useUpdatePrdBacklog,
   useSubmitPrd,
   useWithdrawPrd,
-  useReopenPrd,
   useReviewPrd,
+  useReviewTestCases,
   useDeletePrd,
   useDesignDocsByPrd,
   usePrdTestCases,
@@ -33,6 +33,9 @@ import {
   useGenerateTestCases,
   useScreenInventoryRoutes,
   useCreateDesignDoc,
+  useOwnerApprove,
+  useOwnerApproval,
+  useActiveUsers,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -45,9 +48,11 @@ import {
 import { ProposedChangesReview } from './ProposedChangesReview';
 import { usePrototypesForPrd, useGeneratePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { useDesignPlan } from '../hooks/useDesignPlan';
+import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { AnnotationLayer } from './AnnotationLayer';
+import { ReviewerApprovalChecklist } from './ReviewerApprovalChecklist';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
@@ -188,6 +193,8 @@ function statusBadgeClass(status: PrdStatus): string {
       return styles.badgeGenerating;
     case 'pending_review':
       return styles.badgePendingReview;
+    case 'reviewer_approved':
+      return styles.badgePendingReview;
     case 'approved':
       return styles.badgeApproved;
     case 'revision_requested':
@@ -204,6 +211,8 @@ function statusLabel(status: PrdStatus): string {
     case 'validating':
       return 'Validating';
     case 'pending_review':
+      return 'Pending Review';
+    case 'reviewer_approved':
       return 'Pending Review';
     case 'approved':
       return 'Approved';
@@ -357,9 +366,7 @@ export const PrdReviewView: React.FC = () => {
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
-  const { data: relatedDesignDocs } = useDesignDocsByPrd(
-    prd?.status === 'approved' ? id : undefined
-  );
+  const { data: relatedDesignDocs } = useDesignDocsByPrd(id);
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(
     prd?.status === 'approved' ? id : null
   );
@@ -367,8 +374,11 @@ export const PrdReviewView: React.FC = () => {
   const createDesignDoc = useCreateDesignDoc();
   const { data: testCaseRecord } = usePrdTestCases(id);
   const prevTestCaseStatusRef = useRef<string | undefined>(undefined);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
   const { data: designPlanResponse } = useDesignPlan(prd?.status === 'approved' ? (id ?? null) : null);
   const { data: sourceInterview } = useInterview(prd?.interviewId ?? null);
+  const { data: ownerApproval } = useOwnerApproval(id, 'prd');
+  const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
   const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
 
@@ -376,8 +386,9 @@ export const PrdReviewView: React.FC = () => {
   const updateBacklog = useUpdatePrdBacklog();
   const submitPrd = useSubmitPrd();
   const withdrawPrd = useWithdrawPrd();
-  const reopenPrd = useReopenPrd();
   const reviewPrd = useReviewPrd();
+  const reviewTestCases = useReviewTestCases();
+  const ownerApprovePrd = useOwnerApprove(id ?? null, 'prd');
   const deletePrd = useDeletePrd();
   const createAdoItems = useCreatePrdAdoItems();
   const syncAdoStatus = useSyncPrdAdoStatus(id);
@@ -446,13 +457,174 @@ export const PrdReviewView: React.FC = () => {
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAdoModal, setShowAdoModal] = useState(false);
-  const [showApproverModal, setShowApproverModal] = useState(false);
+  const [showApprovalsModal, setShowApprovalsModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
+  const { data: qaAssignments = [] } = useDocumentAssignments(id, 'test_case');
+  const { data: designPrototypeAssignments = [] } = useDocumentAssignments(id, 'design_prototype');
+
+  const reviewerApprovalComplete = useMemo(() => {
+    if (assignments.length > 0) {
+      const mode = projectConfig?.approvalMode ?? 'any_one';
+      return mode === 'all_required'
+        ? assignments.every((a) => a.status === 'approved')
+        : assignments.some((a) => a.status === 'approved');
+    }
+    const kickoffReviewerIds = sourceInterview?.prdApproverIds;
+    if (kickoffReviewerIds && kickoffReviewerIds.length > 0) return false;
+    return true;
+  }, [assignments, projectConfig?.approvalMode, sourceInterview?.prdApproverIds]);
+  const { data: activeUsers = [] } = useActiveUsers();
   const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
+
+  /** Assigned reviewers from submit-for-review, or kick-off selections on the source interview. */
+  const reviewerDisplayNames = useMemo(() => {
+    if (assignments.length > 0) {
+      return assignments.map((a) => a.approverDisplayName ?? a.approverUserId);
+    }
+    const kickoffReviewerIds = sourceInterview?.prdApproverIds;
+    if (!kickoffReviewerIds?.length) return [];
+    const nameById = new Map(
+      activeUsers.map((u) => [u.oid, u.displayName ?? u.oid]),
+    );
+    return kickoffReviewerIds.map((oid) => nameById.get(oid) ?? oid);
+  }, [assignments, sourceInterview?.prdApproverIds, activeUsers]);
+
+  const prdReviewerRows = useMemo(() => {
+    if (assignments.length > 0) {
+      return assignments.map((a) => ({
+        name: a.approverDisplayName ?? a.approverUserId,
+        status: a.status,
+        respondedAt: a.respondedAt ?? null,
+      }));
+    }
+    const kickoffReviewerIds = sourceInterview?.prdApproverIds;
+    if (!kickoffReviewerIds?.length) return [];
+    const nameById = new Map(
+      activeUsers.map((u) => [u.oid, u.displayName ?? u.oid]),
+    );
+    return kickoffReviewerIds.map((oid) => ({
+      name: nameById.get(oid) ?? oid,
+      status: 'pending' as const,
+      respondedAt: null,
+    }));
+  }, [assignments, sourceInterview?.prdApproverIds, activeUsers]);
+
+  const designDocReviewerRows = useMemo(() => {
+    if (relatedDesignDocs && relatedDesignDocs.length > 0) {
+      return relatedDesignDocs.map((doc) => {
+        let status: 'pending' | 'approved' | 'revision_requested' = 'pending';
+        let respondedAt: string | null = null;
+        if (doc.status === 'approved') {
+          status = 'approved';
+          respondedAt = doc.reviewedAt ?? null;
+        } else if (doc.status === 'reviewer_approved') {
+          status = 'approved';
+          respondedAt = doc.reviewedAt ?? null;
+        } else if (doc.status === 'revision_requested') {
+          status = 'revision_requested';
+          respondedAt = doc.reviewedAt ?? null;
+        }
+        const ownerName = doc.ownerName ?? doc.authorName ?? doc.ownerId ?? doc.authorId;
+        return {
+          name: `${ownerName} — ${doc.title}`,
+          status,
+          respondedAt,
+        };
+      });
+    }
+    const ids = prd?.designDocApproverIds ?? sourceInterview?.designDocApproverIds;
+    if (!ids?.length) return [];
+    const nameById = new Map(
+      activeUsers.map((u) => [u.oid, u.displayName ?? u.oid]),
+    );
+    return ids.map((oid) => ({
+      name: nameById.get(oid) ?? oid,
+      status: 'pending' as const,
+      respondedAt: null,
+    }));
+  }, [relatedDesignDocs, prd?.designDocApproverIds, sourceInterview?.designDocApproverIds, activeUsers]);
+
+  const designPrototypeReviewerRows = useMemo(() => {
+    if (designPrototypeAssignments.length > 0) {
+      return designPrototypeAssignments.map((a) => ({
+        name: a.approverDisplayName ?? a.approverUserId,
+        status: a.status,
+        respondedAt: a.respondedAt ?? null,
+      }));
+    }
+    const ids = sourceInterview?.designPrototypeApproverIds;
+    if (!ids?.length) return [];
+    const nameById = new Map(
+      activeUsers.map((u) => [u.oid, u.displayName ?? u.oid]),
+    );
+    return ids.map((oid) => ({
+      name: nameById.get(oid) ?? oid,
+      status: 'pending' as const,
+      respondedAt: null,
+    }));
+  }, [designPrototypeAssignments, sourceInterview?.designPrototypeApproverIds, activeUsers]);
+
+  const qaReviewerRows = useMemo(() => {
+    if (qaAssignments.length > 0) {
+      return qaAssignments.map((a) => ({
+        name: a.approverDisplayName ?? a.approverUserId,
+        status: a.status,
+        respondedAt: a.respondedAt ?? null,
+      }));
+    }
+    const ids = sourceInterview?.testCaseApproverIds;
+    if (!ids?.length) return [];
+    const nameById = new Map(
+      activeUsers.map((u) => [u.oid, u.displayName ?? u.oid]),
+    );
+    return ids.map((oid) => ({
+      name: nameById.get(oid) ?? oid,
+      status: 'pending' as const,
+      respondedAt: null,
+    }));
+  }, [qaAssignments, sourceInterview?.testCaseApproverIds, activeUsers]);
+
+  const approvalChecklistGroups = useMemo(() => {
+    type GroupEntry = { label: string; informational?: boolean; subtitle?: string; rows: { name: string; status: 'pending' | 'approved' | 'revision_requested'; respondedAt?: string | null }[] };
+    const groups: GroupEntry[] = [];
+    const approvalMode = projectConfig?.approvalMode ?? 'any_one';
+
+    const buildSubtitle = (count: number) => {
+      if (count <= 1) return undefined;
+      return approvalMode === 'all_required' ? 'All required' : `1 of ${count} required`;
+    };
+
+    if (prdReviewerRows.length > 0) {
+      groups.push({ label: 'PRD Review', subtitle: buildSubtitle(prdReviewerRows.length), rows: prdReviewerRows });
+    }
+    if (designDocReviewerRows.length > 0) {
+      const hasRealDocs = relatedDesignDocs && relatedDesignDocs.length > 0;
+      groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle(designDocReviewerRows.length), rows: designDocReviewerRows });
+    }
+    if (designPrototypeReviewerRows.length > 0) {
+      groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle(designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
+    }
+    if (qaReviewerRows.length > 0) {
+      groups.push({ label: 'QA Review', subtitle: buildSubtitle(qaReviewerRows.length), rows: qaReviewerRows });
+    }
+
+    const showOwnerApproval = prd && ['pending_review', 'reviewer_approved', 'approved', 'revision_requested'].includes(prd.status);
+    if (showOwnerApproval) {
+      const ownerName = prd.ownerName ?? prd.ownerId ?? prd.authorName ?? prd.authorId;
+      const ownerStatus = ownerApproval?.status ?? (prd.status === 'approved' ? 'approved' : 'pending');
+      groups.push({
+        label: 'Owner Approval',
+        rows: [{ name: ownerName, status: ownerStatus, respondedAt: ownerApproval?.respondedAt ?? null }],
+      });
+    }
+
+    return groups;
+  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs]);
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -503,31 +675,31 @@ export const PrdReviewView: React.FC = () => {
 
   /* ── Other handlers ──────────────────────────────────────────────────────── */
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!id || !readiness?.readyForReviewActions) return;
-    setShowApproverModal(true);
-  }, [id, readiness?.readyForReviewActions]);
-
-  const handleApproverConfirm = useCallback(
-    async (selections: {
-      prdApproverIds?: string[];
-      designDocApproverIds?: string[];
-    }) => {
-      if (!id || !readiness?.readyForReviewActions) return;
-      await submitPrd.mutateAsync({
-        prdId: id,
-        prdApproverIds: selections.prdApproverIds ?? [],
-        designDocApproverIds: selections.designDocApproverIds ?? [],
-      });
-      setShowApproverModal(false);
-    },
-    [id, readiness?.readyForReviewActions, submitPrd]
-  );
+    await submitPrd.mutateAsync({
+      prdId: id,
+      prdApproverIds: sourceInterview?.prdApproverIds ?? [],
+      designDocApproverIds: sourceInterview?.designDocApproverIds ?? [],
+      designPrototypeApproverIds: sourceInterview?.designPrototypeApproverIds ?? [],
+      qaApproverIds: sourceInterview?.testCaseApproverIds ?? [],
+    });
+  }, [
+    id,
+    readiness?.readyForReviewActions,
+    sourceInterview?.prdApproverIds,
+    sourceInterview?.designDocApproverIds,
+    sourceInterview?.designPrototypeApproverIds,
+    sourceInterview?.testCaseApproverIds,
+    submitPrd,
+  ]);
 
   const handleReassignConfirm = useCallback(
     async (selections: {
       prdApproverIds?: string[];
       designDocApproverIds?: string[];
+      designPrototypeApproverIds?: string[];
+      qaApproverIds?: string[];
     }) => {
       if (!id) return;
       await reassignApprovers.mutateAsync({
@@ -535,6 +707,8 @@ export const PrdReviewView: React.FC = () => {
         documentType: 'prd',
         approverUserIds: selections.prdApproverIds ?? [],
         designDocApproverIds: selections.designDocApproverIds,
+        designPrototypeApproverIds: selections.designPrototypeApproverIds,
+        qaApproverIds: selections.qaApproverIds,
       });
       setShowReassignModal(false);
     },
@@ -556,6 +730,22 @@ export const PrdReviewView: React.FC = () => {
       navigate(`/backlog/design-plan/${id}`);
     }
   }, [id, readiness?.readyForReviewActions, reviewPrd, navigate]);
+
+  const handleQaApprove = useCallback(async () => {
+    if (!id) return;
+    await reviewTestCases.mutateAsync({ prdId: id, status: 'approved' });
+  }, [id, reviewTestCases]);
+
+  const handleOwnerApprove = useCallback(async () => {
+    if (!id) return;
+    await ownerApprovePrd.mutateAsync({ status: 'approved' });
+    navigate(`/backlog/design-plan/${id}`);
+  }, [id, ownerApprovePrd, navigate]);
+
+  const handleOwnerRevision = useCallback(async () => {
+    if (!id) return;
+    await ownerApprovePrd.mutateAsync({ status: 'revision_requested', comment: 'Revision requested by owner' });
+  }, [id, ownerApprovePrd]);
 
   const handleAddComment = useCallback(
     (sectionKey: ReviewSectionKey, selector: TextSelector) => {
@@ -830,6 +1020,29 @@ export const PrdReviewView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prd?.id, prd?.status]);
 
+  useEffect(() => {
+    if (!actionMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (actionMenuRef.current?.contains(event.target as Node)) return;
+      setActionMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActionMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [actionMenuOpen]);
+
   const hasUnpushedItems = useMemo(() => {
     if (!prd?.backlogJson) return false;
     const backlog = prd.backlogJson as {
@@ -848,8 +1061,17 @@ export const PrdReviewView: React.FC = () => {
   const isOwner = prd.ownerId === userId;
   const canManage = can('interviews:manage');
   const canReview = can('prds:review');
-  const isAssignedApprover = assignments.some(
-    (a) => a.approverUserId === userId
+  const isAssignedApprover = assignments.length > 0
+    ? assignments.some((a) => a.approverUserId === userId)
+    : (sourceInterview?.prdApproverIds ?? []).includes(userId ?? '');
+  const hasAlreadyApprovedPrd = assignments.some(
+    (a) => a.approverUserId === userId && a.status === 'approved'
+  );
+  const isAssignedQaApprover = qaAssignments.length > 0
+    ? qaAssignments.some((a) => a.approverUserId === userId)
+    : (sourceInterview?.testCaseApproverIds ?? []).includes(userId ?? '');
+  const hasAlreadyApprovedQa = qaAssignments.some(
+    (a) => a.approverUserId === userId && a.status === 'approved'
   );
   const canPerformReview =
     canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
@@ -865,10 +1087,45 @@ export const PrdReviewView: React.FC = () => {
   const showCommentLayer =
     (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
     readiness.readyForReviewActions &&
-    (canPerformReview || isAuthor || isOwner || isAdmin);
+    (canPerformReview || isAssignedQaApprover || isAuthor || isOwner || isAdmin);
 
   const canEditContent =
     canManage && (isAuthor || isOwner || isAdmin) && prd.status !== 'approved';
+
+  const canShowApprovalsAction = approvalChecklistGroups.length > 0;
+  const canShowAssistantAction = prd.status !== 'approved';
+  const canGenerateTestCasesAction =
+    canManage &&
+    prd.status !== 'approved' &&
+    !!prd.content &&
+    (readiness.state === 'test_cases_pending' ||
+      readiness.state === 'test_case_generation_failed');
+  const canRunValidationAction =
+    canManage &&
+    prd.prdValidationEnabled &&
+    prd.status !== 'approved' &&
+    prd.status !== 'validating' &&
+    !!prd.content &&
+    !!prd.backlogJson &&
+    prd.latestTestCase?.status === 'ready';
+  const canCancelValidationAction = canManage && prd.status === 'validating';
+  const canManageDraftReviewAction =
+    canManage && (isAuthor || isOwner || isAdmin);
+  const canSubmitForReviewAction =
+    canManageDraftReviewAction &&
+    (prd.status === 'draft' || prd.status === 'revision_requested');
+  const canWithdrawAction =
+    canManageDraftReviewAction && prd.status === 'pending_review';
+  const canDeletePrdAction = canManageDraftReviewAction;
+  const canReassignReviewersAction =
+    prd.status === 'pending_review' && canManageDraftReviewAction;
+  const canShowHeaderActionMenu =
+    canShowApprovalsAction ||
+    canRunValidationAction ||
+    canEditContent ||
+    canWithdrawAction ||
+    canDeletePrdAction ||
+    canReassignReviewersAction;
 
   const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
   const validationFixSession = id ? readApexFixInProgress('prd-validation', id) : null;
@@ -1054,16 +1311,6 @@ export const PrdReviewView: React.FC = () => {
                     prd.authorId}
                 </span>
               </span>
-              {assignments.length > 0 && (
-                <span className={styles.metaItem}>
-                  <span className={styles.metaLabel}>Reviewer(s):</span>
-                  <span className={styles.metaValue}>
-                    {assignments
-                      .map((a) => a.approverDisplayName ?? a.approverUserId)
-                      .join(', ')}
-                  </span>
-                </span>
-              )}
               {prd.model && (
                 <span className={styles.metaItem}>
                   <span className={styles.metaLabel}>Model:</span>
@@ -1115,30 +1362,7 @@ export const PrdReviewView: React.FC = () => {
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
 
-          {prd.status !== 'approved' && (
-            <button
-              className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
-              onClick={() => setAssistantOpen((v) => !v)}
-              type="button"
-              aria-label="Apex Assistant"
-              aria-expanded={assistantOpen}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-              Apex Assistant
-            </button>
-          )}
-
-          {canManage && prd.status !== 'approved' && prd.content && (readiness?.state === 'test_cases_pending' || readiness?.state === 'test_case_generation_failed') && (
+          {canGenerateTestCasesAction && (
             <button
               className={styles.actionBtn}
               onClick={() => void generateTestCases.mutateAsync(prd.id)}
@@ -1149,18 +1373,31 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
-          {canManage && prd.prdValidationEnabled && prd.status !== 'approved' && prd.status !== 'validating' && prd.content && !!prd.backlogJson && prd.latestTestCase?.status === 'ready' && (
+          {canShowAssistantAction && (
             <button
-              className={styles.actionBtn}
-              onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
-              disabled={createPrdValidationThread.isPending}
+              className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
+              onClick={() => setAssistantOpen((open) => !open)}
               type="button"
+              title="Apex Assistant"
+              aria-label="Apex Assistant"
+              aria-expanded={assistantOpen}
             >
-              Run Validation
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 10.667A2.667 2.667 0 0 1 11.333 13.333H4.667L2 16V4.667A2.667 2.667 0 0 1 4.667 2h6.666A2.667 2.667 0 0 1 14 4.667z" />
+              </svg>
+              Apex Assistant
             </button>
           )}
 
-          {canManage && prd.status === 'validating' && (
+          {canCancelValidationAction && (
             <button
               className={styles.actionBtn}
               onClick={() => void cancelPrdValidation.mutateAsync(prd.id)}
@@ -1171,101 +1408,30 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
-          {canEditContent && (
+          {canSubmitForReviewAction && (
             <button
-              className={styles.actionBtn}
-              onClick={handleOpenEditModal}
-              type="button"
-              aria-label="Edit"
-            >
-              {pencilIcon}
-              Edit
-            </button>
-          )}
-
-          {canManage && (isAuthor || isOwner || isAdmin) && (
-            <>
-              {(prd.status === 'draft' ||
-                prd.status === 'revision_requested') && (
-                <button
-                  className={styles.actionBtnPrimary}
-                  onClick={handleSubmit}
-                  disabled={
-                    submitPrd.isPending ||
-                    !prd.content ||
-                    !readiness.readyForReviewActions
-                  }
-                  title={
-                    !prd.content
-                      ? 'PRD content is required before submitting'
-                      : !readiness.readyForReviewActions
-                        ? readiness.blockingReason
-                        : undefined
-                  }
-                  type="button"
-                >
-                  Submit for Review
-                </button>
-              )}
-              {prd.status === 'pending_review' && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void handleWithdraw()}
-                  disabled={withdrawPrd.isPending}
-                  type="button"
-                >
-                  Withdraw
-                </button>
-              )}
-              <button
-                className={styles.btnDeletePrd}
-                onClick={() => setShowDeleteModal(true)}
-                disabled={deletePrd.isPending}
-                title="Delete PRD"
-                type="button"
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <polyline points="2 4 4 4 14 4" />
-                  <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
-                  <path d="M6.5 7v4M9.5 7v4" />
-                  <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
-                </svg>
-              </button>
-            </>
-          )}
-
-          {isAdmin && prd.status !== 'pending_review' && (
-            <button
-              className={styles.actionBtn}
-              onClick={() => reopenPrd.mutate(prd.id)}
+              className={styles.actionBtnPrimary}
+              onClick={handleSubmit}
               disabled={
-                reopenPrd.isPending ||
-                prd.status === 'approved' ||
+                submitPrd.isPending ||
+                !prd.content ||
                 !readiness.readyForReviewActions
               }
-              type="button"
               title={
-                prd.status === 'approved'
-                  ? 'Cannot reopen an approved PRD'
+                !prd.content
+                  ? 'PRD content is required before submitting'
                   : !readiness.readyForReviewActions
                     ? readiness.blockingReason
-                  : 'Admin: force this PRD back to Pending Review'
+                    : undefined
               }
+              type="button"
             >
-              {reopenPrd.isPending ? 'Reopening…' : 'Reopen for Review'}
+              Submit for Review
             </button>
           )}
 
-          {canReview &&
-            (!isAuthor || isAdmin) &&
+          {canPerformReview &&
+            !hasAlreadyApprovedPrd &&
             prd.status === 'pending_review' && (
               <>
                 <span className={styles.actionDivider} />
@@ -1275,26 +1441,70 @@ export const PrdReviewView: React.FC = () => {
                     onClick={() => void handleApprove()}
                     disabled={
                       reviewPrd.isPending ||
-                      !canPerformReview ||
                       !readiness.readyForReviewActions ||
                       unresolvedCount > 0
                     }
                     title={
-                      !canPerformReview
-                        ? 'You are not an assigned reviewer for this document'
-                        : !readiness.readyForReviewActions
-                          ? readiness.blockingReason
+                      !readiness.readyForReviewActions
+                        ? readiness.blockingReason
                         : unresolvedCount > 0
                           ? 'Resolve all comments before approving'
                           : undefined
                     }
                     type="button"
                   >
-                    Approve
+                    Approve PRD
                   </button>
                 </div>
               </>
             )}
+
+          {canReview &&
+            isAssignedQaApprover &&
+            !hasAlreadyApprovedQa &&
+            prd.status === 'pending_review' && (
+              <>
+                <span className={styles.actionDivider} />
+                <div className={styles.reviewControls}>
+                  <button
+                    className={styles.btnApprove}
+                    onClick={() => void handleQaApprove()}
+                    disabled={reviewTestCases.isPending}
+                    type="button"
+                  >
+                    Approve QA
+                  </button>
+                </div>
+              </>
+            )}
+
+          {prd.status === 'pending_review' && (isOwner || isAdmin) && (
+            <>
+              <span className={styles.actionDivider} />
+              <div className={styles.reviewControls}>
+                <button
+                  className={styles.btnApprove}
+                  onClick={() => void handleOwnerApprove()}
+                  disabled={ownerApprovePrd.isPending || (!reviewerApprovalComplete && !isAdmin)}
+                  title={!reviewerApprovalComplete && !isAdmin
+                    ? 'Reviewers must approve the PRD before owner approval'
+                    : undefined}
+                  type="button"
+                >
+                  Approve as Owner
+                </button>
+                <button
+                  className={styles.btnRevision}
+                  onClick={() => void handleOwnerRevision()}
+                  disabled={ownerApprovePrd.isPending}
+                  type="button"
+                >
+                  Request Revision
+                </button>
+              </div>
+            </>
+          )}
+
 
           {prd.status === 'approved' &&
             can('workitems:write') &&
@@ -1314,40 +1524,169 @@ export const PrdReviewView: React.FC = () => {
               </button>
             )}
 
-          {prd.status === 'pending_review' &&
-            canManage &&
-            (isAuthor || isOwner || isAdmin) && (
-              <>
-                <span className={styles.actionDivider} />
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => setShowReassignModal(true)}
-                  type="button"
-                  title={
-                    assignments.length > 0
-                      ? `Reviewers: ${assignments.map((a) => a.approverDisplayName ?? a.approverUserId).join(', ')}`
-                      : 'Assign reviewers'
-                  }
+          {canShowHeaderActionMenu && (
+            <div className={styles.actionMenu} ref={actionMenuRef}>
+              <button
+                className={`${styles.actionBtn} ${actionMenuOpen ? styles.actionBtnActive : ''}`}
+                onClick={() => setActionMenuOpen((open) => !open)}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={actionMenuOpen}
+                aria-label="More actions"
+              >
+                More
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
                 >
-                  <svg
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <circle cx="6" cy="5" r="2.5" />
-                    <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
-                    <path d="M12 5.5l2 2 2-2" />
-                  </svg>
-                  {assignments.length > 0
-                    ? `${assignments.length} Reviewer${assignments.length > 1 ? 's' : ''}`
-                    : 'Reviewers'}
-                </button>
-              </>
-            )}
+                  <path d="M4 6l4 4 4-4" />
+                </svg>
+              </button>
+
+              {actionMenuOpen && (
+                <div
+                  className={styles.actionMenuPanel}
+                  role="menu"
+                  aria-label="More PRD actions"
+                >
+                  {canShowApprovalsAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowApprovalsModal(true);
+                      }}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <rect x="2" y="2" width="12" height="12" rx="2" />
+                          <path d="M5 8l2 2 4-4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Approvals</span>
+                    </button>
+                  )}
+
+                  {canRunValidationAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void createPrdValidationThread.mutateAsync(prd.id);
+                      }}
+                      disabled={createPrdValidationThread.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" />
+                          <path d="M5 8l2 2 4-4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Run Validation</span>
+                    </button>
+                  )}
+
+                  {canEditContent && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        handleOpenEditModal();
+                      }}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>{pencilIcon}</span>
+                      <span className={styles.actionMenuLabel}>Edit</span>
+                    </button>
+                  )}
+
+                  {canWithdrawAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void handleWithdraw();
+                      }}
+                      disabled={withdrawPrd.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M4 8h8" />
+                          <path d="M7 5L4 8l3 3" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Withdraw</span>
+                    </button>
+                  )}
+
+                  {canReassignReviewersAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowReassignModal(true);
+                      }}
+                      type="button"
+                      role="menuitem"
+                      title={
+                        reviewerDisplayNames.length > 0
+                          ? `Reviewers: ${reviewerDisplayNames.join(', ')}`
+                          : 'Assign reviewers'
+                      }
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="6" cy="5" r="2.5" />
+                          <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
+                          <path d="M12 5.5l2 2 2-2" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>
+                        {reviewerDisplayNames.length > 0
+                          ? `${reviewerDisplayNames.length} Reviewer${reviewerDisplayNames.length > 1 ? 's' : ''}`
+                          : 'Reviewers'}
+                      </span>
+                    </button>
+                  )}
+
+                  {canDeletePrdAction && (
+                    <button
+                      className={`${styles.actionMenuItem} ${styles.actionMenuItemDanger}`}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowDeleteModal(true);
+                      }}
+                      disabled={deletePrd.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <polyline points="2 4 4 4 14 4" />
+                          <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                          <path d="M6.5 7v4M9.5 7v4" />
+                          <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Delete PRD</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2260,17 +2599,6 @@ export const PrdReviewView: React.FC = () => {
         />
       )}
 
-      {showApproverModal && prd && (
-        <ApproverSelectModal
-          documentType="prd"
-          project={prd.project}
-          excludeSelf={!isAdmin}
-          onConfirm={(selections) => void handleApproverConfirm(selections)}
-          onCancel={() => setShowApproverModal(false)}
-          isSubmitting={submitPrd.isPending}
-        />
-      )}
-
       {showReassignModal && prd && (
         <ApproverSelectModal
           documentType="prd"
@@ -2279,6 +2607,8 @@ export const PrdReviewView: React.FC = () => {
             .filter((a) => a.status === 'pending')
             .map((a) => a.approverUserId)}
           initialDesignDocApproverIds={prd.designDocApproverIds ?? []}
+          initialDesignPrototypeApproverIds={sourceInterview?.designPrototypeApproverIds ?? []}
+          initialQaApproverIds={sourceInterview?.testCaseApproverIds ?? []}
           confirmLabel="Update Reviewers"
           excludeSelf={false}
           allowEmpty
@@ -2286,6 +2616,32 @@ export const PrdReviewView: React.FC = () => {
           onCancel={() => setShowReassignModal(false)}
           isSubmitting={reassignApprovers.isPending}
         />
+      )}
+
+      {showApprovalsModal && (
+        <div
+          className={styles.editModal}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowApprovalsModal(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Approvals"
+        >
+          <div className={styles.editModalCard}>
+            <h3 className={styles.editModalTitle}>Approvals</h3>
+            <ReviewerApprovalChecklist groups={approvalChecklistGroups} />
+            <div className={styles.editActions}>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => setShowApprovalsModal(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <PrdAssistantPanel

@@ -577,6 +577,8 @@ describe('useSubmitPrd', () => {
         prdId: 'prd-1',
         prdApproverIds: ['approver-1'],
         designDocApproverIds: ['approver-2'],
+        designPrototypeApproverIds: ['approver-3'],
+        qaApproverIds: ['approver-4'],
       });
     });
 

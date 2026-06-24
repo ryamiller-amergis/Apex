@@ -291,14 +291,14 @@ describe('syncValidationResult', () => {
     );
   });
 
-  it('sets status to draft when scorecard.is_ready is false', async () => {
+  it('sets status to pending_review regardless of scorecard.is_ready', async () => {
     const chain = makeUpdateChain();
     mockDb.update.mockReturnValue(chain);
 
     await syncValidationResult('doc-1', makeScorecard({ overall_score: 70, is_ready: false }) as any);
 
     expect(chain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
+      expect.objectContaining({ status: 'pending_review' }),
     );
   });
 
@@ -560,12 +560,12 @@ describe('triggerFixValidation', () => {
     });
   });
 
-  it('throws 409 when status is not draft or revision_requested', async () => {
-    const docRow = makeDocRow({ status: 'pending_review', validationScorecard: makeScorecard() });
+  it('throws 409 when status is not draft, pending_review, or revision_requested', async () => {
+    const docRow = makeDocRow({ status: 'approved', validationScorecard: makeScorecard() });
     mockDb.select.mockReturnValue(makeSelectChain([{ designDoc: docRow, reviewerDisplayName: null }]));
 
     await expect(triggerFixValidation('doc-1', 'user-1')).rejects.toMatchObject({
-      message: expect.stringContaining("Cannot fix validation from status 'pending_review'"),
+      message: expect.stringContaining("Cannot fix validation from status 'approved'"),
       status: 409,
     });
   });
@@ -786,7 +786,7 @@ describe('startValidationWatcher', () => {
     );
   });
 
-  it('resets status to draft when agent finishes without producing a scorecard', async () => {
+  it('resets status to pending_review when agent finishes without producing a scorecard', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(true); // agent is done but no scorecard
     const updateChain = makeUpdateChain();
@@ -798,7 +798,7 @@ describe('startValidationWatcher', () => {
 
     expect(isValidationWatcherActive('doc-idle-1')).toBe(false);
     expect(updateChain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
+      expect.objectContaining({ status: 'pending_review' }),
     );
   });
 
@@ -837,7 +837,7 @@ describe('startValidationWatcher', () => {
     expect(scorecardSyncCalls).toHaveLength(0);
   });
 
-  it('resets status to draft on timeout after max attempts', async () => {
+  it('resets status to pending_review on timeout after max attempts', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(false);
     const updateChain = makeUpdateChain();
@@ -851,7 +851,7 @@ describe('startValidationWatcher', () => {
 
     expect(isValidationWatcherActive('doc-timeout-1')).toBe(false);
     expect(updateChain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
+      expect.objectContaining({ status: 'pending_review' }),
     );
   });
 

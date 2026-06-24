@@ -51,6 +51,7 @@ jest.mock('../services/prdService', () => ({
   deletePrd: jest.fn(),
   createPrdAdoWorkItems: jest.fn(),
   syncPrdAdoStatus: jest.fn(),
+  applyProposedPrdChanges: jest.fn().mockResolvedValue({ applied: true }),
 }));
 
 jest.mock('../services/designDocService', () => ({
@@ -135,7 +136,10 @@ jest.mock('../db/drizzle', () => {
 
 // ── Typed mock references ─────────────────────────────────────────────────────
 
-const { getPrd: mockGetPrd } = jest.requireMock('../services/prdService') as { getPrd: jest.Mock };
+const { getPrd: mockGetPrd, applyProposedPrdChanges: mockApplyProposedPrdChanges } = jest.requireMock('../services/prdService') as {
+  getPrd: jest.Mock;
+  applyProposedPrdChanges: jest.Mock;
+};
 const { getDesignDoc: mockGetDesignDoc } = jest.requireMock('../services/designDocService') as { getDesignDoc: jest.Mock };
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
@@ -296,95 +300,23 @@ describe('POST /api/interviews/prds/:prdId/fix-with-ai — clears fixCommentId',
   });
 });
 
-// ── PRD apply-proposed — bulk resolution (fixCommentId is null) ───────────────
+// ── PRD apply-proposed — delegates to applyProposedPrdChanges ─────────────────
 
-describe('POST /api/interviews/prds/:prdId/apply-proposed — bulk resolution', () => {
+describe('POST /api/interviews/prds/:prdId/apply-proposed', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockDb.execute.mockResolvedValue(undefined);
-    // No fixCommentId — simulates bulk "Fix with Apex" header button
-    mockDb.query.prds.findFirst.mockResolvedValue(null);
+    mockApplyProposedPrdChanges.mockResolvedValue({ applied: true });
   });
 
-  it('resolves all open comments when fixCommentId is null', async () => {
-    const mockSet = jest.fn().mockReturnThis();
-    const mockWhere = jest.fn().mockResolvedValue(undefined);
-    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
-
+  it('returns { ok: true } and delegates to applyProposedPrdChanges', async () => {
     const res = await request(buildApp())
       .post('/api/interviews/prds/prd-1/apply-proposed');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'resolved', resolvedBy: 'user-test' }),
-    );
-    // db.update is called once — for the bulk resolve (no ID filter)
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
-  });
-
-  it('calls db.query.prds.findFirst to read fixCommentId before the SQL update', async () => {
-    mockDb.update.mockImplementation(() => ({
-      set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockResolvedValue(undefined),
-    }));
-
-    await request(buildApp()).post('/api/interviews/prds/prd-1/apply-proposed');
-
-    expect(mockDb.query.prds.findFirst).toHaveBeenCalledTimes(1);
-  });
-
-  it('runs the raw SQL promotion exactly once', async () => {
-    mockDb.update.mockImplementation(() => ({
-      set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockResolvedValue(undefined),
-    }));
-
-    await request(buildApp()).post('/api/interviews/prds/prd-1/apply-proposed');
-
-    expect(mockDb.execute).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ── PRD apply-proposed — single-comment resolution (fixCommentId is set) ──────
-
-describe('POST /api/interviews/prds/:prdId/apply-proposed — single-comment resolution', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockDb.execute.mockResolvedValue(undefined);
-    // fixCommentId set — simulates per-comment sparkle fix
-    mockDb.query.prds.findFirst.mockResolvedValue({ fixCommentId: 'comment-prd-1' });
-  });
-
-  it('resolves only the triggering comment when fixCommentId is set', async () => {
-    const mockSet = jest.fn().mockReturnThis();
-    const mockWhere = jest.fn().mockResolvedValue(undefined);
-    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
-
-    const res = await request(buildApp())
-      .post('/api/interviews/prds/prd-1/apply-proposed');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
-    // The resolve update should be called with status resolved
-    expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'resolved', resolvedBy: 'user-test' }),
-    );
-    // db.update is called exactly once — only the specific comment
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns 200 and ok: true whether or not the comment exists', async () => {
-    mockDb.update.mockImplementation(() => ({
-      set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockResolvedValue(undefined),
-    }));
-
-    const res = await request(buildApp())
-      .post('/api/interviews/prds/prd-1/apply-proposed');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(mockApplyProposedPrdChanges).toHaveBeenCalledWith('prd-1', {
+      resolvedBy: 'user-test',
+    });
   });
 });
 

@@ -1,11 +1,19 @@
 import React, { useEffect, useState } from 'react';
+import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { BrandLogo } from './BrandLogo';
 import styles from './Login.module.css';
+
+interface DevLoginPersona {
+  id: DevMockPersonaId;
+  label: string;
+  displayName: string;
+}
 
 export const Login: React.FC = () => {
   const [checking, setChecking] = useState(true);
   const [devLoginAvailable, setDevLoginAvailable] = useState(false);
-  const [devLoggingIn, setDevLoggingIn] = useState(false);
+  const [devPersonas, setDevPersonas] = useState<DevLoginPersona[]>([]);
+  const [devLoggingIn, setDevLoggingIn] = useState<DevMockPersonaId | null>(null);
 
   useEffect(() => {
     const checkAuth = fetch('/auth/status', { credentials: 'include' })
@@ -21,7 +29,14 @@ export const Login: React.FC = () => {
 
     const checkDev = fetch('/auth/dev-login-available', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
-      .then(data => { if (data?.available) setDevLoginAvailable(true); })
+      .then(data => {
+        if (data?.available) {
+          setDevLoginAvailable(true);
+          if (Array.isArray(data.personas)) {
+            setDevPersonas(data.personas);
+          }
+        }
+      })
       .catch(() => {});
 
     Promise.allSettled([checkAuth, checkDev]);
@@ -29,20 +44,22 @@ export const Login: React.FC = () => {
 
   const handleLogin = () => { window.location.href = '/auth/login'; };
 
-  const handleDevLogin = async () => {
-    setDevLoggingIn(true);
+  const handleDevLogin = async (persona: DevMockPersonaId) => {
+    setDevLoggingIn(persona);
     try {
       const res = await fetch('/auth/dev-login', {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persona }),
       });
       if (res.ok) {
         window.location.href = '/';
       } else {
-        setDevLoggingIn(false);
+        setDevLoggingIn(null);
       }
     } catch {
-      setDevLoggingIn(false);
+      setDevLoggingIn(null);
     }
   };
 
@@ -67,18 +84,24 @@ export const Login: React.FC = () => {
           Sign in with Amergis SSO
         </button>
 
-        {devLoginAvailable && (
+        {devLoginAvailable && devPersonas.length > 0 && (
           <>
             <div className={styles['login-divider']}>
-              <span>or</span>
+              <span>or sign in as</span>
             </div>
-            <button
-              className={styles['dev-login-button']}
-              onClick={handleDevLogin}
-              disabled={devLoggingIn}
-            >
-              {devLoggingIn ? 'Signing in...' : 'Sign in as Dev User'}
-            </button>
+            <div className={styles['dev-login-buttons']}>
+              {devPersonas.map((persona) => (
+                <button
+                  key={persona.id}
+                  className={styles['dev-login-button']}
+                  onClick={() => handleDevLogin(persona.id)}
+                  disabled={devLoggingIn !== null}
+                  title={persona.displayName}
+                >
+                  {devLoggingIn === persona.id ? 'Signing in...' : persona.label}
+                </button>
+              ))}
+            </div>
           </>
         )}
       </div>
