@@ -12,7 +12,7 @@ import {
   cancelRun,
   sendMessage,
 } from './chatAgentService';
-import { getSkillConfig } from './projectSettingsService';
+import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
@@ -21,6 +21,7 @@ const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
 export interface DocumentValidationAdapter {
   getDocumentId(): string;
   getProject(): string;
+  getSkillSettingsId?(): string | null;
   getAuthorId(): string;
   getValidationThreadId(): string | null;
   getStatus(): string;
@@ -64,7 +65,8 @@ async function cleanupWorkspace(threadId: string): Promise<void> {
 
 export async function autoStartDocumentValidation(adapter: DocumentValidationAdapter): Promise<void> {
   const project = adapter.getProject();
-  const skillConfig = await getSkillConfig(project);
+  const settingsId = adapter.getSkillSettingsId?.() ?? undefined;
+  const skillConfig = await resolveSkillConfig({ project, settingsId });
   if (!skillConfig) return;
 
   const skillPath = adapter.getSkillPath(skillConfig);

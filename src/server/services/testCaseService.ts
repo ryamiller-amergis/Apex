@@ -16,7 +16,7 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
-import { getSkillConfig } from './projectSettingsService';
+import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 
 const WATCHER_INTERVAL_MS = 5_000;
@@ -398,7 +398,7 @@ export async function triggerTestCaseGeneration(
     return true;
   }
 
-  const skillConfig = await getSkillConfig(prdRow.project);
+  const skillConfig = await resolveSkillConfig({ project: prdRow.project, settingsId: prdRow.skillSettingsId ?? undefined });
   if (!skillConfig?.testCaseSkillPath) {
     console.log(
       `[testCase] Skipping generation; no test-case skill configured (prdId=${prdId})`

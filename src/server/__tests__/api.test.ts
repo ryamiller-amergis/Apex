@@ -9,9 +9,14 @@ import * as projectAccessRequestService from '../services/projectAccessRequestSe
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn(),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn();
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+  };
+});
 
 jest.mock('../services/userProjectAssignmentService', () => ({
   ensureUserProjectAssignment: jest.fn(),
@@ -653,7 +658,7 @@ describe('GET /api/skill-config', () => {
     const res = await request(app).get('/api/skill-config');
 
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: 'project query parameter is required' });
+    expect(res.body).toMatchObject({ error: 'project or settingsId query parameter is required' });
     expect(mockGetSkillConfig).not.toHaveBeenCalled();
   });
 
@@ -663,6 +668,6 @@ describe('GET /api/skill-config', () => {
     const res = await request(app).get('/api/skill-config?project=unknown-project');
 
     expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ error: 'No skill config found for this project' });
+    expect(res.body).toMatchObject({ error: 'No skill config found' });
   });
 });

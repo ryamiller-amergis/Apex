@@ -40,9 +40,14 @@ jest.mock('../utils/rbacHelpers', () => ({
 jest.mock('../services/designPlanService', () => ({
   generateDesignPlan: jest.fn().mockResolvedValue(undefined),
 }));
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn().mockResolvedValue(null),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn().mockResolvedValue(null);
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+  };
+});
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn().mockResolvedValue('global-default-model'),
   getAppSetting: jest.fn().mockResolvedValue(null),
@@ -769,6 +774,8 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       userId: 'user-test',
       chatThreadId: 'thread-new',
       title: 'My PRD',
+      skillSettingsId: null,
+      model: undefined,
     });
     expect(mockPrdService.startPrdWatcher).toHaveBeenCalledWith('prd-new', 'thread-new');
   });

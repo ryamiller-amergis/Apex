@@ -41,11 +41,12 @@ jest.mock('../db/drizzle', () => {
 jest.mock('../services/projectSettingsService', () => {
   const mockGetApproversForDocument = jest.fn().mockResolvedValue([]);
   return {
-    getApproversForDocument: mockGetApproversForDocument,
-    getApproverUserIds: jest.fn(async (project: string, _docType: string) => {
+    getApproversForDocumentByProject: mockGetApproversForDocument,
+    getApproverUserIdsForProject: jest.fn(async (project: string, _docType: string) => {
       const pool = await mockGetApproversForDocument(project, _docType);
       return pool.map((a: any) => a.userId);
     }),
+    getApproverPoolForProject: jest.fn().mockResolvedValue({ individuals: [], groups: [] }),
   };
 });
 
@@ -66,9 +67,9 @@ import {
 } from '../services/documentApprovalService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
-const { getApproversForDocument: mockGetApproversForDocument } = jest.requireMock(
+const { getApproversForDocumentByProject: mockGetApproversForDocument } = jest.requireMock(
   '../services/projectSettingsService',
-) as { getApproversForDocument: jest.Mock };
+) as { getApproversForDocumentByProject: jest.Mock };
 
 const { createNotification: mockCreateNotification } = jest.requireMock(
   '../services/notificationService',

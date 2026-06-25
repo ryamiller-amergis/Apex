@@ -186,6 +186,9 @@ const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, onD
           {interviewStatusLabel(interview.status)}
         </span>
         <div className={styles.cardFooterRight}>
+          {interview.skillSettingsName && (
+            <span className={styles.repoBadge}>{interview.skillSettingsName}</span>
+          )}
           {interview.prdCount > 0 && (
             <span className={styles.cardPrdBadge}>{interview.prdCount} PRD{interview.prdCount !== 1 ? 's' : ''}</span>
           )}
@@ -235,6 +238,9 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
           {readiness.label}
         </span>
         <div className={styles.cardFooterRight}>
+          {prd.skillSettingsName && (
+            <span className={styles.repoBadge}>{prd.skillSettingsName}</span>
+          )}
           {coverage && (
             <span
               className={styles.cardPrdBadge}
@@ -290,6 +296,9 @@ const DesignDocCard: React.FC<DesignDocCardProps> = ({ doc, canDelete, onDelete 
           {designDocStatusLabel(doc.status)}
         </span>
         <div className={styles.cardFooterRight}>
+          {doc.skillSettingsName && (
+            <span className={styles.repoBadge}>{doc.skillSettingsName}</span>
+          )}
           {doc.reviewerId && (
             <span className={styles.cardPrdBadge}>Reviewer assigned</span>
           )}

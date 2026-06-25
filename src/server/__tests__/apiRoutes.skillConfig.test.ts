@@ -67,13 +67,22 @@ jest.mock('drizzle-orm', () => ({
   count: jest.fn(),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn().mockResolvedValue(null),
-  upsertSkillConfig: jest.fn(),
-  deleteSkillConfig: jest.fn(),
-  listSkillConfigs: jest.fn().mockResolvedValue([]),
-  getAllSkillConfigs: jest.fn().mockResolvedValue([]),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn().mockResolvedValue(null);
+  return {
+    getSkillConfig,
+    getSkillConfigById: jest.fn().mockResolvedValue(null),
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string; settingsId?: string }) =>
+      opts.settingsId ? Promise.resolve(null) : getSkillConfig(opts.project),
+    ),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+    listSkillConfigsForProject: jest.fn().mockResolvedValue([]),
+    upsertSkillConfig: jest.fn(),
+    deleteSkillConfig: jest.fn(),
+    listSkillConfigs: jest.fn().mockResolvedValue([]),
+    getAllSkillConfigs: jest.fn().mockResolvedValue([]),
+  };
+});
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
@@ -123,7 +132,7 @@ describe('GET /api/skill-config', () => {
     const res = await request(buildApp()).get('/api/skill-config');
 
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('project') });
+    expect(res.body).toMatchObject({ error: expect.stringContaining('required') });
     expect(mockGetSkillConfig).not.toHaveBeenCalled();
   });
 
@@ -133,7 +142,7 @@ describe('GET /api/skill-config', () => {
     const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
 
     expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ error: 'No skill config found for this project' });
+    expect(res.body).toMatchObject({ error: 'No skill config found' });
   });
 
   it('returns interviewModel, prdModel, designDocModel as null when config has no model fields', async () => {

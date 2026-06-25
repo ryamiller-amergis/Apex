@@ -58,7 +58,10 @@ export interface QuickSkillPill {
 }
 
 export interface ProjectSkillConfig {
+  id: string;
   project: string;
+  friendlyName: string;
+  isDefault: boolean;
   skillRepo: string;
   skillBranch: string;
   updatedBy?: string | null;
@@ -104,7 +107,21 @@ export interface ProjectSkillConfig {
   updatedAt?: string;
 }
 
+/**
+ * Lightweight per-repo config summary for the project repo selector / header switcher.
+ * Returned by `GET /api/skill-configs?project=`.
+ */
+export interface ProjectRepoConfigSummary {
+  id: string;
+  skillRepo: string;
+  skillBranch: string;
+  friendlyName: string;
+  isDefault: boolean;
+}
+
 export interface UpsertProjectSkillConfigRequest {
+  friendlyName: string;
+  isDefault?: boolean;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath?: string | null;
@@ -145,7 +162,7 @@ export interface UpsertProjectSkillConfigRequest {
 
 export interface ProjectApprover {
   id: string;
-  project: string;
+  settingsId: string;
   userId: string;
   documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
   displayName: string | null;
@@ -155,7 +172,7 @@ export interface ProjectApprover {
 }
 
 export interface SetApproversRequest {
-  project: string;
+  settingsId: string;
   /** Individual approver user OIDs. */
   designDocApprovers: string[];
   prdApprovers: string[];
@@ -174,7 +191,10 @@ export interface ApproverPoolResponse {
 }
 
 export interface ProjectSkillConfigResponse {
+  id: string;
   project: string;
+  friendlyName: string;
+  isDefault: boolean;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath?: string | null;
@@ -201,4 +221,13 @@ export interface ProjectSkillConfigResponse {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+}
+
+export interface ProjectRepoConfigSummary {
+  id: string;
+  project: string;
+  skillRepo: string;
+  skillBranch: string;
+  friendlyName: string;
+  isDefault: boolean;
 }

@@ -20,6 +20,7 @@ interface WikiSource {
 
 export type PRDPreviewDrawerProps = (ThreadSource | WikiSource) & {
   onClose: () => void;
+  skillSettingsName?: string | null;
 };
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
@@ -324,6 +325,9 @@ export const PRDPreviewDrawer: React.FC<PRDPreviewDrawerProps> = (props) => {
                 </div>
               )}
               {!isThread && <div className={styles.meta}>{(props as WikiSource).pagePath}</div>}
+              {props.skillSettingsName && (
+                <span className={styles.repoBadge}>{props.skillSettingsName}</span>
+              )}
             </div>
           </div>
           <div className={styles.headerActions}>

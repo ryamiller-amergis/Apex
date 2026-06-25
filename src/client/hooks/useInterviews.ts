@@ -352,6 +352,7 @@ export function useCreateInterview() {
       title?: string;
       chatThreadId: string;
       model?: string;
+      skillSettingsId?: string;
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
