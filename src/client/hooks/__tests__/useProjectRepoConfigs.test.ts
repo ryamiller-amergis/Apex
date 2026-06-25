@@ -17,6 +17,7 @@ function createWrapper() {
 const repoConfigs = [
   {
     id: 'cfg-1',
+    project: 'proj-alpha',
     friendlyName: 'Main',
     skillRepo: 'org/skills',
     skillBranch: 'main',
@@ -24,6 +25,7 @@ const repoConfigs = [
   },
   {
     id: 'cfg-2',
+    project: 'proj-alpha',
     friendlyName: 'Staging',
     skillRepo: 'org/skills',
     skillBranch: 'staging',
