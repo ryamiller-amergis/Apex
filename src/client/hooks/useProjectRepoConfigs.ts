@@ -14,5 +14,6 @@ export function useProjectRepoConfigs(project: string | null | undefined) {
     },
     enabled: !!project,
     staleTime: 5 * 60 * 1000,
+    retry: 1,
   });
 }
