@@ -15,7 +15,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'ui-lab';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -34,6 +34,7 @@ interface AppHeaderProps {
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
+  onNavigateUiLab?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -57,6 +58,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateCloudCost,
   onNavigateBacklog,
   onNavigateMyWork,
+  onNavigateUiLab,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -88,6 +90,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -97,6 +100,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'my-work') {
       return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
     }
+    if (item.view === 'ui-lab') return isSuperAdmin || can('ui-lab:view');
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
     return true;

@@ -39,6 +39,7 @@ import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
+import uiLabRoutes from './routes/uiLab';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -136,6 +137,7 @@ app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
 app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
 app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
+app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 

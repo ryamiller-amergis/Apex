@@ -48,6 +48,7 @@ const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => 
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
 const DevSessionView = lazy(() => import('./components/DevSessionView').then(m => ({ default: m.DevSessionView })));
+const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -75,7 +76,7 @@ function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'ui-lab';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -97,6 +98,8 @@ function App() {
                     ? 'admin'
                     : location.pathname.startsWith('/my-work')
                     ? 'my-work'
+                    : location.pathname.startsWith('/ui-lab')
+                    ? 'ui-lab'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -169,6 +172,7 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
+    if (currentView === 'ui-lab'        && !isSuperAdmin && !can('ui-lab:view')) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -304,6 +308,7 @@ function App() {
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
+            onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
@@ -464,6 +469,14 @@ function App() {
                   ) : (
                     <DevWorkbenchView />
                   )}
+                </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'ui-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <UiLabView project={selectedProject} />
                 </div>
               </Suspense>
             </ErrorBoundary>
