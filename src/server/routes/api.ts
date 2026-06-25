@@ -8,6 +8,8 @@ import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHit
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
 import { DeploymentTrackingService } from '../services/deploymentTracking';
 import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionService';
+import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
+import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { getSkillConfig } from '../services/projectSettingsService';
@@ -564,6 +566,35 @@ router.get('/pr-resolution-metrics-stats', async (req: Request, res: Response) =
   } catch (error: any) {
     console.error('Error fetching PR resolution metrics stats:', error);
     res.status(500).json({ error: 'Failed to fetch PR resolution metrics statistics' });
+  }
+});
+
+// GET /api/maxview-eslint-summary - Current ESLint issue snapshot for the MaxView UI repo
+router.get('/maxview-eslint-summary', async (_req: Request, res: Response) => {
+  try {
+    console.log('=== API: /maxview-eslint-summary called ===');
+    const snapshot = await getMaxViewEslintSnapshot();
+    res.json(snapshot);
+  } catch (error: any) {
+    console.error('Error fetching MaxView ESLint summary:', error);
+    res.status(500).json({ error: error?.message || 'Failed to fetch MaxView ESLint summary' });
+  }
+});
+
+// GET /api/maxview-eslint-burndown - ESLint issue trend from nightly pipeline artifacts
+router.get('/maxview-eslint-burndown', async (req: Request, res: Response) => {
+  try {
+    const { from, to } = req.query as { from?: string; to?: string };
+    if (!from || !to) {
+      res.status(400).json({ error: 'from and to query parameters are required (YYYY-MM-DD)' });
+      return;
+    }
+
+    const burnDown = await getMaxViewEslintBurnDown(from, to);
+    res.json(burnDown);
+  } catch (error: any) {
+    console.error('Error fetching MaxView ESLint burn-down:', error);
+    res.status(500).json({ error: error?.message || 'Failed to fetch MaxView ESLint burn-down' });
   }
 });
 
