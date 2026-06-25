@@ -8,78 +8,65 @@ disable-model-invocation: true
 
 This project uses `node-pg-migrate` with the `pg` driver. Migrations are plain SQL files in `migrations/`.
 
-## Agent workflow — the AI never picks the filename
+## Critical — do not use `migrate:create`
 
-The filename is **always** determined by a command run in the terminal. Do not invent timestamps or write `migrations/20260618….sql` directly.
+**Never run `npm run migrate:create` or `npm run migrate:local:create` in this repo.**
 
-### Schema changes (tables, columns, indexes)
-
-```bash
-npm run migrate:local:create -- add-work-items-table
-```
-
-The CLI prints the exact path, e.g.:
+Those commands call `node-pg-migrate create`, which assigns an **epoch-millisecond** prefix (e.g. `1782406145007_…`). This repo's applied migrations use **`YYYYMMDDHHMMSS`** prefixes (e.g. `20260625150100_…`). Numerically, epoch-ms (~1.78×10¹²) sorts **before** date-stamped (~2.02×10¹³) names, so new CLI migrations fail with:
 
 ```text
-Created migration -- …/migrations/1781818427336_add-work-items-table.sql
+Not run migration 1782402822050_… is preceding already run migration 20260518202500_…
 ```
 
-**Then edit that file.** The slug in the command becomes the suffix; the timestamp prefix is assigned automatically.
+**Always** allocate the filename with `scripts/next-migration-timestamp.mjs` (see below).
 
-### Hand-written SQL only (changelog sync, data backfills)
+## Agent workflow — filename from the helper only
 
-When you must create the file yourself (no CLI scaffold):
+The agent **must** run the helper in the terminal and create **exactly** the path it prints. Do not guess timestamps, use `Date.now()`, or write `migrations/20260618….sql` by hand.
+
+### Step 1 — allocate the filename
 
 ```bash
-node scripts/next-migration-timestamp.mjs sync-changelog-version-1-28-0
-# → migrations/20260618140200_sync-changelog-version-1-28-0.sql
+node scripts/next-migration-timestamp.mjs add-my-table
+# → migrations/20260625150200_add-my-table.sql
 ```
 
-Create **that exact path** and write the SQL. For a second migration in the same change, run the command again (it bumps by 100).
-
-### Multiple migrations in one PR
-
-Run `migrate:local:create` (or the timestamp helper) **once per file**, in order. Never reuse a timestamp or rename after creation.
-
-## Create a migration (always use the CLI)
-
-**Never hand-pick a timestamp or rename a migration file after it has run.** Filenames are the source of truth for ordering; `pgmigrations` stores the exact filename applied.
+For a second migration in the same change, run the helper again (timestamps bump by **100** automatically):
 
 ```bash
-# Local dev (preferred — reads .env.local)
-npm run migrate:local:create -- add-work-items-table
-
-# Cloud / generic
-npm run migrate:create -- add-work-items-table
+node scripts/next-migration-timestamp.mjs add-my-table-index
+# → migrations/20260625150300_add-my-table-index.sql
 ```
 
-### Before writing a hand-crafted SQL file
+### Step 2 — create the file at that path
 
-Some flows (e.g. changelog sync) add SQL without `migrate:create`. **Run the helper with the slug** — it returns the full path to create:
+Create the printed path and write the SQL (Up + Down sections). Use the Write tool or shell — the path must match the helper output character-for-character.
+
+### Step 3 — apply and verify
 
 ```bash
-node scripts/next-migration-timestamp.mjs sync-changelog-version-1-28-0
-# → migrations/20260618140200_sync-changelog-version-1-28-0.sql
+npm run migrate:local:up    # preferred — reads .env.local
+# or
+npm run migrate:up        # uses .env DATABASE_URL
 ```
 
-For multiple related migrations in one change, run the helper again for each slug (timestamps increment by **100** automatically).
+### Step 4 — update Drizzle schema
 
-### Rules that prevent order conflicts
+Update `src/server/db/schema.ts` to match, then:
+
+```bash
+npx tsc -p tsconfig.server.json --noEmit
+```
+
+## Rules that prevent order conflicts
 
 | Do | Don't |
 |---|---|
-| Use `migrate:local:create` for schema changes | Guess timestamps like `20260618130000` |
+| Run `node scripts/next-migration-timestamp.mjs <slug>` before every new file | Run `npm run migrate:create` / `migrate:local:create` |
 | Keep the filename forever once applied anywhere | Rename a migration to "fix" ordering |
-| Add new migrations with timestamps **after** the latest file | Insert a migration between two already-applied ones |
-| Delete mistaken **unapplied** files and recreate via CLI | Add placeholder files to "match" a DB row you guessed wrong |
-
-### Verify before committing
-
-```bash
-npm run migrate:local:up    # must succeed with no order errors
-```
-
-If `migrate:local:up` fails with **"preceding already run migration"**, filenames on disk no longer match `pgmigrations`. Fix by restoring the original filenames (see Troubleshooting below) — do not rename applied migrations forward.
+| Ensure pending files sort **after** the latest applied name | Insert a timestamp between two already-applied migrations |
+| Delete mistaken **unapplied** files and re-run the helper | Add placeholder files to "match" a guessed DB row |
+| Keep on-disk files for every row in `pgmigrations` | Delete migration files that were already applied |
 
 ## Migration file structure
 
@@ -116,17 +103,20 @@ npm run migrate:down    # roll back the last migration
 | **Production** | Run in CI/CD pipeline before `npm start` | App Service env var |
 
 Always test migrations locally first:
-```bash
-# 1. scaffold
-npm run migrate:local:create -- add-my-table
 
-# 2. test locally
+```bash
+# 1. allocate filename
+node scripts/next-migration-timestamp.mjs add-my-table
+
+# 2. create file at printed path, write SQL
+
+# 3. test locally
 npm run migrate:local:up
 
-# 3. verify, then roll back if needed
+# 4. verify, then roll back if needed
 npm run migrate:local:down
 
-# 4. once happy, apply to cloud dev
+# 5. once happy, apply to cloud dev
 npm run migrate:up
 ```
 
@@ -135,6 +125,7 @@ npm run migrate:up
 This project uses Drizzle ORM as the query layer. After writing a migration, **always update `src/server/db/schema.ts`** to match — Drizzle does not own or generate migrations here; it only reads the schema definitions for type safety.
 
 **New table example:**
+
 ```typescript
 // src/server/db/schema.ts
 export const workItems = pgTable('work_items', {
@@ -148,25 +139,28 @@ export const workItems = pgTable('work_items', {
 ```
 
 **New column example** (after `ALTER TABLE … ADD COLUMN`):
+
 ```typescript
 // Add the new field to the existing pgTable definition in schema.ts
 assignedTo: text('assigned_to'),
 ```
 
 **Add a relation** whenever there is a FK — this enables `db.query.*` eager loading:
+
 ```typescript
 export const workItemsRelations = relations(workItems, ({ one }) => ({
   sprint: one(sprints, { fields: [workItems.sprintId], references: [sprints.id] }),
 }));
 ```
 
-Then run `npx tsc -p tsconfig.server.json --noEmit` to verify no type errors before committing.
-
 `.env.local` is git-ignored. If it doesn't exist, create it:
+
 ```
 DATABASE_URL=postgresql://pgadmin:yourpassword@localhost:5432/aipilot
 ```
+
 One-time DB setup if the local database doesn't exist yet:
+
 ```bash
 createdb -U pgadmin aipilot
 # or in psql: CREATE DATABASE aipilot;
@@ -175,6 +169,7 @@ createdb -U pgadmin aipilot
 ## Common patterns
 
 **Add a column safely:**
+
 ```sql
 -- Up
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assigned_to TEXT;
@@ -184,6 +179,7 @@ ALTER TABLE work_items DROP COLUMN IF EXISTS assigned_to;
 ```
 
 **Add an index (non-blocking):**
+
 ```sql
 -- Up
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_work_items_state ON work_items(state);
@@ -193,6 +189,7 @@ DROP INDEX IF EXISTS idx_work_items_state;
 ```
 
 **Foreign key:**
+
 ```sql
 -- Up
 ALTER TABLE sprints ADD COLUMN team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
@@ -202,6 +199,7 @@ ALTER TABLE sprints DROP COLUMN IF EXISTS team_id;
 ```
 
 **Rename a column:**
+
 ```sql
 -- Up
 ALTER TABLE work_items RENAME COLUMN old_name TO new_name;
@@ -212,28 +210,29 @@ ALTER TABLE work_items RENAME COLUMN new_name TO old_name;
 
 ## .NET EF equivalent commands
 
-| EF Migrations | node-pg-migrate |
+| EF Migrations | This project |
 |---|---|
-| `dotnet ef migrations add Name` | `npm run migrate:create -- name` |
+| `dotnet ef migrations add Name` | `node scripts/next-migration-timestamp.mjs name` → create file → write SQL |
 | `dotnet ef database update` | `npm run migrate:up` |
 | `dotnet ef migrations revert` | `npm run migrate:down` |
 
-The main difference: EF generates C# from your model diff; `node-pg-migrate` uses SQL files you write by hand. The SQL gives you full control with no magic.
+The main difference: EF generates C# from your model diff; here you write SQL by hand. The SQL gives you full control with no magic.
 
 ## Troubleshooting order conflicts
 
 **Error:** `Not run migration X is preceding already run migration Y`
 
-This means a file on disk has timestamp X (not in `pgmigrations`) while Y is already recorded as applied. Common causes:
+Common causes:
 
-1. **Renamed after apply** — e.g. DB has `20260618121500_add-model-audit-columns` but the file was renamed to `20260618130100_…`. **Fix:** rename the file back to match `pgmigrations.name` exactly.
-2. **Wrong placeholder** — a guessed filename collides with an applied migration at the same timestamp. **Fix:** delete the unapplied placeholder; do not change the applied migration's name.
-3. **Timestamp behind latest applied** — new file timestamp is earlier than migrations already run on that database. **Fix:** delete the unapplied file, run `node scripts/next-migration-timestamp.mjs`, recreate with the new timestamp.
+1. **Used `migrate:create`** — file has epoch-ms prefix behind date-stamped applied migrations. **Fix:** delete the unapplied file, run `node scripts/next-migration-timestamp.mjs <slug>`, recreate at the new path.
+2. **Renamed after apply** — DB has `20260618121500_add-model-audit-columns` but the file was renamed. **Fix:** rename the file back to match `pgmigrations.name` exactly.
+3. **Missing file on disk** — migration applied in DB but `.sql` deleted. **Fix:** restore the file from git (`git checkout <commit> -- migrations/<name>.sql`).
+4. **Duplicate timestamps** — two different slugs at the same prefix. **Fix:** delete the unapplied duplicate, re-run the helper.
 
 **Inspect what the database thinks is applied (local):**
 
 ```bash
-npx dotenv -e .env.local -- node -e "import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const r=await c.query('SELECT name FROM pgmigrations ORDER BY name DESC LIMIT 10'); console.log(r.rows.map(x=>x.name).join('\n')); await c.end();"
+npx dotenv -e .env.local -- node -e "const pg=require('pg');(async()=>{const c=new pg.Client({connectionString:process.env.DATABASE_URL});await c.connect();const r=await c.query('SELECT name FROM pgmigrations ORDER BY name DESC LIMIT 10');r.rows.forEach(x=>console.log(x.name));await c.end()})()"
 ```
 
 Every `name` in that list must have a matching file in `migrations/`. Pending files must sort **after** the last applied name.
