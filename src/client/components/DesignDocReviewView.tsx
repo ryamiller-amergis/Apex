@@ -33,6 +33,7 @@ import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import BeginImplementationModal from './BeginImplementationModal';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
@@ -43,6 +44,7 @@ import {
   designDocHasProposedChanges,
   isDesignDocSingleCommentFixPending,
 } from '../utils/apexFixHelpers';
+import { findFeatureAdoIdByDesignDocId } from '../../shared/utils/backlogTransform';
 import {
   clearApexFixInProgress,
   fetchChatThreadStatus,
@@ -1019,7 +1021,7 @@ export const DesignDocReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, groups } = useAppShell();
   const qc = useQueryClient();
 
   const { data: doc, isLoading, isError } = useDesignDoc(id);
@@ -1186,6 +1188,7 @@ export const DesignDocReviewView: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
+  const [showImplModal, setShowImplModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
 
@@ -1742,6 +1745,14 @@ export const DesignDocReviewView: React.FC = () => {
   const canUseAssistant = (isReviewer || isOwner || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
+  // "Start Implementation" is available to Admin, or the design-doc owner who is
+  // also a member of the Developer group.
+  const canImplement = isAdmin || (isOwner && groups.includes('Developer'));
+  const resolvedFeatureAdoId = id
+    ? findFeatureAdoIdByDesignDocId(sourcePrd?.backlogJson, id)
+    : undefined;
+  const isDocApproved = doc.status === 'approved' || doc.status === 'reviewer_approved';
+
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
   const apexFixRunningBanner = (() => {
     if (fixFlow.phase === 'fixing' || (validationFixSession && fixFlow.phase === 'idle')) {
@@ -1950,6 +1961,27 @@ export const DesignDocReviewView: React.FC = () => {
         <div className={styles.headerRight}>
           {doc.status === 'approved' && (
             <span className={styles.reviewOnlyBadge}>Read-only</span>
+          )}
+
+          {canImplement && isDocApproved && (
+            <>
+              <button
+                className={styles.actionBtnImplement}
+                onClick={() => setShowImplModal(true)}
+                type="button"
+                title={
+                  resolvedFeatureAdoId
+                    ? `Start implementation in Cursor for ADO Feature #${resolvedFeatureAdoId}`
+                    : 'ADO Feature not yet created — create ADO items on the parent PRD first'
+                }
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M5.5 3L10.5 8L5.5 13" />
+                </svg>
+                Start Implementation
+              </button>
+              <span className={styles.actionDivider} />
+            </>
           )}
 
           {canUseAssistant && (
@@ -2589,6 +2621,14 @@ export const DesignDocReviewView: React.FC = () => {
           onConfirm={(selections) => void handleReassignConfirm(selections)}
           onCancel={() => setShowReassignModal(false)}
           isSubmitting={reassignApprovers.isPending}
+        />
+      )}
+
+      {showImplModal && doc && (
+        <BeginImplementationModal
+          featureTitle={doc.title}
+          featureAdoId={resolvedFeatureAdoId}
+          onClose={() => setShowImplModal(false)}
         />
       )}
     </div>

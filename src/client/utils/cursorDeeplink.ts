@@ -13,6 +13,15 @@ export function buildDesignDocKickoffPrompt(adoWorkItemId: number): string {
   return `/design-doc-kickoff ${adoWorkItemId}`;
 }
 
+/**
+ * Builds the Cursor prompt for the apex-implement-feature skill.
+ * The prompt is intentionally thin — the skill fetches all context from the
+ * ADO Feature (design doc attachments + acceptance criteria on children).
+ */
+export function buildApexImplementPrompt(featureAdoId: number): string {
+  return `/apex-implement-feature ${featureAdoId}`;
+}
+
 export function buildCursorPromptDeeplink(promptText: string): {
   desktop: string;
   web: string;

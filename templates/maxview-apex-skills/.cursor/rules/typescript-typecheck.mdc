@@ -1,0 +1,34 @@
+---
+description: TypeScript type-check discipline for MaxView. Apply after any .ts or .tsx file changes.
+alwaysApply: true
+---
+
+# TypeScript Type-Check Discipline
+
+After making any changes to `.ts` or `.tsx` files, **always run the TypeScript compiler** to catch type errors before committing.
+
+## Commands
+
+```bash
+# Client (React/Vite)
+npx tsc -p tsconfig.client.json --noEmit
+
+# Server (Node/Express) — if server files were changed
+npx tsc -p tsconfig.server.json --noEmit
+```
+
+Run the relevant one(s) based on which files were changed. Fix all errors before declaring the task done. Do not skip or suppress type errors with `// @ts-ignore` or `as any` casts — fix the underlying issue.
+
+## Common pitfall
+
+`ReturnType<typeof setTimeout>` resolves to `NodeJS.Timeout` when `@types/node` is in scope (even in client code). Use explicit `number` for browser timers:
+
+```typescript
+// BAD - breaks when @types/node is present
+let timerId: ReturnType<typeof setTimeout> | null = null;
+timerId = window.setTimeout(...);
+
+// GOOD
+let timerId: number | null = null;
+timerId = window.setTimeout(...);
+```

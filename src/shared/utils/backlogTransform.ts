@@ -165,6 +165,29 @@ export function stampAdoIds(
 }
 
 /**
+ * Find the ADO Feature work item id for a given designDocId.
+ * Returns undefined when the backlog has not yet been pushed to ADO or the
+ * matching feature cannot be found.
+ */
+export function findFeatureAdoIdByDesignDocId(
+  backlogJson: unknown,
+  designDocId: string,
+): number | undefined {
+  const source = backlogJson as BacklogJson;
+  if (!source) return undefined;
+
+  const allFeatures: BacklogNode[] = [
+    ...(source.features ?? []),
+    ...(source.epics ?? []).flatMap((e) => e.features ?? []),
+  ];
+
+  const match = allFeatures.find(
+    (f) => (f as Record<string, unknown>).designDocId === designDocId,
+  );
+  return match?.adoWorkItemId;
+}
+
+/**
  * Stamp a designDocId or designPrototypeId onto the feature at `featureIndex`
  * in the backlog JSON. Returns a new copy with the ID set.
  *

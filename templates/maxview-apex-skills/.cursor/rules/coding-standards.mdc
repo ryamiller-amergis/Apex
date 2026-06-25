@@ -1,0 +1,90 @@
+---
+description: MaxView React/TypeScript coding standards. Apply whenever creating or modifying .tsx or .ts files.
+alwaysApply: true
+---
+
+# MaxView Coding Standards
+
+## Component structure
+
+Always use functional components with explicit `React.FC` typing:
+
+```tsx
+// GOOD
+interface ShiftCardProps {
+  shiftId: string;
+  title: string;
+  isSelected?: boolean;
+}
+
+export const ShiftCard: React.FC<ShiftCardProps> = ({ shiftId, title, isSelected = false }) => {
+  return <div>...</div>;
+};
+
+// BAD — class components, anonymous exports, missing types
+export default function({ id }) { ... }
+```
+
+- Name prop interfaces `ComponentNameProps`
+- Define the interface directly above the component
+- Optional props use `?`; set defaults in the destructuring signature
+
+## Hooks order
+
+Declare hooks inside every component in this order:
+
+1. `useState`
+2. `useRef`
+3. `useQuery` / `useMutation` (TanStack Query)
+4. `useMemo` / `useCallback`
+5. `useEffect`
+6. `useContext` / custom hooks
+
+## Early returns
+
+Return `null` early for missing data or loading states — do not nest the entire render in a conditional:
+
+```tsx
+// GOOD
+if (!data) return null;
+
+// BAD
+return data ? <div>...</div> : null;
+```
+
+## State management
+
+- **Local UI state**: `useState`
+- **Server / async state**: TanStack Query (`useQuery`, `useMutation`, `useQueryClient`) — never fetch in `useEffect`
+- **Shared state**: `useContext` with a dedicated context file
+- No Redux or other global state libraries
+
+## Forms
+
+Use `react-hook-form` + `zod` for all forms:
+
+```tsx
+const schema = z.object({ reason: z.string().min(1, 'Required') });
+type FormValues = z.infer<typeof schema>;
+
+const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
+  resolver: zodResolver(schema),
+  defaultValues: { reason: '' },
+});
+```
+
+Never manage form field state manually with `useState`.
+
+## Environment variables
+
+Access `VITE_*` variables only via the project's `env.ts` config helper — never via `import.meta.env` directly in components or hooks.
+
+## Code organisation
+
+- Reusable stateful logic → custom hook in `src/client/hooks/`
+- API / data-fetching → TanStack Query inside custom hooks (not components or plain service files)
+- Shared TypeScript types → `src/shared/types/`
+
+## Comments
+
+Only add comments that explain non-obvious intent, trade-offs, or constraints. Do not write comments that just narrate what the code does.
