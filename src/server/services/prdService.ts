@@ -22,7 +22,7 @@ import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import { getTestCases, listLatestTestCaseSummariesForPrds } from './testCaseService';
-import { getSkillConfig } from './projectSettingsService';
+import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import {
   autoStartDocumentValidation,
@@ -168,6 +168,7 @@ export async function createPrd(opts: {
   chatThreadId: string;
   title?: string;
   model?: string;
+  skillSettingsId?: string | null;
 }): Promise<{ prdId: string; threadId: string }> {
   const [row] = await db
     .insert(prds)
@@ -178,6 +179,7 @@ export async function createPrd(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled PRD',
       model: opts.model ?? null,
+      skillSettingsId: opts.skillSettingsId ?? null,
       content: '',
       status: 'generating',
     })
@@ -222,6 +224,10 @@ export async function listPrds(
     thresholdByProject.set(p, cfg?.prdValidationScoreThreshold ?? null);
   }));
 
+  const uniqueSettingsIds = [...new Set(rows.map(({ prd }) => prd.skillSettingsId).filter(Boolean))] as string[];
+  const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
+  const settingsNameMap = new Map(settingsNameEntries);
+
   return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) => ({
     ...rowToPrdSummary(
       prd,
@@ -230,6 +236,7 @@ export async function listPrds(
       prdOwnerId,
       prdOwnerDisplayName,
       latestTestCases.get(prd.id) ?? null,
+      prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
     ),
     validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
   }));
@@ -254,12 +261,13 @@ export async function getPrd(id: string): Promise<Prd | null> {
 
   if (rows.length === 0) return null;
   const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
-  const [latestTestCase, skillConfig] = await Promise.all([
+  const [latestTestCase, skillConfig, skillSettingsName] = await Promise.all([
     getTestCases(id),
-    getSkillConfig(row.project),
+    resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined }),
+    getSkillSettingsName(row.skillSettingsId),
   ]);
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, latestTestCase),
+    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, latestTestCase, skillSettingsName),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
@@ -344,7 +352,7 @@ export async function submitForReview(
     throw conflict(`Cannot submit PRD from status '${row.status}'`);
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
-  const skillConfig = await getSkillConfig(row.project);
+  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -452,7 +460,7 @@ export async function reviewPrd(
   const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
-  const reviewSkillConfig = await getSkillConfig(row.project);
+  const reviewSkillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -551,10 +559,10 @@ export async function syncPrdContent(
     try {
       const prdRow = await db.query.prds.findFirst({
         where: eq(prds.id, id),
-        columns: { project: true, interviewId: true },
+        columns: { project: true, interviewId: true, skillSettingsId: true },
       });
-      const { getSkillConfig } = await import('./projectSettingsService');
-      const skillConfig = prdRow?.project ? await getSkillConfig(prdRow.project) : null;
+      const { resolveSkillConfig: resolve } = await import('./projectSettingsService');
+      const skillConfig = prdRow?.project ? await resolve({ project: prdRow.project, settingsId: prdRow.skillSettingsId ?? undefined }) : null;
       const transcript = prdRow?.interviewId ? await readInterviewTranscript(prdRow.interviewId) : null;
       const { enrichBacklogPersonasWithBedrock } = await import('./bedrockService');
       resolvedBacklog = await enrichBacklogPersonasWithBedrock(
@@ -649,6 +657,7 @@ function rowToPrdSummary(
   prdOwnerId?: string | null,
   prdOwnerName?: string | null,
   latestTestCase?: TestCaseSummary | null,
+  skillSettingsName?: string | null,
 ): PrdSummary {
   const effectiveOwnerId = prdOwnerId ?? row.authorId;
   const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
@@ -663,6 +672,8 @@ function rowToPrdSummary(
     project: row.project,
     title: row.title,
     model: row.model ?? undefined,
+    skillSettingsId: row.skillSettingsId ?? null,
+    skillSettingsName: skillSettingsName ?? null,
     status: row.status as PrdStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,
@@ -1357,6 +1368,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
   return {
     getDocumentId: () => prd.id,
     getProject: () => prd.project,
+    getSkillSettingsId: () => prd.skillSettingsId ?? null,
     getAuthorId: () => prd.authorId,
     getValidationThreadId: () => prd.validationThreadId ?? null,
     getStatus: () => prd.status,
@@ -1444,7 +1456,7 @@ export async function autoStartPrdValidation(prdId: string): Promise<void> {
   const prd = await getPrd(prdId);
   if (!prd) return;
 
-  const skillConfig = await getSkillConfig(prd.project);
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   if (!skillConfig?.prdValidationSkillPath) return;
 
   const ready = await arePrdValidationArtifactsReady(prdId);
@@ -1540,7 +1552,7 @@ export async function triggerFixPrdValidation(
     capturedAt: new Date().toISOString(),
   };
 
-  const skillConfig = await getSkillConfig(prd.project);
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const globalModel = await getDefaultModel();
   const model = skillConfig?.prdAssistantModel ?? globalModel;
 

@@ -5,6 +5,7 @@ import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '.
 import type { PrdStatus } from '../../shared/types/interview';
 import { markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
+import { getSkillSettingsName } from './projectSettingsService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -23,6 +24,7 @@ export async function createInterview(opts: {
   title?: string;
   chatThreadId: string;
   model?: string;
+  skillSettingsId?: string | null;
   prdOwnerId?: string;
   designDocOwnerId?: string;
   designPrototypeOwnerId?: string;
@@ -41,6 +43,7 @@ export async function createInterview(opts: {
       project: opts.project,
       repo: opts.repo,
       model: opts.model ?? null,
+      skillSettingsId: opts.skillSettingsId ?? null,
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
       designDocOwnerId: opts.designDocOwnerId ?? null,
@@ -168,6 +171,7 @@ export async function listInterviews(
       designDocOwnerId: interviews.designDocOwnerId,
       designPrototypeOwnerId: interviews.designPrototypeOwnerId,
       testCaseOwnerId: interviews.testCaseOwnerId,
+      skillSettingsId: interviews.skillSettingsId,
       prdApproverIds: interviews.prdApproverIds,
       designDocApproverIds: interviews.designDocApproverIds,
       designPrototypeApproverIds: interviews.designPrototypeApproverIds,
@@ -186,6 +190,10 @@ export async function listInterviews(
 
   const prdCountMap = new Map(prdCounts.map((r) => [r.interviewId, Number(r.cnt)]));
 
+  const uniqueSettingsIds = [...new Set(rows.map((r) => r.skillSettingsId).filter(Boolean))] as string[];
+  const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
+  const settingsNameMap = new Map(settingsNameEntries);
+
   return rows.map((row) => ({
     id: row.id,
     chatThreadId: row.chatThreadId,
@@ -200,6 +208,8 @@ export async function listInterviews(
     designDocOwnerId: row.designDocOwnerId ?? undefined,
     designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
+    skillSettingsId: row.skillSettingsId ?? null,
+    skillSettingsName: row.skillSettingsId ? settingsNameMap.get(row.skillSettingsId) ?? null : null,
     prdApproverIds: row.prdApproverIds ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
@@ -216,6 +226,8 @@ export async function getInterview(id: string): Promise<Interview | null> {
   });
 
   if (!row) return null;
+
+  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
 
   const prdSummaries: PrdSummary[] = row.prds.map((p) => ({
     id: p.id,
@@ -251,6 +263,8 @@ export async function getInterview(id: string): Promise<Interview | null> {
     designPrototypeOwnerName: row.designPrototypeOwner?.displayName ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
     testCaseOwnerName: row.testCaseOwner?.displayName ?? undefined,
+    skillSettingsId: row.skillSettingsId ?? null,
+    skillSettingsName,
     prdApproverIds: row.prdApproverIds ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,

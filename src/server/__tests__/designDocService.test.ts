@@ -60,9 +60,14 @@ jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn().mockResolvedValue(null),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn().mockResolvedValue(null);
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+  };
+});
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn().mockResolvedValue('default-model'),
 }));

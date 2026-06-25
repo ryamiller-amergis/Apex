@@ -146,7 +146,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     }
   }, [handleSend]);
 
-  const visibleMessages = messages.filter((m) => m.role !== 'tool' && !m.hidden);
+  const visibleMessages = messages.filter((m) => m.role !== 'tool' && !m.hidden && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
   if (!open) return null;
 

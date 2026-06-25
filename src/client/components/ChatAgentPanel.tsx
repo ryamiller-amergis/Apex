@@ -505,7 +505,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     : status === 'closed' ? styles.statusDotClosed
     : styles.statusDotIdle;
 
-  const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const visibleMessages = messages.filter((m) =>
+    !(m.role === 'user' && m.text === 'Begin.') &&
+    m.toolName !== '_reasoning' && m.toolName !== '_thinking'
+  );
 
   const statusLabel =
     status === 'running' ? 'Agent is thinking…'

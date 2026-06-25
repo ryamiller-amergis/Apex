@@ -12,7 +12,7 @@ import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
 import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { getSkillConfig } from '../services/projectSettingsService';
+import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
@@ -3943,21 +3943,49 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
   }
 });
 
-// GET /api/skill-config?project=<name> — resolve project skill settings
-router.get('/skill-config', async (req: Request, res: Response) => {
+// GET /api/skill-configs?project=<name> — list all repo configs for a project
+router.get('/skill-configs', async (req: Request, res: Response) => {
   try {
     const project = req.query.project as string | undefined;
     if (!project) {
       res.status(400).json({ error: 'project query parameter is required' });
       return;
     }
-    const config = await getSkillConfig(project);
+    const configs = await listSkillConfigsForProject(project);
+    res.json(configs.map((c) => ({
+      id: c.id,
+      project: c.project,
+      skillRepo: c.skillRepo,
+      skillBranch: c.skillBranch,
+      friendlyName: c.friendlyName,
+      isDefault: c.isDefault,
+    })));
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
+router.get('/skill-config', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const settingsId = req.query.settingsId as string | undefined;
+    if (!project && !settingsId) {
+      res.status(400).json({ error: 'project or settingsId query parameter is required' });
+      return;
+    }
+    const config = settingsId
+      ? await getSkillConfigById(settingsId)
+      : await getSkillConfig(project!);
     if (!config) {
-      res.status(404).json({ error: 'No skill config found for this project' });
+      res.status(404).json({ error: 'No skill config found' });
       return;
     }
     res.json({
+      id: config.id,
       project: config.project,
+      friendlyName: config.friendlyName,
+      isDefault: config.isDefault,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? null,

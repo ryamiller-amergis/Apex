@@ -717,6 +717,13 @@
   font-weight: 600;
 }
 
+.composePillError {
+  background: color-mix(in srgb, var(--error-color, #e53e3e) 10%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--error-color, #e53e3e) 30%, var(--border-color));
+  color: var(--error-color, #e53e3e);
+  font-weight: 600;
+}
+
 .composeInputBox {
   width: 100%;
   background: var(--bg-secondary);

@@ -25,6 +25,7 @@ import styles from './AgentHome.module.css';
 
 interface AgentHomeProps {
   selectedProject: string;
+  selectedSkillSettingsId?: string | null;
 }
 
 interface SpeechRecognitionAlternativeLike {
@@ -434,7 +435,7 @@ function MessageBubble({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
+export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedSkillSettingsId }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [input, setInput] = useState('');
@@ -483,7 +484,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
-  const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
+  const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
 
   // Prefer admin-configured repo/branch; fall back to heuristic (match project name, then first repo)
   const defaultRepo = skillConfig
@@ -508,7 +509,10 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
   });
   const isRunning = status === 'running';
 
-  const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const visibleMessages = messages.filter((m) =>
+    !(m.role === 'user' && m.text === 'Begin.') &&
+    m.toolName !== '_reasoning' && m.toolName !== '_thinking'
+  );
 
   const hasPrd = prdReady;
 
@@ -792,6 +796,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject }) => {
             skillPath: effectiveSkillPath,
             freeformContext,
             model,
+            skillSettingsId: skillConfig?.id ?? undefined,
             ...(selectedMcpPill ? { mcpPill: selectedMcpPill } : {}),
             pillLabel: selectedQuickSkill?.label ?? selectedMcpPill?.label ?? undefined,
             pillDescription: (selectedQuickSkill?.description ?? selectedMcpPill?.description) ?? undefined,

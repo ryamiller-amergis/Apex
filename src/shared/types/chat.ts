@@ -57,6 +57,8 @@ export interface ChatThreadKickoff {
   mode?: 'development';
   /** Work item ID driving the development session */
   workItemId?: number;
+  /** Selected project_skill_settings row id — drives repo/branch/config resolution */
+  skillSettingsId?: string | null;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
