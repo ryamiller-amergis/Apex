@@ -107,18 +107,6 @@ export interface ProjectSkillConfig {
   updatedAt?: string;
 }
 
-/**
- * Lightweight per-repo config summary for the project repo selector / header switcher.
- * Returned by `GET /api/skill-configs?project=`.
- */
-export interface ProjectRepoConfigSummary {
-  id: string;
-  skillRepo: string;
-  skillBranch: string;
-  friendlyName: string;
-  isDefault: boolean;
-}
-
 export interface UpsertProjectSkillConfigRequest {
   friendlyName: string;
   isDefault?: boolean;
@@ -223,6 +211,7 @@ export interface ProjectSkillConfigResponse {
   approvalMode?: ApprovalMode;
 }
 
+/** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */
 export interface ProjectRepoConfigSummary {
   id: string;
   project: string;
