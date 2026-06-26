@@ -44,7 +44,6 @@ jobs:
         id: migration_changes
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           GITHUB_SHA: ${{ github.sha }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node scripts/ci/has-migration-changes.mjs
@@ -54,6 +53,32 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up
+
+      - name: Verify no pending migrations remain
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node -e "
+          import('pg').then(async ({ default: pg }) => {
+            const { readdirSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            try {
+              const files = readdirSync(join(process.cwd(), 'migrations')).filter(f => f.endsWith('.sql'));
+              const { rows } = await client.query('SELECT name FROM pgmigrations');
+              const applied = new Set(rows.map(r => r.name));
+              const pending = files.filter(f => !applied.has(f.replace(/\\.sql\$/, '')));
+              if (pending.length > 0) {
+                console.error('FAIL: pending migrations after apply: ' + pending.join(', '));
+                process.exit(1);
+              }
+              console.log('OK: no pending migrations.');
+            } finally {
+              await client.end();
+            }
+          });
+          "
 
       - name: Create deployment package
         run: |
