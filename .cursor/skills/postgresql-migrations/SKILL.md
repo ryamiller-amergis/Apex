@@ -12,30 +12,40 @@ This project uses `node-pg-migrate` with the `pg` driver. Migrations are plain S
 
 **Never run `npm run migrate:create` or `npm run migrate:local:create` in this repo.**
 
-Those commands call `node-pg-migrate create`, which assigns an **epoch-millisecond** prefix (e.g. `1782406145007_…`). This repo's applied migrations use **`YYYYMMDDHHMMSS`** prefixes (e.g. `20260625150100_…`). Numerically, epoch-ms (~1.78×10¹²) sorts **before** date-stamped (~2.02×10¹³) names, so new CLI migrations fail with:
-
-```text
-Not run migration 1782402822050_… is preceding already run migration 20260518202500_…
-```
+Those commands call `node-pg-migrate create`, which assigns an **epoch-millisecond** prefix (e.g. `1782406145007_…`). This repo's applied migrations use **`YYYYMMDDHHMMSS`** prefixes (e.g. `20260625150100_…`). Numerically, epoch-ms (~1.78×10¹²) sorts **before** date-stamped (~2.02×10¹³) names, causing failures.
 
 **Always** allocate the filename with `scripts/next-migration-timestamp.mjs` (see below).
 
+## Filename format
+
+Migration files follow this pattern:
+
+```
+YYYYMMDDHHMMSS_<token>_<slug>.sql
+```
+
+- **Timestamp** — `YYYYMMDDHHMMSS` — provides chronological ordering and readability.
+- **Token** — 4 hex chars generated from `crypto.randomBytes` — makes the filename globally unique across branches. Two developers running the helper at the same second on different branches will always produce different filenames. This prevents duplicate-name and order-collision failures at merge.
+- **Slug** — short description of what the migration does.
+
+Example: `20260625150200_a3f1_add-work-items.sql`
+
 ## Agent workflow — filename from the helper only
 
-The agent **must** run the helper in the terminal and create **exactly** the path it prints. Do not guess timestamps, use `Date.now()`, or write `migrations/20260618….sql` by hand.
+The agent **must** run the helper in the terminal and create **exactly** the path it prints. Do not guess timestamps, construct names by hand, or use `Date.now()`.
 
 ### Step 1 — allocate the filename
 
 ```bash
 node scripts/next-migration-timestamp.mjs add-my-table
-# → migrations/20260625150200_add-my-table.sql
+# → migrations/20260625150200_a3f1_add-my-table.sql
 ```
 
-For a second migration in the same change, run the helper again (timestamps bump by **100** automatically):
+For a second migration in the same change, run the helper again (timestamp bumps by **100** automatically, new token generated):
 
 ```bash
 node scripts/next-migration-timestamp.mjs add-my-table-index
-# → migrations/20260625150300_add-my-table-index.sql
+# → migrations/20260625150300_9c2e_add-my-table-index.sql
 ```
 
 ### Step 2 — create the file at that path
@@ -47,8 +57,10 @@ Create the printed path and write the SQL (Up + Down sections). Use the Write to
 ```bash
 npm run migrate:local:up    # preferred — reads .env.local
 # or
-npm run migrate:up        # uses .env DATABASE_URL
+npm run migrate:up          # uses .env DATABASE_URL
 ```
+
+All `migrate:up` / `migrate:down` commands run with `--no-check-order` (see below).
 
 ### Step 4 — update Drizzle schema
 
@@ -58,15 +70,30 @@ Update `src/server/db/schema.ts` to match, then:
 npx tsc -p tsconfig.server.json --noEmit
 ```
 
-## Rules that prevent order conflicts
+## `--no-check-order` — how and why
+
+All apply/rollback npm scripts pass `--no-check-order` to `node-pg-migrate`. This disables the order check that throws:
+
+```text
+Not run migration X is preceding already run migration Y
+```
+
+**Why it is safe here:**
+
+`node-pg-migrate up` computes the pending set as files whose name is not yet in `pgmigrations`. It then applies those in filename (lexicographic) order. The order check only validates that pending files sort _after_ already-applied ones — it does not change what gets applied. With tokenized unique filenames, independent migrations from different branches apply cleanly in whatever merge order they arrive. The order check is only meaningful when migrations have a true dependency (e.g. migration B must run after A because B alters a table A creates).
+
+**When you still need to care about order:**
+
+If migration B depends on migration A (e.g. B adds a foreign key to a table A creates), ship both in the same PR. Within a single PR they apply in filename order, which is deterministic.
+
+## Rules
 
 | Do | Don't |
 |---|---|
 | Run `node scripts/next-migration-timestamp.mjs <slug>` before every new file | Run `npm run migrate:create` / `migrate:local:create` |
-| Keep the filename forever once applied anywhere | Rename a migration to "fix" ordering |
-| Ensure pending files sort **after** the latest applied name | Insert a timestamp between two already-applied migrations |
-| Delete mistaken **unapplied** files and re-run the helper | Add placeholder files to "match" a guessed DB row |
+| Keep the filename forever once applied anywhere | Rename a migration after it has been applied |
 | Keep on-disk files for every row in `pgmigrations` | Delete migration files that were already applied |
+| Ship dependent migrations in the same PR | Split dependent migrations across separate PRs |
 
 ## Migration file structure
 
@@ -218,16 +245,17 @@ ALTER TABLE work_items RENAME COLUMN new_name TO old_name;
 
 The main difference: EF generates C# from your model diff; here you write SQL by hand. The SQL gives you full control with no magic.
 
-## Troubleshooting order conflicts
+## Troubleshooting
 
 **Error:** `Not run migration X is preceding already run migration Y`
 
-Common causes:
+This should no longer occur in normal operation because all scripts pass `--no-check-order`. If you see it, it means a migration file on disk does not have the tokenized name format (`YYYYMMDDHHMMSS_<token>_<slug>`) and was created before the hardening change. Fix by ensuring it was not allocated with `migrate:create` (epoch-ms prefix).
 
-1. **Used `migrate:create`** — file has epoch-ms prefix behind date-stamped applied migrations. **Fix:** delete the unapplied file, run `node scripts/next-migration-timestamp.mjs <slug>`, recreate at the new path.
-2. **Renamed after apply** — DB has `20260618121500_add-model-audit-columns` but the file was renamed. **Fix:** rename the file back to match `pgmigrations.name` exactly.
-3. **Missing file on disk** — migration applied in DB but `.sql` deleted. **Fix:** restore the file from git (`git checkout <commit> -- migrations/<name>.sql`).
-4. **Duplicate timestamps** — two different slugs at the same prefix. **Fix:** delete the unapplied duplicate, re-run the helper.
+Common causes that still need attention:
+
+1. **Used `migrate:create`** — file has epoch-ms prefix. **Fix:** delete the unapplied file, run `node scripts/next-migration-timestamp.mjs <slug>`, recreate at the new path.
+2. **Renamed after apply** — DB has `20260618121500_a1b2_add-model-audit-columns` but the file was renamed. **Fix:** rename the file back to match `pgmigrations.name` exactly.
+3. **Missing file on disk** — migration applied in DB but `.sql` deleted. **Fix:** restore from git (`git checkout <commit> -- migrations/<name>.sql`).
 
 **Inspect what the database thinks is applied (local):**
 
@@ -235,4 +263,4 @@ Common causes:
 npx dotenv -e .env.local -- node -e "const pg=require('pg');(async()=>{const c=new pg.Client({connectionString:process.env.DATABASE_URL});await c.connect();const r=await c.query('SELECT name FROM pgmigrations ORDER BY name DESC LIMIT 10');r.rows.forEach(x=>console.log(x.name));await c.end()})()"
 ```
 
-Every `name` in that list must have a matching file in `migrations/`. Pending files must sort **after** the last applied name.
+Every `name` in that list must have a matching file in `migrations/`.

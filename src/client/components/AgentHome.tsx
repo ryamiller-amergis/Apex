@@ -992,14 +992,14 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             isCompose
               ? (needsSkillSelection ? 'Select an option above to get started' : 'Let Apex know what you need…')
               : isRunning
-                ? 'Agent is thinking…'
+                ? 'Type your follow-up…'
                 : 'Continue the conversation…'
           }
           value={input}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           rows={isCompose ? 3 : 1}
-          disabled={isRunning || isSending || needsSkillSelection}
+          disabled={isSending || needsSkillSelection}
           autoFocus={isCompose && !needsSkillSelection}
         />
         {attachments.length > 0 && (

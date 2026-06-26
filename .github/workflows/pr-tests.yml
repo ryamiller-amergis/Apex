@@ -84,5 +84,4 @@ jobs:
       - name: Validate migration sequence
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/aipilot
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/ci/validate-migrations.mjs
