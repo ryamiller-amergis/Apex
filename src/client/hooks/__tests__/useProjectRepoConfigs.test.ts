@@ -95,6 +95,9 @@ describe('useProjectRepoConfigs', () => {
 
     const { result } = renderHook(() => useProjectRepoConfigs('proj-alpha'), { wrapper });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    // Hook uses retry: 1 with default ~1s backoff between attempts
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 });
