@@ -164,29 +164,38 @@ function App() {
 
   const { enabledViews } = useProjectMenuConfig(selectedProject);
 
-  const { data: repoConfigs = [], isSuccess: repoConfigsLoaded } = useProjectRepoConfigs(pendingProject ?? selectedProject);
+  // On the project picker, only fetch repo configs once a project is clicked (pending).
+  // Elsewhere (header repo switcher), load configs for the active project.
+  const repoConfigProject = currentView === 'project-selector' ? pendingProject : selectedProject;
+  const {
+    data: repoConfigs = [],
+    isFetched: repoConfigsFetched,
+    isError: repoConfigsError,
+  } = useProjectRepoConfigs(repoConfigProject);
   const { data: activeSkillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
 
   useEffect(() => {
-    if (!pendingProject || !repoConfigsLoaded) return;
+    if (!pendingProject || !repoConfigsFetched) return;
+    const project = pendingProject;
     const completePendingSelect = (settingsId: string | null) => {
-      changeProject(pendingProject);
-      changeAreaPath(pendingProject);
+      changeProject(project);
+      changeAreaPath(project);
       changeSkillSettings(settingsId);
       setPendingProject(null);
       navigate('/home');
-      fetch(`/api/projects/${encodeURIComponent(pendingProject)}/select`, {
+      fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
         method: 'POST',
         credentials: 'include',
       }).catch(() => {});
     };
-    if (repoConfigs.length === 0) {
+    // Degrade gracefully when skill-configs is unavailable (e.g. migration not applied yet).
+    if (repoConfigsError || repoConfigs.length === 0) {
       completePendingSelect(null);
     } else if (repoConfigs.length === 1) {
       completePendingSelect(repoConfigs[0].id);
     }
     // >1 configs: handled by RepoSelector render branch
-  }, [pendingProject, repoConfigs, repoConfigsLoaded, changeProject, changeAreaPath, changeSkillSettings, navigate]);
+  }, [pendingProject, repoConfigs, repoConfigsFetched, repoConfigsError, changeProject, changeAreaPath, changeSkillSettings, navigate]);
 
   // Guard all gated routes: redirect if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
@@ -241,18 +250,25 @@ function App() {
   if (!isAuthenticated) return <Login />;
 
   if (currentView === 'project-selector') {
-    if (pendingProject && repoConfigs.length > 1) {
+    const showRepoSelector = Boolean(
+      pendingProject && repoConfigsFetched && !repoConfigsError && repoConfigs.length > 1,
+    );
+    const pendingSelectInProgress = Boolean(pendingProject && !showRepoSelector);
+
+    if (showRepoSelector) {
       return (
         <ErrorBoundary FallbackComponent={ViewErrorFallback}>
           <RepoSelector
             configs={repoConfigs}
             onSelect={(settingsId) => {
-              changeProject(pendingProject);
-              changeAreaPath(pendingProject);
+              const project = pendingProject;
+              if (!project) return;
+              changeProject(project);
+              changeAreaPath(project);
               changeSkillSettings(settingsId);
               setPendingProject(null);
               navigate('/home');
-              fetch(`/api/projects/${encodeURIComponent(pendingProject)}/select`, {
+              fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
                 method: 'POST',
                 credentials: 'include',
               }).catch(() => {});
@@ -260,6 +276,17 @@ function App() {
             onBack={() => setPendingProject(null)}
           />
         </ErrorBoundary>
+      );
+    }
+
+    if (pendingSelectInProgress) {
+      return (
+        <div className="loading-overlay">
+          <div className="loading-spinner-container">
+            <div className="spinner" />
+            <p>Opening project…</p>
+          </div>
+        </div>
       );
     }
 
