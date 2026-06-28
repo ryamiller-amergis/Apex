@@ -400,6 +400,7 @@ function App() {
                   <div className="calendar-view">
                     <UnscheduledList
                       workItems={unscheduledItems}
+                      allWorkItems={workItems}
                       onSelectItem={setSelectedItem}
                       onUpdateDueDate={(id, dueDate) => {
                         setSelectedItem(null);
