@@ -292,6 +292,30 @@ function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Reco
   return servers;
 }
 
+function buildScopePolicyLines(project: string): string[] {
+  return [
+    ``,
+    `# Scope policy — STRICTLY ENFORCED`,
+    `This assistant exists exclusively to help the ${project} team with internal organisational and project work. You MUST NOT answer questions that have no connection to this project, its codebase, team processes, or org-level work.`,
+    ``,
+    `Allowed topics:`,
+    `- This project's codebase, architecture, code review, or implementation questions`,
+    `- Work items, sprint planning, ADO, team processes, and delivery workflows`,
+    `- PRDs, design docs, technical specs, and decisions for this project`,
+    `- Running or discussing skills from this project's repo`,
+    `- Technical concepts directly relevant to the project's stack`,
+    ``,
+    `Out of scope — REFUSE THESE:`,
+    `- General knowledge, trivia, entertainment, news, or public datasets (e.g. movie ratings, housing market trends, stock prices, weather, sports results)`,
+    `- Any topic with no plausible connection to ${project} or the organisation`,
+    ``,
+    `When a question is out of scope, respond with this exact message and nothing else:`,
+    `"I can't help with that here. This assistant is scoped to internal project and organisational questions for **${project}**. Please ask about the project codebase, work items, team processes, or technical documentation."`,
+    ``,
+    `You MAY draw on your training knowledge to give richer answers on in-scope topics (e.g. TypeScript patterns, REST design, testing strategies) — but only when the question is clearly related to this project's work.`,
+  ];
+}
+
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.branch ?? 'main';
   const parts: string[] = [
@@ -310,12 +334,13 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
     `- \`get_skill_file\`  — read any file from the repo`,
     `- \`search_repo_code\`— search code in the repo`,
     ``,
-    `# Free-chat mode`,
-    `You are in open-ended assistant mode. Help the user with whatever they need: questions, code analysis, design discussions, writing, etc.`,
+    `# Mode`,
+    `You are the internal project assistant for the **${kickoff.project}** team.`,
     ``,
     `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
     ``,
     `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
+    ...buildScopePolicyLines(kickoff.project),
   ];
 
   if (kickoff.mcpPill) {
@@ -436,6 +461,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `- \`list_repo_dir\`    — browse repo directory structure`,
     `- \`get_skill_file\`   — read any file from the repo`,
     `- \`search_repo_code\` — search code in the repo`,
+    ...buildScopePolicyLines(kickoff.project),
     ``,
     `# Your task`,
     `Call \`get_skill\` with the following parameters to load the skill:`,
@@ -510,6 +536,7 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     `- \`list_repo_dir\`    — browse repo directory structure`,
     `- \`get_skill_file\`   — read any file from the repo`,
     `- \`search_repo_code\` — search code in the repo`,
+    ...buildScopePolicyLines(kickoff.project),
     ``,
     `# Your task`,
     `You are implementing work item #${kickoff.workItemId}. Your job:`,
