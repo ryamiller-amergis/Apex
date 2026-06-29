@@ -5,6 +5,7 @@ import './UnscheduledList.css';
 
 interface UnscheduledListProps {
   workItems: WorkItem[];
+  allWorkItems: WorkItem[];
   onSelectItem: (item: WorkItem) => void;
   onUpdateDueDate: (id: number, dueDate: string | null) => void;
 }
@@ -17,6 +18,7 @@ interface HierarchicalItem {
 
 export const UnscheduledList: React.FC<UnscheduledListProps> = ({
   workItems,
+  allWorkItems,
   onSelectItem,
   onUpdateDueDate,
 }) => {
@@ -86,8 +88,8 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
   const idSearchResults = useMemo(() => {
     const trimmed = idSearch.trim();
     if (!trimmed) return [];
-    return workItems.filter(item => item.id.toString().includes(trimmed));
-  }, [workItems, idSearch]);
+    return allWorkItems.filter(item => item.id.toString().includes(trimmed));
+  }, [allWorkItems, idSearch]);
 
   const filteredItems = useMemo(() => {
     let items = workItems;
@@ -112,18 +114,19 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
       items = items.filter(item => selectedStates.includes(item.state));
     }
     
-    // Filter by search term
-    if (searchTerm.trim()) {
-      const lowerSearch = searchTerm.toLowerCase();
-      items = items.filter(item => 
-        item.title.toLowerCase().includes(lowerSearch) ||
-        item.id.toString().includes(lowerSearch) ||
-        (item.assignedTo && item.assignedTo.toLowerCase().includes(lowerSearch))
-      );
-    }
-    
     return items;
-  }, [workItems, searchTerm, selectedIteration, selectedWorkItemType, selectedAssignedTo, selectedStates]);
+  }, [workItems, selectedIteration, selectedWorkItemType, selectedAssignedTo, selectedStates]);
+
+  // When a text search is active, search across ALL work items (scheduled + unscheduled)
+  const searchResults = useMemo(() => {
+    if (!searchTerm.trim()) return null;
+    const lower = searchTerm.toLowerCase();
+    return allWorkItems.filter(item =>
+      item.title.toLowerCase().includes(lower) ||
+      item.id.toString().includes(lower) ||
+      (item.assignedTo && item.assignedTo.toLowerCase().includes(lower))
+    );
+  }, [allWorkItems, searchTerm]);
 
   // Build hierarchical structure
   const hierarchicalItems = useMemo(() => {
@@ -279,7 +282,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
       
       {!isCollapsed && (
         <>
-          <h3>Unscheduled Items</h3>
+          <h3>Work Items</h3>
           <input
             type="text"
             placeholder="Search items..."
@@ -417,13 +420,28 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                     <DraggableWorkItem
                       workItem={item}
                       onClick={() => onSelectItem(item)}
+                      scheduledDate={item.dueDate || item.targetDate}
+                    />
+                  </div>
+                ))
+              )
+            ) : searchResults !== null ? (
+              searchResults.length === 0 ? (
+                <div className="empty-state">No items match your search</div>
+              ) : (
+                searchResults.map(item => (
+                  <div key={item.id} className="item-wrapper no-children">
+                    <DraggableWorkItem
+                      workItem={item}
+                      onClick={() => onSelectItem(item)}
+                      scheduledDate={item.dueDate || item.targetDate}
                     />
                   </div>
                 ))
               )
             ) : hierarchicalItems.length === 0 ? (
               <div className="empty-state">
-                {searchTerm ? 'No items match your search' : 'No unscheduled items'}
+                No unscheduled items
               </div>
             ) : (
               <HierarchicalItemList
@@ -497,11 +515,13 @@ const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
 interface DraggableWorkItemProps {
   workItem: WorkItem;
   onClick: () => void;
+  scheduledDate?: string;
 }
 
 const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
   workItem,
   onClick,
+  scheduledDate,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -529,6 +549,11 @@ const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
         onClick={onClick}
         isDragging={isDragging}
       />
+      {scheduledDate && (
+        <div className="scheduled-badge">
+          Scheduled: {scheduledDate}
+        </div>
+      )}
     </div>
   );
 };

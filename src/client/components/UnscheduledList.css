@@ -447,3 +447,15 @@
     margin-bottom: 8px;
   }
 }
+
+.scheduled-badge {
+  display: inline-block;
+  font-size: 0.72em;
+  padding: 2px 6px;
+  margin-top: 3px;
+  background: var(--accent-color, #0078D4);
+  color: #fff;
+  border-radius: 3px;
+  font-weight: 500;
+  opacity: 0.85;
+}
