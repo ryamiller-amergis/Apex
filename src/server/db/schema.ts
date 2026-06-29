@@ -788,3 +788,22 @@ export const documentOwnerApprovalsRelations = relations(documentOwnerApprovals,
     references: [appUsers.oid],
   }),
 }));
+
+// ── ESLint burn-down snapshots (persisted from nightly pipeline artifacts) ────
+
+export const eslintBurnDownSnapshots = pgTable('eslint_burn_down_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  pipelineBuildId: integer('pipeline_build_id').notNull().unique(),
+  buildNumber: text('build_number').notNull(),
+  definitionName: text('definition_name').notNull(),
+  capturedAt: timestamp('captured_at', { withTimezone: true, mode: 'string' }).notNull(),
+  totalFiles: integer('total_files').notNull().default(0),
+  filesWithProblems: integer('files_with_problems').notNull().default(0),
+  totalErrors: integer('total_errors').notNull().default(0),
+  totalWarnings: integer('total_warnings').notNull().default(0),
+  issueCount: integer('issue_count').notNull().default(0),
+  fixableCount: integer('fixable_count').notNull().default(0),
+  syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  capturedAtIdx: index('idx_eslint_burn_down_snapshots_captured_at').on(t.capturedAt),
+}));
