@@ -292,7 +292,9 @@ function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Reco
   return servers;
 }
 
-function buildScopePolicyLines(project: string): string[] {
+function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
+  if (kickoff.pillBypassScopePolicy) return [];
+  const project = kickoff.project;
   return [
     ``,
     `# Scope policy — STRICTLY ENFORCED`,
@@ -340,7 +342,7 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
     `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
     ``,
     `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
-    ...buildScopePolicyLines(kickoff.project),
+    ...buildScopePolicyLines(kickoff),
   ];
 
   if (kickoff.mcpPill) {
@@ -461,7 +463,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `- \`list_repo_dir\`    — browse repo directory structure`,
     `- \`get_skill_file\`   — read any file from the repo`,
     `- \`search_repo_code\` — search code in the repo`,
-    ...buildScopePolicyLines(kickoff.project),
+    ...buildScopePolicyLines(kickoff),
     ``,
     `# Your task`,
     `Call \`get_skill\` with the following parameters to load the skill:`,
@@ -536,7 +538,7 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     `- \`list_repo_dir\`    — browse repo directory structure`,
     `- \`get_skill_file\`   — read any file from the repo`,
     `- \`search_repo_code\` — search code in the repo`,
-    ...buildScopePolicyLines(kickoff.project),
+    ...buildScopePolicyLines(kickoff),
     ``,
     `# Your task`,
     `You are implementing work item #${kickoff.workItemId}. Your job:`,

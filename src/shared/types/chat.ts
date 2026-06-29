@@ -53,6 +53,8 @@ export interface ChatThreadKickoff {
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */
   pillDescription?: string;
+  /** When true, the scope guardrail is omitted from the system prompt for this thread */
+  pillBypassScopePolicy?: boolean;
   /** Development workbench mode — agent works on a real repo checkout */
   mode?: 'development';
   /** Work item ID driving the development session */

@@ -55,6 +55,8 @@ export interface QuickSkillPill {
   model?: string | null;
   /** Plain-English description shown to users when the pill is selected */
   description?: string | null;
+  /** When true, the scope guardrail is skipped for this skill's sessions */
+  bypassScopePolicy?: boolean | null;
 }
 
 export interface ProjectSkillConfig {
