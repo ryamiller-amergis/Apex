@@ -1772,7 +1772,9 @@ export class AzureDevOpsService {
           }
         });
 
-        const versions = Array.from(releaseVersions).sort();
+        const versions = Array.from(releaseVersions).sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        );
         console.log(`[getReleaseVersions] Found ${versions.length} unique release versions:`, versions);
         
         return versions;

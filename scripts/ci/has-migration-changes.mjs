@@ -1,8 +1,10 @@
 /**
  * Detects whether migrations should run in CI.
  *
- * - pull_request / push: true when migrations/ changed between base and head
- * - workflow_dispatch: true when DATABASE_URL has pending migrations
+ * - pull_request: true when migrations/ changed between base and head (diff-based;
+ *   PR CI only validates, never applies).
+ * - push / workflow_dispatch: true when DATABASE_URL has pending migrations
+ *   (DB-truth; self-heals any previously skipped migration).
  *
  * Writes has_migration_changes=true|false to GITHUB_OUTPUT when set.
  */
@@ -52,19 +54,8 @@ function writeGithubOutput(value) {
 const eventName = process.env.GITHUB_EVENT_NAME ?? 'push';
 let hasChanges = false;
 
-if (eventName === 'workflow_dispatch') {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('workflow_dispatch requires DATABASE_URL to detect pending migrations');
-    process.exit(1);
-  }
-  hasChanges = await hasPendingMigrations(databaseUrl);
-  console.log(
-    hasChanges
-      ? 'Pending migrations found on database'
-      : 'No pending migrations on database',
-  );
-} else if (eventName === 'pull_request') {
+if (eventName === 'pull_request') {
+  // PR path: diff-based only (PR CI validates, never applies)
   const base = process.env.GITHUB_BASE_SHA;
   const head = process.env.GITHUB_SHA ?? 'HEAD';
   hasChanges = gitDiffMigrations(base, head);
@@ -74,22 +65,17 @@ if (eventName === 'workflow_dispatch') {
       : 'No migration file changes in PR',
   );
 } else {
-  let before = process.env.GITHUB_EVENT_BEFORE ?? process.env.GITHUB_BEFORE_SHA;
-  const head = process.env.GITHUB_SHA ?? 'HEAD';
-
-  if (!before || /^0+$/.test(before)) {
-    try {
-      before = execSync('git rev-parse HEAD^', { encoding: 'utf8' }).trim();
-    } catch {
-      before = null;
-    }
+  // push and workflow_dispatch both use DB truth so no migration is ever missed
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error(`${eventName} requires DATABASE_URL to detect pending migrations`);
+    process.exit(1);
   }
-
-  hasChanges = before ? gitDiffMigrations(before, head) : true;
+  hasChanges = await hasPendingMigrations(databaseUrl);
   console.log(
     hasChanges
-      ? `Migration files changed between ${before ?? 'unknown'} and ${head}`
-      : 'No migration file changes in push',
+      ? 'Pending migrations found on database'
+      : 'No pending migrations on database',
   );
 }
 

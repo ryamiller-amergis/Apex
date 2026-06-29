@@ -1,5 +1,5 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
@@ -269,6 +269,7 @@ export const interviews = pgTable('interviews', {
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
   testCaseApproverIds: jsonb('test_case_approver_ids').$type<string[]>(),
+  skillSettingsId: uuid('skill_settings_id'),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -300,6 +301,7 @@ export const prds = pgTable('prds', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
+  skillSettingsId: uuid('skill_settings_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -342,6 +344,7 @@ export const designDocs = pgTable('design_docs', {
   proposedTechSpecContent: text('proposed_tech_spec_content'),
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
+  skillSettingsId: uuid('skill_settings_id'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
@@ -430,9 +433,11 @@ export const designDocsRelations = relations(designDocs, ({ one }) => ({
 
 export const projectSkillSettings = pgTable('project_skill_settings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').unique().notNull(),
+  project: text('project').notNull(),
   skillRepo: text('skill_repo').notNull(),
   skillBranch: text('skill_branch').notNull(),
+  friendlyName: text('friendly_name').notNull(),
+  isDefault: boolean('is_default').notNull().default(false),
   updatedBy: text('updated_by'),
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
@@ -470,23 +475,29 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // Exactly one default repo config per project.
+  oneDefaultPerProject: uniqueIndex('project_skill_settings_one_default_per_project')
+    .on(t.project)
+    .where(sql`is_default`),
+  projectFriendlyName: unique('project_skill_settings_project_friendly_name_key').on(t.project, t.friendlyName),
+}));
 
 export const projectApprovers = pgTable('project_approvers', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   documentType: text('document_type').notNull(),
   assignedBy: text('assigned_by'),
   assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
-  uniq: unique().on(t.project, t.userId, t.documentType),
+  uniq: unique().on(t.settingsId, t.userId, t.documentType),
 }));
 
 export const projectApproversRelations = relations(projectApprovers, ({ one }) => ({
   projectSkillSetting: one(projectSkillSettings, {
-    fields: [projectApprovers.project],
-    references: [projectSkillSettings.project],
+    fields: [projectApprovers.settingsId],
+    references: [projectSkillSettings.id],
   }),
   user: one(appUsers, {
     fields: [projectApprovers.userId],
@@ -497,19 +508,19 @@ export const projectApproversRelations = relations(projectApprovers, ({ one }) =
 // Live group references in a project's approver pool, expanded to members at read time.
 export const projectApproverGroups = pgTable('project_approver_groups', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
   groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
   documentType: text('document_type').notNull(),
   assignedBy: text('assigned_by'),
   assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
-  uniq: unique().on(t.project, t.groupId, t.documentType),
+  uniq: unique().on(t.settingsId, t.groupId, t.documentType),
 }));
 
 export const projectApproverGroupsRelations = relations(projectApproverGroups, ({ one }) => ({
   projectSkillSetting: one(projectSkillSettings, {
-    fields: [projectApproverGroups.project],
-    references: [projectSkillSettings.project],
+    fields: [projectApproverGroups.settingsId],
+    references: [projectSkillSettings.id],
   }),
   group: one(appGroups, {
     fields: [projectApproverGroups.groupId],

@@ -13,7 +13,7 @@ import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
-import { getSkillConfig } from './projectSettingsService';
+import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
@@ -121,6 +121,7 @@ export async function createDesignDoc(opts: {
   title?: string;
   status?: DesignDocStatus;
   model?: string;
+  skillSettingsId?: string | null;
 }): Promise<{ designDocId: string }> {
   const status = opts.status ?? 'generating';
   const [row] = await db
@@ -134,6 +135,7 @@ export async function createDesignDoc(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
       model: opts.model ?? null,
+      skillSettingsId: opts.skillSettingsId ?? null,
       designContent: '',
       techSpecContent: '',
       assumptionsContent: '',
@@ -171,8 +173,13 @@ export async function listDesignDocs(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(designDocs.updatedAt));
 
+  const uniqueSettingsIds = [...new Set(rows.map(({ designDoc }) => designDoc.skillSettingsId).filter(Boolean))] as string[];
+  const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
+  const settingsNameMap = new Map(settingsNameEntries);
+
   return rows.map(({ designDoc, reviewerDisplayName, authorDisplayName, prdTitle, designDocOwnerId, designDocOwnerDisplayName }) =>
-    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName,
+      designDoc.skillSettingsId ? settingsNameMap.get(designDoc.skillSettingsId) ?? null : null),
   );
 }
 
@@ -196,8 +203,9 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
 
   if (rows.length === 0) return null;
   const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
+  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
   return {
-    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName, skillSettingsName),
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -326,7 +334,7 @@ export async function reviewDesignDoc(
     throw err;
   }
 
-  const skillConfig = await getSkillConfig(row.project);
+  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   if (skillConfig?.designDocValidationSkillPath) {
     if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
       const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
@@ -448,13 +456,13 @@ export async function syncPerFeatureDesignDocs(
     return;
   }
 
-  const skillConfig = await getSkillConfig(project);
-  const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
   const seedModelRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.id, seedId),
-    columns: { model: true },
+    columns: { model: true, skillSettingsId: true },
   });
   const seedModel = seedModelRow?.model ?? null;
+  const skillConfig = await resolveSkillConfig({ project, settingsId: seedModelRow?.skillSettingsId ?? undefined });
+  const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
   // Load titles already persisted for this PRD so the watcher's early inserts are not duplicated
   const existingRows = await db
@@ -479,6 +487,7 @@ export async function syncPerFeatureDesignDocs(
         authorId,
         title,
         model: seedModel,
+        skillSettingsId: seedModelRow?.skillSettingsId ?? null,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
@@ -538,7 +547,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId) {
       clearInterval(interval);
@@ -559,7 +568,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     const newFeatures = features.filter((f) => !createdSlugs.has(f.slug));
     if (newFeatures.length > 0) {
       try {
-        const skillConfig = await getSkillConfig(seedDoc.project);
+        const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
         const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
         for (const feat of newFeatures) {
@@ -572,6 +581,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
               model: seedDoc.model ?? null,
+              skillSettingsId: seedDoc.skillSettingsId ?? null,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
@@ -662,7 +672,8 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
 
-      const skillConfig = await getSkillConfig(project);
+      const docRow = await db.query.designDocs.findFirst({ where: eq(designDocs.id, designDocId), columns: { skillSettingsId: true } });
+      const skillConfig = await resolveSkillConfig({ project, settingsId: docRow?.skillSettingsId ?? undefined });
       const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
       await db.update(designDocs)
@@ -736,11 +747,11 @@ export async function startSingleFeatureDesignDocWatcher(
     return;
   }
 
-  const { getSkillConfig } = await import('./projectSettingsService');
+  const { resolveSkillConfig: resolveCfg } = await import('./projectSettingsService');
   const { getDefaultModel } = await import('./appSettingsService');
   const { createThread } = await import('./chatAgentService');
 
-  const skillConfig = await getSkillConfig(prd.project);
+  const skillConfig = await resolveCfg({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const globalModel = await getDefaultModel();
   const model = skillConfig?.designDocModel ?? globalModel;
 
@@ -827,6 +838,7 @@ export async function startSingleFeatureDesignDocWatcher(
     featureIndex,
     title: featureName,
     model,
+    skillSettingsId: prd.skillSettingsId ?? null,
   });
 
   console.log(`[designDoc] startSingleFeatureDesignDocWatcher: created doc (docId=${designDocId}, prototypeId=${prototypeId}, featureIndex=${featureIndex})`);
@@ -861,6 +873,7 @@ function rowToSummary(
   authorName?: string | null,
   designDocOwnerId?: string | null,
   designDocOwnerName?: string | null,
+  skillSettingsName?: string | null,
 ): DesignDocSummary {
   const effectiveOwnerId = designDocOwnerId ?? row.authorId;
   const effectiveOwnerName = designDocOwnerName ?? authorName ?? undefined;
@@ -885,6 +898,8 @@ function rowToSummary(
     ownerName: effectiveOwnerName,
     title: row.title,
     model: row.model ?? undefined,
+    skillSettingsId: row.skillSettingsId ?? null,
+    skillSettingsName: skillSettingsName ?? null,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,
@@ -907,7 +922,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     return;
   }
 
-  const skillConfig = await getSkillConfig(doc.project);
+  const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
   if (!skillConfig?.designDocValidationSkillPath) {
     // #region agent log
     try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:no-skill',message:'autoStartValidation early exit: no skill config',data:{designDocId,project:doc.project,hasSkillConfig:!!skillConfig,validationSkillPath:skillConfig?.designDocValidationSkillPath??null},timestamp:Date.now(),hypothesisId:'H-B'})+'\n');}catch(_){}
@@ -1220,7 +1235,7 @@ export async function triggerFixValidation(
   };
 
   // Create or reuse the doc assistant thread
-  const skillConfig = await getSkillConfig(doc.project);
+  const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
   const globalModel = await getDefaultModel();
   const model = skillConfig?.designDocAssistantModel ?? globalModel;
 

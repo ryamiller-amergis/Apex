@@ -40,9 +40,14 @@ jest.mock('../services/chatAgentService', () => ({
   updateThreadKickoffContext: jest.fn(),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn(),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn();
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+  };
+});
 
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn().mockResolvedValue('default-model'),

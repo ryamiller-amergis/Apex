@@ -7,7 +7,7 @@ import {
   appUsers,
 } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { getApproverUserIds, getApproverPool, getApproversForDocument } from './projectSettingsService';
+import { getApproverUserIdsForProject, getApproverPoolForProject, getApproversForDocumentByProject } from './projectSettingsService';
 import { createNotification } from './notificationService';
 import type {
   DocumentApproverAssignment,
@@ -107,7 +107,7 @@ export async function assignApprovers(
   if (approverUserIds.length === 0) return getAssignments(documentId, documentType);
 
   const project = await getProjectForDocument(documentId, documentType);
-  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
+  const poolUserIds = new Set(await getApproverUserIdsForProject(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -274,7 +274,7 @@ export async function reassignApprovers(
   }
 
   const project = await getProjectForDocument(documentId, documentType);
-  const poolUserIds = new Set(await getApproverUserIds(project, documentType));
+  const poolUserIds = new Set(await getApproverUserIdsForProject(project, documentType));
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -321,7 +321,7 @@ export async function getAvailableApprovers(
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ProjectApprover[]> {
-  const approvers = await getApproversForDocument(project, documentType);
+  const approvers = await getApproversForDocumentByProject(project, documentType);
   if (excludeUserId) {
     return approvers.filter((a) => a.userId !== excludeUserId);
   }
@@ -333,7 +333,7 @@ export async function getAvailableApproverPool(
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ApproverPoolResponse> {
-  const pool = await getApproverPool(project, documentType);
+  const pool = await getApproverPoolForProject(project, documentType);
   if (excludeUserId) {
     return {
       individuals: pool.individuals.filter((a) => a.userId !== excludeUserId),

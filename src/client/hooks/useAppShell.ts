@@ -79,6 +79,9 @@ export function useAppShell() {
 
   const [selectedProject, setSelectedProject] = useState<string>(() => localStorage.getItem('selectedProject') || availableProjects[0] || 'MaxView');
   const [selectedAreaPath, setSelectedAreaPath] = useState<string>(() => localStorage.getItem('selectedAreaPath') || availableAreaPaths[0] || 'MaxView');
+  const [selectedSkillSettingsId, setSelectedSkillSettingsId] = useState<string | null>(
+    () => localStorage.getItem('selectedSkillSettingsId')
+  );
   const currentTeamRef = useRef({ project: selectedProject, areaPath: selectedAreaPath });
 
   const startDate = useMemo(() => startOfMonth(currentDate), [currentDate]);
@@ -123,6 +126,13 @@ export function useAppShell() {
 
   useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
   useEffect(() => { localStorage.setItem('selectedAreaPath', selectedAreaPath); }, [selectedAreaPath]);
+  useEffect(() => {
+    if (selectedSkillSettingsId) {
+      localStorage.setItem('selectedSkillSettingsId', selectedSkillSettingsId);
+    } else {
+      localStorage.removeItem('selectedSkillSettingsId');
+    }
+  }, [selectedSkillSettingsId]);
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); }, [theme]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -253,8 +263,11 @@ export function useAppShell() {
   const scheduledItems = useMemo(() => workItems.filter(i => i.dueDate || i.targetDate), [workItems]);
   const unscheduledItems = useMemo(() => workItems.filter(i => !i.dueDate && !i.targetDate), [workItems]);
 
-  const changeProject = (project: string) => { setIsChangingTeam(true); setSelectedProject(project); };
+  const changeProject = (project: string) => { setIsChangingTeam(true); setSelectedProject(project); setSelectedSkillSettingsId(null); };
   const changeAreaPath = (areaPath: string) => { setIsChangingTeam(true); setSelectedAreaPath(areaPath); };
+  const changeSkillSettings = useCallback((id: string | null) => {
+    setSelectedSkillSettingsId(id);
+  }, []);
 
   return {
     isAuthenticated,
@@ -292,6 +305,8 @@ export function useAppShell() {
     availableTeams,
     changeProject,
     changeAreaPath,
+    selectedSkillSettingsId,
+    changeSkillSettings,
     scheduledItems,
     unscheduledItems,
     pendingDueDateChange,

@@ -263,14 +263,14 @@ router.put('/groups/:id/members', async (req: Request, res: Response): Promise<v
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [configs, approversByProject, approverGroupsByProject] = await Promise.all([
+    const [configs, approversBySettingsId, approverGroupsBySettingsId] = await Promise.all([
       projectSettingsService.listSkillConfigs(),
       projectSettingsService.listApproversForAllProjects(),
       projectSettingsService.listApproverGroupsForAllProjects(),
     ]);
     const enriched = configs.map((cfg) => {
-      const approvers = approversByProject[cfg.project] ?? [];
-      const approverGroups = approverGroupsByProject[cfg.project] ?? [];
+      const approvers = approversBySettingsId[cfg.id] ?? [];
+      const approverGroups = approverGroupsBySettingsId[cfg.id] ?? [];
       const countByType = (documentType: string) =>
         approvers.filter((a) => a.documentType === documentType).length +
         approverGroups.filter((g) => g.documentType === documentType).length;
@@ -288,79 +288,59 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
   }
 });
 
-router.put('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
+router.post('/project-settings', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { project } = req.params;
-    const { skillRepo, skillBranch, interviewSkillPath, prdSkillPath, designDocSkillPath, designDocAssistantSkillPath, designPrototypeSkillPath, testCaseSkillPath, designDocValidationSkillPath, prdValidationSkillPath, interviewModel, prdModel, designDocModel, designDocAssistantModel, designPrototypeModel, testCaseModel, designDocValidationModel, prdValidationModel, quickSkillPills, defaultModel, approvalMode, quickMcpPills, prdAssistantSkillPath, prdAssistantModel, prdReviewBedrockModelId, prdReviewBedrockMaxTokens, designPrototypeBedrockModelId, designPrototypeBedrockMaxTokens, designPrototypeBedrockTimeoutMs, designPrototypeRegenBedrockModelId, designPrototypeRegenBedrockMaxTokens, designPlanBedrockModelId, designPlanBedrockMaxTokens, developmentSkillPath, developmentModel, prdValidationScoreThreshold } = req.body as UpsertProjectSkillConfigRequest;
-    if (!skillRepo || !skillBranch) {
+    const body = req.body as UpsertProjectSkillConfigRequest & { project: string };
+    if (!body.skillRepo || !body.skillBranch || !body.project || !body.friendlyName) {
+      res.status(400).json({ error: 'project, friendlyName, skillRepo, and skillBranch are required' });
+      return;
+    }
+    const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
+    const config = await projectSettingsService.upsertSkillConfig({ ...body, updatedBy });
+    res.status(201).json(config);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-settings/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const body = req.body as UpsertProjectSkillConfigRequest & { project: string };
+    if (!body.skillRepo || !body.skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
     }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
-    const config = await projectSettingsService.upsertSkillConfig(
-      project,
-      skillRepo,
-      skillBranch,
-      updatedBy,
-      interviewSkillPath,
-      prdSkillPath,
-      designDocSkillPath,
-      interviewModel,
-      prdModel,
-      designDocModel,
-      designDocAssistantSkillPath,
-      designDocAssistantModel,
-      designPrototypeSkillPath,
-      designPrototypeModel,
-      designDocValidationSkillPath,
-      designDocValidationModel,
-      quickSkillPills,
-      defaultModel,
-      approvalMode,
-      quickMcpPills,
-      prdAssistantSkillPath,
-      prdAssistantModel,
-      prdReviewBedrockModelId,
-      prdReviewBedrockMaxTokens,
-      designPrototypeBedrockModelId,
-      designPrototypeBedrockMaxTokens,
-      designPrototypeBedrockTimeoutMs,
-      designPrototypeRegenBedrockModelId,
-      designPrototypeRegenBedrockMaxTokens,
-      testCaseSkillPath,
-      testCaseModel,
-      prdValidationSkillPath,
-      prdValidationModel,
-      designPlanBedrockModelId,
-      designPlanBedrockMaxTokens,
-      developmentSkillPath,
-      developmentModel,
-      prdValidationScoreThreshold,
-    );
+    const config = await projectSettingsService.upsertSkillConfig({ id, ...body, updatedBy });
     res.json(config);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-router.delete('/project-settings/:project', async (req: Request, res: Response): Promise<void> => {
+router.delete('/project-settings/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { project } = req.params;
-    await projectSettingsService.deleteSkillConfig(project);
+    const { id } = req.params;
+    await projectSettingsService.deleteSkillConfig(id);
     res.status(204).send();
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('Cannot delete the only repo config')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // ── Project Approvers ────────────────────────────────────────────────────────
 
-router.get('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
+router.get('/project-settings/:id/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { project } = req.params;
+    const { id } = req.params;
     const [approvers, approverGroups] = await Promise.all([
-      projectSettingsService.listApprovers(project),
-      projectSettingsService.listApproverGroupsForProject(project),
+      projectSettingsService.listApprovers(id),
+      projectSettingsService.listApproverGroupsForProject(id),
     ]);
     res.json({ approvers, approverGroups });
   } catch {
@@ -368,9 +348,9 @@ router.get('/project-settings/:project/approvers', async (req: Request, res: Res
   }
 });
 
-router.put('/project-settings/:project/approvers', async (req: Request, res: Response): Promise<void> => {
+router.put('/project-settings/:id/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { project } = req.params;
+    const { id } = req.params;
     const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups, testCaseApprovers, testCaseApproverGroups } = req.body as SetApproversRequest;
     if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
       res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
@@ -378,17 +358,17 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
     }
     const assignedBy = (req.user as any)?.profile?.oid ?? undefined;
     const [designDoc, prd, designPrototype, testCase] = await Promise.all([
-      projectSettingsService.setApprovers(project, 'design_doc', designDocApprovers, assignedBy),
-      projectSettingsService.setApprovers(project, 'prd', prdApprovers, assignedBy),
-      projectSettingsService.setApprovers(project, 'design_prototype', designPrototypeApprovers, assignedBy),
-      projectSettingsService.setApprovers(project, 'test_case', testCaseApprovers ?? [], assignedBy),
+      projectSettingsService.setApprovers(id, 'design_doc', designDocApprovers, assignedBy),
+      projectSettingsService.setApprovers(id, 'prd', prdApprovers, assignedBy),
+      projectSettingsService.setApprovers(id, 'design_prototype', designPrototypeApprovers, assignedBy),
+      projectSettingsService.setApprovers(id, 'test_case', testCaseApprovers ?? [], assignedBy),
     ]);
 
     await Promise.all([
-      projectSettingsService.setApproverGroups(project, 'design_doc', designDocApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(project, 'prd', prdApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(project, 'design_prototype', designPrototypeApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(project, 'test_case', testCaseApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(id, 'design_doc', designDocApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(id, 'prd', prdApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(id, 'design_prototype', designPrototypeApproverGroups ?? [], assignedBy),
+      projectSettingsService.setApproverGroups(id, 'test_case', testCaseApproverGroups ?? [], assignedBy),
     ]);
 
     res.json({ designDoc, prd, designPrototype, testCase });
@@ -398,16 +378,16 @@ router.put('/project-settings/:project/approvers', async (req: Request, res: Res
 });
 
 // ── Available Approver Pool (grouped) ─────────────────────────────────────
-router.get('/project-settings/:project/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
+router.get('/project-settings/:id/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { project, documentType } = req.params;
+    const { id, documentType } = req.params;
     if (documentType !== 'prd' && documentType !== 'design_doc' && documentType !== 'design_prototype' && documentType !== 'test_case') {
       res.status(400).json({ error: 'documentType must be prd, design_doc, design_prototype, or test_case' });
       return;
     }
     const excludeSelf = req.query.excludeSelf === 'true';
     const userId = excludeSelf ? (req.user as any)?.profile?.oid : undefined;
-    const pool = await projectSettingsService.getApproverPool(project, documentType);
+    const pool = await projectSettingsService.getApproverPool(id, documentType);
     if (userId) {
       pool.individuals = pool.individuals.filter((a) => a.userId !== userId);
       pool.groups = pool.groups.map((g) => ({

@@ -19,6 +19,14 @@ jest.mock('../hooks/useChatThreads', () => ({
   useStartChat: jest.fn(),
 }));
 
+jest.mock('../hooks/useProjectRepoConfigs', () => ({
+  useProjectRepoConfigs: jest.fn().mockReturnValue({ data: [], isLoading: false, isSuccess: true }),
+}));
+
+jest.mock('../hooks/useProjectSkillConfig', () => ({
+  useProjectSkillConfig: jest.fn().mockReturnValue({ data: null }),
+}));
+
 jest.mock('../components/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header" />,
 }));

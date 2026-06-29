@@ -20,6 +20,8 @@ export interface InterviewSummary {
   testCaseOwnerId?: string;
   testCaseOwnerName?: string;
   /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
+  skillSettingsId?: string | null;
+  skillSettingsName?: string | null;
   prdApproverIds?: string[];
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
@@ -45,6 +47,8 @@ export interface PrdSummary {
   project: string;
   title: string;
   model?: string;
+  skillSettingsId?: string | null;
+  skillSettingsName?: string | null;
   status: PrdStatus;
   reviewerId?: string;
   reviewerName?: string;
@@ -261,6 +265,8 @@ export interface DesignDocSummary {
   ownerName?: string;
   title: string;
   model?: string;
+  skillSettingsId?: string | null;
+  skillSettingsName?: string | null;
   status: DesignDocStatus;
   reviewerId?: string;
   reviewerName?: string;

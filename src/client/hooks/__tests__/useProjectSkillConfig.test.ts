@@ -190,7 +190,30 @@ describe('useAllProjectSkillConfigs', () => {
 describe('useUpsertProjectSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('PUTs to /api/admin/project-settings/:project and returns the saved config', async () => {
+  it('PUTs to /api/admin/project-settings/:id and returns the saved config', async () => {
+    mockFetchOk(skillConfig);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useUpsertProjectSkillConfig(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({
+        id: 'uuid-123',
+        project: 'proj-alpha',
+        body: { friendlyName: 'Main', skillRepo: 'org/skills-repo', skillBranch: 'main' },
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toMatchObject({ project: 'proj-alpha' });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('uuid-123'),
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
+  it('POSTs when no id is provided (create)', async () => {
     mockFetchOk(skillConfig);
     const { wrapper } = createWrapper();
 
@@ -199,20 +222,19 @@ describe('useUpsertProjectSkillConfig', () => {
     await act(async () => {
       result.current.mutate({
         project: 'proj-alpha',
-        body: { skillRepo: 'org/skills-repo', skillBranch: 'main' },
+        body: { friendlyName: 'New Config', skillRepo: 'org/skills-repo', skillBranch: 'main' },
       });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toMatchObject({ project: 'proj-alpha' });
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('proj-alpha'),
-      expect.objectContaining({ method: 'PUT' }),
+      '/api/admin/project-settings',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 
-  it('URL-encodes the project name in the URL', async () => {
+  it('URL-encodes the id in the URL', async () => {
     mockFetchOk(skillConfig);
     const { wrapper } = createWrapper();
 
@@ -220,15 +242,16 @@ describe('useUpsertProjectSkillConfig', () => {
 
     await act(async () => {
       result.current.mutate({
+        id: 'id/with spaces',
         project: 'my project/with spaces',
-        body: { skillRepo: 'org/repo', skillBranch: 'main' },
+        body: { friendlyName: 'Test', skillRepo: 'org/repo', skillBranch: 'main' },
       });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining(encodeURIComponent('my project/with spaces')),
+      expect.stringContaining(encodeURIComponent('id/with spaces')),
       expect.any(Object),
     );
   });
@@ -241,15 +264,16 @@ describe('useUpsertProjectSkillConfig', () => {
 
     await act(async () => {
       result.current.mutate({
+        id: 'uuid-123',
         project: 'proj-alpha',
-        body: { skillRepo: 'org/new-skills', skillBranch: 'release' },
+        body: { friendlyName: 'Main', skillRepo: 'org/new-skills', skillBranch: 'release' },
       });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const sentBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(sentBody).toEqual({ skillRepo: 'org/new-skills', skillBranch: 'release' });
+    expect(sentBody).toEqual({ friendlyName: 'Main', skillRepo: 'org/new-skills', skillBranch: 'release' });
   });
 
   it('surfaces errors from the API', async () => {
@@ -259,7 +283,7 @@ describe('useUpsertProjectSkillConfig', () => {
     const { result } = renderHook(() => useUpsertProjectSkillConfig(), { wrapper });
 
     await act(async () => {
-      result.current.mutate({ project: 'p', body: { skillRepo: '', skillBranch: '' } });
+      result.current.mutate({ id: 'x', project: 'p', body: { friendlyName: 'f', skillRepo: '', skillBranch: '' } });
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -271,38 +295,38 @@ describe('useUpsertProjectSkillConfig', () => {
 describe('useDeleteProjectSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('DELETEs /api/admin/project-settings/:project', async () => {
+  it('DELETEs /api/admin/project-settings/:id', async () => {
     mockFetchNoContent();
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useDeleteProjectSkillConfig(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('proj-alpha');
+      result.current.mutate('uuid-123');
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('proj-alpha'),
+      expect.stringContaining('uuid-123'),
       expect.objectContaining({ method: 'DELETE' }),
     );
   });
 
-  it('URL-encodes the project name', async () => {
+  it('URL-encodes the id', async () => {
     mockFetchNoContent();
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useDeleteProjectSkillConfig(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('my project/with spaces');
+      result.current.mutate('id/with spaces');
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining(encodeURIComponent('my project/with spaces')),
+      expect.stringContaining(encodeURIComponent('id/with spaces')),
       expect.any(Object),
     );
   });
@@ -314,7 +338,7 @@ describe('useDeleteProjectSkillConfig', () => {
     const { result } = renderHook(() => useDeleteProjectSkillConfig(), { wrapper });
 
     await act(async () => {
-      result.current.mutate('proj-alpha');
+      result.current.mutate('uuid-123');
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -402,22 +426,22 @@ const approver = {
 describe('useProjectApprovers', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('fetches approvers for the project', async () => {
+  it('fetches approvers for the settings id', async () => {
     mockFetchOk([approver]);
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useProjectApprovers('proj-alpha'), { wrapper });
+    const { result } = renderHook(() => useProjectApprovers('settings-uuid-1'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toHaveLength(1);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/admin/project-settings/'),
+      expect.stringContaining('/api/admin/project-settings/settings-uuid-1/approvers'),
       expect.any(Object),
     );
   });
 
-  it('does not fetch when project is null', async () => {
+  it('does not fetch when settingsId is null', async () => {
     const { wrapper } = createWrapper();
 
     renderHook(() => useProjectApprovers(null), { wrapper });
@@ -439,7 +463,7 @@ describe('useSetProjectApprovers', () => {
 
     await act(async () => {
       result.current.mutate({
-        project: 'proj-alpha',
+        settingsId: 'settings-uuid-1',
         designDocApprovers: ['user-1'],
         prdApprovers: [],
         designPrototypeApprovers: [],
