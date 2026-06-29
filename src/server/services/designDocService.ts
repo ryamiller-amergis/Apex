@@ -3,7 +3,7 @@ import path from 'path';
 import { and, desc, eq } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
@@ -747,6 +747,28 @@ export async function startSingleFeatureDesignDocWatcher(
     return;
   }
 
+  // Resolve the feature's routing decision from the design plan (authoritative) with
+  // a fallback to the raw backlog feature's route field.
+  const planRow = await db.query.designPlans.findFirst({
+    where: eq(designPlans.prdId, prdId),
+    columns: { features: true },
+  });
+  const planFeature = planRow?.features?.find((f) => f.featureIndex === featureIndex);
+  const decision = planFeature?.decision ?? 'new-page';
+
+  // Flatten the backlog JSON to get the raw feature (mirrors extractFeatures in designPrototypeService).
+  const bj = prd.backlogJson as { features?: Array<{ route?: string }>; epics?: Array<{ features?: Array<{ route?: string }> }> } | null;
+  const allBacklogFeatures: Array<{ route?: string }> = [];
+  if (bj?.features) allBacklogFeatures.push(...bj.features);
+  if (bj?.epics) {
+    for (const epic of bj.epics) {
+      if (epic.features) allBacklogFeatures.push(...epic.features);
+    }
+  }
+  const backlogFeatureRoute = allBacklogFeatures[featureIndex]?.route?.trim();
+  const targetRoute = planFeature?.targetRoute?.trim() || backlogFeatureRoute || undefined;
+  const targetRouteDisplay = decision === 'no-ui' ? 'N/A' : (targetRoute ?? 'N/A');
+
   const { resolveSkillConfig: resolveCfg } = await import('./projectSettingsService');
   const { getDefaultModel } = await import('./appSettingsService');
   const { createThread } = await import('./chatAgentService');
@@ -803,6 +825,11 @@ export async function startSingleFeatureDesignDocWatcher(
     ...(prd.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
     ...(interviewTranscript ? ['\n# Interview Transcript', interviewTranscript] : []),
     ...(prototypeContext ? [prototypeContext] : []),
+    '\n# Feature Routing — AUTHORITATIVE VALUES (reproduce verbatim)',
+    '',
+    'The following routing values are pre-decided. Do NOT substitute, paraphrase, or infer your own values — use exactly what is provided here.',
+    `Decision: ${decision}`,
+    `Target route: ${targetRouteDisplay}`,
     '\n# CRITICAL: Output File Instructions',
     '',
     'You MUST write the following output files using the built-in file writing tool.',
@@ -810,7 +837,7 @@ export async function startSingleFeatureDesignDocWatcher(
     'The app will not mark this design doc complete unless all three files are present:',
     '',
     '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
-    '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification. When a prototype is provided, this file MUST include a `## UI Changes (from approved prototype)` section that renders every change inside the annotation as a numbered checklist where each item is tagged `[additive]` or `[impacts-existing]` per the classification rules in the prototype context above, formatted as: `- [ ] [additive|impacts-existing] <concise description> (target area: <where on the page>)`. It MUST also include (for update-page features) a `## Existing Functionality Impact` section where every `[impacts-existing]` item from the UI Changes checklist has a corresponding entry explaining what existing behavior is at risk.',
+    `2. \`.ai-pilot/output/design-doc-tech-spec.md\` — the technical implementation specification. The file MUST open with the following two headings as the very first content (before all other sections), reproducing the provided routing values VERBATIM — never substitute, paraphrase, or infer:\n\n## Target route\n\`${targetRouteDisplay}\`\n\n## Page decision\n\`${decision}\`\n\nWhen a prototype is provided, this file MUST also include a \`## UI Changes (from approved prototype)\` section that renders every change inside the annotation as a numbered checklist where each item is tagged \`[additive]\` or \`[impacts-existing]\` per the classification rules in the prototype context above, formatted as: \`- [ ] [additive|impacts-existing] <concise description> (target area: <where on the page>)\`. It MUST also include (for update-page features) a \`## Existing Functionality Impact\` section where every \`[impacts-existing]\` item from the UI Changes checklist has a corresponding entry explaining what existing behavior is at risk.`,
     '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section that lists one explicit go/no-go decision per `[impacts-existing]` item from the UI Changes checklist, phrased so the developer can confirm or defer each individually before implementation starts. It MUST also include a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
   ].join('\n');
 
