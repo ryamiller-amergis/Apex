@@ -5,6 +5,7 @@ resource_group_name    = "rg-ai-pilot-dev"
 location               = "East US"
 app_service_name       = "app-ai-pilot-dev"
 app_service_plan_name  = "plan-ai-pilot-dev"
+app_service_plan_sku   = "B1" # Use S1+ in prod for deployment slots (blue-green)
 environment            = "dev"
 
 # Azure DevOps Configuration

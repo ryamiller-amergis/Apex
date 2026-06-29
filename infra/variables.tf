@@ -1,7 +1,7 @@
 variable "resource_group_name" {
   description = "Name of the Azure Resource Group"
   type        = string
-  default     = "rg-scrum-mv"
+  default     = "rg-apex-mv"
 }
 
 variable "location" {
@@ -10,16 +10,58 @@ variable "location" {
   default     = "East US"
 }
 
+variable "app_service_location" {
+  description = "Azure region for App Service plan and web app (defaults to location). Override when the primary region lacks capacity."
+  type        = string
+  default     = null
+}
+
 variable "app_service_name" {
   description = "Name of the App Service"
   type        = string
-  default     = "app-scrum"
+  default     = "app-apex"
 }
 
 variable "app_service_plan_name" {
   description = "Name of the App Service Plan"
   type        = string
-  default     = "plan-scrum"
+  default     = "plan-apex"
+}
+
+variable "app_service_plan_sku" {
+  description = "App Service Plan SKU. S1+ for deployment slots; P1v3+ with zone_balancing for zone redundancy."
+  type        = string
+  default     = "B1"
+}
+
+variable "app_service_zone_redundant" {
+  description = "Enable zone balancing on the App Service plan (requires P1v3+ and worker_count >= 3)."
+  type        = bool
+  default     = false
+}
+
+variable "app_service_worker_count" {
+  description = "App Service plan worker count. Use 3 when app_service_zone_redundant is true."
+  type        = number
+  default     = null
+}
+
+variable "enable_staging_slot" {
+  description = "Create a staging deployment slot for blue-green swap deployments."
+  type        = bool
+  default     = false
+}
+
+variable "staging_slot_name" {
+  description = "Name of the staging deployment slot."
+  type        = string
+  default     = "staging"
+}
+
+variable "app_service_resource_group_name" {
+  description = "Optional dedicated resource group for App Service (required for zone-redundant P1v3 when main RG region differs). Created in app_service_location."
+  type        = string
+  default     = null
 }
 
 variable "environment" {
@@ -186,10 +228,16 @@ variable "postgresql_location" {
   default     = "East US 2"
 }
 
+variable "postgresql_resource_group_name" {
+  description = "Resource group for PostgreSQL (defaults to resource_group_name). Set explicitly when the server lives in a different RG than App Insights."
+  type        = string
+  default     = null
+}
+
 variable "postgresql_server_name" {
   description = "Name of the PostgreSQL Flexible Server (must be globally unique)"
   type        = string
-  default     = "psql-scrum-eus2"
+  default     = "psql-apex-eus2"
 }
 
 variable "postgresql_admin_username" {
@@ -208,11 +256,29 @@ variable "postgresql_admin_password" {
 variable "postgresql_database_name" {
   description = "Name of the database to create on the PostgreSQL server"
   type        = string
-  default     = "aipilot"
+  default     = "apex"
 }
 
 variable "postgresql_sku_name" {
   description = "SKU name for the PostgreSQL Flexible Server"
   type        = string
   default     = "B_Standard_B1ms"
+}
+
+variable "postgresql_high_availability_mode" {
+  description = "PostgreSQL HA mode: ZoneRedundant or SameZone. Requires General Purpose or Memory Optimized SKU."
+  type        = string
+  default     = null
+}
+
+variable "postgresql_availability_zone" {
+  description = "Primary availability zone for PostgreSQL (required when enabling HA on an existing server)."
+  type        = string
+  default     = null
+}
+
+variable "postgresql_standby_availability_zone" {
+  description = "Standby zone for zone-redundant PostgreSQL HA (must differ from primary zone)."
+  type        = string
+  default     = null
 }

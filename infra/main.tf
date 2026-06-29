@@ -5,21 +5,43 @@ resource "azurerm_resource_group" "main" {
   tags     = merge(var.tags, { Environment = var.environment })
 }
 
+locals {
+  app_service_location     = coalesce(var.app_service_location, var.location)
+  app_service_workers      = coalesce(var.app_service_worker_count, var.app_service_zone_redundant ? 3 : 1)
+  use_dedicated_app_rg     = var.app_service_resource_group_name != null
+  app_resource_group_name  = local.use_dedicated_app_rg ? var.app_service_resource_group_name : azurerm_resource_group.main.name
+  postgresql_resource_group_name = coalesce(var.postgresql_resource_group_name, var.resource_group_name)
+}
+
+# Dedicated App Service RG in the app region (required for zone-redundant P1v3 when main RG is elsewhere).
+resource "azurerm_resource_group" "app" {
+  count    = local.use_dedicated_app_rg ? 1 : 0
+  name     = var.app_service_resource_group_name
+  location = local.app_service_location
+  tags     = merge(var.tags, { Environment = var.environment })
+}
+
 # App Service Plan
 resource "azurerm_service_plan" "main" {
-  name                = var.app_service_plan_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  os_type             = "Linux"
-  sku_name            = "B1" # Basic tier - can be upgraded to S1, P1v2, etc.
-  tags                = merge(var.tags, { Environment = var.environment })
+  name                     = var.app_service_plan_name
+  location                 = local.app_service_location
+  resource_group_name      = local.app_resource_group_name
+  os_type                  = "Linux"
+  sku_name                 = var.app_service_plan_sku
+  zone_balancing_enabled   = var.app_service_zone_redundant
+  worker_count             = local.app_service_workers
+  tags                     = merge(var.tags, { Environment = var.environment })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # App Service
 resource "azurerm_linux_web_app" "main" {
   name                = var.app_service_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.app_service_location
+  resource_group_name = local.app_resource_group_name
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
   tags                = merge(var.tags, { Environment = var.environment })
@@ -30,7 +52,7 @@ resource "azurerm_linux_web_app" "main" {
 
   site_config {
     always_on = true
-    
+
     application_stack {
       node_version = "20-lts"
     }
@@ -107,23 +129,73 @@ resource "azurerm_linux_web_app" "main" {
       }
     }
   }
+
+  # Runtime config (app settings, startup command, affinity) is managed by
+  # .github/workflows/deploy.yml after provision — keep Terraform from drifting.
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes = [
+      app_settings,
+      site_config[0].app_command_line,
+      client_affinity_enabled,
+      tags,
+      identity,
+    ]
+  }
+}
+
+# Staging slot for blue-green deployments (deploy here, then swap into production).
+resource "azurerm_linux_web_app_slot" "staging" {
+  count          = var.enable_staging_slot ? 1 : 0
+  name           = var.staging_slot_name
+  app_service_id = azurerm_linux_web_app.main.id
+  https_only     = true
+  tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+
+  site_config {
+    always_on = true
+
+    application_stack {
+      node_version = "20-lts"
+    }
+
+    app_command_line = "npm start"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      app_settings,
+      site_config[0].app_command_line,
+      client_affinity_enabled,
+      tags,
+    ]
+  }
 }
 
 # PostgreSQL Flexible Server
 resource "azurerm_postgresql_flexible_server" "main" {
   name                   = var.postgresql_server_name
   location               = var.postgresql_location
-  resource_group_name    = azurerm_resource_group.main.name
+  resource_group_name    = local.postgresql_resource_group_name
   version                = "16"
   administrator_login    = var.postgresql_admin_username
   administrator_password = var.postgresql_admin_password
   sku_name               = var.postgresql_sku_name
   storage_mb             = 32768
   backup_retention_days  = 7
+  zone                   = var.postgresql_availability_zone
   tags                   = merge(var.tags, { Environment = var.environment })
 
+  dynamic "high_availability" {
+    for_each = var.postgresql_high_availability_mode != null ? [1] : []
+    content {
+      mode                      = var.postgresql_high_availability_mode
+      standby_availability_zone = var.postgresql_standby_availability_zone
+    }
+  }
+
   lifecycle {
-    ignore_changes = [zone, tags]
+    ignore_changes = [tags]
   }
 }
 
