@@ -13,6 +13,11 @@ output "app_service_url" {
   value       = "https://${azurerm_linux_web_app.main.default_hostname}"
 }
 
+output "app_service_staging_slot_url" {
+  description = "URL of the staging deployment slot (blue-green target)"
+  value       = var.enable_staging_slot ? "https://${azurerm_linux_web_app.main.name}-${var.staging_slot_name}.azurewebsites.net" : null
+}
+
 output "app_service_plan_name" {
   description = "Name of the App Service Plan"
   value       = azurerm_service_plan.main.name
