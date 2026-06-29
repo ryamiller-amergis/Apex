@@ -1747,7 +1747,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   // "Start Implementation" is available to Admin, or the design-doc owner who is
   // also a member of the Developer group.
-  const canImplement = isAdmin || (isOwner && groups.includes('Developer'));
+  const canImplement = isAdmin || (isOwner && (groups ?? []).includes('Developer'));
   const resolvedFeatureAdoId = id
     ? findFeatureAdoIdByDesignDocId(sourcePrd?.backlogJson, id)
     : undefined;
