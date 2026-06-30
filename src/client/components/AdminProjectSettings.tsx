@@ -1357,6 +1357,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                         }}
                         disabled={upsert.isPending}
                       />
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', marginTop: '4px' }}>
+                        <input
+                          type="checkbox"
+                          checked={pill.bypassScopePolicy ?? false}
+                          onChange={(e) => {
+                            const pills = [...edit.quickSkillPills];
+                            pills[idx] = { ...pills[idx], bypassScopePolicy: e.target.checked || null };
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                        />
+                        Bypass scope guardrail (allows this skill to research public/external topics)
+                      </label>
                     </div>
                   ))}
                 </div>

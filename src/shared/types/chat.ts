@@ -53,6 +53,8 @@ export interface ChatThreadKickoff {
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */
   pillDescription?: string;
+  /** When true, the scope guardrail is omitted from the system prompt for this thread */
+  pillBypassScopePolicy?: boolean;
   /** Thread mode — controls system prompt behavior */
   mode?: 'development' | 'standup-participant' | 'standup-facilitator' | 'standup-followup';
   /** Work item ID driving the development session */

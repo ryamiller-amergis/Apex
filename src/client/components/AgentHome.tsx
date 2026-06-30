@@ -800,6 +800,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             ...(selectedMcpPill ? { mcpPill: selectedMcpPill } : {}),
             pillLabel: selectedQuickSkill?.label ?? selectedMcpPill?.label ?? undefined,
             pillDescription: (selectedQuickSkill?.description ?? selectedMcpPill?.description) ?? undefined,
+            pillBypassScopePolicy: selectedQuickSkill?.bypassScopePolicy ?? undefined,
           },
           skipAutoKickoff: !skillSlugOnlyKickoff,
         });
