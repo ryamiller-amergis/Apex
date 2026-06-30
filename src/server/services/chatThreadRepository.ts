@@ -63,6 +63,7 @@ export async function insertMessage(
         role: msg.role,
         text: msg.text,
         toolName: msg.toolName ?? null,
+        hidden: msg.hidden ?? false,
         ts: msg.ts,
       })
       .onConflictDoNothing();
@@ -170,6 +171,7 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     role: m.role as ChatMessage['role'],
     text: m.text,
     toolName: m.toolName ?? undefined,
+    hidden: m.hidden || undefined,
     ts: m.ts,
     attachments:
       m.attachments.length > 0

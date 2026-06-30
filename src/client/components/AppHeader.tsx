@@ -16,7 +16,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -38,6 +38,7 @@ interface AppHeaderProps {
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
+  onNavigateStandup?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -64,6 +65,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateCloudCost,
   onNavigateBacklog,
   onNavigateMyWork,
+  onNavigateStandup,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -95,6 +97,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 

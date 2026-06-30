@@ -39,6 +39,8 @@ import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
+import standupRouter from './routes/standup';
+import { standupScheduler } from './services/standupScheduler';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -103,9 +105,17 @@ const internalOnlyPaths = [
   '/backlog/update-figma-url',
   '/backlog/mock-html',
 ];
+
+// Health check paths are unauthenticated — used by Azure slot-swap warmup and
+// external monitoring. req.path is relative to /api (prefix is stripped by Express).
+const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
+  const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+
+  if (isHealthPath) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -136,6 +146,7 @@ app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
 app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
 app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
+app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 
@@ -226,6 +237,9 @@ const server = app.listen(PORT, () => {
   const uatAutoRelease = getUatAutoReleaseService();
   uatAutoRelease.start();
   console.log('UAT auto-release service started');
+
+  standupScheduler.start();
+  console.log('Standup scheduler started');
 
   bootstrapAdmin();
 

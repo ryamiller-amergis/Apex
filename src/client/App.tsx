@@ -51,6 +51,9 @@ const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => 
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
 const DevSessionView = lazy(() => import('./components/DevSessionView').then(m => ({ default: m.DevSessionView })));
+const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'));
+const StandupManageView = lazy(() => import('./components/StandupManageView'));
+const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -79,7 +82,7 @@ function App() {
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -101,6 +104,12 @@ function App() {
                     ? 'admin'
                     : location.pathname.startsWith('/my-work')
                     ? 'my-work'
+                    : location.pathname === '/standup-manage'
+                    ? 'standup-manage'
+                    : location.pathname === '/standup-summary'
+                    ? 'standup-summary'
+                    : location.pathname === '/standup'
+                    ? 'standup'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -208,6 +217,9 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
+    if (currentView === 'standup'        && !isSuperAdmin && !can('standup:participate')) navigate('/home');
+    if (currentView === 'standup-manage' && !isSuperAdmin && !can('standup:manage'))      navigate('/home');
+    if (currentView === 'standup-summary' && !isSuperAdmin && !can('standup:participate')) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -362,7 +374,7 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work'}
+            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary'}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
@@ -381,6 +393,7 @@ function App() {
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
+            onNavigateStandup={() => navigate('/standup')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
@@ -545,6 +558,30 @@ function App() {
                 </div>
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'standup' && can('standup:participate') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupCeremonyView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          ) : currentView === 'standup-manage' && can('standup:manage') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupManageView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          ) : currentView === 'standup-summary' && can('standup:participate') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupSummaryView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
           ) : currentView === 'planning' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">

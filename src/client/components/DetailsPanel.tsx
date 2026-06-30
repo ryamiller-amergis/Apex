@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { WorkItem } from '../types/workitem';
 import { EpicProgress } from './EpicProgress';
 import { RichTextField } from './RichTextField';
+import { useAppShell } from '../hooks/useAppShell';
 import './DetailsPanel.css';
 
 interface DetailsPanelProps {
@@ -27,6 +28,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   areaPath,
   onSelectItem,
 }) => {
+  const { authenticatedUser } = useAppShell();
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [tempDueDate, setTempDueDate] = useState('');
   const [dueDateReason, setDueDateReason] = useState('');
@@ -69,6 +71,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [showUnlinkConfirmModal, setShowUnlinkConfirmModal] = useState(false);
   const [isUnlinking, setIsUnlinking] = useState(false);
   const [newTag, setNewTag] = useState('');
+  const [teamAssignees, setTeamAssignees] = useState<string[]>([]);
 
   if (!workItem) return null;
 
@@ -190,6 +193,61 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
       });
   }, [workItem.id, project]);
 
+  // Load ADO team members for the Assigned To dropdown when allWorkItems isn't provided
+  useEffect(() => {
+    if (!project) {
+      setTeamAssignees([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const teamsRes = await fetch(
+          `/api/projects/${encodeURIComponent(project)}/teams`,
+          { credentials: 'include' },
+        );
+        if (!teamsRes.ok || cancelled) return;
+
+        const teams: Array<{ id: string; name: string }> = await teamsRes.json();
+        let teamsToQuery = teams;
+
+        if (areaPath) {
+          const leaf = areaPath.split('\\').pop()?.trim() ?? areaPath.trim();
+          const matched = teams.filter(
+            (t) =>
+              t.name === leaf ||
+              t.name === areaPath.trim() ||
+              areaPath.endsWith(`\\${t.name}`) ||
+              areaPath === t.name,
+          );
+          if (matched.length > 0) teamsToQuery = matched;
+        }
+
+        const memberSet = new Set<string>();
+        await Promise.allSettled(
+          teamsToQuery.map(async (team) => {
+            const params = new URLSearchParams({ project, teamName: team.name });
+            const res = await fetch(`/api/team-members?${params}`, { credentials: 'include' });
+            if (res.ok) {
+              const members: string[] = await res.json();
+              members.forEach((m) => memberSet.add(m));
+            }
+          }),
+        );
+
+        if (!cancelled) {
+          setTeamAssignees(Array.from(memberSet).sort());
+        }
+      } catch {
+        if (!cancelled) setTeamAssignees([]);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [project, areaPath]);
+
   // Extract unique values for dropdowns
   const uniqueStates = useMemo(() => {
     const states = new Set(allWorkItems.map(item => item.state));
@@ -205,9 +263,14 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   }, [allWorkItems]);
 
   const uniqueAssignees = useMemo(() => {
-    const assignees = new Set(allWorkItems.map(item => item.assignedTo).filter(Boolean));
+    const assignees = new Set(
+      allWorkItems.map((item) => item.assignedTo).filter((name): name is string => Boolean(name)),
+    );
+    teamAssignees.forEach((name) => assignees.add(name));
+    if (workItem.assignedTo) assignees.add(workItem.assignedTo);
+    if (authenticatedUser?.name) assignees.add(authenticatedUser.name);
     return Array.from(assignees).sort();
-  }, [allWorkItems]);
+  }, [allWorkItems, teamAssignees, workItem.assignedTo, authenticatedUser?.name]);
 
   const uniqueIterations = useMemo(() => {
     const iterations = new Set(allWorkItems.map(item => item.iterationPath));

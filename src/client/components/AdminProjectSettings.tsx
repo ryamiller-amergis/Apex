@@ -260,6 +260,7 @@ const SKILL_FIELDS = [
   { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
   { key: 'prdValidationSkillPath' as const, label: 'PRD Validation Skill', desc: 'Validates PRD spec after all artifacts are ready', emptyLabel: 'None (skip PRD validation)' },
   { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
+  { key: 'standupSkillPath' as const, label: 'Standup Skill', desc: 'Custom standup procedure for participant conversations', emptyLabel: 'None (use built-in default)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -271,6 +272,7 @@ const MODEL_FIELDS = [
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
   { key: 'prdValidationModel' as const, label: 'PRD Validation Model' },
   { key: 'developmentModel' as const, label: 'Development Model' },
+  { key: 'standupModel' as const, label: 'Standup Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -437,6 +439,7 @@ interface EditState {
   designDocValidationSkillPath: string;
   prdValidationSkillPath: string;
   developmentSkillPath: string;
+  standupSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
@@ -446,6 +449,7 @@ interface EditState {
   designDocValidationModel: string;
   prdValidationModel: string;
   developmentModel: string;
+  standupModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -468,10 +472,10 @@ const emptyEdit = (): EditState => ({
   skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
-  developmentSkillPath: '',
+  developmentSkillPath: '', standupSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
-  developmentModel: '',
+  developmentModel: '', standupModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -615,6 +619,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationSkillPath: config.designDocValidationSkillPath ?? '',
       prdValidationSkillPath: config.prdValidationSkillPath ?? '',
       developmentSkillPath: config.developmentSkillPath ?? '',
+      standupSkillPath: config.standupSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
@@ -624,6 +629,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationModel: config.designDocValidationModel ?? '',
       prdValidationModel: config.prdValidationModel ?? '',
       developmentModel: config.developmentModel ?? '',
+      standupModel: config.standupModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -678,6 +684,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocValidationSkillPath: edit.designDocValidationSkillPath || null,
         prdValidationSkillPath: edit.prdValidationSkillPath || null,
         developmentSkillPath: edit.developmentSkillPath || null,
+        standupSkillPath: edit.standupSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         designDocModel: edit.designDocModel || null,
@@ -687,6 +694,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocValidationModel: edit.designDocValidationModel || null,
         prdValidationModel: edit.prdValidationModel || null,
         developmentModel: edit.developmentModel || null,
+        standupModel: edit.standupModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

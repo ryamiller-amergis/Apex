@@ -92,15 +92,26 @@ router.get(
           return res.redirect('/auth/login-failed');
         }
         console.log('User logged in successfully');
+        const userEmail =
+          user.profile?.upn ||
+          user.profile?.email ||
+          user.profile?.preferred_username ||
+          (Array.isArray(user.profile?.emails) ? user.profile.emails[0] : '') ||
+          user.profile?._json?.email ||
+          user.profile?._json?.preferred_username ||
+          '';
+        if (!userEmail) {
+          console.warn('[auth] No email found in profile claims:', Object.keys(user.profile ?? {}));
+        }
         // Fire-and-forget: populate user cache table (do not block login on this)
         upsertAppUser(
           user.profile?.oid ?? '',
           user.profile?.displayName ?? '',
-          user.profile?.upn ?? user.profile?.email ?? ''
+          userEmail,
         ).catch((err) => console.error('upsertAppUser failed:', err));
         resolvePendingAssignments(
           user.profile?.oid ?? '',
-          user.profile?.upn ?? user.profile?.email ?? ''
+          userEmail,
         ).catch((err) => console.error('resolvePendingAssignments failed:', err));
         // Redirect to the Vite dev server (or root in production)
         const redirectUrl = process.env.NODE_ENV === 'production' 
