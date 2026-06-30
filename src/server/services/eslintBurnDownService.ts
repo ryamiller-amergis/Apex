@@ -1,7 +1,10 @@
 import * as azdev from 'azure-devops-node-api';
 import { BuildQueryOrder, BuildStatus } from 'azure-devops-node-api/interfaces/BuildInterfaces';
+import { and, asc, gte, inArray, lte } from 'drizzle-orm';
 import { inflateRaw } from 'zlib';
 import { promisify } from 'util';
+import { db } from '../db/drizzle';
+import { eslintBurnDownSnapshots } from '../db/schema';
 import type { EslintBurnDownResponse, EslintBuildSnapshot, EslintSummaryArtifact } from '../types/workitem';
 
 const inflateRawAsync = promisify(inflateRaw);
@@ -244,6 +247,122 @@ function toSnapshot(artifact: EslintSummaryArtifact): EslintBuildSnapshot {
   };
 }
 
+function rowToSnapshot(row: typeof eslintBurnDownSnapshots.$inferSelect): EslintBuildSnapshot {
+  return {
+    capturedAt: row.capturedAt,
+    buildId: String(row.pipelineBuildId),
+    buildNumber: row.buildNumber,
+    definitionName: row.definitionName,
+    totalFiles: row.totalFiles,
+    filesWithProblems: row.filesWithProblems,
+    totalErrors: row.totalErrors,
+    totalWarnings: row.totalWarnings,
+    issueCount: row.issueCount,
+    fixableCount: row.fixableCount,
+  };
+}
+
+function parsePipelineBuildId(buildId: string): number | null {
+  const parsed = Number.parseInt(buildId, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function getStoredBuildIds(buildIds: number[]): Promise<Set<number>> {
+  if (buildIds.length === 0) return new Set();
+  const rows = await db
+    .select({ pipelineBuildId: eslintBurnDownSnapshots.pipelineBuildId })
+    .from(eslintBurnDownSnapshots)
+    .where(inArray(eslintBurnDownSnapshots.pipelineBuildId, buildIds));
+  return new Set(rows.map(row => row.pipelineBuildId));
+}
+
+async function getSnapshotsInRange(from: string, to: string): Promise<EslintBuildSnapshot[]> {
+  const minTime = `${from}T00:00:00.000Z`;
+  const maxTime = `${to}T23:59:59.999Z`;
+  const rows = await db
+    .select()
+    .from(eslintBurnDownSnapshots)
+    .where(and(gte(eslintBurnDownSnapshots.capturedAt, minTime), lte(eslintBurnDownSnapshots.capturedAt, maxTime)))
+    .orderBy(asc(eslintBurnDownSnapshots.capturedAt));
+  return rows.map(rowToSnapshot);
+}
+
+async function upsertSnapshot(snapshot: EslintBuildSnapshot): Promise<void> {
+  const pipelineBuildId = parsePipelineBuildId(snapshot.buildId);
+  if (pipelineBuildId === null) return;
+
+  const syncedAt = new Date().toISOString();
+  await db
+    .insert(eslintBurnDownSnapshots)
+    .values({
+      pipelineBuildId,
+      buildNumber: snapshot.buildNumber,
+      definitionName: snapshot.definitionName,
+      capturedAt: snapshot.capturedAt,
+      totalFiles: snapshot.totalFiles,
+      filesWithProblems: snapshot.filesWithProblems,
+      totalErrors: snapshot.totalErrors,
+      totalWarnings: snapshot.totalWarnings,
+      issueCount: snapshot.issueCount,
+      fixableCount: snapshot.fixableCount,
+      syncedAt,
+    })
+    .onConflictDoUpdate({
+      target: eslintBurnDownSnapshots.pipelineBuildId,
+      set: {
+        buildNumber: snapshot.buildNumber,
+        definitionName: snapshot.definitionName,
+        capturedAt: snapshot.capturedAt,
+        totalFiles: snapshot.totalFiles,
+        filesWithProblems: snapshot.filesWithProblems,
+        totalErrors: snapshot.totalErrors,
+        totalWarnings: snapshot.totalWarnings,
+        issueCount: snapshot.issueCount,
+        fixableCount: snapshot.fixableCount,
+        syncedAt,
+      },
+    });
+}
+
+async function fetchSnapshotFromBuild(
+  buildApi: Awaited<ReturnType<azdev.WebApi['getBuildApi']>>,
+  build: { id?: number; buildNumber?: string },
+): Promise<EslintBuildSnapshot | null> {
+  if (!build.id) return null;
+  try {
+    const buildLabel = String(build.buildNumber ?? build.id);
+    const zipBuffer = await downloadArtifactZip(buildApi, ESLINT_BUILD_PROJECT, build.id, ESLINT_ARTIFACT_NAME);
+    if (!zipBuffer) return null;
+    const jsonText = await extractSummaryJson(zipBuffer);
+    if (!jsonText) return null;
+    const artifact = parseSummaryArtifact(jsonText, build.id, buildLabel);
+    return toSnapshot(artifact);
+  } catch {
+    return null;
+  }
+}
+
+async function syncMissingSnapshots(
+  buildApi: Awaited<ReturnType<azdev.WebApi['getBuildApi']>>,
+  builds: Array<{ id?: number; buildNumber?: string }>,
+  storedBuildIds: Set<number>,
+): Promise<number> {
+  const missingBuilds = builds.filter(build => build.id && !storedBuildIds.has(build.id));
+  if (missingBuilds.length === 0) return 0;
+
+  const fetched = await mapWithConcurrency(missingBuilds, ARTIFACT_CONCURRENCY, build =>
+    fetchSnapshotFromBuild(buildApi, build),
+  );
+
+  let syncedCount = 0;
+  for (const snapshot of fetched) {
+    if (!snapshot) continue;
+    await upsertSnapshot(snapshot);
+    syncedCount += 1;
+  }
+  return syncedCount;
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -264,23 +383,24 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export async function getMaxViewEslintBurnDown(from: string, to: string): Promise<EslintBurnDownResponse> {
-  const minTime = new Date(`${from}T00:00:00.000Z`);
-  const maxTime = new Date(`${to}T23:59:59.999Z`);
-
-  if (Number.isNaN(minTime.getTime()) || Number.isNaN(maxTime.getTime())) {
-    throw new Error('Invalid from/to date range for ESLint burn-down');
-  }
-  if (minTime > maxTime) {
-    throw new Error('The from date must be before the to date');
-  }
+/**
+ * Backfill snapshots for recently finished pipeline runs without building a chart
+ * response. Used by the scheduled sync job so nightly runs are captured even when
+ * nobody opens the chart (before ADO retention purges the artifacts).
+ *
+ * Only runs whose pipeline_build_id is not already stored get their artifact
+ * downloaded; everything else is a cheap no-op via the unique-id check.
+ */
+export async function syncRecentEslintBurnDownSnapshots(
+  lookbackDays = 7,
+): Promise<{ scanned: number; synced: number }> {
+  const maxTime = new Date();
+  const minTime = new Date(maxTime.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
   const connection = getAdoConnection();
   const buildApi = await connection.getBuildApi();
   const definition = await resolveBuildDefinition(buildApi, ESLINT_BUILD_PROJECT, ESLINT_BUILD_DEFINITION);
 
-  // List finished pipeline runs in the date window. We do NOT filter by build result
-  // (succeeded/failed/partial) — only whether eslint-burn-down/eslint-summary.json exists.
   const buildsPage = await buildApi.getBuilds(
     ESLINT_BUILD_PROJECT,
     [definition.id],
@@ -301,61 +421,114 @@ export async function getMaxViewEslintBurnDown(from: string, to: string): Promis
     BuildQueryOrder.FinishTimeAscending,
   );
 
-  const builds = normalizePagedList<{ id?: number; buildNumber?: string; finishTime?: Date; result?: number }>(buildsPage);
+  const builds = normalizePagedList<{ id?: number; buildNumber?: string }>(buildsPage);
+  const buildIds = builds.map(build => build.id).filter((id): id is number => typeof id === 'number');
+  const storedBuildIds = await getStoredBuildIds(buildIds);
+  const synced = await syncMissingSnapshots(buildApi, builds, storedBuildIds);
 
+  return { scanned: builds.length, synced };
+}
+
+export async function getMaxViewEslintBurnDown(from: string, to: string): Promise<EslintBurnDownResponse> {
+  const minTime = new Date(`${from}T00:00:00.000Z`);
+  const maxTime = new Date(`${to}T23:59:59.999Z`);
+
+  if (Number.isNaN(minTime.getTime()) || Number.isNaN(maxTime.getTime())) {
+    throw new Error('Invalid from/to date range for ESLint burn-down');
+  }
+  if (minTime > maxTime) {
+    throw new Error('The from date must be before the to date');
+  }
+
+  let snapshots = await getSnapshotsInRange(from, to);
+  let definitionName = ESLINT_BUILD_DEFINITION;
+  let definitionId: number | undefined;
+  let buildsScanned = 0;
   let hint: string | undefined;
-  if (builds.length === 0) {
-    const latestPage = await buildApi.getBuilds(
+  let buildsSynced = 0;
+  let builds: Array<{ id?: number; buildNumber?: string; finishTime?: Date; result?: number }> = [];
+
+  try {
+    const connection = getAdoConnection();
+    const buildApi = await connection.getBuildApi();
+    const definition = await resolveBuildDefinition(buildApi, ESLINT_BUILD_PROJECT, ESLINT_BUILD_DEFINITION);
+    definitionName = definition.name;
+    definitionId = definition.id;
+
+    // List finished pipeline runs in the date window. We do NOT filter by build result
+    // (succeeded/failed/partial) — only whether eslint-burn-down/eslint-summary.json exists.
+    const buildsPage = await buildApi.getBuilds(
       ESLINT_BUILD_PROJECT,
       [definition.id],
       undefined,
       undefined,
-      undefined,
-      undefined,
+      minTime,
+      maxTime,
       undefined,
       undefined,
       BuildStatus.Completed,
       undefined,
       undefined,
       undefined,
-      1,
+      BUILD_FETCH_TOP,
       undefined,
       undefined,
       undefined,
-      BuildQueryOrder.FinishTimeDescending,
+      BuildQueryOrder.FinishTimeAscending,
     );
-    const latest = normalizePagedList<{ id?: number; buildNumber?: string; finishTime?: Date }>(latestPage)[0];
-    if (latest?.finishTime) {
-      const latestDay = new Date(latest.finishTime).toISOString().slice(0, 10);
-      hint =
-        `No completed builds in ${from}–${to}. Latest run for this pipeline finished ${latestDay} ` +
-        `(build ${latest.buildNumber ?? latest.id}). Widen the Time Frame filter.`;
-    } else {
-      hint =
-        `No completed builds found for "${definition.name}" in ${ESLINT_BUILD_PROJECT}. ` +
-        'Confirm the pipeline has run and the PAT has Build (Read) scope.';
-    }
-  }
-  const snapshots = (
-    await mapWithConcurrency(builds, ARTIFACT_CONCURRENCY, async build => {
-      if (!build.id) return null;
-      try {
-        const buildLabel = String(build.buildNumber ?? build.id);
-        const zipBuffer = await downloadArtifactZip(buildApi, ESLINT_BUILD_PROJECT, build.id, ESLINT_ARTIFACT_NAME);
-        if (!zipBuffer) return null;
-        const jsonText = await extractSummaryJson(zipBuffer);
-        if (!jsonText) {
-          return null;
-        }
-        const artifact = parseSummaryArtifact(jsonText, build.id, buildLabel);
-        return toSnapshot(artifact);
-      } catch {
-        return null;
+
+    builds = normalizePagedList<{ id?: number; buildNumber?: string; finishTime?: Date; result?: number }>(buildsPage);
+    buildsScanned = builds.length;
+    const buildIds = builds.map(build => build.id).filter((id): id is number => typeof id === 'number');
+    const storedBuildIds = await getStoredBuildIds(buildIds);
+    buildsSynced = await syncMissingSnapshots(buildApi, builds, storedBuildIds);
+    snapshots = await getSnapshotsInRange(from, to);
+    if (builds.length === 0 && snapshots.length === 0) {
+      const latestPage = await buildApi.getBuilds(
+        ESLINT_BUILD_PROJECT,
+        [definition.id],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        BuildStatus.Completed,
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        undefined,
+        undefined,
+        BuildQueryOrder.FinishTimeDescending,
+      );
+      const latest = normalizePagedList<{ id?: number; buildNumber?: string; finishTime?: Date }>(latestPage)[0];
+      if (latest?.finishTime) {
+        const latestDay = new Date(latest.finishTime).toISOString().slice(0, 10);
+        hint =
+          `No completed builds in ${from}–${to}. Latest run for this pipeline finished ${latestDay} ` +
+          `(build ${latest.buildNumber ?? latest.id}). Widen the Time Frame filter.`;
+      } else {
+        hint =
+          `No completed builds found for "${definition.name}" in ${ESLINT_BUILD_PROJECT}. ` +
+          'Confirm the pipeline has run and the PAT has Build (Read) scope.';
       }
-    })
-  )
-    .filter((snapshot): snapshot is EslintBuildSnapshot => snapshot !== null)
-    .sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
+    } else if (builds.length > 0 && snapshots.length === 0 && buildsSynced === 0) {
+      hint =
+        `Checked ${builds.length} finished pipeline run(s) in this range; none had a readable ` +
+        `"${ESLINT_ARTIFACT_NAME}" artifact with eslint-summary.json. Pipeline pass/fail is ignored — only the published file counts.`;
+    }
+  } catch (error) {
+    if (snapshots.length === 0) {
+      throw error;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    hint = message.includes('(401)') || message.includes('401')
+      ? 'Showing stored ESLint snapshots only. Azure DevOps rejected the PAT while checking for newer pipeline artifacts; confirm ADO_PAT has Build (Read) scope.'
+      : `Showing stored ESLint snapshots only. Could not refresh from Azure DevOps: ${message}`;
+  }
 
   const startingIssueCount = snapshots[0]?.issueCount ?? null;
   const endingIssueCount = snapshots[snapshots.length - 1]?.issueCount ?? null;
@@ -366,22 +539,16 @@ export async function getMaxViewEslintBurnDown(from: string, to: string): Promis
       ? Math.round((issueReduction / startingIssueCount) * 1000) / 10
       : null;
 
-  if (builds.length > 0 && snapshots.length === 0) {
-    hint =
-      `Checked ${builds.length} finished pipeline run(s) in this range; none had a readable ` +
-      `"${ESLINT_ARTIFACT_NAME}" artifact with eslint-summary.json. Pipeline pass/fail is ignored — only the published file counts.`;
-  }
-
   return {
     from,
     to,
-    definitionName: definition.name,
+    definitionName,
     artifactName: ESLINT_ARTIFACT_NAME,
     snapshots,
     latest: snapshots[snapshots.length - 1] ?? null,
     summary: {
-      definitionId: definition.id,
-      buildsScanned: builds.length,
+      definitionId,
+      buildsScanned,
       buildsWithArtifact: snapshots.length,
       startingIssueCount,
       endingIssueCount,

@@ -55,12 +55,22 @@ export interface ChatThreadKickoff {
   pillDescription?: string;
   /** When true, the scope guardrail is omitted from the system prompt for this thread */
   pillBypassScopePolicy?: boolean;
-  /** Development workbench mode — agent works on a real repo checkout */
-  mode?: 'development';
+  /** Thread mode — controls system prompt behavior */
+  mode?: 'development' | 'standup-participant' | 'standup-facilitator' | 'standup-followup';
   /** Work item ID driving the development session */
   workItemId?: number;
   /** Selected project_skill_settings row id — drives repo/branch/config resolution */
   skillSettingsId?: string | null;
+  /** Standup session ID (for standup-* modes) */
+  standupSessionId?: string;
+  /** Standup participant row ID (for standup-participant mode) */
+  standupParticipantId?: string;
+  /** Resolved standup skill path (for standup-participant mode with custom skill) */
+  standupSkillPath?: string;
+  /** Display name of the standup participant (for grounding ADO queries by assignee) */
+  standupUserDisplayName?: string;
+  /** Email/ADO uniqueName of the standup participant (for [System.AssignedTo] filters) */
+  standupUserEmail?: string;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';

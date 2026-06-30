@@ -127,7 +127,7 @@ describe('PlatformAdmin user-project access', () => {
   });
 
   it('lets a super admin find and select users before saving assignments', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const { saveAssignments } = setupPlatformAdmin();
 
     await user.type(screen.getByLabelText(/add users/i), 'ada');

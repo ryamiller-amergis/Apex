@@ -201,6 +201,22 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/workitems/:id - Fetch a single work item by ID
+router.get('/workitems/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid work item ID' });
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const items = await adoService.getWorkItemsByIds([id]);
+    if (!items || items.length === 0) return res.status(404).json({ error: 'Work item not found' });
+    res.json(items[0]);
+  } catch (error: any) {
+    console.error('Error fetching work item:', error);
+    res.status(500).json({ error: 'Failed to fetch work item' });
+  }
+});
+
 // GET /api/pr-review-tag-trends — work items tagged pr-reviewed / pr-review-skipped by ChangedDate
 router.get('/pr-review-tag-trends', async (req: Request, res: Response) => {
   try {

@@ -98,6 +98,8 @@ export interface ProjectSkillConfig {
   prdValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  standupSkillPath?: string | null;
+  standupModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -145,6 +147,8 @@ export interface UpsertProjectSkillConfigRequest {
   prdValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  standupSkillPath?: string | null;
+  standupModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
