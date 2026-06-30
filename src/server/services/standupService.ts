@@ -362,15 +362,25 @@ export async function deleteStandupSession(sessionId: string): Promise<void> {
 
 // ── Structured Update Extraction ──────────────────────────────────────────────
 
+type StructuredUpdate = {
+  yesterday?: string;
+  today?: string;
+  blockers?: string;
+  atRisk?: string;
+  handoffs?: string;
+  capacity?: string;
+};
+
 /**
  * Scans agent messages in a thread from newest to oldest and extracts the first
- * JSON code block that looks like { yesterday, today, blockers }. The participant
- * prompt instructs the agent to emit exactly this structure at the end of the
- * standup. Returns null if none is found (e.g. the user submitted early).
+ * JSON code block that looks like { yesterday, today, blockers, atRisk, handoffs,
+ * capacity }. The participant prompt instructs the agent to emit exactly this
+ * structure at the end of the standup. Returns null if none is found (e.g. the
+ * user submitted early).
  */
 async function extractStructuredUpdate(
   threadId: string,
-): Promise<{ yesterday?: string; today?: string; blockers?: string } | null> {
+): Promise<StructuredUpdate | null> {
   const messages = await db
     .select({ role: chatMessages.role, text: chatMessages.text })
     .from(chatMessages)
@@ -395,6 +405,9 @@ async function extractStructuredUpdate(
           yesterday: typeof parsed.yesterday === 'string' ? parsed.yesterday : undefined,
           today: typeof parsed.today === 'string' ? parsed.today : undefined,
           blockers: typeof parsed.blockers === 'string' ? parsed.blockers : undefined,
+          atRisk: typeof parsed.atRisk === 'string' ? parsed.atRisk : undefined,
+          handoffs: typeof parsed.handoffs === 'string' ? parsed.handoffs : undefined,
+          capacity: typeof parsed.capacity === 'string' ? parsed.capacity : undefined,
         };
       }
     } catch {
@@ -415,7 +428,7 @@ export async function submitParticipant(participantId: string): Promise<void> {
   if (!participant) return;
 
   // Parse the structured update from the agent conversation transcript
-  let structuredUpdate: { yesterday?: string; today?: string; blockers?: string } | null = null;
+  let structuredUpdate: StructuredUpdate | null = null;
   if (participant.threadId) {
     structuredUpdate = await extractStructuredUpdate(participant.threadId);
     if (structuredUpdate) {

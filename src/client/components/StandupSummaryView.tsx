@@ -15,7 +15,7 @@ interface SessionDetail {
     id: string;
     userId: string;
     status: string;
-    structuredUpdate: { yesterday?: string; today?: string; blockers?: string } | null;
+    structuredUpdate: { yesterday?: string; today?: string; blockers?: string; atRisk?: string; handoffs?: string; capacity?: string } | null;
     submittedAt: string | null;
   }>;
   followups: Array<{
@@ -97,6 +97,15 @@ export const StandupSummaryView: React.FC = () => {
                     )}
                     {p.structuredUpdate.blockers && (
                       <div className={styles.blocker}><strong>Blockers:</strong> {p.structuredUpdate.blockers}</div>
+                    )}
+                    {p.structuredUpdate.atRisk && (
+                      <div className={styles.blocker}><strong>At risk:</strong> {p.structuredUpdate.atRisk}</div>
+                    )}
+                    {p.structuredUpdate.handoffs && (
+                      <div><strong>Handoffs:</strong> {p.structuredUpdate.handoffs}</div>
+                    )}
+                    {p.structuredUpdate.capacity && (
+                      <div><strong>Capacity:</strong> {p.structuredUpdate.capacity}</div>
                     )}
                   </div>
                 )}
