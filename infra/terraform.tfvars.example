@@ -21,7 +21,8 @@ ado_project = "YourProject"
 #   CostCenter  = "Engineering"
 # }
 
-# Azure AD Auth
+# Azure AD Auth — use the SAME app registration as GitHub AZURE_CREDENTIALS
+# (deployment SP and user sign-in share one app; redirect URIs must include /auth/callback)
 azure_tenant_id     = "your-tenant-id"
 azure_client_id     = "your-client-id"
 azure_client_secret = "your-client-secret"

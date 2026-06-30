@@ -8,14 +8,14 @@ import { resolvePendingAssignments } from '../services/pendingAssignmentService'
 
 const router = express.Router();
 
-// Configure Azure AD strategy
-const azureAdConfig: any = {
+// Base Azure AD strategy config (everything except redirectUrl, which is resolved
+// per-request — see resolveStrategyName below).
+const baseAzureAdConfig: any = {
   identityMetadata: `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/v2.0/.well-known/openid-configuration`,
   clientID: process.env.AZURE_CLIENT_ID || '',
   clientSecret: process.env.AZURE_CLIENT_SECRET || '',
   responseType: 'code',
   responseMode: 'query',
-  redirectUrl: process.env.AZURE_REDIRECT_URL || 'http://localhost:3001/auth/callback',
   allowHttpForRedirectUrl: process.env.NODE_ENV !== 'production',
   validateIssuer: true,
   passReqToCallback: false,
@@ -31,29 +31,84 @@ const azureAdConfig: any = {
   loggingNoPII: true,
 };
 
+// Fallback redirect URL — used in dev and whenever the request Host can't be trusted.
+const DEFAULT_REDIRECT_URL =
+  process.env.AZURE_REDIRECT_URL || 'http://localhost:3001/auth/callback';
+
 console.log('Azure AD Config:', {
   tenantId: process.env.AZURE_TENANT_ID,
   clientId: process.env.AZURE_CLIENT_ID,
-  redirectUrl: process.env.AZURE_REDIRECT_URL,
-  allowHttp: azureAdConfig.allowHttpForRedirectUrl,
-  nodeEnv: process.env.NODE_ENV
+  defaultRedirectUrl: DEFAULT_REDIRECT_URL,
+  dynamicRedirect: process.env.NODE_ENV === 'production',
+  allowHttp: baseAzureAdConfig.allowHttpForRedirectUrl,
+  nodeEnv: process.env.NODE_ENV,
 });
 
-passport.use(
-  new OIDCStrategy(
-    azureAdConfig,
-    (iss: any, sub: any, profile: any, accessToken: any, refreshToken: any, done: any) => {
-      console.log('Authentication successful', { oid: profile?.oid ?? sub });
-      // Store user profile and tokens
-      const user = {
-        profile,
-        accessToken,
-        refreshToken,
-      };
-      return done(null, user);
+const verifyAzureAd = (
+  iss: any,
+  sub: any,
+  profile: any,
+  accessToken: any,
+  refreshToken: any,
+  done: any
+) => {
+  console.log('Authentication successful', { oid: profile?.oid ?? sub });
+  // Store user profile and tokens
+  const user = {
+    profile,
+    accessToken,
+    refreshToken,
+  };
+  return done(null, user);
+};
+
+// passport-azure-ad reads redirectUrl from the strategy instance (both when building
+// the authorize request and when redeeming the code), and offers no per-request
+// override. To support a custom domain AND the *.azurewebsites.net hostnames without
+// the OAuth flow ever hopping between origins (which breaks the session cookie and the
+// redirect_uri match), we register one strategy instance per redirect URL and select it
+// by the request's Host header. Azure AD still rejects any redirect_uri not listed in
+// the app registration's Reply URLs, so the Host header can't be abused to exfiltrate
+// tokens — the only residual concern is unbounded cache growth, capped below.
+const DEFAULT_STRATEGY_NAME = 'azuread-openidconnect';
+const MAX_DYNAMIC_STRATEGIES = 25;
+const HOSTNAME_RE = /^[a-z0-9.-]+(:\d+)?$/i;
+const strategyNameByRedirect = new Map<string, string>();
+
+function registerStrategy(name: string, redirectUrl: string): void {
+  passport.use(name, new OIDCStrategy({ ...baseAzureAdConfig, redirectUrl }, verifyAzureAd));
+}
+
+// Always register the default strategy (dev flow + production fallback).
+registerStrategy(DEFAULT_STRATEGY_NAME, DEFAULT_REDIRECT_URL);
+strategyNameByRedirect.set(DEFAULT_REDIRECT_URL, DEFAULT_STRATEGY_NAME);
+
+// Pick (and lazily register) the OIDC strategy whose redirect URL matches the host the
+// user actually visited, so login starts and finishes on the same origin.
+function resolveStrategyName(req: express.Request): string {
+  // Outside production we keep the original static behavior to avoid disrupting the
+  // local dev / Vite-proxy flow.
+  if (process.env.NODE_ENV !== 'production') return DEFAULT_STRATEGY_NAME;
+
+  const host = (req.get('host') || '').toLowerCase();
+  if (!host || !HOSTNAME_RE.test(host)) return DEFAULT_STRATEGY_NAME;
+
+  const proto = req.protocol || 'https';
+  const redirectUrl = `${proto}://${host}/auth/callback`;
+
+  let name = strategyNameByRedirect.get(redirectUrl);
+  if (!name) {
+    // Safety valve against Host-header flooding filling the strategy cache.
+    if (strategyNameByRedirect.size >= MAX_DYNAMIC_STRATEGIES) {
+      return DEFAULT_STRATEGY_NAME;
     }
-  )
-);
+    name = `azuread-${host.replace(/[^a-z0-9]/gi, '_')}`;
+    registerStrategy(name, redirectUrl);
+    strategyNameByRedirect.set(redirectUrl, name);
+    console.log(`[auth] Registered dynamic OIDC strategy for ${redirectUrl}`);
+  }
+  return name;
+}
 
 passport.serializeUser((user: any, done) => {
   done(null, user);
@@ -65,8 +120,9 @@ passport.deserializeUser((user: any, done) => {
 
 // Login route
 router.get('/login', (req, res, next) => {
-  console.log('Login route hit, initiating OAuth flow');
-  passport.authenticate('azuread-openidconnect', { 
+  const strategyName = resolveStrategyName(req);
+  console.log(`Login route hit, initiating OAuth flow via "${strategyName}" (host: ${req.get('host')})`);
+  passport.authenticate(strategyName, { 
     failureRedirect: '/auth/login-failed',
     failureMessage: true 
   })(req, res, next);
@@ -77,7 +133,7 @@ router.get(
   '/callback',
   (req, res, next) => {
     console.log('Auth callback received');
-    passport.authenticate('azuread-openidconnect', (err: any, user: any, info: any) => {
+    passport.authenticate(resolveStrategyName(req), (err: any, user: any, info: any) => {
       if (err) {
         console.error('Authentication error:', err);
         return res.redirect('/auth/login-failed');

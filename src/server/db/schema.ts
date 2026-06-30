@@ -866,7 +866,7 @@ export const standupParticipants = pgTable('standup_participants', {
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   status: text('status').notNull().default('pending'),
-  structuredUpdate: jsonb('structured_update').$type<{ yesterday?: string; today?: string; blockers?: string }>(),
+  structuredUpdate: jsonb('structured_update').$type<{ yesterday?: string; today?: string; blockers?: string; atRisk?: string; handoffs?: string; capacity?: string }>(),
   adoAccessToken: text('ado_access_token'),
   adoTokenExpiresAt: timestamp('ado_token_expires_at', { withTimezone: true, mode: 'string' }),
   submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),

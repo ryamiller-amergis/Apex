@@ -108,6 +108,8 @@ jobs:
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
 
       - name: Configure staging slot settings
+        env:
+          STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
         run: |
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
@@ -129,7 +131,7 @@ jobs:
               AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
               AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
-              AZURE_REDIRECT_URL="${{ secrets.AZURE_REDIRECT_URL }}" \
+              AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               AZURE_COST_TENANT_ID="${{ secrets.AZURE_COST_TENANT_ID }}" \
               AZURE_COST_CLIENT_ID="${{ secrets.AZURE_COST_CLIENT_ID }}" \
               AZURE_COST_CLIENT_SECRET="${{ secrets.AZURE_COST_CLIENT_SECRET }}" \
@@ -160,7 +162,7 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --slot-settings \
-              AZURE_REDIRECT_URL="${{ secrets.AZURE_REDIRECT_URL }}" \
+              AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
 
           az webapp config set \
@@ -204,7 +206,7 @@ jobs:
           exit 1
 
       - name: Azure logout
-        run: az logout
+        run: az logout || true
         if: always()
 
   swap:
@@ -261,5 +263,5 @@ jobs:
           echo "Rollback complete."
 
       - name: Azure logout
-        run: az logout
+        run: az logout || true
         if: always()
