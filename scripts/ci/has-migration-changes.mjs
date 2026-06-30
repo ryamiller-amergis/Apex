@@ -3,8 +3,8 @@
  *
  * - pull_request: true when migrations/ changed between base and head (diff-based;
  *   PR CI only validates, never applies).
- * - push / workflow_dispatch: true when DATABASE_URL has pending migrations
- *   (DB-truth; self-heals any previously skipped migration).
+ * - push / workflow_dispatch / MIGRATION_DETECT_STRATEGY=db: true when DATABASE_URL
+ *   has pending migrations (DB-truth; used for deploy jobs).
  *
  * Writes has_migration_changes=true|false to GITHUB_OUTPUT when set.
  */
@@ -52,20 +52,11 @@ function writeGithubOutput(value) {
 }
 
 const eventName = process.env.GITHUB_EVENT_NAME ?? 'push';
+const strategy = process.env.MIGRATION_DETECT_STRATEGY;
 let hasChanges = false;
 
-if (eventName === 'pull_request') {
-  // PR path: diff-based only (PR CI validates, never applies)
-  const base = process.env.GITHUB_BASE_SHA;
-  const head = process.env.GITHUB_SHA ?? 'HEAD';
-  hasChanges = gitDiffMigrations(base, head);
-  console.log(
-    hasChanges
-      ? `Migration files changed between ${base} and ${head}`
-      : 'No migration file changes in PR',
-  );
-} else {
-  // push and workflow_dispatch both use DB truth so no migration is ever missed
+if (strategy === 'db' || eventName === 'push' || eventName === 'workflow_dispatch') {
+  // Apply path: compare migration files on disk to pgmigrations in the target DB.
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error(`${eventName} requires DATABASE_URL to detect pending migrations`);
@@ -77,6 +68,19 @@ if (eventName === 'pull_request') {
       ? 'Pending migrations found on database'
       : 'No pending migrations on database',
   );
+} else if (eventName === 'pull_request') {
+  // PR path: diff-based only (PR CI validates, never applies)
+  const base = process.env.GITHUB_BASE_SHA;
+  const head = process.env.GITHUB_SHA ?? 'HEAD';
+  hasChanges = gitDiffMigrations(base, head);
+  console.log(
+    hasChanges
+      ? `Migration files changed between ${base} and ${head}`
+      : 'No migration file changes in PR',
+  );
+} else {
+  console.error(`Unsupported GITHUB_EVENT_NAME for migration detection: ${eventName}`);
+  process.exit(1);
 }
 
 const value = hasChanges ? 'true' : 'false';

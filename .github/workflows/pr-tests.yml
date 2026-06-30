@@ -117,8 +117,7 @@ jobs:
       - name: Detect migration changes
         id: migration_changes
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_SHA: ${{ github.sha }}
+          MIGRATION_DETECT_STRATEGY: db
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node scripts/ci/has-migration-changes.mjs
 
