@@ -5,6 +5,7 @@ import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import type { ThemeMode } from '../hooks/useAppShell';
+import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -15,7 +16,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -27,6 +28,9 @@ interface AppHeaderProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  repoConfigs?: ProjectRepoConfigSummary[];
+  selectedSkillSettingsId?: string | null;
+  onChangeSkillSettings?: (id: string) => void;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
   onNavigateCalendar: () => void;
@@ -34,6 +38,7 @@ interface AppHeaderProps {
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
+  onNavigateStandup?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -50,6 +55,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  repoConfigs = [],
+  selectedSkillSettingsId,
+  onChangeSkillSettings,
   onNavigateHome,
   onNavigateProjects,
   onNavigateCalendar,
@@ -57,6 +65,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateCloudCost,
   onNavigateBacklog,
   onNavigateMyWork,
+  onNavigateStandup,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -88,6 +97,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -154,6 +164,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
 
       <div className="header-controls">
+        {repoConfigs.length > 1 && onChangeSkillSettings && (
+          <div className={styles['repo-switcher-group']}>
+            <span className={styles['repo-switcher-label']}>Repo Project -</span>
+            <select
+              className={styles['repo-switcher']}
+              value={selectedSkillSettingsId ?? ''}
+              onChange={(e) => onChangeSkillSettings(e.target.value)}
+            >
+              {repoConfigs.map((cfg) => (
+                <option key={cfg.id} value={cfg.id}>
+                  {cfg.friendlyName}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {can('notifications:view') && <NotificationBell />}
         <UserMenu
           onOpenChangelog={onOpenChangelog}

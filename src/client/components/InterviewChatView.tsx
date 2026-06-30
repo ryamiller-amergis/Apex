@@ -236,7 +236,7 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
 
 const NewInterviewCompose: React.FC = () => {
   const navigate = useNavigate();
-  const { selectedProject } = useAppShell();
+  const { selectedProject, selectedSkillSettingsId } = useAppShell();
   const [input, setInput] = useState('');
   const [title, setTitle] = useState('');
   const [titleTouched, setTitleTouched] = useState(false);
@@ -250,7 +250,7 @@ const NewInterviewCompose: React.FC = () => {
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
-  const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
+  const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
@@ -326,6 +326,7 @@ const NewInterviewCompose: React.FC = () => {
           branch: resolvedBranch,
           skillPath: grillSkill?.path,
           model,
+          skillSettingsId: skillConfig?.id ?? undefined,
         },
         skipAutoKickoff: true,
       });
@@ -335,6 +336,7 @@ const NewInterviewCompose: React.FC = () => {
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
         model,
+        skillSettingsId: skillConfig?.id ?? undefined,
         prdOwnerId: selections.prdOwnerId,
         designDocOwnerId: selections.designDocOwnerId,
         designPrototypeOwnerId: selections.designPrototypeOwnerId,
@@ -410,8 +412,8 @@ const NewInterviewCompose: React.FC = () => {
             </span>
           ) : null}
 
-          <span className={`${styles.composePill} ${styles.composePillSkill}`}>
-            ✨ {grillSkill?.name ?? 'grill-with-docs'}
+          <span className={`${styles.composePill} ${grillSkill ? styles.composePillSkill : styles.composePillError}`}>
+            {grillSkill ? `✨ ${grillSkill.name}` : '⚠ No interview skill configured'}
           </span>
         </div>
 
@@ -526,7 +528,7 @@ const NewInterviewCompose: React.FC = () => {
             <button
               className={styles.sendBtn}
               onClick={() => void handleSend()}
-              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim()}
+              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || !grillSkill}
               type="button"
               aria-label="Start interview"
             >
@@ -546,9 +548,16 @@ const NewInterviewCompose: React.FC = () => {
           )}
         </div>
 
-        <p className={styles.composeHint}>
-          Enter to send · Shift+Enter for new line · The <strong>{grillSkill?.name ?? 'grill-with-docs'}</strong> skill will guide this structured interview
-        </p>
+        {!grillSkill && skillConfig && (
+          <div className={styles.composeError}>
+            No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
+          </div>
+        )}
+        {grillSkill && (
+          <p className={styles.composeHint}>
+            Enter to send · Shift+Enter for new line · The <strong>{grillSkill.name}</strong> skill will guide this structured interview
+          </p>
+        )}
       </div>
 
       {showOwnerModal && (
@@ -802,7 +811,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   if (isLoading) return <div className={styles.loadingState}>Loading interview…</div>;
   if (isError || !interview) return <div className={styles.errorState}>Interview not found.</div>;
 
-  const visibleMessages = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const visibleMessages = messages.filter((m) =>
+    !(m.role === 'user' && m.text === 'Begin.') &&
+    m.toolName !== '_reasoning' && m.toolName !== '_thinking'
+  );
   const canManage = can('interviews:manage');
   const isAuthor = interview.authorId === userId;
   const isReadOnlyViewer = !isAuthor && !isAdmin;

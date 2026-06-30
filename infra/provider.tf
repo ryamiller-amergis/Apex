@@ -11,4 +11,7 @@ terraform {
 
 provider "azurerm" {
   features {}
+
+  # Prod subscription users often lack subscription-level provider register permission.
+  skip_provider_registration = true
 }

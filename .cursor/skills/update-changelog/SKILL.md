@@ -114,14 +114,14 @@ After writing `public/CHANGELOG.json`, add a migration that updates the server-s
 Create a migration named like:
 
 ```text
-migrations/<YYYYMMDDHHMMSS>_sync-changelog-version-<new-version-with-dashes>.sql
+migrations/<YYYYMMDDHHMMSS>_<token>_sync-changelog-version-<new-version-with-dashes>.sql
 ```
 
-**Get the filename from the helper — do not guess:**
+The token is a 4-hex-char unique id injected automatically by the helper (see `postgresql-migrations` skill). **Get the filename from the helper — do not guess:**
 
 ```bash
 node scripts/next-migration-timestamp.mjs sync-changelog-version-<new-version-with-dashes>
-# → migrations/20260618140200_sync-changelog-version-1-28-0.sql
+# → migrations/20260618140200_a3f1_sync-changelog-version-1-28-0.sql
 ```
 
 Create that path and write the SQL into it.

@@ -8,14 +8,14 @@ import type {
 } from '../../shared/types/projectSettings';
 import type { AppSetting } from '../../shared/types/appSettings';
 
-export function useProjectSkillConfig(project: string | null | undefined) {
+export function useProjectSkillConfig(project: string | null | undefined, settingsId?: string | null) {
   return useQuery<ProjectSkillConfigResponse | null>({
-    queryKey: ['skill-config', project],
+    queryKey: ['skill-config', project, settingsId],
     queryFn: async () => {
       if (!project) return null;
-      const res = await fetch(`/api/skill-config?project=${encodeURIComponent(project)}`, {
-        credentials: 'include',
-      });
+      let url = `/api/skill-config?project=${encodeURIComponent(project)}`;
+      if (settingsId) url += `&settingsId=${encodeURIComponent(settingsId)}`;
+      const res = await fetch(url, { credentials: 'include' });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error('Failed to fetch skill config');
       return res.json() as Promise<ProjectSkillConfigResponse>;
@@ -37,21 +37,47 @@ export function useAllProjectSkillConfigs() {
   });
 }
 
+export function useCreateProjectSkillConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: UpsertProjectSkillConfigRequest & { project: string }) => {
+      const res = await fetch('/api/admin/project-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('Failed to create project settings');
+      return res.json() as Promise<ProjectSkillConfig>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
+    },
+  });
+}
+
 export function useUpsertProjectSkillConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({
+      id,
       project,
       body,
     }: {
+      id?: string;
       project: string;
       body: UpsertProjectSkillConfigRequest;
     }) => {
-      const res = await fetch(`/api/admin/project-settings/${encodeURIComponent(project)}`, {
-        method: 'PUT',
+      const url = id
+        ? `/api/admin/project-settings/${encodeURIComponent(id)}`
+        : '/api/admin/project-settings';
+      const method = id ? 'PUT' : 'POST';
+      const payload = id ? body : { ...body, project };
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Failed to save project settings');
       return res.json() as Promise<ProjectSkillConfig>;
@@ -59,16 +85,13 @@ export function useUpsertProjectSkillConfig() {
     onSuccess: (data, { project }) => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
       queryClient.invalidateQueries({ queryKey: ['skill-config', project] });
-      // Bust server-side skill catalog cache so newly added/changed skills on
-      // the configured branch appear immediately instead of waiting up to 5 min.
+      queryClient.invalidateQueries({ queryKey: ['skill-configs', project] });
       if (data.skillRepo) {
         fetch(
           `/api/skills/refresh?project=${encodeURIComponent(project)}&repo=${encodeURIComponent(data.skillRepo)}`,
           { method: 'POST', credentials: 'include' },
         ).catch(() => { /* best-effort */ });
       }
-      // Also invalidate client-side skill-list cache for this project so
-      // React Query refetches from the now-fresh server cache.
       queryClient.invalidateQueries({ queryKey: ['skill-list', project] });
     },
   });
@@ -77,12 +100,15 @@ export function useUpsertProjectSkillConfig() {
 export function useDeleteProjectSkillConfig() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (project: string) => {
-      const res = await fetch(`/api/admin/project-settings/${encodeURIComponent(project)}`, {
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/project-settings/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'include',
       });
-      if (!res.ok) throw new Error('Failed to delete project settings');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || 'Failed to delete project settings');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
@@ -162,18 +188,18 @@ export interface ProjectApproversResponse {
   approverGroups: Array<{ groupId: string; groupName: string; documentType: string }>;
 }
 
-export function useProjectApprovers(project: string | null) {
+export function useProjectApprovers(settingsId: string | null) {
   return useQuery<ProjectApproversResponse>({
-    queryKey: ['admin', 'project-approvers', project],
+    queryKey: ['admin', 'project-approvers', settingsId],
     queryFn: async () => {
       const res = await fetch(
-        `/api/admin/project-settings/${encodeURIComponent(project!)}/approvers`,
+        `/api/admin/project-settings/${encodeURIComponent(settingsId!)}/approvers`,
         { credentials: 'include' },
       );
       if (!res.ok) throw new Error('Failed to fetch approvers');
       return res.json() as Promise<ProjectApproversResponse>;
     },
-    enabled: !!project,
+    enabled: !!settingsId,
     staleTime: 60_000,
   });
 }
@@ -182,7 +208,7 @@ export function useSetProjectApprovers() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({
-      project,
+      settingsId,
       designDocApprovers,
       prdApprovers,
       designDocApproverGroups,
@@ -193,7 +219,7 @@ export function useSetProjectApprovers() {
       testCaseApproverGroups,
     }: SetApproversRequest) => {
       const res = await fetch(
-        `/api/admin/project-settings/${encodeURIComponent(project)}/approvers`,
+        `/api/admin/project-settings/${encodeURIComponent(settingsId)}/approvers`,
         {
           method: 'PUT',
           credentials: 'include',
@@ -213,8 +239,8 @@ export function useSetProjectApprovers() {
       if (!res.ok) throw new Error('Failed to save approvers');
       return res.json();
     },
-    onSuccess: (_, { project }) => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'project-approvers', project] });
+    onSuccess: (_, { settingsId }) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-approvers', settingsId] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
     },
   });

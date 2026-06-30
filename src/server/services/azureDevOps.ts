@@ -408,6 +408,51 @@ export class AzureDevOpsService {
     });
   }
 
+  async getWorkItemsByIds(ids: number[]): Promise<WorkItem[]> {
+    return retryWithBackoff(async () => {
+      if (ids.length === 0) return [];
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const fields = [
+        'System.Id', 'System.Title', 'System.State', 'System.AssignedTo',
+        'System.WorkItemType', 'System.ChangedDate', 'System.CreatedDate',
+        'Microsoft.VSTS.Common.ClosedDate', 'System.AreaPath', 'System.IterationPath',
+        'Microsoft.VSTS.Scheduling.DueDate', 'Microsoft.VSTS.Scheduling.TargetDate',
+        'Custom.QACompleteDate', 'System.Tags', 'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria', 'Microsoft.VSTS.TCM.ReproSteps',
+        'Custom.Design', 'System.History',
+      ];
+      const rawItems = await this.getWorkItemsInBatches(witApi, ids, fields);
+      const extractDate = (dateValue: any): string | undefined => {
+        if (!dateValue) return undefined;
+        const d = new Date(dateValue);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+      return rawItems
+        .filter((wi) => wi?.id && wi.fields)
+        .map((wi) => ({
+          id: wi.id!,
+          title: wi.fields['System.Title'] || '',
+          state: wi.fields['System.State'] || '',
+          assignedTo: wi.fields['System.AssignedTo']?.displayName,
+          dueDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.DueDate']),
+          targetDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.TargetDate']),
+          qaCompleteDate: extractDate(wi.fields['Custom.QACompleteDate']),
+          workItemType: wi.fields['System.WorkItemType'] || '',
+          changedDate: wi.fields['System.ChangedDate'] || '',
+          createdDate: wi.fields['System.CreatedDate'] || '',
+          closedDate: extractDate(wi.fields['Microsoft.VSTS.Common.ClosedDate']),
+          areaPath: wi.fields['System.AreaPath'] || '',
+          iterationPath: wi.fields['System.IterationPath'] || '',
+          tags: wi.fields['System.Tags'] || '',
+          description: wi.fields['System.Description'] || '',
+          acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || '',
+          reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'] || '',
+          design: wi.fields['Custom.Design'] || '',
+          discussions: wi.fields['System.History'] || '',
+        }));
+    });
+  }
+
   async calculateCycleTime(workItemId: number): Promise<CycleTimeData | undefined> {
     try {
       const witApi = await this.connection.getWorkItemTrackingApi();
@@ -571,6 +616,22 @@ export class AzureDevOpsService {
 
       console.log(`Updating work item ${id} field ${adoFieldName} to:`, value);
       await witApi.updateWorkItem({}, patchDocument, id, this.project);
+    });
+  }
+
+  /**
+   * Add a comment (discussion entry) to a work item using the ADO Comments API.
+   * Returns the comment ID.
+   */
+  async addWorkItemComment(workItemId: number, text: string): Promise<{ id: number }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const comment = await witApi.addComment(
+        { text } as any,
+        this.project,
+        workItemId,
+      );
+      return { id: comment.id! };
     });
   }
 
@@ -1772,7 +1833,9 @@ export class AzureDevOpsService {
           }
         });
 
-        const versions = Array.from(releaseVersions).sort();
+        const versions = Array.from(releaseVersions).sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        );
         console.log(`[getReleaseVersions] Found ${versions.length} unique release versions:`, versions);
         
         return versions;

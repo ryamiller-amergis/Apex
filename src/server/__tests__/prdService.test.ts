@@ -68,10 +68,15 @@ jest.mock('../services/reviewCommentService', () => ({
   getUnresolvedCount: jest.fn().mockResolvedValue(0),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn().mockResolvedValue(null),
-  getApproverUserIds: jest.fn().mockResolvedValue([]),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn().mockResolvedValue(null);
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+    getApproverUserIdsForProject: jest.fn().mockResolvedValue([]),
+  };
+});
 
 jest.mock('../services/designSystemService', () => ({
   inferRoutesForBacklog: jest.fn().mockImplementation((backlog: unknown) => Promise.resolve({ backlog })),

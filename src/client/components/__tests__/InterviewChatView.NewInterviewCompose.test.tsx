@@ -97,7 +97,8 @@ jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
 import { useEffect } from 'react';
 import { useCreateInterview } from '../../hooks/useInterviews';
-import { useStartChat } from '../../hooks/useChatThreads';
+import { useStartChat, useSkillList } from '../../hooks/useChatThreads';
+import { useProjectSkillConfig } from '../../hooks/useProjectSkillConfig';
 import { SectionOwnerModal } from '../SectionOwnerModal';
 
 const MockSectionOwnerModal = SectionOwnerModal as jest.Mock;
@@ -395,5 +396,62 @@ describe('NewInterviewCompose — section owner modal', () => {
 
     expect(createInterviewMutateAsync).not.toHaveBeenCalled();
     expect(screen.queryByTestId('owner-modal')).not.toBeInTheDocument();
+  });
+});
+
+// ── NewInterviewCompose — no interview skill blocks submission ─────────────────
+
+describe('NewInterviewCompose — no interview skill configured', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({
+      data: {
+        id: 'settings-1',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        interviewSkillPath: null,
+      },
+    });
+
+    (useSkillList as jest.Mock).mockReturnValue({ data: [] });
+
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+
+    (useCreateInterview as jest.Mock).mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+
+    MockSectionOwnerModal.mockImplementation(() => null);
+  });
+
+  it('shows a warning pill when no interview skill is configured', () => {
+    renderCompose();
+    expect(screen.getByText(/no interview skill configured/i)).toBeInTheDocument();
+  });
+
+  it('shows an error message explaining the skill is missing', () => {
+    renderCompose();
+    expect(screen.getByText(/no interview skill is configured for this repo project/i)).toBeInTheDocument();
+  });
+
+  it('send button is disabled even when title and message are filled', () => {
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'My Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Tell me about the architecture' },
+    });
+    expect(screen.getByLabelText('Start interview')).toBeDisabled();
+  });
+
+  it('does not show the skill hint paragraph', () => {
+    renderCompose();
+    expect(screen.queryByText(/skill will guide this structured interview/i)).not.toBeInTheDocument();
   });
 });

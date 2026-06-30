@@ -337,8 +337,8 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
 
-  const { getSkillConfig } = await import('./projectSettingsService');
-  const skillConfig = await getSkillConfig(prd.project);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? DEFAULT_DESIGN_PROTOTYPE_MODEL;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
   const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
@@ -583,8 +583,8 @@ export async function regeneratePrototype(
     // Re-resolve the feature's target route so regenerations stay in EXTEND mode.
     const feature = prd ? extractFeatures(prd.backlogJson)[proto.featureIndex] : undefined;
     const targetRoute = feature?.route?.trim() || undefined;
-    const { getSkillConfig } = await import('./projectSettingsService');
-    const skillConfig = prd ? await getSkillConfig(prd.project) : null;
+    const { resolveSkillConfig } = await import('./projectSettingsService');
+    const skillConfig = prd ? await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }) : null;
     // Prefer the regen-specific model; fall back to the generation model.
     const prototypeModel = skillConfig?.designPrototypeRegenBedrockModelId
       ?? skillConfig?.designPrototypeBedrockModelId
@@ -698,8 +698,8 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
   const planRow = await db.query.designPlans.findFirst({ where: eq(designPlans.prdId, proto.prdId) });
   const planFeature = planRow?.features?.find(f => f.featureIndex === proto.featureIndex);
 
-  const { getSkillConfig } = await import('./projectSettingsService');
-  const skillConfig = await getSkillConfig(prd.project);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const prototypeModel = skillConfig?.designPrototypeBedrockModelId ?? DEFAULT_DESIGN_PROTOTYPE_MODEL;
   const prototypeMaxTokens = skillConfig?.designPrototypeBedrockMaxTokens ?? undefined;
   const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;

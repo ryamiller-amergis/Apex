@@ -38,6 +38,178 @@
   gap: 8px;
 }
 
+.eslint-summary {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.eslint-summary-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.eslint-summary-title {
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.eslint-summary-meta {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.eslint-health-badge {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.eslint-health-badge.clean {
+  background: rgba(46, 204, 113, 0.16);
+  color: #27ae60;
+}
+
+.eslint-health-badge.has-warnings {
+  background: rgba(243, 156, 18, 0.16);
+  color: #d68910;
+}
+
+.eslint-health-badge.has-errors {
+  background: rgba(231, 76, 60, 0.16);
+  color: #e74c3c;
+}
+
+.eslint-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.eslint-metric-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.eslint-metric-value {
+  color: var(--text-primary);
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.eslint-metric-label {
+  color: var(--text-secondary);
+  display: block;
+  font-size: 12px;
+  margin-top: 8px;
+  text-transform: uppercase;
+}
+
+.eslint-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.eslint-detail-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.eslint-detail-panel h4 {
+  color: var(--text-primary);
+  font-size: 15px;
+  margin: 0 0 10px 0;
+}
+
+.eslint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.eslint-list li {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.eslint-list-label {
+  color: var(--text-primary);
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eslint-list-count {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 30px;
+  padding: 3px 8px;
+  text-align: center;
+}
+
+.eslint-filter-actions {
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.eslint-summary-delta {
+  color: #27ae60;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.eslint-run-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.eslint-burndown-chart-container {
+  margin-top: 4px;
+}
+
+.eslint-burndown-chart-container .recharts-default-legend {
+  padding-top: 8px !important;
+}
+
+.eslint-burndown-chart-container .recharts-legend-item-text {
+  color: var(--text-primary) !important;
+}
+
+.eslint-burndown-chart-container .recharts-tooltip-label {
+  color: var(--text-primary) !important;
+}
+
 .collapse-button {
   background: none;
   border: none;

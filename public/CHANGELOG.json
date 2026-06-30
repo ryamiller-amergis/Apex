@@ -1,5 +1,44 @@
 [
   {
+    "version": "1.31.0",
+    "date": "2026-06-30",
+    "title": "Daily Standup Ceremony",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added AI-guided Daily Standup ceremonies — participants receive a personal standup thread, answer yesterday/today/blockers with an agent, and submit updates from the My Standup page"
+      },
+      {
+        "type": "feature",
+        "description": "Standup Management lets admins configure scheduled standups per project and group, run sessions on demand, trigger the facilitator early, and review recent session status"
+      },
+      {
+        "type": "feature",
+        "description": "A facilitator agent automatically summarizes team updates, creates cross-cutting follow-up discussions, and publishes a session summary when everyone submits or the deadline is reached"
+      },
+      {
+        "type": "feature",
+        "description": "Standup Summary view shows completed session summaries and follow-up items for the team"
+      },
+      {
+        "type": "feature",
+        "description": "Standup configs support multiple groups, configurable reminder timing, and a facilitator deadline instead of a fixed four-hour window"
+      },
+      {
+        "type": "improvement",
+        "description": "Standup Management timing controls use modern schedule-time and duration pickers with quick-select presets for reminders and facilitator deadlines"
+      },
+      {
+        "type": "improvement",
+        "description": "Project skill settings now include a Standup Skill path and model so teams can customize the participant standup procedure"
+      },
+      {
+        "type": "improvement",
+        "description": "Participants receive in-app and Teams notifications when a standup session starts and periodic reminders until they submit"
+      }
+    ]
+  },
+  {
     "version": "1.30.0",
     "date": "2026-06-24",
     "title": "Owner Approval & Review Workflow",

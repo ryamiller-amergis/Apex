@@ -158,3 +158,35 @@
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
   font-weight: 600;
 }
+
+.repo-switcher-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.repo-switcher-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.repo-switcher {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  max-width: 200px;
+}
+
+.repo-switcher:hover,
+.repo-switcher:focus {
+  border-color: var(--accent-color);
+  outline: none;
+}

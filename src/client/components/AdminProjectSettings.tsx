@@ -8,12 +8,12 @@ import {
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
+import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
+import type { ApprovalMode } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
-import type { ProjectSkillConfig, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
-import type { ApprovalMode } from '../../shared/types/approvals';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -260,6 +260,7 @@ const SKILL_FIELDS = [
   { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
   { key: 'prdValidationSkillPath' as const, label: 'PRD Validation Skill', desc: 'Validates PRD spec after all artifacts are ready', emptyLabel: 'None (skip PRD validation)' },
   { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
+  { key: 'standupSkillPath' as const, label: 'Standup Skill', desc: 'Custom standup procedure for participant conversations', emptyLabel: 'None (use built-in default)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -271,6 +272,7 @@ const MODEL_FIELDS = [
   { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
   { key: 'prdValidationModel' as const, label: 'PRD Validation Model' },
   { key: 'developmentModel' as const, label: 'Development Model' },
+  { key: 'standupModel' as const, label: 'Standup Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -422,7 +424,10 @@ interface AdminProjectSettingsProps {
 }
 
 interface EditState {
+  id: string | null;
   project: string;
+  friendlyName: string;
+  isDefault: boolean;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath: string;
@@ -434,6 +439,7 @@ interface EditState {
   designDocValidationSkillPath: string;
   prdValidationSkillPath: string;
   developmentSkillPath: string;
+  standupSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
@@ -443,6 +449,7 @@ interface EditState {
   designDocValidationModel: string;
   prdValidationModel: string;
   developmentModel: string;
+  standupModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -461,13 +468,14 @@ interface EditState {
 }
 
 const emptyEdit = (): EditState => ({
-  project: '', skillRepo: '', skillBranch: '',
+  id: null, project: '', friendlyName: '', isDefault: false,
+  skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
-  developmentSkillPath: '',
+  developmentSkillPath: '', standupSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
-  developmentModel: '',
+  developmentModel: '', standupModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -495,12 +503,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   // ── Derived: filter to current project ────────────────────────────────
   const projectConfigs = configs.filter((c) => c.project === selectedProject);
-  const currentConfig = projectConfigs[0] ?? null;
 
   // ── Local state ────────────────────────────────────────────────────────
   const [edit, setEdit] = useState<EditState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Accordion expanded state
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -534,7 +541,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillRepo || null,
     edit?.skillBranch || undefined,
   );
-  const { data: approversData } = useProjectApprovers(edit?.project || null);
+  const { data: approversData } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
   const { data: allGroupsWithMembers = [] } = useGroupsWithMembers();
 
@@ -577,7 +584,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     setTestCaseApproverGroupIds(
       approverGroups.filter((g) => g.documentType === 'test_case').map((g) => g.groupId),
     );
-  }, [approversData, edit?.project]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [approversData, edit?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ───────────────────────────────────────────────────────────
 
@@ -597,7 +604,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
   const handleEditRow = (config: ProjectSkillConfig) => {
     setEdit({
+      id: config.id,
       project: config.project,
+      friendlyName: config.friendlyName,
+      isDefault: config.isDefault,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? '',
@@ -609,6 +619,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationSkillPath: config.designDocValidationSkillPath ?? '',
       prdValidationSkillPath: config.prdValidationSkillPath ?? '',
       developmentSkillPath: config.developmentSkillPath ?? '',
+      standupSkillPath: config.standupSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
@@ -618,6 +629,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationModel: config.designDocValidationModel ?? '',
       prdValidationModel: config.prdValidationModel ?? '',
       developmentModel: config.developmentModel ?? '',
+      standupModel: config.standupModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -653,51 +665,59 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const handleSave = async () => {
     if (!edit) return;
     if (!edit.project.trim()) { setFormError('Project is required.'); return; }
+    if (!edit.friendlyName.trim()) { setFormError('Friendly Name is required.'); return; }
     if (!edit.skillRepo.trim()) { setFormError('Skill Repo is required.'); return; }
     if (!edit.skillBranch.trim()) { setFormError('Skill Branch is required.'); return; }
     setFormError(null);
     try {
-      await upsert.mutateAsync({
+      const body: UpsertProjectSkillConfigRequest = {
+        friendlyName: edit.friendlyName.trim(),
+        isDefault: edit.isDefault,
+        skillRepo: edit.skillRepo.trim(),
+        skillBranch: edit.skillBranch.trim(),
+        interviewSkillPath: edit.interviewSkillPath || null,
+        prdSkillPath: edit.prdSkillPath || null,
+        designDocSkillPath: edit.designDocSkillPath || null,
+        designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
+        designPrototypeSkillPath: edit.designPrototypeSkillPath || null,
+        testCaseSkillPath: edit.testCaseSkillPath || null,
+        designDocValidationSkillPath: edit.designDocValidationSkillPath || null,
+        prdValidationSkillPath: edit.prdValidationSkillPath || null,
+        developmentSkillPath: edit.developmentSkillPath || null,
+        standupSkillPath: edit.standupSkillPath || null,
+        interviewModel: edit.interviewModel || null,
+        prdModel: edit.prdModel || null,
+        designDocModel: edit.designDocModel || null,
+        designDocAssistantModel: edit.designDocAssistantModel || null,
+        designPrototypeModel: edit.designPrototypeModel || null,
+        testCaseModel: edit.testCaseModel || null,
+        designDocValidationModel: edit.designDocValidationModel || null,
+        prdValidationModel: edit.prdValidationModel || null,
+        developmentModel: edit.developmentModel || null,
+        standupModel: edit.standupModel || null,
+        defaultModel: edit.defaultModel || null,
+        prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
+        prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
+        designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
+        designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
+        designPrototypeBedrockTimeoutMs: edit.designPrototypeBedrockTimeoutMs || null,
+        designPrototypeRegenBedrockModelId: edit.designPrototypeRegenBedrockModelId || null,
+        designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
+        designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
+        designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
+        prdValidationScoreThreshold: edit.prdValidationScoreThreshold !== 90 ? edit.prdValidationScoreThreshold : null,
+        quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
+        quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
+        approvalMode: edit.approvalMode,
+      };
+
+      const savedConfig = await upsert.mutateAsync({
+        id: edit.id ?? undefined,
         project: edit.project.trim(),
-        body: {
-          skillRepo: edit.skillRepo.trim(),
-          skillBranch: edit.skillBranch.trim(),
-          interviewSkillPath: edit.interviewSkillPath || null,
-          prdSkillPath: edit.prdSkillPath || null,
-          designDocSkillPath: edit.designDocSkillPath || null,
-          designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
-          designPrototypeSkillPath: edit.designPrototypeSkillPath || null,
-          testCaseSkillPath: edit.testCaseSkillPath || null,
-          designDocValidationSkillPath: edit.designDocValidationSkillPath || null,
-          prdValidationSkillPath: edit.prdValidationSkillPath || null,
-          developmentSkillPath: edit.developmentSkillPath || null,
-          interviewModel: edit.interviewModel || null,
-          prdModel: edit.prdModel || null,
-          designDocModel: edit.designDocModel || null,
-          designDocAssistantModel: edit.designDocAssistantModel || null,
-          designPrototypeModel: edit.designPrototypeModel || null,
-          testCaseModel: edit.testCaseModel || null,
-          designDocValidationModel: edit.designDocValidationModel || null,
-          prdValidationModel: edit.prdValidationModel || null,
-          developmentModel: edit.developmentModel || null,
-          defaultModel: edit.defaultModel || null,
-          prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
-          prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
-          designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
-          designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
-          designPrototypeBedrockTimeoutMs: edit.designPrototypeBedrockTimeoutMs || null,
-          designPrototypeRegenBedrockModelId: edit.designPrototypeRegenBedrockModelId || null,
-          designPrototypeRegenBedrockMaxTokens: edit.designPrototypeRegenBedrockMaxTokens || null,
-          designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
-          designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
-          prdValidationScoreThreshold: edit.prdValidationScoreThreshold !== 90 ? edit.prdValidationScoreThreshold : null,
-          quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
-          quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
-          approvalMode: edit.approvalMode,
-        },
+        body,
       });
 
-      // Save approvers if any were configured
+      const configId = savedConfig.id;
       const hasApprovers =
         designDocApproverIds.length > 0 ||
         prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
@@ -708,7 +728,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
         await setApprovers.mutateAsync({
-          project: edit.project.trim(),
+          settingsId: configId,
           designDocApprovers: designDocApproverIds,
           prdApprovers: prdApproverIds,
           designDocApproverGroups: designDocApproverGroupIds,
@@ -726,13 +746,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     }
   };
 
-  const handleDelete = async (project: string) => {
-    if (!window.confirm(`Delete skill config for "${project}"? This cannot be undone.`)) return;
-    setDeletingProject(project);
+  const handleDelete = async (config: ProjectSkillConfig) => {
+    if (!window.confirm(`Delete repo config "${config.friendlyName}" for "${config.project}"? This cannot be undone.`)) return;
+    setDeletingId(config.id);
     try {
-      await remove.mutateAsync(project);
+      await remove.mutateAsync(config.id);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to delete.');
     } finally {
-      setDeletingProject(null);
+      setDeletingId(null);
     }
   };
 
@@ -790,9 +812,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <h1 className={styles.pageTitle}>Project Skill Settings</h1>
             <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document reviewers for <strong>{selectedProject}</strong>.</p>
           </div>
-          {!edit && !currentConfig && (
+          {!edit && (
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
-              + Add Config
+              + Add Repo Config
             </button>
           )}
         </div>
@@ -800,7 +822,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (
           <div className={styles.formCard}>
-            <p className={styles.formTitle}>{edit.isNew ? 'Add Project Skill Config' : `Edit: ${edit.project}`}</p>
+            <p className={styles.formTitle}>{edit.isNew ? 'Add Repo Config' : `Edit: ${edit.friendlyName || edit.project}`}</p>
 
             {/* Section 1: Repository & Branch */}
             <AccordionSection
@@ -823,6 +845,35 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   />
                 </div>
 
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-friendlyName">Friendly Name</label>
+                  <input
+                    id="ps-friendlyName"
+                    className={styles.input}
+                    value={edit.friendlyName}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, friendlyName: e.target.value } : prev)}
+                    placeholder="e.g. Main Skills, Feature Branch"
+                    disabled={upsert.isPending}
+                  />
+                </div>
+
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-isDefault">
+                    <input
+                      id="ps-isDefault"
+                      type="checkbox"
+                      checked={edit.isDefault}
+                      onChange={(e) => setEdit((prev) => prev ? { ...prev, isDefault: e.target.checked } : prev)}
+                      disabled={upsert.isPending}
+                      style={{ marginRight: '6px' }}
+                    />
+                    Default config
+                  </label>
+                  <span className={styles.skillDescription}>Auto-selected when user picks this project</span>
+                </div>
+              </div>
+
+              <div className={styles.formGridThreeCol}>
                 <div className={styles.field}>
                   <label className={styles.label} htmlFor="ps-repo">Skill Repo</label>
                   <select
@@ -1551,7 +1602,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         {/* ── Project config list ─────────────────────────────────────── */}
         {projectConfigs.length === 0 && !edit ? (
           <div className={styles.empty}>
-            <p>No skill settings configured for <strong>{selectedProject}</strong>. Click <strong>+ Add Config</strong> to get started.</p>
+            <p>No skill settings configured for <strong>{selectedProject}</strong>. Click <strong>+ Add Repo Config</strong> to get started.</p>
           </div>
         ) : (
           !edit && (
@@ -1559,7 +1610,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th className={styles.th}>Project</th>
+                    <th className={styles.th}>Name</th>
                     <th className={styles.th}>Skill Repo / Branch</th>
                     <th className={styles.th}>Reviewers</th>
                     <th className={styles.th}>Last Updated</th>
@@ -1568,9 +1619,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </thead>
                 <tbody>
                   {projectConfigs.map((config) => (
-                    <tr key={config.project} className={styles.tr}>
+                    <tr key={config.id} className={styles.tr}>
                       <td className={styles.td}>
-                        <span className={styles.projectName}>{config.project}</span>
+                        <span className={styles.projectName}>{config.friendlyName}</span>
+                        {config.isDefault && (
+                          <span className={styles.approverBadge} style={{ marginLeft: '6px', fontSize: '0.7rem' }}>Default</span>
+                        )}
                       </td>
                       <td className={styles.td}>
                         <span className={styles.repoText}>{config.skillRepo}</span>
@@ -1600,11 +1654,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           </button>
                           <button
                             className={`${styles.btnAction} ${styles.btnActionDanger}`}
-                            onClick={() => void handleDelete(config.project)}
+                            onClick={() => void handleDelete(config)}
                             type="button"
-                            disabled={deletingProject === config.project || remove.isPending}
+                            disabled={deletingId === config.id || remove.isPending}
                           >
-                            {deletingProject === config.project ? 'Deleting…' : 'Delete'}
+                            {deletingId === config.id ? 'Deleting…' : 'Delete'}
                           </button>
                         </div>
                       </td>
@@ -1615,6 +1669,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             </div>
           )
         )}
+
+        {formError && !edit && <p className={styles.formError}>{formError}</p>}
       </div>
     </div>
   );

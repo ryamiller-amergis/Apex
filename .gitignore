@@ -14,7 +14,10 @@ infra/.terraform/
 infra/.terraform.lock.hcl
 infra/terraform.tfstate
 infra/terraform.tfstate.backup
+infra/terraform.tfstate.d/
 infra/terraform.tfvars
+infra/terraform.prd.tfvars
+infra/terraform.prd.tfstate
 infra/*.tfplan
 
 # Logs
@@ -47,5 +50,6 @@ temp/
 # Local AI Pilot runtime/scratch artifacts
 .ai-pilot/
 data/chat-threads/
+data/dev-workspaces/
 wiki-*.json
 wiki-page.json

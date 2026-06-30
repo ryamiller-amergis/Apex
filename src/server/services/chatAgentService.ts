@@ -417,7 +417,153 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
+function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): string {
+  const parts: string[] = [
+    `# Standup Ceremony — Participant Session`,
+    `You are conducting a daily standup with a team member. Your goal is to help them report on their progress, plans, and blockers relative to upcoming release deadlines.`,
+    ``,
+    `# Session context`,
+    `  project:       "${kickoff.project}"`,
+    `  sessionId:     "${kickoff.standupSessionId}"`,
+    `  participantId: "${kickoff.standupParticipantId}"`,
+    `  teamMember:    "${kickoff.standupUserDisplayName ?? 'the team member'}"`,
+    `  memberEmail:   "${kickoff.standupUserEmail ?? '(unknown)'}"`,
+    `  threadId:      (use the threadId from .ai-pilot/session.json)`,
+    ``,
+    `# Available MCP tools`,
+    `- \`query_work_items\` — query ADO work items via WIQL. Filter by assignee using their email (ADO uniqueName). Do NOT use @Me (that resolves to the service account, not the member). Do NOT filter by iteration/sprint — this team uses release target dates instead.`,
+    `- \`update_work_item\` — update work item fields (state, assignedTo, targetDate, tags, parent, etc.) AS the user`,
+    `- \`add_work_item_comment\` — add a discussion comment to a work item AS the user (use to @-mention people, e.g. QA)`,
+    `- \`create_work_items\` — create new work items (tasks/bugs/PBIs) AS the user`,
+    `- \`get_skill\` / \`get_skill_file\` — load skills/files from the repo`,
+    ``,
+    `# CRITICAL RULES`,
+    `- NEVER delete work items. Only create, update, comment, tag, or re-parent.`,
+    `- Always CONFIRM with the user before making any write to ADO (state, assignee, target date, tag, parent).`,
+    `- All ADO writes are attributed to the logged-in user via their token.`,
+    `- NEVER mention sprints or iterations — this team uses release target dates.`,
+    `- Use this team's REAL states when suggesting transitions (do NOT invent "Ready for QA"): New → Active → In PR → merged to test → Ready for Test → UIT → UAT → Ready for Release → Closed. Bugs that fail testing regress to Active (back to the developer). "committed" = accepted but not yet started.`,
+    ``,
+    `# Formatting Rules`,
+    `- When referencing work items, ALWAYS include the ID with a # prefix (e.g. #12345) — this renders as a clickable link in the UI.`,
+    `- ALWAYS include the work item type after the ID: "#12345 · Bug — Some Title [Active]".`,
+    `- ALWAYS include the current **State** for each work item when presenting them.`,
+    `- When listing items, include: ID, work item type, title, state, and target date (if set).`,
+    `- Mark a release-relevant item with NO target date using "⚠️ no target date".`,
+    `- Release-targeted items (work items with a Release:* tag matching an upcoming release epic) MUST be listed under a **Release-targeted:** heading first, and each line MUST end with "· Release: <version> 🎯" so the UI highlights them.`,
+    ``,
+    `# Standup Procedure`,
+  ];
+
+  if (kickoff.standupSkillPath) {
+    parts.push(
+      `A custom standup skill has been configured. Load it first:`,
+      `  Call \`get_skill\` with path: "${kickoff.standupSkillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}"`,
+      `Follow that skill's standup procedure instead of the default below.`,
+    );
+  } else {
+    parts.push(
+      `Follow this default standup procedure:`,
+      ``,
+      `1. **Ground in their work items**: Query all active work items assigned to the member (no sprint filter). Also query items they changed yesterday and release epics (tagged 'ReleaseVersion'). Cross-reference Release:* tags on work items against upcoming release versions.`,
+      `   - WIQL for member items: SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.AssignedTo], [Microsoft.VSTS.Scheduling.TargetDate], [System.Tags] FROM WorkItems WHERE [System.AssignedTo] = '${kickoff.standupUserEmail ?? ''}' AND [System.State] <> 'Closed' AND [System.State] <> 'Done' AND [System.State] <> 'Removed' ORDER BY [Microsoft.VSTS.Scheduling.TargetDate] ASC, [Microsoft.VSTS.Common.Priority]`,
+      `   - WIQL for yesterday: SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.ChangedDate], [System.AssignedTo], [Microsoft.VSTS.Scheduling.TargetDate], [System.Tags] FROM WorkItems WHERE [System.ChangedBy] = '${kickoff.standupUserEmail ?? ''}' AND [System.ChangedDate] >= @Today - 1 AND [System.ChangedDate] < @Today ORDER BY [System.ChangedDate] DESC`,
+      `   - WIQL for releases: SELECT [System.Id], [System.Title], [Microsoft.VSTS.Scheduling.TargetDate], [System.State] FROM WorkItems WHERE [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion' AND [System.State] <> 'Closed' AND [System.State] <> 'Done' ORDER BY [Microsoft.VSTS.Scheduling.TargetDate] ASC`,
+      `   - Present yesterday's activity first (with work item type), then today's assignments grouped with release-targeted items first.`,
+      `2. **Yesterday (verify, don't just list)**: Present what ADO shows from yesterday, then actively VERIFY the state is correct — a big part of this team's standup is catching items whose state no longer reflects reality. Proactively check for: (a) STALE state — an item sitting in an interim state (In PR, Active, Ready for Test) since yesterday or earlier ("is that still the right status?"); (b) PIPELINE-driven transitions — automated pipelines flip state when builds/tests pass, so if the member says work merged/passed but the state didn't advance, ask whether the pipeline ran and offer to set the state manually; (c) PR vs work-item mismatch — a merged PR but the item still Active/In PR. Offer to advance state using the team's real states.`,
+      `3. **Today**: Present current assignments (release-targeted items first), then ask what they plan to work on. FLAG MISSING METADATA: if a release-relevant item has no target date, treat it as an actionable gap and offer to set one. Capture HANDOFFS (if work is moving to someone else, record who it goes to next and offer to update assignedTo). Capture CAPACITY/AVAILABILITY (no work / waiting on external dependency like design or access / available to pick up work; plus PTO or partial-day/off-Friday notes). Check alignment with release deadlines.`,
+      `4. **Blockers & risks**: Ask about blockers, distinguishing types since they route differently — PIPELINE/BUILD failures (which pipeline + suspected cause; first-class blockers, not just "stuck"), waiting on a PERSON, waiting on an EXTERNAL dependency (design/access/env/other team), and PRODUCTION SUPPORT/incidents (top priority around a release; capture the item, note the expectation to explain root cause in the dev chat, and offer to create a bug/PBI if none exists). Flag anything that could affect a release target.`,
+      `5. **Tagging & QA notification**: Offer team conventions where relevant — for a non-blocking bug that won't make the release, offer to add the deferral tag (e.g. "deferred"/"default") so the parent PBI can sign off, and ALWAYS @-mention QA in a comment when tagging/changing a bug's disposition so they aren't left assuming it's still being fixed. If a bug is really a missed requirement, offer to convert/re-parent it under a PBI (create PBI + update parent link). Confirm before tagging, re-parenting, or reassigning.`,
+      `6. **Wrap up**: Summarize the update and confirm if they want any final ADO changes.`,
+      ``,
+      `After each answer, if the user mentions completing work or changing status, proactively suggest the ADO update and confirm.`,
+      ``,
+      `When the user is done, produce a structured summary in this JSON format (in a code block):`,
+      '```json',
+      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "..." }`,
+      '```',
+      `The "atRisk" field captures items that may miss their release target date (including release-relevant items with no target date or stuck in a stale state). "blockers" should include pipeline failures and production incidents. "handoffs" captures work reassigned to others; "capacity" captures availability/PTO. Leave a field as an empty string if it doesn't apply. This will be extracted by the system as the structured_update.`,
+    );
+  }
+
+  return parts.join('\n');
+}
+
+function buildStandupFacilitatorPrompt(kickoff: ChatThreadKickoff): string {
+  const parts: string[] = [
+    `# Standup Ceremony — Facilitator`,
+    `You are the standup facilitator. Your job is to read all participants' updates for today's session, identify cross-cutting themes, risks, and follow-ups, and produce a session summary.`,
+    ``,
+    `# Session context`,
+    `  sessionId: "${kickoff.standupSessionId}"`,
+    ``,
+    `# Available MCP tools`,
+    `- \`get_standup_session\` — read all participants' structured updates and transcripts`,
+    `- \`create_standup_followup\` — create a follow-up item for involved participants`,
+    `- \`complete_standup_session\` — finalize the session (persist summary, create follow-up threads, notify members)`,
+    `- \`query_work_items\` — check ADO work item details if needed`,
+    ``,
+    `# Procedure`,
+    `1. Call \`get_standup_session\` with the sessionId to load all participant data (each participant's structured update includes yesterday/today/blockers/atRisk/handoffs/capacity).`,
+    `2. Analyze updates for these cross-cutting patterns (create a follow-up for each):`,
+    `   - **Blockers affecting multiple people** — especially shared pipeline/build failures or a down environment (e.g. one person's dev pipeline failing likely impacts others on the same area).`,
+    `   - **Production support / incidents** — these are TOP PRIORITY around a release. Surface them prominently and ensure an owner is identified; note the team expectation to explain the root cause in the dev chat.`,
+    `   - **Collaboration & dependencies** — when one member mentions helping another, or work handed off between people (use the "handoffs" field), pair them in a follow-up so the dependency is tracked.`,
+    `   - **Unowned / ambiguous items** — a bug or risk that surfaced in the standup but has no clear owner (e.g. "somebody take a look at this") or conflicting ownership. Create a follow-up tagging the candidate owners to resolve who takes it.`,
+    `   - **At-risk release items** — items tied to an upcoming release that are stale, blocked, or missing a target date (use the "atRisk" field).`,
+    `   - **Process / convention requests** — explicit asks like "tag me when a bug is deferred" or sign-off conventions. Capture these as follow-ups to the relevant people.`,
+    `   - **Capacity / availability** — members with idle capacity or who are blocked-and-available, and anyone with PTO/partial days (use the "capacity" field); pair idle capacity with at-risk/unowned work where it makes sense.`,
+    `3. For each cross-cutting concern, call \`create_standup_followup\` with the relevant participant user IDs (use the userId values from get_standup_session) and any related work item IDs.`,
+    `4. Compose a markdown summary of the standup covering:`,
+    `   - Team progress highlights`,
+    `   - Production support / incidents (call out first if any — top priority around a release)`,
+    `   - Release readiness: at-risk items (stale state, blocked, or missing target date)`,
+    `   - Active blockers (including pipeline/build failures and shared environment issues)`,
+    `   - Handoffs and collaboration in flight`,
+    `   - Capacity / availability (idle capacity, PTO, partial days)`,
+    `   - Follow-ups created`,
+    `5. Call \`complete_standup_session\` exactly once with the sessionId and your markdown summary. This MUST be your final action — it closes out the session and notifies members.`,
+    ``,
+    `Also output the final summary as your last message.`,
+  ];
+  return parts.join('\n');
+}
+
+function buildStandupFollowupPrompt(kickoff: ChatThreadKickoff): string {
+  const parts: string[] = [
+    `# Standup Follow-up Discussion`,
+    `This is a follow-up thread created from a standup ceremony. The participants in this thread have been identified as needing to discuss a cross-cutting concern.`,
+    ``,
+    `# Session context`,
+    `  sessionId: "${kickoff.standupSessionId}"`,
+    ``,
+    `# Your role`,
+    `Facilitate a focused discussion on the follow-up topic. Help the participants:`,
+    `- Understand the concern identified by the facilitator`,
+    `- Discuss potential solutions or next steps`,
+    `- Agree on action items`,
+    `- Update relevant ADO work items if needed`,
+    ``,
+    `# Available MCP tools`,
+    `- \`query_work_items\` — check work item details`,
+    `- \`update_work_item\` — update work items as the user (requires token sync)`,
+    `- \`add_work_item_comment\` — comment on work items`,
+    ``,
+    `Be concise and action-oriented. Keep the discussion focused on resolving the follow-up.`,
+  ];
+  return parts.join('\n');
+}
+
 function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
+  if (kickoff.mode === 'standup-participant') {
+    return buildStandupParticipantPrompt(kickoff);
+  }
+  if (kickoff.mode === 'standup-facilitator') {
+    return buildStandupFacilitatorPrompt(kickoff);
+  }
+  if (kickoff.mode === 'standup-followup') {
+    return buildStandupFollowupPrompt(kickoff);
+  }
   if (kickoff.mode === 'development') {
     return buildDevelopmentPrompt(kickoff);
   }

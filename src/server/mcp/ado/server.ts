@@ -579,6 +579,180 @@ export function createAdoMcpServer(): McpServer {
     },
   );
 
+  // ── Standup ceremony tools ───────────────────────────────────────────────────
+
+  server.tool(
+    'update_work_item',
+    'Update one or more fields on an Azure DevOps work item as the logged-in user. ' +
+    'Resolves the per-user token from the standup participant thread. Never deletes items.',
+    {
+      threadId: z.string().describe('The current chat thread ID'),
+      project: z.string().describe('ADO project name'),
+      areaPath: z.string().optional().describe('Optional area path override'),
+      workItemId: z.number().int().describe('Work item ID to update'),
+      fields: z.record(z.string(), z.any()).describe('Map of field names to new values (e.g. { "state": "Active", "assignedTo": "user@example.com" })'),
+    },
+    async ({ threadId, project, areaPath, workItemId, fields }) => {
+      try {
+        const { adoServiceForStandupThread } = await import('../../services/standupTokenResolver');
+        const adoService = await adoServiceForStandupThread(threadId, project, areaPath);
+        for (const [field, value] of Object.entries(fields)) {
+          await adoService.updateWorkItemField(workItemId, field, value);
+        }
+        console.log(`[MCP] update_work_item: updated ${Object.keys(fields).length} fields on #${workItemId}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, workItemId, updatedFields: Object.keys(fields) }) }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] update_work_item: FAILED #${workItemId} — ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
+    },
+  );
+
+  server.tool(
+    'add_work_item_comment',
+    'Add a discussion comment to an Azure DevOps work item as the logged-in user.',
+    {
+      threadId: z.string().describe('The current chat thread ID'),
+      project: z.string().describe('ADO project name'),
+      workItemId: z.number().int().describe('Work item ID'),
+      comment: z.string().describe('Comment text (HTML or plain text)'),
+    },
+    async ({ threadId, project, workItemId, comment }) => {
+      try {
+        const { adoServiceForStandupThread } = await import('../../services/standupTokenResolver');
+        const adoService = await adoServiceForStandupThread(threadId, project);
+        const result = await adoService.addWorkItemComment(workItemId, comment);
+        console.log(`[MCP] add_work_item_comment: added comment ${result.id} to #${workItemId}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, workItemId, commentId: result.id }) }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] add_work_item_comment: FAILED #${workItemId} — ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
+    },
+  );
+
+  server.tool(
+    'get_standup_session',
+    'Get the full standup session data including all participants\' structured updates and transcripts. Used by the facilitator agent.',
+    {
+      sessionId: z.string().describe('Standup session ID'),
+    },
+    async ({ sessionId }) => {
+      try {
+        const { eq } = await import('drizzle-orm');
+        const { standupSessions, standupParticipants, appUsers, chatMessages } = await import('../../db/schema');
+        const session = await db.query.standupSessions.findFirst({
+          where: eq(standupSessions.id, sessionId),
+          with: {
+            participants: true,
+            config: true,
+          },
+        });
+        if (!session) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'Session not found' }) }] };
+        }
+
+        const participantData = await Promise.all(
+          session.participants.map(async (p: any) => {
+            const user = await db.query.appUsers.findFirst({
+              where: eq(appUsers.oid, p.userId),
+              columns: { displayName: true, email: true },
+            });
+            let transcript: string[] = [];
+            if (p.threadId) {
+              const messages = await db
+                .select({ role: chatMessages.role, text: chatMessages.text })
+                .from(chatMessages)
+                .where(eq(chatMessages.threadId, p.threadId));
+              transcript = messages.map((m: any) => `[${m.role}] ${m.text}`);
+            }
+            return {
+              userId: p.userId,
+              displayName: user?.displayName ?? p.userId,
+              email: user?.email,
+              status: p.status,
+              structuredUpdate: p.structuredUpdate,
+              transcript,
+            };
+          }),
+        );
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              sessionId: session.id,
+              sessionDate: session.sessionDate,
+              status: session.status,
+              project: session.config.project,
+              areaPath: session.config.areaPath,
+              participants: participantData,
+            }, null, 2),
+          }],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] get_standup_session: FAILED ${sessionId} — ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
+    },
+  );
+
+  server.tool(
+    'create_standup_followup',
+    'Create a follow-up item from a standup session. Used by the facilitator to record cross-cutting concerns.',
+    {
+      sessionId: z.string().describe('Standup session ID'),
+      title: z.string().describe('Follow-up title'),
+      description: z.string().optional().describe('Follow-up description'),
+      participantUserIds: z.array(z.string()).describe('User IDs involved in this follow-up'),
+      relatedWorkItemIds: z.array(z.number().int()).optional().describe('Related ADO work item IDs'),
+    },
+    async ({ sessionId, title, description, participantUserIds, relatedWorkItemIds }) => {
+      try {
+        const { standupFollowups } = await import('../../db/schema');
+        const [row] = await db.insert(standupFollowups).values({
+          sessionId,
+          title,
+          description: description ?? null,
+          participantUserIds,
+          relatedWorkItemIds: relatedWorkItemIds ?? [],
+        }).returning();
+        console.log(`[MCP] create_standup_followup: created ${row.id} for session ${sessionId}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, followupId: row.id, title }) }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] create_standup_followup: FAILED session ${sessionId} — ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
+    },
+  );
+
+  server.tool(
+    'complete_standup_session',
+    'Finalize a standup session. Persists the facilitator\'s markdown summary, transitions the session to completed, ' +
+    'spins up joint follow-up discussion threads, and notifies the involved members. ' +
+    'The facilitator MUST call this exactly once as the final step, after recording any follow-ups.',
+    {
+      sessionId: z.string().describe('Standup session ID'),
+      summaryMarkdown: z.string().describe('The final markdown summary of the standup'),
+    },
+    async ({ sessionId, summaryMarkdown }) => {
+      try {
+        const { completeSession } = await import('../../services/standupService');
+        await completeSession(sessionId, summaryMarkdown);
+        console.log(`[MCP] complete_standup_session: completed ${sessionId}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, sessionId }) }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MCP] complete_standup_session: FAILED ${sessionId} — ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+      }
+    },
+  );
+
   // ── Prompts ──────────────────────────────────────────────────────────────────
 
   server.prompt(
