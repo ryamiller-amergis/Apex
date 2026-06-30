@@ -2,8 +2,10 @@ import './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
+import createFileStore from 'session-file-store';
 import passport from 'passport';
 
 // Load environment variables BEFORE importing routes
@@ -41,6 +43,9 @@ import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
 import { standupScheduler } from './services/standupScheduler';
+import { resolveDataRoot } from './utils/dataDir';
+
+const FileStore = createFileStore(session);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,27 +57,47 @@ if (process.env.NODE_ENV === 'production') {
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://app-scrum-dev.azurewebsites.net']
+  origin: process.env.NODE_ENV === 'production'
+    ? [
+        'https://app-scrum-dev.azurewebsites.net',
+        'https://app-apex-prd.azurewebsites.net',
+        'https://apex.amergis.com',
+      ]
     : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Session configuration
+// Session configuration — in production use a file store on /home/data so OAuth
+// state and login sessions survive load balancing across App Service instances.
+const sessionCookie = {
+  secure: process.env.NODE_ENV === 'production',
+  httpOnly: true,
+  maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  sameSite: 'lax' as const,
+  path: '/',
+};
+
+let sessionStore: session.Store | undefined;
+if (process.env.NODE_ENV === 'production') {
+  const sessionsDir = path.join(resolveDataRoot(), 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  sessionStore = new FileStore({
+    path: sessionsDir,
+    ttl: 86400,
+    retries: 0,
+  });
+  console.log(`[session] Using file store at ${sessionsDir}`);
+}
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
-  resave: true, // Changed to true for file store
-  saveUninitialized: true, // Changed to true to save the session before OAuth flow
+  store: sessionStore,
+  resave: false,
+  saveUninitialized: true, // required so OAuth state is persisted before the Azure AD redirect
   name: 'connect.sid',
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'lax',
-    path: '/'
-  }
+  cookie: sessionCookie,
 }));
 
 // Initialize Passport
