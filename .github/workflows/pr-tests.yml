@@ -87,7 +87,8 @@ jobs:
         run: node scripts/ci/validate-migrations.mjs
 
   deploy-dev:
-    needs: [test]
+    needs: [test, detect-changes, migrate-check]
+    if: ${{ needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
@@ -117,8 +118,7 @@ jobs:
       - name: Detect migration changes
         id: migration_changes
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_SHA: ${{ github.sha }}
+          MIGRATION_DETECT_STRATEGY: db
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node scripts/ci/has-migration-changes.mjs
 
