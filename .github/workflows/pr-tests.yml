@@ -88,7 +88,10 @@ jobs:
 
   deploy-dev:
     needs: [test, detect-changes, migrate-check]
-    if: ${{ needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
+    # always() is required: when the PR has no migration file changes, migrate-check
+    # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
+    # PRs should still deploy to dev.
+    if: ${{ always() && !cancelled() && needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
