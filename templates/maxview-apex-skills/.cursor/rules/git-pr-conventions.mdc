@@ -1,74 +1,27 @@
----
-description: Git branch naming, commit message, and PR conventions for MaxView. Apply whenever creating branches, commits, or pull requests.
-alwaysApply: true
----
+# Commit Message Conventions
 
-# Git and PR Conventions
+APEX manages branch creation, commit, push, and pull request opening automatically.
+The implementation skill must NOT run `git push`, `git commit`, `git checkout -b`, or create PRs.
 
-## Branch naming
+## Commit message style (informational — APEX commits on your behalf)
 
-All APEX-driven feature branches use:
+When APEX commits the agent's work it uses the conventional commits format:
 
 ```
-feat/apex-<featureAdoId>-<slug>
-```
+feat(<scope>): <short summary — imperative mood, no period>
 
-- `<featureAdoId>` — the ADO Feature work item id (e.g. `42`)
-- `<slug>` — short kebab-case title derived from the Feature title (max 40 chars, lowercase, alphanumeric + hyphens, no special characters)
-
-Example: `feat/apex-42-shift-scheduler-widget`
-
-Never commit directly to `main`.
-
-## Commit messages
-
-Use the [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-```
-<type>(<scope>): <short summary — imperative mood, no period>
-
-<optional body: why, not what>
+Implements APEX-approved design doc for ADO work item #<workItemId>.
+- <bullet: what changed>
+- <bullet: what changed>
 ```
 
 Types: `feat`, `fix`, `refactor`, `test`, `chore`, `docs`, `style`, `perf`
 
-For APEX-driven features always include the ADO reference in the body:
+## Branch naming (informational — APEX creates the branch)
 
-```
-feat(shift-scheduler): add ShiftSchedulerWidget component
+APEX creates branches as: `feature/apex-<workItemId>-<slug>`
 
-Implements APEX-approved design doc for ADO Feature #42.
-- Add ShiftSchedulerWidget with availability grid
-- Add useShiftScheduler hook with TanStack Query
-- Add unit tests for component and hook
-```
+- `<workItemId>` — the assigned ADO work item id
+- `<slug>` — kebab-case title derived from the work item title (max ~40 chars)
 
-## Commit hygiene
-
-- Run `git add -A` then inspect `git status` before committing — confirm only intended files are staged
-- Never stage `.env`, `.env.local`, or any file containing secrets or API keys
-- Never stage generated artefacts (build output, `dist/`, `node_modules/`)
-- Never use `--no-verify` to skip hooks
-
-## Pushing
-
-```bash
-git push -u origin HEAD
-```
-
-Use `-u` on the first push for a new branch to set the upstream. If the push is rejected (non-fast-forward), run `git pull --rebase` then push again. Never force-push (`--force`).
-
-## Pull request
-
-- Title: matches the commit summary line
-- Body: reference the ADO Feature with `AB#<featureAdoId>` so Azure Boards auto-links the PR
-- Base branch: `main`
-- Include a brief test plan section listing which tests were added or modified
-
-After creating the PR, update the ADO Feature state to "In Pull Request" and attach the PR URL as a hyperlink on the work item.
-
-## Guardrails
-
-- Never open a PR from `main` into `main`
-- Never force-push to any branch
-- Never merge without a PR (direct pushes to `main` are blocked)
+Example: `feature/apex-42-shift-scheduler-widget`

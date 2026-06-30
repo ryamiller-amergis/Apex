@@ -186,19 +186,28 @@ export async function listApprovers(project: string): Promise<ProjectApprover[]>
 }
 
 export async function listApproversForAllProjects(): Promise<Record<string, ProjectApprover[]>> {
-  const rows = await db
-    .select({
-      id: projectApprovers.id,
-      project: projectApprovers.project,
-      userId: projectApprovers.userId,
-      displayName: appUsers.displayName,
-      email: appUsers.email,
-      documentType: projectApprovers.documentType,
-      assignedBy: projectApprovers.assignedBy,
-      assignedAt: projectApprovers.assignedAt,
-    })
-    .from(projectApprovers)
-    .innerJoin(appUsers, eq(projectApprovers.userId, appUsers.oid));
+  let rows: Array<{
+    id: string; project: string; userId: string; displayName: string | null;
+    email: string | null; documentType: string; assignedBy: string | null; assignedAt: string;
+  }>;
+  try {
+    rows = await db
+      .select({
+        id: projectApprovers.id,
+        project: projectApprovers.project,
+        userId: projectApprovers.userId,
+        displayName: appUsers.displayName,
+        email: appUsers.email,
+        documentType: projectApprovers.documentType,
+        assignedBy: projectApprovers.assignedBy,
+        assignedAt: projectApprovers.assignedAt,
+      })
+      .from(projectApprovers)
+      .innerJoin(appUsers, eq(projectApprovers.userId, appUsers.oid));
+  } catch {
+    // Table may not exist on fresh local environments; return empty gracefully.
+    return {};
+  }
 
   const grouped: Record<string, ProjectApprover[]> = {};
   for (const r of rows) {
@@ -378,15 +387,21 @@ export async function listApproverGroupsForProject(
 export async function listApproverGroupsForAllProjects(): Promise<
   Record<string, Array<{ groupId: string; groupName: string; documentType: string }>>
 > {
-  const rows = await db
-    .select({
-      project: projectApproverGroups.project,
-      groupId: projectApproverGroups.groupId,
-      groupName: appGroups.name,
-      documentType: projectApproverGroups.documentType,
-    })
-    .from(projectApproverGroups)
-    .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id));
+  let rows: Array<{ project: string; groupId: string; groupName: string; documentType: string }>;
+  try {
+    rows = await db
+      .select({
+        project: projectApproverGroups.project,
+        groupId: projectApproverGroups.groupId,
+        groupName: appGroups.name,
+        documentType: projectApproverGroups.documentType,
+      })
+      .from(projectApproverGroups)
+      .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id));
+  } catch {
+    // Table may not exist on fresh local environments; return empty gracefully.
+    return {};
+  }
 
   const grouped: Record<string, Array<{ groupId: string; groupName: string; documentType: string }>> = {};
   for (const r of rows) {

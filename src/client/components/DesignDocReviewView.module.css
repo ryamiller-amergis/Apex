@@ -525,35 +525,6 @@
   flex-shrink: 0;
 }
 
-/* "Start Implementation" — accent-filled button to distinguish from secondary actions */
-.actionBtnImplement {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 5px;
-  border: 1px solid var(--accent-color);
-  background: var(--accent-color);
-  color: #fff;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-
-.actionBtnImplement svg {
-  width: 13px;
-  height: 13px;
-  flex-shrink: 0;
-}
-
-.actionBtnImplement:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
 
 /* Filled primary variant — "Submit for Review" */
 .actionBtnPrimary {

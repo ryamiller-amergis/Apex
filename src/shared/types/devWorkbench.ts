@@ -16,7 +16,7 @@ export interface StartDevSessionRequest {
   model?: string;
 }
 
-export type DevSessionStatus = 'setting_up' | 'in_progress' | 'failed' | 'closed';
+export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed';
 
 export interface StartDevSessionResponse {
   sessionId: string;
@@ -29,7 +29,22 @@ export interface DevSessionDetail {
   branchName: string | null;
   status: DevSessionStatus;
   setupError: string | null;
+  prUrl: string | null;
   createdAt: string;
+}
+
+export interface ConflictedFile {
+  path: string;
+  content: string;
+}
+
+export interface PushSessionResponse {
+  ok: boolean;
+  /** Set when the merge produced conflicts — push and PR are blocked until resolved. */
+  status: 'clean' | 'conflict';
+  branch?: string;
+  prUrl?: string;
+  conflictedFiles?: ConflictedFile[];
 }
 
 export interface DevDiff {
@@ -44,5 +59,6 @@ export interface ActiveDevSession {
   chatThreadId: string | null;
   branchName: string | null;
   status: DevSessionStatus;
+  prUrl: string | null;
   createdAt: string;
 }

@@ -80,8 +80,10 @@ export const devSessions = pgTable('dev_sessions', {
   chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'cascade' }),
   authorId: text('author_id').notNull(),
   branchName: text('branch_name'),
+  // status values: setting_up | in_progress | conflict | closed | failed
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
+  prUrl: text('pr_url'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });

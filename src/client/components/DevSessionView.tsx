@@ -4,8 +4,18 @@ import remarkGfm from 'remark-gfm';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useChatThread, useSendMessage, useCancelRun } from '../hooks/useChatThreads';
 import { useChatStream } from '../hooks/useChatStream';
-import { useDevSession, useDevDiff, usePushBranch } from '../hooks/useDevWorkbench';
+import {
+  useDevSession,
+  useDevDiff,
+  usePushBranch,
+  useSessionConflicts,
+  useResolveConflict,
+  useCompleteMerge,
+  useAbortMerge,
+} from '../hooks/useDevWorkbench';
 import type { ChatMessage } from '../../shared/types/chat';
+import type { ConflictedFile } from '../../shared/types/devWorkbench';
+import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import styles from './DevSessionView.module.css';
 
 /** An "agent turn" groups all activity between a user message and the final agent response */
@@ -214,7 +224,10 @@ const AgentTurnBlock: React.FC<{
   turn: AgentTurn;
   isLive?: boolean;
   streamingText?: string;
-}> = ({ turn, isLive, streamingText }) => {
+  onSend?: (text: string) => void;
+  isRunning?: boolean;
+  interactive?: boolean;
+}> = ({ turn, isLive, streamingText, onSend, isRunning, interactive }) => {
   const [expanded, setExpanded] = useState(isLive ? true : false);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -287,7 +300,12 @@ const AgentTurnBlock: React.FC<{
       )}
 
       {turn.finalOutput && (
-        <AgentBubble msg={turn.finalOutput} />
+        <AgentBubble
+          msg={turn.finalOutput}
+          onSend={onSend}
+          isRunning={isRunning}
+          interactive={interactive}
+        />
       )}
     </div>
   );
@@ -300,18 +318,177 @@ const UserBubble: React.FC<{ msg: ChatMessage }> = ({ msg }) => (
   </div>
 );
 
-const AgentBubble: React.FC<{ msg: ChatMessage }> = ({ msg }) => (
-  <div className={`${styles.message} ${styles['role-agent']}`}>
-    <div className={styles['agent-header']}>
-      <span className={styles['agent-avatar']}>AI</span>
-      <span>Agent</span>
-      <span className={styles.meta}>{new Date(msg.ts).toLocaleTimeString()}</span>
+const ChoiceBlockUI: React.FC<{
+  block: ChoiceBlock;
+  questionNumber: number;
+  selection: string | null;
+  freeform: string;
+  locked: boolean;
+  onSelect: (letter: string) => void;
+  onFreeform: (text: string) => void;
+}> = ({ block, questionNumber, selection, freeform, locked, onSelect, onFreeform }) => {
+  const showFreeform = selection === 'other';
+
+  return (
+    <div className={`${styles['choice-block']} ${locked ? styles['choice-block-locked'] : ''}`}>
+      {block.question && (
+        <div className={styles['choice-question']}>
+          <span className={styles['choice-qnum']}>Q{questionNumber}</span>
+          <div className={styles['choice-question-text']}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+      <div className={styles['choice-options']}>
+        {block.options.map((opt) => {
+          const isSelected = selection === opt.letter;
+          return (
+            <button
+              key={opt.letter}
+              className={`${styles['choice-option']} ${isSelected ? styles['choice-option-selected'] : ''}`}
+              onClick={() => !locked && onSelect(opt.letter)}
+              disabled={locked}
+              type="button"
+            >
+              <span className={styles['choice-option-letter']}>{opt.letter.toUpperCase()}</span>
+              <span className={styles['choice-option-text']}>{opt.text}</span>
+            </button>
+          );
+        })}
+        <button
+          className={`${styles['choice-option']} ${selection === 'other' ? styles['choice-option-selected'] : ''}`}
+          onClick={() => !locked && onSelect('other')}
+          disabled={locked}
+          type="button"
+        >
+          <span className={styles['choice-option-letter']}>✎</span>
+          <span className={styles['choice-option-text']}>Other / free-form</span>
+        </button>
+      </div>
+      {showFreeform && !locked && (
+        <textarea
+          className={styles['choice-freeform']}
+          placeholder="Type your answer here…"
+          value={freeform}
+          onChange={(e) => onFreeform(e.target.value)}
+          rows={2}
+        />
+      )}
+      {locked && freeform && (
+        <div className={styles['choice-freeform-locked']}>{freeform}</div>
+      )}
     </div>
-    <div className={styles['agent-bubble']}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+  );
+};
+
+interface QuestionState {
+  selected: string | null;
+  freeform: string;
+}
+
+const AgentBubble: React.FC<{
+  msg: ChatMessage;
+  onSend?: (text: string) => void;
+  isRunning?: boolean;
+  interactive?: boolean;
+}> = ({ msg, onSend, isRunning = false, interactive = false }) => {
+  const parts = parseAgentMessage(msg.text);
+  const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
+
+  const [selections, setSelections] = useState<Record<string, QuestionState>>(() => {
+    const init: Record<string, QuestionState> = {};
+    for (const b of choiceBlocks) init[b.id] = { selected: null, freeform: '' };
+    return init;
+  });
+  const [sent, setSent] = useState(false);
+
+  const allAnswered = choiceBlocks.every((b) => {
+    const s = selections[b.id];
+    if (!s) return false;
+    if (s.selected === 'other') return s.freeform.trim().length > 0;
+    return s.selected !== null;
+  });
+
+  const handleSelect = useCallback((blockId: string, letter: string) => {
+    setSelections((prev) => ({ ...prev, [blockId]: { ...prev[blockId], selected: letter } }));
+  }, []);
+
+  const handleFreeform = useCallback((blockId: string, text: string) => {
+    setSelections((prev) => ({ ...prev, [blockId]: { ...prev[blockId], freeform: text } }));
+  }, []);
+
+  const handleSubmit = () => {
+    if (!allAnswered || sent || !onSend) return;
+    const lines: string[] = [];
+    let qNum = 1;
+    for (const block of choiceBlocks) {
+      const s = selections[block.id];
+      if (!s) continue;
+      if (s.selected === 'other') {
+        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
+      } else if (s.selected) {
+        const opt = block.options.find((o) => o.letter === s.selected);
+        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
+        if (s.freeform.trim()) lines.push(`  Additional notes: ${s.freeform.trim()}`);
+      }
+      qNum++;
+    }
+    onSend(lines.join('\n'));
+    setSent(true);
+  };
+
+  const locked = sent || !interactive;
+  let questionCounter = 0;
+
+  return (
+    <div className={`${styles.message} ${styles['role-agent']}`}>
+      <div className={styles['agent-header']}>
+        <span className={styles['agent-avatar']}>AI</span>
+        <span>Agent</span>
+        <span className={styles.meta}>{new Date(msg.ts).toLocaleTimeString()}</span>
+      </div>
+      <div className={styles['agent-bubble']}>
+        {parts.map((part) => {
+          if (part.type === 'markdown') {
+            return (
+              <div key={part.id}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.content}</ReactMarkdown>
+              </div>
+            );
+          }
+          questionCounter++;
+          const s = selections[part.id] ?? { selected: null, freeform: '' };
+          return (
+            <ChoiceBlockUI
+              key={part.id}
+              block={part}
+              questionNumber={questionCounter}
+              selection={s.selected}
+              freeform={s.freeform}
+              locked={locked}
+              onSelect={(letter) => handleSelect(part.id, letter)}
+              onFreeform={(text) => handleFreeform(part.id, text)}
+            />
+          );
+        })}
+
+        {choiceBlocks.length > 0 && interactive && !sent && (
+          <button
+            className={styles['choice-send-btn']}
+            onClick={handleSubmit}
+            disabled={!allAnswered || isRunning}
+            type="button"
+          >
+            {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
+          </button>
+        )}
+        {sent && choiceBlocks.length > 0 && (
+          <div className={styles['choice-sent-label']}>✓ Answers sent</div>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const SetupProgress: React.FC<{ status: string; error: string | null }> = ({ status, error }) => (
   <div className={styles['setup-overlay']}>
@@ -336,10 +513,11 @@ const SetupProgress: React.FC<{ status: string; error: string | null }> = ({ sta
 const ReadyToTest: React.FC<{
   branchName: string;
   sessionId: string;
-}> = ({ branchName, sessionId }) => {
+  existingPrUrl?: string | null;
+}> = ({ branchName, sessionId, existingPrUrl }) => {
   const pushBranch = usePushBranch();
   const [copied, setCopied] = useState(false);
-  const [pushed, setPushed] = useState(false);
+  const [prUrl, setPrUrl] = useState<string | null>(existingPrUrl ?? null);
 
   const copyBranch = useCallback(() => {
     navigator.clipboard.writeText(branchName);
@@ -349,75 +527,215 @@ const ReadyToTest: React.FC<{
 
   const handlePush = useCallback(async () => {
     try {
-      await pushBranch.mutateAsync(sessionId);
-      setPushed(true);
+      const result = await pushBranch.mutateAsync(sessionId);
+      if (result.prUrl) setPrUrl(result.prUrl);
     } catch {
-      // error is available via pushBranch.error
+      // error surfaced via pushBranch.error
     }
   }, [pushBranch, sessionId]);
 
-  const checkoutCmd = `git fetch origin && git checkout ${branchName}`;
-
-  const copyCommand = useCallback(() => {
-    navigator.clipboard.writeText(checkoutCmd);
-  }, [checkoutCmd]);
+  if (prUrl) {
+    return (
+      <div className={styles['ready-to-test']}>
+        <div className={styles['ready-to-test-header']}>
+          <span className={styles['ready-to-test-icon']}>&#10003;</span>
+          <span className={styles['ready-to-test-title']}>Pull Request Opened</span>
+        </div>
+        <div className={styles['ready-to-test-body']}>
+          <a
+            href={prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles['pr-link']}
+          >
+            View Pull Request →
+          </a>
+          <div className={styles['branch-copy-row']}>
+            <span className={styles['branch-label']}>Branch:</span>
+            <code className={styles['branch-name-code']}>{branchName}</code>
+            <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles['ready-to-test']}>
       <div className={styles['ready-to-test-header']}>
         <span className={styles['ready-to-test-icon']}>&#10003;</span>
-        <span className={styles['ready-to-test-title']}>
-          {pushed ? 'Branch Pushed' : 'Ready to Test Locally'}
-        </span>
+        <span className={styles['ready-to-test-title']}>Ready to Push</span>
       </div>
-
-      {!pushed ? (
-        <div className={styles['ready-to-test-body']}>
-          <p className={styles['ready-to-test-desc']}>
-            Push the branch to the remote so you can pull it down and test locally.
-          </p>
-          <button
-            type="button"
-            className={styles['push-btn']}
-            onClick={handlePush}
-            disabled={pushBranch.isPending}
-          >
-            {pushBranch.isPending ? 'Pushing…' : `Push ${branchName}`}
+      <div className={styles['ready-to-test-body']}>
+        <p className={styles['ready-to-test-desc']}>
+          Push the branch, merge the latest base, and open a pull request automatically.
+        </p>
+        <button
+          type="button"
+          className={styles['push-btn']}
+          onClick={handlePush}
+          disabled={pushBranch.isPending}
+        >
+          {pushBranch.isPending ? 'Pushing…' : `Push & Open PR`}
+        </button>
+        {pushBranch.error && (
+          <p className={styles['push-error']}>{pushBranch.error.message}</p>
+        )}
+        <div className={styles['branch-copy-row']}>
+          <span className={styles['branch-label']}>Branch:</span>
+          <code className={styles['branch-name-code']}>{branchName}</code>
+          <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+            {copied ? 'Copied!' : 'Copy'}
           </button>
-          {pushBranch.error && (
-            <p className={styles['push-error']}>{pushBranch.error.message}</p>
-          )}
         </div>
-      ) : (
-        <div className={styles['ready-to-test-body']}>
-          <p className={styles['ready-to-test-desc']}>
-            Run this in your local repo to start testing:
-          </p>
-          <div className={styles['checkout-cmd']}>
-            <code>{checkoutCmd}</code>
-            <button
-              type="button"
-              className={styles['copy-cmd-btn']}
-              onClick={copyCommand}
-              title="Copy command"
-            >
-              copy
-            </button>
-          </div>
+      </div>
+    </div>
+  );
+};
 
-          <div className={styles['branch-copy-row']}>
-            <span className={styles['branch-label']}>Branch:</span>
-            <code className={styles['branch-name-code']}>{branchName}</code>
-            <button
-              type="button"
-              className={styles['copy-branch-btn']}
-              onClick={copyBranch}
-            >
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
+// ── MergeResolver ─────────────────────────────────────────────────────────────
+
+interface FileEditorState {
+  content: string;
+  resolved: boolean;
+}
+
+const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
+  const { data: conflictsData, isLoading } = useSessionConflicts(sessionId);
+  const resolveConflict = useResolveConflict(sessionId);
+  const completeMerge = useCompleteMerge(sessionId);
+  const abortMerge = useAbortMerge(sessionId);
+
+  const [editors, setEditors] = useState<Record<string, FileEditorState>>({});
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!conflictsData) return;
+    setEditors((prev) => {
+      const next: Record<string, FileEditorState> = { ...prev };
+      for (const f of conflictsData.files) {
+        if (!next[f.path]) {
+          next[f.path] = { content: f.content, resolved: false };
+        }
+      }
+      return next;
+    });
+  }, [conflictsData]);
+
+  const handleMarkResolved = useCallback(async (filePath: string) => {
+    const editor = editors[filePath];
+    if (!editor) return;
+    try {
+      await resolveConflict.mutateAsync({ path: filePath, content: editor.content });
+      setEditors((prev) => ({ ...prev, [filePath]: { ...prev[filePath], resolved: true } }));
+    } catch {
+      // error surfaced via resolveConflict.error
+    }
+  }, [editors, resolveConflict]);
+
+  const allResolved = conflictsData
+    ? conflictsData.files.every((f) => editors[f.path]?.resolved)
+    : false;
+
+  const handleComplete = useCallback(async () => {
+    try {
+      const result = await completeMerge.mutateAsync();
+      if (result.prUrl) setPrUrl(result.prUrl);
+    } catch {
+      // surfaced via completeMerge.error
+    }
+  }, [completeMerge]);
+
+  if (prUrl) {
+    return (
+      <div className={styles['merge-resolver']}>
+        <div className={styles['merge-resolver-header']}>
+          <span className={styles['ready-to-test-icon']}>&#10003;</span>
+          <span>Merge complete — Pull Request Opened</span>
         </div>
+        <a href={prUrl} target="_blank" rel="noopener noreferrer" className={styles['pr-link']}>
+          View Pull Request →
+        </a>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return <div className={styles['merge-resolver']}>Loading conflicts…</div>;
+  }
+
+  const files: ConflictedFile[] = conflictsData?.files ?? [];
+
+  return (
+    <div className={styles['merge-resolver']}>
+      <div className={styles['merge-resolver-header']}>
+        <span className={styles['merge-conflict-icon']}>⚠</span>
+        <span className={styles['merge-resolver-title']}>Merge Conflicts</span>
+      </div>
+      <p className={styles['merge-resolver-desc']}>
+        The base branch has diverged. Resolve each conflict below, then complete the merge to push and open a PR.
+      </p>
+
+      {files.map((f) => {
+        const editor = editors[f.path];
+        return (
+          <div key={f.path} className={styles['conflict-file']}>
+            <div className={styles['conflict-file-header']}>
+              <code className={styles['conflict-file-path']}>{f.path}</code>
+              {editor?.resolved && (
+                <span className={styles['conflict-resolved-badge']}>Resolved</span>
+              )}
+            </div>
+            <textarea
+              className={styles['conflict-editor']}
+              value={editor?.content ?? f.content}
+              onChange={(e) =>
+                setEditors((prev) => ({
+                  ...prev,
+                  [f.path]: { ...prev[f.path], content: e.target.value, resolved: false },
+                }))
+              }
+              rows={12}
+              spellCheck={false}
+            />
+            <div className={styles['conflict-file-actions']}>
+              <button
+                type="button"
+                className={styles['resolve-btn']}
+                onClick={() => void handleMarkResolved(f.path)}
+                disabled={resolveConflict.isPending || editor?.resolved}
+              >
+                {resolveConflict.isPending ? 'Saving…' : editor?.resolved ? 'Saved' : 'Mark as Resolved'}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {completeMerge.error && (
+        <p className={styles['push-error']}>{completeMerge.error.message}</p>
       )}
+
+      <div className={styles['merge-resolver-footer']}>
+        <button
+          type="button"
+          className={styles['push-btn']}
+          onClick={() => void handleComplete()}
+          disabled={!allResolved || completeMerge.isPending}
+        >
+          {completeMerge.isPending ? 'Completing merge…' : 'Complete merge & open PR'}
+        </button>
+        <button
+          type="button"
+          className={styles['close-btn']}
+          onClick={() => abortMerge.mutate()}
+          disabled={abortMerge.isPending}
+        >
+          {abortMerge.isPending ? 'Aborting…' : 'Abort merge'}
+        </button>
+      </div>
     </div>
   );
 };
@@ -435,6 +753,7 @@ export const DevSessionView: React.FC = () => {
   const threadId = session?.chatThreadId ?? null;
   const isSettingUp = !session || session.status === 'setting_up';
   const isFailed = session?.status === 'failed';
+  const isConflict = session?.status === 'conflict';
 
   const { data: thread } = useChatThread(threadId);
 
@@ -561,12 +880,27 @@ export const DevSessionView: React.FC = () => {
               if (msg.role === 'agent') {
                 const turn = turns[turnIdx];
                 if (turn) {
+                  const isLastTurn = turnIdx === turns.length - 1;
                   elements.push(
-                    <AgentTurnBlock key={`turn-${turnIdx}`} turn={turn} />,
+                    <AgentTurnBlock
+                      key={`turn-${turnIdx}`}
+                      turn={turn}
+                      onSend={doSend}
+                      isRunning={isRunning}
+                      interactive={isLastTurn && !isRunning}
+                    />,
                   );
                   turnIdx++;
                 } else {
-                  elements.push(<AgentBubble key={msg.id} msg={msg} />);
+                  elements.push(
+                    <AgentBubble
+                      key={msg.id}
+                      msg={msg}
+                      onSend={doSend}
+                      isRunning={isRunning}
+                      interactive={!isRunning}
+                    />,
+                  );
                 }
               }
             }
@@ -593,11 +927,11 @@ export const DevSessionView: React.FC = () => {
           <textarea
             ref={textareaRef}
             className={styles.textarea}
-            placeholder={isSettingUp ? 'Setting up workspace…' : isRunning ? 'Agent is working…' : 'Ask the agent to implement changes…'}
+            placeholder={isSettingUp ? 'Setting up workspace…' : isConflict ? 'Resolve merge conflicts first…' : isRunning ? 'Agent is working…' : 'Ask the agent to implement changes…'}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isSettingUp || isFailed || isRunning || status === 'closed'}
+            disabled={isSettingUp || isFailed || isConflict || isRunning || status === 'closed'}
             rows={1}
           />
           {isRunning ? (
@@ -612,7 +946,7 @@ export const DevSessionView: React.FC = () => {
             <button
               className={styles['send-btn']}
               onClick={() => doSend(input)}
-              disabled={isSettingUp || isFailed || !input.trim() || status === 'closed'}
+              disabled={isSettingUp || isFailed || isConflict || !input.trim() || status === 'closed'}
               type="button"
             >
               Send ↑
@@ -644,10 +978,15 @@ export const DevSessionView: React.FC = () => {
             </div>
           </div>
 
-          {!isRunning && sessionId && session?.branchName && diff && diff.changedFiles.length > 0 && (
+          {isConflict && sessionId && (
+            <MergeResolver sessionId={sessionId} />
+          )}
+
+          {!isRunning && !isConflict && sessionId && session?.branchName && diff && diff.changedFiles.length > 0 && (
             <ReadyToTest
               branchName={session.branchName}
               sessionId={sessionId}
+              existingPrUrl={session.prUrl}
             />
           )}
 

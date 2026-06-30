@@ -338,7 +338,9 @@ router.put('/project-settings/:project', async (req: Request, res: Response): Pr
       prdValidationScoreThreshold,
     );
     res.json(config);
-  } catch {
+  } catch (err) {
+    const cause = (err as any)?.cause;
+    console.error('[admin] PUT /project-settings error:', (err as Error).message, '| cause:', cause?.message ?? cause ?? '(none)');
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -1,66 +1,116 @@
 ---
 name: apex-implement-feature
 description: >
-  APEX-driven, full-cycle feature implementation skill. Reads the approved design doc from the ADO
-  Feature (design.md / tech-spec.md / assumptions.md attachments + acceptance criteria on child PBIs/TBIs),
-  drafts a Principal-Engineer implementation plan, and — after explicit human approval — delivers the
-  complete feature: feature branch, code, unit tests, self code-review, commit, push, and PR, with ADO
-  state transitions throughout. Use when the user runs /apex-implement-feature <featureAdoId>.
+  APEX-driven, full-cycle feature implementation skill. Reads the approved design doc from the
+  assigned work item (and its parent Feature when the item is a PBI/Task), gathers repo context
+  from the local workspace, drafts a Principal-Engineer implementation plan, and — after explicit
+  human approval — delivers the complete feature: code, unit tests, and a code-reviewer subagent
+  pass. APEX owns the git branch, commit, push, PR creation, and ADO state transitions.
+  Use when the session is started from the APEX My Work tab.
 disable-model-invocation: true
 ---
 
 # apex-implement-feature
 
-Full-cycle APEX implementation: plan (stop for approval) → branch → code → test → self-review → commit → push → PR → ADO state transitions.
+Full-cycle APEX implementation: plan (stop for approval) → code → test → code-review subagent.
+APEX already created the branch `feature/apex-<workItemId>-<slug>` and owns commit/push/PR/ADO.
+
+---
 
 ## Invocation
 
-```
-/apex-implement-feature <featureAdoId>
-```
+This skill is auto-loaded by APEX when a dev session starts. The session context includes:
 
-`<featureAdoId>` is the Azure DevOps **Feature** work item id linked to the approved APEX design doc (e.g. `42`).
+- `project` — the Azure DevOps project
+- `repo` — the repository name
+- `branch` — the pre-created feature branch (`feature/apex-<workItemId>-<slug>`)
+- `workItemId` — the assigned ADO work item id
+
+The current working directory **is a real, full clone of the repo on the feature branch**.
+Read, edit, and create files directly. Do NOT run `git push`, `git commit`, `git checkout -b`,
+open PRs, or transition ADO work-item state — APEX handles all of those.
 
 ---
 
 ## Phase 0 — Gather context
 
-Run ALL of the following in parallel:
+Run ALL of the following in parallel.
 
-### 0a. ADO Feature + attachments
+### 0a. ADO work item + design doc
 
-1. Use the `ado-skills` MCP `query_work_items` tool to load the Feature:
-
-```
-project: <project from session context>
-wiql: SELECT [System.Id], [System.Title], [System.Description], [System.State], [System.AssignedTo] FROM WorkItems WHERE [System.Id] = <featureAdoId>
-```
-
-2. Fetch the Feature's attachment list (look for `design.md`, `tech-spec.md`, `assumptions.md`, `prototype.html`). Read each attachment using `get_skill_file` or the ADO REST attachment URL.
-
-3. Fetch all child PBIs and TBIs:
+1. Use `ado-skills` MCP `query_work_items` to load the assigned work item:
 
 ```
-wiql: SELECT [System.Id], [System.Title], [System.Description], [Microsoft.VSTS.Common.AcceptanceCriteria], [System.WorkItemType], [System.State] FROM WorkItems WHERE [System.Parent] = <featureAdoId>
+wiql: SELECT [System.Id], [System.Title], [System.Description],
+      [System.WorkItemType], [System.State], [System.Parent]
+      FROM WorkItems WHERE [System.Id] = <workItemId>
 ```
 
-Read the `AcceptanceCriteria` field of every child item — these are the authoritative implementation targets.
+2. If the work item is a **PBI or Task** (not a Feature), resolve its parent Feature:
 
-### 0b. MaxView repo context
+```
+wiql: SELECT [System.Id], [System.Title], [System.Description], [System.State]
+      FROM WorkItems WHERE [System.Id] = <parentId>
+```
 
-Using the `ado-skills` MCP tools (`get_skill_file`, `list_repo_dir`, `search_repo_code`), load:
+3. Fetch the Feature's attachment list (look for `design.md`, `tech-spec.md`, `assumptions.md`,
+   `prototype.html`). Read each attachment via the ADO REST attachment URL using `get_skill_file`.
 
-- `/CONTEXT.md` — project overview, tech stack, conventions
-- `/AGENTS.md` — agent operating rules for this repo
-- Relevant ADRs under `/docs/adr/` (browse with `list_repo_dir` first)
-- `/.cursor/rules/*.mdc` — all coding-standards and protection rules
-- The target route's existing component source (from `tech-spec.md`'s "Target route" / `decision` field):
-  - For **update-page** features: search for the existing page component (`search_repo_code <targetRoute>`) and read it fully
+4. Fetch acceptance criteria from all child PBIs/TBIs of the Feature:
+
+```
+wiql: SELECT [System.Id], [System.Title], [Microsoft.VSTS.Common.AcceptanceCriteria],
+      [System.WorkItemType], [System.State]
+      FROM WorkItems WHERE [System.Parent] = <featureId>
+```
+
+### 0b. Repo context (read from the LOCAL workspace — do NOT use ado-skills MCP for repo files)
+
+The repo is already checked out in the current working directory. Use normal file read, search,
+grep, and list-directory tools:
+
+- `CONTEXT.md` — project overview, tech stack, conventions
+- `AGENTS.md` — agent operating rules for this repo
+- Relevant ADRs under `docs/adr/` (list the directory first)
+- `.cursor/rules/*.mdc` — all coding-standards and protection rules
+- The target route's existing component source (from `tech-spec.md`'s "Target route"):
+  - For **update-page** features: find and read the existing page component
   - For **new-page** features: read the router registration file to understand the route pattern
-- MWx Design System usage patterns (`search_repo_code "from '@mwx"` or the import alias from `CONTEXT.md`)
-- Test conventions: read an existing `__tests__` file for a similar component to understand naming, mocking, and assertion patterns
+- MWx Design System usage patterns (search for `from '@mwx'` or the import alias in `CONTEXT.md`)
+- Test conventions: read an existing `__tests__` file for a similar component
 
 Summarise what you found before proceeding.
+
+---
+
+## Phase 0.5 — Scope confirmation (interactive)
+
+**Do not write any source code in this phase. STOP and wait for the developer's response before proceeding to Phase 1.**
+
+From the design doc / tech-spec / prototype, enumerate every distinct change the feature introduces. For each one, classify it as either **[additive]** (introduces new UI/behaviour without touching anything that already works) or **[impacts-existing]** (could alter, remove, reorder, or make ambiguous any existing behaviour, layout, validation, default, data flow, or interaction — when in doubt, classify here).
+
+Present the changes to the developer as **interactive multiple-choice questions — one question per change. Do NOT use a Markdown table.** The My Work chat automatically renders any run of `a.` / `b.` / `c.` option lines as clickable answer buttons with a single **Submit answers** control, so the developer picks a decision per change instead of typing free text.
+
+Emit one block per change, in this exact shape — a short question line, a blank line, then the three lettered options each on their own line:
+
+```
+**Change 1 of N — [impacts-existing]:** <one-line description of the change>
+
+a. Implement — build it exactly as described in the design doc
+b. Defer — skip this item; do not implement it in this feature
+c. Modify — implement with changes (describe them after you pick this)
+```
+
+Formatting rules so the buttons render correctly:
+- One block per change; number them "Change X of N" and put the `[additive]` / `[impacts-existing]` tag in the heading line.
+- Each option must start at the beginning of its line as `a.`, `b.`, `c.` (lowercase letter, period, space). Never wrap the options in a table, bullet list, or code fence in the real message.
+- Keep option text short; put any extra context in the heading line above the options, not inside an option.
+- Use exactly these three options — do not add a fourth; `Modify` already covers "implement with changes". The developer can use the built-in **Other / free-form** field for anything else.
+- Separate consecutive change-blocks with a blank line.
+
+**STOP. Post the per-change questions and wait for the developer to answer each one** (they submit all answers together via the Submit button). If a developer picks **Modify**, ask the follow-up for the specific change instructions before that item enters the plan.
+
+Default rule when the developer does not explicitly respond on an item: `[additive]` → treat as `implement`; `[impacts-existing]` → **defer** (never implement an `[impacts-existing]` item without an explicit `implement` or `modify`). Only `implement`/`modify` items flow into the Phase 1 plan; state which items were deferred in the plan header.
 
 ---
 
@@ -68,10 +118,10 @@ Summarise what you found before proceeding.
 
 **Do not write any source code in this phase.**
 
-Produce a thorough implementation plan structured as follows:
+Produce a thorough implementation plan:
 
 ### 1.1 Feature summary
-One paragraph: what the feature does, which ADO Feature id it implements, and its APEX design doc scope.
+One paragraph: what the feature does, which ADO work item it implements, and its design doc scope.
 
 ### 1.2 Files to create or modify
 
@@ -80,28 +130,23 @@ One paragraph: what the feature does, which ADO Feature id it implements, and it
 | Create | `src/...` | ... |
 | Modify | `src/...` | ... |
 
-Include every file — components, hooks, route registrations, API handlers (if any), test files.
+Include every file — components, hooks, route registrations, API handlers, test files.
 
 ### 1.3 Component / module breakdown
-For each new or changed component:
-- Props interface
-- Internal state (`useState`, `useRef`, `useQuery`, `useMutation`, `useEffect` in hooks-order)
-- Key rendering decisions (loading/empty/error states, conditional rendering)
-- Which MWx Design System components to use
+For each new or changed component: props interface, internal state (hooks in order), key rendering
+decisions, which MWx Design System components to use.
 
 ### 1.4 Data / API changes
-- Any new API endpoint(s) needed (path, method, payload, response)
-- Client query/mutation keys and stale times
-- State ownership (server state via TanStack Query vs. local `useState`)
+New API endpoints, TanStack Query keys, state ownership decisions.
 
 ### 1.5 Existing-code protection plan
-Explicitly list which existing files will **not** be touched (shell, nav, header, existing grids), and describe exactly where/how the new code is inserted into each modified file (new import + placement line).
+List which existing files will **not** be touched, and exactly where new code is inserted.
 
 ### 1.6 Test plan
-For every new file: describe the describe blocks, mocks (`jest.mock`), happy-path test, and at least one error/edge-case test.
+Describe blocks, mocks, happy-path test, and at least one error/edge-case test per new file.
 
 ### 1.7 Risk and existing-functionality impact
-List any existing behaviour that could be affected by this change and the mitigation.
+Existing behaviour that could be affected and the mitigation.
 
 ### 1.8 Sequencing
 Numbered implementation steps in dependency order.
@@ -110,41 +155,14 @@ Numbered implementation steps in dependency order.
 
 **STOP here. Post the plan and wait for explicit human approval before writing any code.**
 
-When the user approves (any affirmative reply — "approved", "LGTM", "go ahead", "proceed", etc.), move to Phase 2.
+When the user approves (any affirmative reply — "approved", "LGTM", "go ahead", "proceed", etc.),
+move to Phase 2.
 
 ---
 
 ## Phase 2 — Deliver
 
-Execute in this exact order:
-
-### Step 1 — Move ADO Feature to "In Progress"
-
-Update the Feature work item state:
-
-```
-PATCH https://dev.azure.com/<org>/<project>/_apis/wit/workitems/<featureAdoId>?api-version=7.1
-[{ "op": "add", "path": "/fields/System.State", "value": "In Progress" }]
-```
-
-Use the ADO PAT available in the environment (`ADO_PAT`). Report success or skip if the state is already In Progress.
-
-### Step 2 — Create the feature branch
-
-```bash
-git fetch origin main
-git checkout -b feat/apex-<featureAdoId>-<slug> origin/main
-```
-
-`<slug>` is a short kebab-case name derived from the Feature title (max 40 chars, lowercase, alphanumeric + hyphens only).
-
-Verify the branch was created:
-
-```bash
-git branch --show-current
-```
-
-### Step 3 — Implement per plan
+### Step 1 — Implement per plan
 
 Follow the plan from Phase 1 exactly:
 
@@ -158,7 +176,7 @@ Follow the plan from Phase 1 exactly:
    - **Never modify the shell, nav/sidebar, header, or any existing component not listed in the plan**
 4. After implementing each file, re-read it and check for obvious issues before proceeding.
 
-### Step 4 — Write unit tests
+### Step 2 — Write unit tests
 
 For each new source file, create (or update) its corresponding test file:
 
@@ -173,7 +191,7 @@ Requirements per test file:
 - At minimum: one describe block per exported function/component, with happy-path + one error/edge case
 - Tests ONLY cover the new behaviour — do not assert on existing shell, nav, or unrelated components
 
-### Step 5 — Run the build and tests
+### Step 3 — Run the build and tests
 
 ```bash
 npx tsc -p tsconfig.client.json --noEmit
@@ -181,108 +199,45 @@ npx tsc -p tsconfig.server.json --noEmit
 npm test
 ```
 
-If any step fails:
-- Fix the errors in the source or test file (never skip type errors)
-- Re-run until all pass
-- If the same test fails 3 times despite fixes, stop and report to the user
+If any step fails: fix the errors (never skip type errors). If the same test fails 3 times despite
+fixes, stop and report to the user.
 
-### Step 6 — Self code-review
+### Step 4 — Code review subagent
 
-Before committing, re-read every changed file and verify:
-
-- [ ] All existing-code protection rules respected (shell/nav/header untouched)
-- [ ] CSS variables used throughout — no hardcoded colours
-- [ ] Hooks in correct order in every component
-- [ ] Every new component has a matching test
-- [ ] No accidental `console.log` statements left in
-- [ ] No `.env`, secrets, or credentials in any changed file
-
-Report the review outcome in chat.
-
-### Step 7 — Commit and push
-
-```bash
-git add -A
-git status
-```
-
-Draft a conventional commit message:
+Dispatch the built-in **code-reviewer** subagent via the `Task` tool:
 
 ```
-feat(<scope>): <one-line summary from the Feature title>
+subagent_type: "code-reviewer"
+prompt: |
+  Review the implementation of ADO work item #<workItemId> on branch <branch>.
 
-Implements APEX-approved design doc for ADO Feature #<featureAdoId>.
-- <bullet: what changed>
-- <bullet: what changed>
+  Design doc context: <paste the design.md summary + acceptance criteria>
+
+  Changed files: <list from git diff --name-only HEAD~1 or the diff panel>
+
+  Check for:
+  - Acceptance criteria coverage
+  - Correctness, edge cases, error handling
+  - CSS token compliance (no hardcoded colours)
+  - Hooks order, TanStack Query usage
+  - Test coverage completeness
+
+  Report findings by severity (blocking / advisory).
+  Fix all blocking issues before handing back.
 ```
 
-Commit and push:
-
-```bash
-git commit -m "$(cat <<'EOF'
-<your drafted message>
-EOF
-)"
-git push -u origin HEAD
-```
-
-### Step 8 — Open the PR
-
-Check for an existing PR first:
-
-```bash
-gh pr view --json url,state 2>$null
-```
-
-If none exists, create it:
-
-```bash
-gh pr create --fill --base main
-```
-
-`--fill` auto-populates title + body from the commit message. Alternatively, if using ADO PRs:
-
-```
-POST https://dev.azure.com/<org>/<project>/_apis/git/repositories/<repo>/pullrequests?api-version=7.1
-{
-  "title": "<Feature title>",
-  "description": "Implements APEX design doc for ADO Feature #<featureAdoId>.\n\n...",
-  "sourceRefName": "refs/heads/feat/apex-<featureAdoId>-<slug>",
-  "targetRefName": "refs/heads/main"
-}
-```
-
-Link the PR to the ADO Feature by adding a commit mention (`AB#<featureAdoId>`) in the PR description if it is not already present.
-
-Report the PR URL.
-
-### Step 9 — Move ADO Feature to "In Pull Request"
-
-```
-PATCH https://dev.azure.com/<org>/<project>/_apis/wit/workitems/<featureAdoId>?api-version=7.1
-[{ "op": "add", "path": "/fields/System.State", "value": "In Pull Request" }]
-```
-
-Also add the PR URL as a hyperlink on the work item:
-
-```
-[{ "op": "add", "path": "/relations/-", "value": {
-  "rel": "Hyperlink",
-  "url": "<pr-url>",
-  "attributes": { "comment": "Implementation PR" }
-}}]
-```
-
-Report success.
+After the reviewer completes:
+- Fix any **blocking** issues it raises, re-run tests to confirm still green.
+- Advisory findings are surfaced to the user as notes.
+- Do NOT commit, push, or open a PR — APEX handles that via the Push & Open PR button.
 
 ---
 
 ## Guardrails (always enforced)
 
-- Never `--force` push or `--force-with-lease`
-- Never skip hooks (`--no-verify`)
+- Never `git push`, `git commit`, `git checkout -b`, or create pull requests
+- Never transition ADO work-item state (APEX does this)
 - Never commit `.env`, `.env.local`, or any file containing secrets or credentials
-- Never commit directly to `main` — always use the `feat/apex-<id>-<slug>` branch
 - Never modify the shell, sidebar, nav header, or any component not listed in the Phase 1 plan
-- Respect all `.cursor/rules/*.mdc` rules in the MaxView repo at all times
-- If the build or tests fail 3+ times with the same error after attempted fixes, stop and report the blocker to the user instead of retrying indefinitely
+- Respect all `.cursor/rules/*.mdc` rules at all times
+- If the build or tests fail 3+ times with the same error, stop and report the blocker
