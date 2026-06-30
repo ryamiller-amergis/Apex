@@ -5614,6 +5614,75 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Creates a pull request in Azure DevOps and returns the PR URL.
+   */
+  async createPullRequest(opts: {
+    repo: string;
+    project: string;
+    sourceBranch: string;
+    targetBranch: string;
+    title: string;
+    description: string;
+    workItemId?: number;
+  }): Promise<string> {
+    const { repo, project, sourceBranch, targetBranch, title, description, workItemId } = opts;
+    const gitApi = await this.connection.getGitApi();
+
+    const prPayload: any = {
+      title,
+      description,
+      sourceRefName: `refs/heads/${sourceBranch}`,
+      targetRefName: `refs/heads/${targetBranch}`,
+    };
+
+    if (workItemId) {
+      prPayload.workItemRefs = [{ id: String(workItemId) }];
+    }
+
+    const pr = await gitApi.createPullRequest(prPayload, repo, project);
+
+    if (!pr?.pullRequestId) {
+      throw new Error('ADO createPullRequest returned no pullRequestId');
+    }
+
+    return `${this.organization}/${project}/_git/${repo}/pullrequest/${pr.pullRequestId}`;
+  }
+
+  /**
+   * Transitions an ADO work item to the given state.
+   */
+  async setWorkItemState(workItemId: number, state: string): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    await witApi.updateWorkItem(
+      [],
+      [{ op: 'add', path: '/fields/System.State', value: state }],
+      workItemId,
+    );
+  }
+
+  /**
+   * Adds a hyperlink relation to an ADO work item (e.g. a PR URL).
+   */
+  async addWorkItemHyperlink(workItemId: number, url: string, comment: string): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    await witApi.updateWorkItem(
+      [],
+      [
+        {
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'Hyperlink',
+            url,
+            attributes: { comment },
+          },
+        },
+      ],
+      workItemId,
+    );
+  }
+
+  /**
    * Check which of the provided ADO work item IDs still exist.
    * Returns the subset that are confirmed deleted/missing in ADO.
    */

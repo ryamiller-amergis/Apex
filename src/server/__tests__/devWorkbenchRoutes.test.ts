@@ -45,11 +45,18 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 jest.mock('../services/repoCheckoutService', () => ({
   checkoutDefaultBranch: jest.fn().mockResolvedValue('/tmp/workspace'),
-  createFeatureBranch: jest.fn().mockReturnValue('feature/42'),
+  createFeatureBranch: jest.fn().mockReturnValue('feature/apex-42-shift-scheduler'),
   computeDiff: jest.fn().mockReturnValue({ diffText: 'diff', changedFiles: ['a.ts'] }),
   pushBranch: jest.fn(),
+  pushMergedBranch: jest.fn(),
+  syncWithBase: jest.fn().mockReturnValue({ status: 'clean', conflictedFiles: [] }),
+  listConflicts: jest.fn().mockReturnValue([]),
+  writeResolvedFile: jest.fn(),
+  completeMerge: jest.fn(),
+  abortMerge: jest.fn(),
   getWorkspaceDir: jest.fn().mockReturnValue('/tmp/workspace'),
   cleanupWorkspace: jest.fn(),
+  slugify: jest.fn((t: string) => t.toLowerCase().replace(/\s+/g, '-')),
 }));
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
@@ -326,9 +333,26 @@ describe('POST /api/dev-workbench/sessions/:id/close', () => {
 });
 
 describe('POST /api/dev-workbench/sessions/:id/push', () => {
-  const { pushBranch, getWorkspaceDir } = jest.requireMock('../services/repoCheckoutService') as {
-    pushBranch: jest.Mock;
+  const { syncWithBase, pushMergedBranch, getWorkspaceDir } = jest.requireMock('../services/repoCheckoutService') as {
+    syncWithBase: jest.Mock;
+    pushMergedBranch: jest.Mock;
     getWorkspaceDir: jest.Mock;
+  };
+
+  const SESSION = {
+    id: 'session-1',
+    branchName: 'feature/apex-42-shift-scheduler',
+    project: 'MaxView',
+    workItemId: 42,
+    authorId: 'user-1',
+  };
+  const PR_URL = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/1';
+
+  let mockAdoPush: {
+    getDefaultBranch: jest.Mock;
+    createPullRequest: jest.Mock;
+    setWorkItemState: jest.Mock;
+    addWorkItemHyperlink: jest.Mock;
   };
 
   beforeEach(() => {
@@ -336,24 +360,53 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
     mockGroupMembershipGranted = true;
     jest.clearAllMocks();
     getWorkspaceDir.mockReturnValue('/tmp/workspace');
-    pushBranch.mockImplementation(() => {});
+    syncWithBase.mockReturnValue({ status: 'clean', conflictedFiles: [] });
+    pushMergedBranch.mockImplementation(() => {});
+    mockAdoPush = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      createPullRequest: jest.fn().mockResolvedValue(PR_URL),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+      addWorkItemHyperlink: jest.fn().mockResolvedValue(undefined),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdoPush as unknown as AzureDevOpsService);
+    // First call fetches the session; second call (after finalisePush) returns updated row
+    mockFindFirst
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValue({ ...SESSION, prUrl: PR_URL });
   });
 
-  it('pushes the feature branch for the session', async () => {
-    mockFindFirst.mockResolvedValue({
-      id: 'session-1',
-      branchName: 'feature/42',
+  it('syncs base, pushes, and returns prUrl on clean merge', async () => {
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/push');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.status).toBe('clean');
+    expect(res.body.prUrl).toBe(PR_URL);
+    expect(syncWithBase).toHaveBeenCalledWith('/tmp/workspace', 'main');
+    expect(pushMergedBranch).toHaveBeenCalledWith('/tmp/workspace', SESSION.branchName);
+  });
+
+  it('returns conflict status when base merge has conflicts', async () => {
+    mockFindFirst.mockReset();
+    mockFindFirst.mockResolvedValue(SESSION);
+    MockAzureDevOpsService.mockImplementation(() => mockAdoPush as unknown as AzureDevOpsService);
+    syncWithBase.mockReturnValue({
+      status: 'conflict',
+      conflictedFiles: [{ path: 'src/foo.ts', content: '<<<<<<< HEAD\n...' }],
     });
 
     const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/push');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, branch: 'feature/42' });
-    expect(pushBranch).toHaveBeenCalledWith('/tmp/workspace', 'feature/42');
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe('conflict');
+    expect(res.body.conflictedFiles).toHaveLength(1);
+    expect(pushMergedBranch).not.toHaveBeenCalled();
   });
 
   it('returns 400 when the session has no branch', async () => {
-    mockFindFirst.mockResolvedValue({ id: 'session-1', branchName: null });
+    mockFindFirst.mockReset();
+    mockFindFirst.mockResolvedValue({ ...SESSION, branchName: null });
 
     const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/push');
 

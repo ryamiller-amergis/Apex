@@ -2594,6 +2594,7 @@ export const DesignDocReviewView: React.FC = () => {
           isSubmitting={reassignApprovers.isPending}
         />
       )}
+
     </div>
   );
 };

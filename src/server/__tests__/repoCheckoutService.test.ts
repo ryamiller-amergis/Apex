@@ -109,12 +109,12 @@ describe('repoCheckoutService', () => {
   });
 
   describe('createFeatureBranch', () => {
-    it('creates a feature branch named after the work item id', () => {
-      const branchName = createFeatureBranch('/tmp/workspace', 50743);
+    it('creates a feature branch with workItemId and slugified title', () => {
+      const branchName = createFeatureBranch('/tmp/workspace', 50743, 'Shift Scheduler Widget');
 
-      expect(branchName).toBe('feature/wi-50743');
+      expect(branchName).toBe('feature/apex-50743-shift-scheduler-widget');
       expect(mockExecSync).toHaveBeenCalledWith(
-        'git checkout -b "feature/wi-50743"',
+        'git checkout -b "feature/apex-50743-shift-scheduler-widget"',
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });

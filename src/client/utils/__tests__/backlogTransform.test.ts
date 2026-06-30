@@ -1,4 +1,4 @@
-import { stampAdoIds, stampFeatureLinkId } from '../../../shared/utils/backlogTransform';
+import { stampAdoIds, stampFeatureLinkId, findFeatureAdoIdByDesignDocId } from '../../../shared/utils/backlogTransform';
 import type { CreatePrdAdoItemsResponse } from '../../../shared/types/interview';
 
 describe('stampFeatureLinkId', () => {
@@ -84,6 +84,58 @@ describe('stampFeatureLinkId', () => {
         expect(feat.designDocId).toBeUndefined();
       }
     }
+  });
+});
+
+describe('findFeatureAdoIdByDesignDocId', () => {
+  const makeBacklog = () => ({
+    epics: [
+      {
+        title: 'Epic One',
+        features: [
+          { title: 'Feature A', designDocId: 'doc-aaa', adoWorkItemId: 101 },
+          { title: 'Feature B', designDocId: 'doc-bbb', adoWorkItemId: 102 },
+        ],
+      },
+      {
+        title: 'Epic Two',
+        features: [
+          { title: 'Feature C', designDocId: 'doc-ccc', adoWorkItemId: 103 },
+        ],
+      },
+    ],
+  });
+
+  it('returns the adoWorkItemId for a matching designDocId in epics.features', () => {
+    expect(findFeatureAdoIdByDesignDocId(makeBacklog(), 'doc-bbb')).toBe(102);
+  });
+
+  it('returns the adoWorkItemId from the second epic', () => {
+    expect(findFeatureAdoIdByDesignDocId(makeBacklog(), 'doc-ccc')).toBe(103);
+  });
+
+  it('returns undefined when designDocId does not match', () => {
+    expect(findFeatureAdoIdByDesignDocId(makeBacklog(), 'doc-zzz')).toBeUndefined();
+  });
+
+  it('returns undefined when the feature has no adoWorkItemId', () => {
+    const backlog = {
+      epics: [{ title: 'E', features: [{ title: 'F', designDocId: 'doc-x' }] }],
+    };
+    expect(findFeatureAdoIdByDesignDocId(backlog, 'doc-x')).toBeUndefined();
+  });
+
+  it('finds features at the top-level features array', () => {
+    const backlog = {
+      features: [{ title: 'Top', designDocId: 'doc-top', adoWorkItemId: 201 }],
+      epics: [],
+    };
+    expect(findFeatureAdoIdByDesignDocId(backlog, 'doc-top')).toBe(201);
+  });
+
+  it('returns undefined for null/undefined backlog', () => {
+    expect(findFeatureAdoIdByDesignDocId(null, 'doc-x')).toBeUndefined();
+    expect(findFeatureAdoIdByDesignDocId(undefined, 'doc-x')).toBeUndefined();
   });
 });
 

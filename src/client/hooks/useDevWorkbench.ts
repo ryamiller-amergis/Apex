@@ -1,5 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { AssignedWorkItem, StartDevSessionResponse, DevDiff, ActiveDevSession, DevSessionDetail } from '../../shared/types/devWorkbench';
+import type {
+  AssignedWorkItem,
+  StartDevSessionResponse,
+  DevDiff,
+  ActiveDevSession,
+  DevSessionDetail,
+  ConflictedFile,
+  PushSessionResponse,
+} from '../../shared/types/devWorkbench';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -67,9 +75,58 @@ export function useCloseDevSession() {
 }
 
 export function usePushBranch() {
-  return useMutation<{ ok: boolean; branch: string }, Error, string>({
+  const queryClient = useQueryClient();
+  return useMutation<PushSessionResponse, Error, string>({
     mutationFn: (sessionId) =>
       apiFetch(`/api/dev-workbench/sessions/${sessionId}/push`, { method: 'POST' }),
+    onSuccess: (_data, sessionId) => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'session', sessionId] });
+    },
+  });
+}
+
+export function useSessionConflicts(sessionId: string | null) {
+  return useQuery<{ files: ConflictedFile[] }>({
+    queryKey: ['dev-workbench', 'conflicts', sessionId],
+    queryFn: () => apiFetch(`/api/dev-workbench/sessions/${sessionId}/conflicts`),
+    enabled: !!sessionId,
+  });
+}
+
+export function useResolveConflict(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, { path: string; content: string }>({
+    mutationFn: (body) =>
+      apiFetch(`/api/dev-workbench/sessions/${sessionId}/conflicts`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'conflicts', sessionId] });
+    },
+  });
+}
+
+export function useCompleteMerge(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: boolean; prUrl: string | null }, Error, void>({
+    mutationFn: () =>
+      apiFetch(`/api/dev-workbench/sessions/${sessionId}/conflicts/complete`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'session', sessionId] });
+    },
+  });
+}
+
+export function useAbortMerge(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, void>({
+    mutationFn: () =>
+      apiFetch(`/api/dev-workbench/sessions/${sessionId}/conflicts/abort`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'session', sessionId] });
+    },
   });
 }
 

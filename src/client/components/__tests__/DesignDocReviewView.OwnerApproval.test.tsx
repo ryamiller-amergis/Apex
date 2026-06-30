@@ -140,6 +140,7 @@ beforeEach(() => {
     can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
     userId: 'user-viewer',
     isAdmin: false,
+    groups: [],
   });
   mockUseDocumentAssignments.mockReturnValue({
     data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'approved' }],
@@ -154,6 +155,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'user-owner',
       isAdmin: false,
+      groups: [],
     });
 
     renderView();
@@ -166,6 +168,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'admin-user',
       isAdmin: true,
+      groups: [],
     });
 
     renderView();
@@ -178,6 +181,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'user-owner',
       isAdmin: false,
+      groups: [],
     });
     mockUseDesignDoc.mockReturnValue({
       data: { ...baseDoc, status: 'pending_review', reviewerId: null, reviewerName: null },
@@ -195,6 +199,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'user-reviewer',
       isAdmin: false,
+      groups: [],
     });
     mockUseDesignDoc.mockReturnValue({
       data: { ...baseDoc, status: 'pending_review', reviewerId: null, reviewerName: null },
@@ -216,6 +221,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'user-owner',
       isAdmin: false,
+      groups: [],
     });
     mockUseDesignDoc.mockReturnValue({
       data: { ...baseDoc, status: 'draft' },
@@ -233,6 +239,7 @@ describe('Owner Approval in DesignDocReviewView', () => {
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'user-viewer',
       isAdmin: false,
+      groups: [],
     });
 
     renderView();

@@ -314,7 +314,9 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
     const config = await projectSettingsService.upsertSkillConfig({ id, ...body, updatedBy });
     res.json(config);
-  } catch {
+  } catch (err) {
+    const cause = (err as any)?.cause;
+    console.error('[admin] PUT /project-settings error:', (err as Error).message, '| cause:', cause?.message ?? cause ?? '(none)');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
