@@ -8,9 +8,11 @@ import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHit
 import { getFeatureAutoCompleteService } from '../services/featureAutoComplete';
 import { DeploymentTrackingService } from '../services/deploymentTracking';
 import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionService';
+import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
+import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { getSkillConfig } from '../services/projectSettingsService';
+import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getAgentHealthStats } from '../services/chatAgentService';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
@@ -196,6 +198,22 @@ router.get('/workitems', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error fetching work items:', error);
     res.status(500).json({ error: 'Failed to fetch work items' });
+  }
+});
+
+// GET /api/workitems/:id - Fetch a single work item by ID
+router.get('/workitems/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid work item ID' });
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const items = await adoService.getWorkItemsByIds([id]);
+    if (!items || items.length === 0) return res.status(404).json({ error: 'Work item not found' });
+    res.json(items[0]);
+  } catch (error: any) {
+    console.error('Error fetching work item:', error);
+    res.status(500).json({ error: 'Failed to fetch work item' });
   }
 });
 
@@ -564,6 +582,35 @@ router.get('/pr-resolution-metrics-stats', async (req: Request, res: Response) =
   } catch (error: any) {
     console.error('Error fetching PR resolution metrics stats:', error);
     res.status(500).json({ error: 'Failed to fetch PR resolution metrics statistics' });
+  }
+});
+
+// GET /api/maxview-eslint-summary - Current ESLint issue snapshot for the MaxView UI repo
+router.get('/maxview-eslint-summary', async (_req: Request, res: Response) => {
+  try {
+    console.log('=== API: /maxview-eslint-summary called ===');
+    const snapshot = await getMaxViewEslintSnapshot();
+    res.json(snapshot);
+  } catch (error: any) {
+    console.error('Error fetching MaxView ESLint summary:', error);
+    res.status(500).json({ error: error?.message || 'Failed to fetch MaxView ESLint summary' });
+  }
+});
+
+// GET /api/maxview-eslint-burndown - ESLint issue trend from nightly pipeline artifacts
+router.get('/maxview-eslint-burndown', async (req: Request, res: Response) => {
+  try {
+    const { from, to } = req.query as { from?: string; to?: string };
+    if (!from || !to) {
+      res.status(400).json({ error: 'from and to query parameters are required (YYYY-MM-DD)' });
+      return;
+    }
+
+    const burnDown = await getMaxViewEslintBurnDown(from, to);
+    res.json(burnDown);
+  } catch (error: any) {
+    console.error('Error fetching MaxView ESLint burn-down:', error);
+    res.status(500).json({ error: error?.message || 'Failed to fetch MaxView ESLint burn-down' });
   }
 });
 
@@ -3840,8 +3887,7 @@ import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelo
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { getAppSetting } from '../services/appSettingsService';
-import type { MenuItemKey } from '../../shared/types/menuSettings';
-const ALL_MENU_VIEWS: MenuItemKey[] = ['calendar', 'planning', 'cloudcost', 'backlog'];
+import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
 
 async function getCurrentChangelogVersion(): Promise<string> {
   const dbValue = await getAppSetting('current_changelog_version');
@@ -3881,6 +3927,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       isSuperAdmin: superAdmin,
       changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
+      betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -3889,7 +3936,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
 
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean }
+// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3898,13 +3945,15 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, showChangelogOnLogin } = req.body as {
+    const { markChangelogRead, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
       markChangelogRead?: boolean;
       showChangelogOnLogin?: boolean;
+      dismissBetaAnnouncement?: boolean;
     };
     const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
     if (markChangelogRead === true) updates.lastSeenChangelogVersion = await getCurrentChangelogVersion();
     if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
+    if (dismissBetaAnnouncement === true) updates.dismissedBetaProdAnnouncement = true;
     await updateChangelogPrefs(userId, updates);
     res.json({ ok: true });
   } catch {
@@ -3912,21 +3961,49 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
   }
 });
 
-// GET /api/skill-config?project=<name> — resolve project skill settings
-router.get('/skill-config', async (req: Request, res: Response) => {
+// GET /api/skill-configs?project=<name> — list all repo configs for a project
+router.get('/skill-configs', async (req: Request, res: Response) => {
   try {
     const project = req.query.project as string | undefined;
     if (!project) {
       res.status(400).json({ error: 'project query parameter is required' });
       return;
     }
-    const config = await getSkillConfig(project);
+    const configs = await listSkillConfigsForProject(project);
+    res.json(configs.map((c) => ({
+      id: c.id,
+      project: c.project,
+      skillRepo: c.skillRepo,
+      skillBranch: c.skillBranch,
+      friendlyName: c.friendlyName,
+      isDefault: c.isDefault,
+    })));
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
+router.get('/skill-config', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const settingsId = req.query.settingsId as string | undefined;
+    if (!project && !settingsId) {
+      res.status(400).json({ error: 'project or settingsId query parameter is required' });
+      return;
+    }
+    const config = settingsId
+      ? await getSkillConfigById(settingsId)
+      : await getSkillConfig(project!);
     if (!config) {
-      res.status(404).json({ error: 'No skill config found for this project' });
+      res.status(404).json({ error: 'No skill config found' });
       return;
     }
     res.json({
+      id: config.id,
       project: config.project,
+      friendlyName: config.friendlyName,
+      isDefault: config.isDefault,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? null,

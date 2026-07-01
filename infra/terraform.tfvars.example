@@ -5,6 +5,7 @@ resource_group_name    = "rg-ai-pilot-dev"
 location               = "East US"
 app_service_name       = "app-ai-pilot-dev"
 app_service_plan_name  = "plan-ai-pilot-dev"
+app_service_plan_sku   = "B1" # Use S1+ in prod for deployment slots (blue-green)
 environment            = "dev"
 
 # Azure DevOps Configuration
@@ -20,7 +21,8 @@ ado_project = "YourProject"
 #   CostCenter  = "Engineering"
 # }
 
-# Azure AD Auth
+# Azure AD Auth — use the SAME app registration as GitHub AZURE_CREDENTIALS
+# (deployment SP and user sign-in share one app; redirect URIs must include /auth/callback)
 azure_tenant_id     = "your-tenant-id"
 azure_client_id     = "your-client-id"
 azure_client_secret = "your-client-secret"

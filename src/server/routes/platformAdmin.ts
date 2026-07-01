@@ -8,6 +8,9 @@ import {
   listKnownApplicationUsers,
 } from '../services/userProjectAssignmentService';
 import * as menuSettingsService from '../services/menuSettingsService';
+import * as featureFlagService from '../services/featureFlagService';
+import * as groupService from '../services/groupService';
+import { getUserId, getUserEmail } from '../utils/requestUser';
 import { listProjectCatalog } from '../services/projectCatalogService';
 import {
   approveProjectAccessRequest,
@@ -72,6 +75,21 @@ router.get('/users', async (_req: Request, res: Response): Promise<void> => {
   try {
     const users = await listKnownApplicationUsers();
     res.json({ users });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/groups', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const groups = await groupService.listGroups();
+    res.json({
+      groups: groups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        project: group.project,
+      })),
+    });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -226,6 +244,88 @@ router.put('/menu-settings/:project', async (req: Request, res: Response): Promi
 
     const config = await menuSettingsService.upsertMenuConfig(project, enabledViews, getActingUserLabel(req));
     res.json(config);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Feature Flags ─────────────────────────────────────────────────────────────
+
+router.get('/feature-flags', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const flags = await featureFlagService.listFlags();
+    res.json(flags);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/feature-flags', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
+    const flag = await featureFlagService.createFlag(req.body, actor);
+    res.status(201).json(flag);
+  } catch (err: any) {
+    if (err?.message?.includes('Invalid flag key') || err?.message?.includes('already exists')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/feature-flags/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
+    const flag = await featureFlagService.updateFlag(req.params.id, req.body, actor);
+    res.json(flag);
+  } catch (err: any) {
+    if (err?.message?.includes('not found')) {
+      res.status(404).json({ error: 'Flag not found' });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/feature-flags/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
+    await featureFlagService.deleteFlag(req.params.id, actor);
+    res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/feature-flags/:id/rules', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
+    const rule = await featureFlagService.addRule(req.params.id, req.body, actor);
+    res.status(201).json(rule);
+  } catch (err: any) {
+    if (err?.message?.includes('not found')) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/feature-flags/:id/rules/:ruleId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
+    await featureFlagService.removeRule(req.params.ruleId, actor);
+    res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/feature-flags/:id/audit', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const entries = await featureFlagService.getFlagAudit(req.params.id);
+    res.json(entries);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

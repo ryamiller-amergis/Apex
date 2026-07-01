@@ -4,6 +4,7 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
+import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
 import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
@@ -17,8 +18,13 @@ import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
 import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
+import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
+import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
+import { FeatureFlagDemo } from './components/FeatureFlagDemo';
+import { useFeatureFlag } from './hooks/useFeatureFlags';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
@@ -48,6 +54,9 @@ const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => 
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
 const DevSessionView = lazy(() => import('./components/DevSessionView').then(m => ({ default: m.DevSessionView })));
+const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'));
+const StandupManageView = lazy(() => import('./components/StandupManageView'));
+const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -74,9 +83,10 @@ function App() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [pendingProject, setPendingProject] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'ui-lab';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'ui-lab';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -98,6 +108,12 @@ function App() {
                     ? 'admin'
                     : location.pathname.startsWith('/my-work')
                     ? 'my-work'
+                    : location.pathname === '/standup-manage'
+                    ? 'standup-manage'
+                    : location.pathname === '/standup-summary'
+                    ? 'standup-summary'
+                    : location.pathname === '/standup'
+                    ? 'standup'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
                     : 'calendar';
@@ -147,6 +163,8 @@ function App() {
     availableProjects,
     changeProject,
     changeAreaPath,
+    selectedSkillSettingsId,
+    changeSkillSettings,
     scheduledItems,
     unscheduledItems,
     pendingDueDateChange,
@@ -154,12 +172,49 @@ function App() {
     handleConfirmDueDateChange,
     handleCancelDueDateChange,
     handleFieldUpdate,
+    betaAnnouncementDismissed,
+    handleDismissBetaAnnouncement,
   } = useAppShell();
+
+  const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
 
   const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
     : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
 
   const { enabledViews } = useProjectMenuConfig(selectedProject);
+
+  // On the project picker, only fetch repo configs once a project is clicked (pending).
+  // Elsewhere (header repo switcher), load configs for the active project.
+  const repoConfigProject = currentView === 'project-selector' ? pendingProject : selectedProject;
+  const {
+    data: repoConfigs = [],
+    isFetched: repoConfigsFetched,
+    isError: repoConfigsError,
+  } = useProjectRepoConfigs(repoConfigProject);
+  const { data: activeSkillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
+
+  useEffect(() => {
+    if (!pendingProject || !repoConfigsFetched) return;
+    const project = pendingProject;
+    const completePendingSelect = (settingsId: string | null) => {
+      changeProject(project);
+      changeAreaPath(project);
+      changeSkillSettings(settingsId);
+      setPendingProject(null);
+      navigate('/home');
+      fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {});
+    };
+    // Degrade gracefully when skill-configs is unavailable (e.g. migration not applied yet).
+    if (repoConfigsError || repoConfigs.length === 0) {
+      completePendingSelect(null);
+    } else if (repoConfigs.length === 1) {
+      completePendingSelect(repoConfigs[0].id);
+    }
+    // >1 configs: handled by RepoSelector render branch
+  }, [pendingProject, repoConfigs, repoConfigsFetched, repoConfigsError, changeProject, changeAreaPath, changeSkillSettings, navigate]);
 
   // Guard all gated routes: redirect if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
@@ -171,7 +226,10 @@ function App() {
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
-    if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
+    if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
+    if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
+    if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
+    if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
@@ -186,46 +244,81 @@ function App() {
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
-  const defaultAgentRepo = skillRepos.find(
-    (repo) => repo.name.toLowerCase() === selectedProject.toLowerCase(),
-  ) ?? skillRepos[0];
+  const panelRepo = activeSkillConfig
+    ? { name: activeSkillConfig.skillRepo, defaultBranch: activeSkillConfig.skillBranch }
+    : (skillRepos.find((repo) => repo.name.toLowerCase() === selectedProject.toLowerCase()) ?? skillRepos[0]);
 
   const handleStartPanelChat = useCallback(async () => {
     if (!can('chat:view')) return;
     setChatOpen(true);
-    if (!defaultAgentRepo || startChat.isPending) return;
+    if (!panelRepo || startChat.isPending) return;
     setActiveThreadId(null);
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
           project: selectedProject,
-          repo: defaultAgentRepo.name,
-          branch: defaultAgentRepo.defaultBranch ?? 'main',
+          repo: panelRepo.name,
+          branch: panelRepo.defaultBranch ?? 'main',
           model: DEFAULT_MODEL_ID,
+          skillSettingsId: selectedSkillSettingsId ?? undefined,
         },
       });
       setActiveThreadId(result.threadId);
     } catch {
       // Error shown inside the panel
     }
-  }, [defaultAgentRepo, selectedProject, startChat]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId]);
 
   if (isAuthenticated === null) return <div>Loading...</div>;
   if (!isAuthenticated) return <Login />;
 
   if (currentView === 'project-selector') {
+    const showRepoSelector = Boolean(
+      pendingProject && repoConfigsFetched && !repoConfigsError && repoConfigs.length > 1,
+    );
+    const pendingSelectInProgress = Boolean(pendingProject && !showRepoSelector);
+
+    if (showRepoSelector) {
+      return (
+        <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+          <RepoSelector
+            configs={repoConfigs}
+            onSelect={(settingsId) => {
+              const project = pendingProject;
+              if (!project) return;
+              changeProject(project);
+              changeAreaPath(project);
+              changeSkillSettings(settingsId);
+              setPendingProject(null);
+              navigate('/home');
+              fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
+                method: 'POST',
+                credentials: 'include',
+              }).catch(() => {});
+            }}
+            onBack={() => setPendingProject(null)}
+          />
+        </ErrorBoundary>
+      );
+    }
+
+    if (pendingSelectInProgress) {
+      return (
+        <div className="loading-overlay">
+          <div className="loading-spinner-container">
+            <div className="spinner" />
+            <p>Opening project…</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <ProjectSelector
           selectedProject={selectedProject}
           onSelect={(project) => {
-            changeProject(project);
-            changeAreaPath(project);
-            navigate('/home');
-            fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
-              method: 'POST',
-              credentials: 'include',
-            }).catch(() => {});
+            setPendingProject(project);
           }}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
@@ -292,7 +385,7 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work'}
+            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary'}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
@@ -301,6 +394,9 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
+            repoConfigs={repoConfigs}
+            selectedSkillSettingsId={selectedSkillSettingsId}
+            onChangeSkillSettings={changeSkillSettings}
             onNavigateHome={() => navigate('/home')}
             onNavigateProjects={() => navigate('/')}
             onNavigateCalendar={() => navigate('/calendar')}
@@ -308,6 +404,7 @@ function App() {
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
+            onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -319,7 +416,9 @@ function App() {
 
           {currentView === 'home' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-              <AgentHome selectedProject={selectedProject} />
+              {/* Top-level split: demo component gated by "example-flag-demo" flag */}
+              <FeatureFlagDemo project={selectedProject} />
+              <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} />
             </ErrorBoundary>
           ) : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
@@ -328,6 +427,7 @@ function App() {
                   <div className="calendar-view">
                     <UnscheduledList
                       workItems={unscheduledItems}
+                      allWorkItems={workItems}
                       onSelectItem={setSelectedItem}
                       onUpdateDueDate={(id, dueDate) => {
                         setSelectedItem(null);
@@ -472,6 +572,30 @@ function App() {
                 </div>
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'standup' && can('standup:participate') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupCeremonyView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          ) : currentView === 'standup-manage' && can('standup:manage') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupManageView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          ) : currentView === 'standup-summary' && can('standup:participate') ? (
+            <div className="standup-view">
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <StandupSummaryView />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
           ) : currentView === 'ui-lab' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
@@ -553,6 +677,12 @@ function App() {
           showOnLogin={showChangelogOnLogin}
           onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
         />
+        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+          <BetaAnnouncementModal
+            isSuperAdmin={isSuperAdmin}
+            onDismiss={handleDismissBetaAnnouncement}
+          />
+        )}
 
         <ChatAgentPanel
           thread={activeThread}
@@ -561,7 +691,7 @@ function App() {
           onNewChat={handleStartPanelChat}
           onSelectThread={(id) => setActiveThreadId(id || null)}
           selectedProject={selectedProject}
-          canStartNewChat={!!defaultAgentRepo && !isLoadingSkillRepos && !startChat.isPending}
+          canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}
         />

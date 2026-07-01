@@ -5,6 +5,7 @@ import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import type { ThemeMode } from '../hooks/useAppShell';
+import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -15,7 +16,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'ui-lab';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'ui-lab';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -27,6 +28,9 @@ interface AppHeaderProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  repoConfigs?: ProjectRepoConfigSummary[];
+  selectedSkillSettingsId?: string | null;
+  onChangeSkillSettings?: (id: string) => void;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
   onNavigateCalendar: () => void;
@@ -34,6 +38,7 @@ interface AppHeaderProps {
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
+  onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
@@ -51,6 +56,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  repoConfigs = [],
+  selectedSkillSettingsId,
+  onChangeSkillSettings,
   onNavigateHome,
   onNavigateProjects,
   onNavigateCalendar,
@@ -58,6 +66,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateCloudCost,
   onNavigateBacklog,
   onNavigateMyWork,
+  onNavigateStandup,
   onNavigateUiLab,
   onNavigateAdmin,
   onOpenChangelog,
@@ -90,6 +99,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -98,7 +108,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'home') return true;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
       return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+    }
+    if (item.view === 'standup') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
+      if (!isSuperAdmin && !can('standup:participate')) return false;
+      return true;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
@@ -157,6 +173,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
 
       <div className="header-controls">
+        {repoConfigs.length > 1 && onChangeSkillSettings && (
+          <div className={styles['repo-switcher-group']}>
+            <span className={styles['repo-switcher-label']}>Repo Project -</span>
+            <select
+              className={styles['repo-switcher']}
+              value={selectedSkillSettingsId ?? ''}
+              onChange={(e) => onChangeSkillSettings(e.target.value)}
+            >
+              {repoConfigs.map((cfg) => (
+                <option key={cfg.id} value={cfg.id}>
+                  {cfg.friendlyName}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {can('notifications:view') && <NotificationBell />}
         <UserMenu
           onOpenChangelog={onOpenChangelog}

@@ -2,6 +2,7 @@ import './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
 import passport from 'passport';
@@ -39,6 +40,14 @@ import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
+import standupRouter from './routes/standup';
+import featureFlagRoutes from './routes/featureFlags';
+import { standupScheduler } from './services/standupScheduler';
+import { resolveDataRoot } from './utils/dataDir';
+
+type FileStoreFactory = (
+  sessionMiddleware: typeof session,
+) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
 import uiLabRoutes from './routes/uiLab';
 
 const app = express();
@@ -51,27 +60,51 @@ if (process.env.NODE_ENV === 'production') {
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://app-scrum-dev.azurewebsites.net']
+  origin: process.env.NODE_ENV === 'production'
+    ? [
+        'https://app-scrum-dev.azurewebsites.net',
+        'https://app-apex-prd.azurewebsites.net',
+        'https://apex.amergis.com',
+      ]
     : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Session configuration
+// Session configuration — in production use a file store on /home/data so OAuth
+// state and login sessions survive load balancing across App Service instances.
+const sessionCookie = {
+  secure: process.env.NODE_ENV === 'production',
+  httpOnly: true,
+  maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  sameSite: 'lax' as const,
+  path: '/',
+};
+
+let sessionStore: session.Store | undefined;
+if (process.env.NODE_ENV === 'production') {
+  const sessionsDir = path.join(resolveDataRoot(), 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // Loaded via require so local dev (ts-node) does not need session-file-store typings.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const createFileStore = require('session-file-store') as FileStoreFactory;
+  const FileStore = createFileStore(session);
+  sessionStore = new FileStore({
+    path: sessionsDir,
+    ttl: 86400,
+    retries: 0,
+  });
+  console.log(`[session] Using file store at ${sessionsDir}`);
+}
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
-  resave: true, // Changed to true for file store
-  saveUninitialized: true, // Changed to true to save the session before OAuth flow
+  store: sessionStore,
+  resave: false,
+  saveUninitialized: true, // required so OAuth state is persisted before the Azure AD redirect
   name: 'connect.sid',
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'lax',
-    path: '/'
-  }
+  cookie: sessionCookie,
 }));
 
 // Initialize Passport
@@ -104,9 +137,17 @@ const internalOnlyPaths = [
   '/backlog/update-figma-url',
   '/backlog/mock-html',
 ];
+
+// Health check paths are unauthenticated — used by Azure slot-swap warmup and
+// external monitoring. req.path is relative to /api (prefix is stripped by Express).
+const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
+  const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+
+  if (isHealthPath) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -137,6 +178,8 @@ app.use('/api/review-comments', ensureAuthenticated, reviewCommentRoutes);
 app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRouter);
 app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
+app.use('/api/standup', ensureAuthenticated, standupRouter);
+app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
@@ -228,6 +271,9 @@ const server = app.listen(PORT, () => {
   const uatAutoRelease = getUatAutoReleaseService();
   uatAutoRelease.start();
   console.log('UAT auto-release service started');
+
+  standupScheduler.start();
+  console.log('Standup scheduler started');
 
   bootstrapAdmin();
 

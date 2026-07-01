@@ -1,22 +1,26 @@
-name: Deploy to Azure App Service
+name: Deploy to Production
 
-# Triggers on push to main branch or manual workflow dispatch
 on:
   push:
     branches:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
 env:
   NODE_VERSION: '20.x'
-  APP_SERVICE_NAME: 'app-scrum-dev'
-  RESOURCE_GROUP_NAME: 'rg-scrum-dev'
+  APP_SERVICE_NAME: 'app-apex-prd'
+  RESOURCE_GROUP_NAME: 'rg-apex-prd-app'
+  SLOT_NAME: 'staging'
 
 jobs:
-  build-and-deploy:
+  deploy-staging:
     runs-on: ubuntu-latest
-    environment: dev
-    
+    environment: prd
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,7 +31,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -44,7 +48,6 @@ jobs:
         id: migration_changes
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           GITHUB_SHA: ${{ github.sha }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node scripts/ci/has-migration-changes.mjs
@@ -55,6 +58,32 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up
 
+      - name: Verify no pending migrations remain
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node -e "
+          import('pg').then(async ({ default: pg }) => {
+            const { readdirSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            try {
+              const files = readdirSync(join(process.cwd(), 'migrations')).filter(f => f.endsWith('.sql'));
+              const { rows } = await client.query('SELECT name FROM pgmigrations');
+              const applied = new Set(rows.map(r => r.name));
+              const pending = files.filter(f => !applied.has(f.replace(/\\.sql\$/, '')));
+              if (pending.length > 0) {
+                console.error('FAIL: pending migrations after apply: ' + pending.join(', '));
+                process.exit(1);
+              }
+              console.log('OK: no pending migrations.');
+            } finally {
+              await client.end();
+            }
+          });
+          "
+
       - name: Create deployment package
         run: |
           mkdir -p deploy/dist
@@ -63,66 +92,29 @@ jobs:
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           cd deploy
-          # NOTE: do NOT use --ignore-scripts here. Native deps such as sqlite3
-          # (pulled in transitively by @cursor/sdk) rely on their install script
-          # to download the prebuilt node_sqlite3.node binary. Skipping scripts
-          # produces "Could not locate the bindings file" at runtime. The
-          # postinstall esbuild-wasm patch is a safe no-op in this package
-          # because esbuild-wasm is a devDependency and is omitted here.
           npm ci --omit=dev
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
-
-      - name: Validate Azure credentials secret
-        shell: bash
-        env:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-
-          raw = os.environ.get('AZURE_CREDENTIALS', '')
-          if not raw.strip():
-            print("AZURE_CREDENTIALS is empty/unavailable. If you're using an Environment, ensure the secret is added under that Environment (job environment: dev).")
-            sys.exit(1)
-
-          try:
-            creds = json.loads(raw)
-          except Exception as e:
-            print("AZURE_CREDENTIALS is not valid JSON:", str(e))
-            sys.exit(1)
-
-          if not isinstance(creds, dict):
-            print("AZURE_CREDENTIALS must be a JSON object with keys clientId, clientSecret, tenantId, subscriptionId")
-            sys.exit(1)
-
-          required = ["clientId", "clientSecret", "tenantId", "subscriptionId"]
-          missing = [k for k in required if not creds.get(k)]
-          if missing:
-            print("AZURE_CREDENTIALS JSON is missing required field(s):", ", ".join(missing))
-            print("Expected format: {\"clientId\":..., \"clientSecret\":..., \"tenantId\":..., \"subscriptionId\":...}")
-            sys.exit(1)
-
-          print("AZURE_CREDENTIALS JSON looks OK (required keys present).")
-          PY
-
-      - name: Extract Azure credentials for authentication
-        id: extract-creds
-        run: |
-          echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
-          echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
-          echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
 
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set App Service Configuration
+      - name: Extract Azure credentials
+        run: |
+          echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+          echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
+          echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+
+      - name: Configure staging slot settings
+        env:
+          STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
         run: |
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
             --settings \
               SCM_DO_BUILD_DURING_DEPLOYMENT=false \
               ENABLE_ORYX_BUILD=false \
@@ -139,7 +131,7 @@ jobs:
               AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
               AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
-              AZURE_REDIRECT_URL="${{ secrets.AZURE_REDIRECT_URL }}" \
+              AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               AZURE_COST_TENANT_ID="${{ secrets.AZURE_COST_TENANT_ID }}" \
               AZURE_COST_CLIENT_ID="${{ secrets.AZURE_COST_CLIENT_ID }}" \
               AZURE_COST_CLIENT_SECRET="${{ secrets.AZURE_COST_CLIENT_SECRET }}" \
@@ -160,49 +152,116 @@ jobs:
               MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
+              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
+              WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
+              WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
 
-          # Bypass npm start/package.json resolution issues by setting an explicit startup command.
-          # Using an absolute path ensures it works even if the current working directory isn't wwwroot.
+          # Mark sticky slot settings (these stay with their slot during swap)
+          az webapp config appsettings set \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --slot-settings \
+              AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
+              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
+
           az webapp config set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
             --startup-file "node /home/site/wwwroot/dist/server/index.js"
 
-          # Enable ARR Affinity for session persistence
           az webapp update \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
             --set clientAffinityEnabled=true
 
-          # Configure static content cache headers to prevent caching issues
-          az resource update \
-            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
-            --name ${{ env.APP_SERVICE_NAME }} \
-            --resource-type "Microsoft.Web/sites/config" \
-            --set properties.staticWebAssets.enabled=true \
-            --api-version 2022-03-01 || true
-
-      - name: Wait for SCM restart
-        run: sleep 60
-
-      - name: Verify build-related App Settings
-        run: |
-          az webapp config appsettings list \
-            --name ${{ env.APP_SERVICE_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
-            --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT' || name=='ENABLE_ORYX_BUILD' || name=='WEBSITE_RUN_FROM_PACKAGE'].{name:name,value:value}" \
-            -o table
-
-      - name: Wait before deployment
-        run: sleep 30
-
-      - name: Deploy to Azure Web App
+      - name: Deploy to staging slot
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APP_SERVICE_NAME }}
+          slot-name: ${{ env.SLOT_NAME }}
           package: ./deploy.zip
 
+      - name: Health check staging slot
+        run: |
+          echo "Waiting for staging slot to warm up..."
+          sleep 30
+          SLOT_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/api/health/db"
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS: $SLOT_URL"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$SLOT_URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Staging slot is healthy (HTTP 200)"
+              exit 0
+            fi
+            echo "Got HTTP $HTTP_CODE, waiting 15s..."
+            sleep 15
+          done
+          echo "FAIL: Staging slot did not become healthy after $MAX_ATTEMPTS attempts"
+          exit 1
+
       - name: Azure logout
-        run: az logout
+        run: az logout || true
+        if: always()
+
+  swap:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: prd-production
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Swap staging to production
+        run: |
+          echo "Swapping ${{ env.SLOT_NAME }} -> production..."
+          az webapp deployment slot swap \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --target-slot production
+
+      - name: Smoke test production
+        id: smoke
+        run: |
+          echo "Waiting for production to stabilize..."
+          sleep 20
+          PROD_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net/api/health/db"
+          MAX_ATTEMPTS=5
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Smoke test attempt $ATTEMPT/$MAX_ATTEMPTS: $PROD_URL"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Production is healthy (HTTP 200)"
+              exit 0
+            fi
+            echo "Got HTTP $HTTP_CODE, waiting 10s..."
+            sleep 10
+          done
+          echo "FAIL: Production not healthy after swap"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          echo "Rolling back: swapping production -> ${{ env.SLOT_NAME }}..."
+          az webapp deployment slot swap \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot production \
+            --target-slot ${{ env.SLOT_NAME }}
+          echo "Rollback complete."
+
+      - name: Azure logout
+        run: az logout || true
         if: always()

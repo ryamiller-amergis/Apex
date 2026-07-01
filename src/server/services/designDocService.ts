@@ -3,7 +3,7 @@ import path from 'path';
 import { and, desc, eq } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
@@ -13,7 +13,7 @@ import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
-import { getSkillConfig } from './projectSettingsService';
+import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
@@ -121,6 +121,7 @@ export async function createDesignDoc(opts: {
   title?: string;
   status?: DesignDocStatus;
   model?: string;
+  skillSettingsId?: string | null;
 }): Promise<{ designDocId: string }> {
   const status = opts.status ?? 'generating';
   const [row] = await db
@@ -134,6 +135,7 @@ export async function createDesignDoc(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
       model: opts.model ?? null,
+      skillSettingsId: opts.skillSettingsId ?? null,
       designContent: '',
       techSpecContent: '',
       assumptionsContent: '',
@@ -171,8 +173,13 @@ export async function listDesignDocs(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(designDocs.updatedAt));
 
+  const uniqueSettingsIds = [...new Set(rows.map(({ designDoc }) => designDoc.skillSettingsId).filter(Boolean))] as string[];
+  const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
+  const settingsNameMap = new Map(settingsNameEntries);
+
   return rows.map(({ designDoc, reviewerDisplayName, authorDisplayName, prdTitle, designDocOwnerId, designDocOwnerDisplayName }) =>
-    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+    rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName,
+      designDoc.skillSettingsId ? settingsNameMap.get(designDoc.skillSettingsId) ?? null : null),
   );
 }
 
@@ -196,8 +203,9 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
 
   if (rows.length === 0) return null;
   const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
+  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
   return {
-    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName),
+    ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName, skillSettingsName),
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -326,7 +334,7 @@ export async function reviewDesignDoc(
     throw err;
   }
 
-  const skillConfig = await getSkillConfig(row.project);
+  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   if (skillConfig?.designDocValidationSkillPath) {
     if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
       const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
@@ -448,13 +456,13 @@ export async function syncPerFeatureDesignDocs(
     return;
   }
 
-  const skillConfig = await getSkillConfig(project);
-  const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
   const seedModelRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.id, seedId),
-    columns: { model: true },
+    columns: { model: true, skillSettingsId: true },
   });
   const seedModel = seedModelRow?.model ?? null;
+  const skillConfig = await resolveSkillConfig({ project, settingsId: seedModelRow?.skillSettingsId ?? undefined });
+  const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
   // Load titles already persisted for this PRD so the watcher's early inserts are not duplicated
   const existingRows = await db
@@ -479,6 +487,7 @@ export async function syncPerFeatureDesignDocs(
         authorId,
         title,
         model: seedModel,
+        skillSettingsId: seedModelRow?.skillSettingsId ?? null,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
@@ -538,7 +547,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId) {
       clearInterval(interval);
@@ -559,7 +568,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     const newFeatures = features.filter((f) => !createdSlugs.has(f.slug));
     if (newFeatures.length > 0) {
       try {
-        const skillConfig = await getSkillConfig(seedDoc.project);
+        const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
         const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
         for (const feat of newFeatures) {
@@ -572,6 +581,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
               model: seedDoc.model ?? null,
+              skillSettingsId: seedDoc.skillSettingsId ?? null,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
@@ -662,7 +672,8 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
 
-      const skillConfig = await getSkillConfig(project);
+      const docRow = await db.query.designDocs.findFirst({ where: eq(designDocs.id, designDocId), columns: { skillSettingsId: true } });
+      const skillConfig = await resolveSkillConfig({ project, settingsId: docRow?.skillSettingsId ?? undefined });
       const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
       await db.update(designDocs)
@@ -736,11 +747,33 @@ export async function startSingleFeatureDesignDocWatcher(
     return;
   }
 
-  const { getSkillConfig } = await import('./projectSettingsService');
+  // Resolve the feature's routing decision from the design plan (authoritative) with
+  // a fallback to the raw backlog feature's route field.
+  const planRow = await db.query.designPlans.findFirst({
+    where: eq(designPlans.prdId, prdId),
+    columns: { features: true },
+  });
+  const planFeature = planRow?.features?.find((f) => f.featureIndex === featureIndex);
+  const decision = planFeature?.decision ?? 'new-page';
+
+  // Flatten the backlog JSON to get the raw feature (mirrors extractFeatures in designPrototypeService).
+  const bj = prd.backlogJson as { features?: Array<{ route?: string }>; epics?: Array<{ features?: Array<{ route?: string }> }> } | null;
+  const allBacklogFeatures: Array<{ route?: string }> = [];
+  if (bj?.features) allBacklogFeatures.push(...bj.features);
+  if (bj?.epics) {
+    for (const epic of bj.epics) {
+      if (epic.features) allBacklogFeatures.push(...epic.features);
+    }
+  }
+  const backlogFeatureRoute = allBacklogFeatures[featureIndex]?.route?.trim();
+  const targetRoute = planFeature?.targetRoute?.trim() || backlogFeatureRoute || undefined;
+  const targetRouteDisplay = decision === 'no-ui' ? 'N/A' : (targetRoute ?? 'N/A');
+
+  const { resolveSkillConfig: resolveCfg } = await import('./projectSettingsService');
   const { getDefaultModel } = await import('./appSettingsService');
   const { createThread } = await import('./chatAgentService');
 
-  const skillConfig = await getSkillConfig(prd.project);
+  const skillConfig = await resolveCfg({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const globalModel = await getDefaultModel();
   const model = skillConfig?.designDocModel ?? globalModel;
 
@@ -770,9 +803,9 @@ export async function startSingleFeatureDesignDocWatcher(
         '',
         '## REQUIRED — Reflect the approved UI and flag impact',
         '',
-        'The dashed purple "NEW" annotation marks EXACTLY the scope that was approved by the reviewer. Treat that marked region as the source of truth for what is changing. The generated doc MUST additionally:',
+        'The dashed purple "NEW" annotation is a visual reference of the intended end state — it is NOT an implementation contract or source of truth. The developer-confirmed scope (decided before implementation) is the source of truth. Where reproducing the prototype would alter, remove, or risk existing functionality, existing functionality takes precedence until the developer explicitly approves that specific change. The generated doc MUST additionally:',
         '',
-        '7. **Summarize the UI changes** exactly as shown inside the annotation border (new fields, columns, controls, states), so the doc stays faithful to the approved prototype.',
+        '7. **Emit every UI change as a pre-classified numbered checklist.** For every distinct UI element or behavior change visible inside the annotation border, output exactly one line in this format: `- [ ] [additive|impacts-existing] <concise description> (target area: <where on the page>)`. Tag a change `[additive]` if it introduces new UI/behavior without touching anything that already works. Tag it `[impacts-existing]` if it could alter, remove, reorder, or make ambiguous any existing behavior, data flow, validation, default, layout, or interaction — including when the change is additive but could shift existing behavior (e.g. a new required field, a changed default, a layout shift).',
         '8. **For update-page features, analyze and flag impact on EXISTING functionality:** explicitly identify any existing behavior, data flow, validation, or interaction on the page that these UI changes could alter, break, or make ambiguous (e.g. layout shifts, changed defaults, new required inputs, conflicts with existing actions). Do NOT silently assume; if a change would touch existing behavior, call it out.',
         '9. **Raise developer sign-off questions:** where the prototype leaves a decision open or where implementation could reasonably go more than one way, pose a concrete question for the developer to confirm BEFORE implementation, rather than guessing.',
         '',
@@ -792,6 +825,11 @@ export async function startSingleFeatureDesignDocWatcher(
     ...(prd.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
     ...(interviewTranscript ? ['\n# Interview Transcript', interviewTranscript] : []),
     ...(prototypeContext ? [prototypeContext] : []),
+    '\n# Feature Routing — AUTHORITATIVE VALUES (reproduce verbatim)',
+    '',
+    'The following routing values are pre-decided. Do NOT substitute, paraphrase, or infer your own values — use exactly what is provided here.',
+    `Decision: ${decision}`,
+    `Target route: ${targetRouteDisplay}`,
     '\n# CRITICAL: Output File Instructions',
     '',
     'You MUST write the following output files using the built-in file writing tool.',
@@ -799,8 +837,8 @@ export async function startSingleFeatureDesignDocWatcher(
     'The app will not mark this design doc complete unless all three files are present:',
     '',
     '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
-    '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification. When a prototype is provided, this file MUST include a `## UI Changes (from approved prototype)` section that describes the changes shown inside the "NEW" annotation, and (for update-page features) a `## Existing Functionality Impact` section that flags any existing behavior these changes could alter or break.',
-    '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section listing concrete decisions the developer should confirm BEFORE implementation, and a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
+    `2. \`.ai-pilot/output/design-doc-tech-spec.md\` — the technical implementation specification. The file MUST open with the following two headings as the very first content (before all other sections), reproducing the provided routing values VERBATIM — never substitute, paraphrase, or infer:\n\n## Target route\n\`${targetRouteDisplay}\`\n\n## Page decision\n\`${decision}\`\n\nWhen a prototype is provided, this file MUST also include a \`## UI Changes (from approved prototype)\` section that renders every change inside the annotation as a numbered checklist where each item is tagged \`[additive]\` or \`[impacts-existing]\` per the classification rules in the prototype context above, formatted as: \`- [ ] [additive|impacts-existing] <concise description> (target area: <where on the page>)\`. It MUST also include (for update-page features) a \`## Existing Functionality Impact\` section where every \`[impacts-existing]\` item from the UI Changes checklist has a corresponding entry explaining what existing behavior is at risk.`,
+    '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section that lists one explicit go/no-go decision per `[impacts-existing]` item from the UI Changes checklist, phrased so the developer can confirm or defer each individually before implementation starts. It MUST also include a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
   ].join('\n');
 
   const thread = await createThread(
@@ -827,6 +865,7 @@ export async function startSingleFeatureDesignDocWatcher(
     featureIndex,
     title: featureName,
     model,
+    skillSettingsId: prd.skillSettingsId ?? null,
   });
 
   console.log(`[designDoc] startSingleFeatureDesignDocWatcher: created doc (docId=${designDocId}, prototypeId=${prototypeId}, featureIndex=${featureIndex})`);
@@ -861,6 +900,7 @@ function rowToSummary(
   authorName?: string | null,
   designDocOwnerId?: string | null,
   designDocOwnerName?: string | null,
+  skillSettingsName?: string | null,
 ): DesignDocSummary {
   const effectiveOwnerId = designDocOwnerId ?? row.authorId;
   const effectiveOwnerName = designDocOwnerName ?? authorName ?? undefined;
@@ -885,6 +925,8 @@ function rowToSummary(
     ownerName: effectiveOwnerName,
     title: row.title,
     model: row.model ?? undefined,
+    skillSettingsId: row.skillSettingsId ?? null,
+    skillSettingsName: skillSettingsName ?? null,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,
@@ -907,7 +949,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     return;
   }
 
-  const skillConfig = await getSkillConfig(doc.project);
+  const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
   if (!skillConfig?.designDocValidationSkillPath) {
     // #region agent log
     try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:no-skill',message:'autoStartValidation early exit: no skill config',data:{designDocId,project:doc.project,hasSkillConfig:!!skillConfig,validationSkillPath:skillConfig?.designDocValidationSkillPath??null},timestamp:Date.now(),hypothesisId:'H-B'})+'\n');}catch(_){}
@@ -1220,7 +1262,7 @@ export async function triggerFixValidation(
   };
 
   // Create or reuse the doc assistant thread
-  const skillConfig = await getSkillConfig(doc.project);
+  const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
   const globalModel = await getDefaultModel();
   const model = skillConfig?.designDocAssistantModel ?? globalModel;
 

@@ -78,8 +78,8 @@ async function runPlanGeneration(prdId: string): Promise<void> {
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
 
-  const { getSkillConfig } = await import('./projectSettingsService');
-  const skillConfig = await getSkillConfig(prd.project);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   const modelId = skillConfig?.designPlanBedrockModelId ?? undefined;
   const maxTokens = skillConfig?.designPlanBedrockMaxTokens ?? undefined;
 
@@ -137,12 +137,12 @@ export async function generateDesignPlan(prdId: string): Promise<string> {
   // Assign the design-prototype reviewer pool (kickoff approvers, else project pool) and notify
   // them — these are the only users who may edit the plan and generate designs from it.
   try {
-    const { getApproverUserIds } = await import('./projectSettingsService');
+    const { getApproverUserIdsForProject } = await import('./projectSettingsService');
     const { assignApprovers } = await import('./documentApprovalService');
     const kickoffIds = prd.designPrototypeApproverIds?.filter(Boolean) ?? [];
     const poolIds = kickoffIds.length > 0
       ? kickoffIds
-      : await getApproverUserIds(prd.project, 'design_prototype');
+      : await getApproverUserIdsForProject(prd.project, 'design_prototype');
     if (poolIds.length > 0) {
       await assignApprovers(prdId, 'design_prototype', poolIds, prd.authorId);
     }

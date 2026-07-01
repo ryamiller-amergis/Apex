@@ -161,7 +161,7 @@
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   border: 1px solid var(--border-color);
   border-radius: 10px;
   box-shadow: 0 -4px 16px var(--shadow-md);
@@ -361,7 +361,7 @@
 }
 
 .attachBtn:hover:not(:disabled) {
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
@@ -392,7 +392,7 @@
 }
 
 .micBtn:hover:not(:disabled) {
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
@@ -445,7 +445,7 @@
 
 .modelSelect:hover:not(:disabled),
 .modelSelect:focus {
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   border-color: var(--accent-color);
   color: var(--text-primary);
 }
@@ -540,7 +540,7 @@
   padding: 5px 10px 5px 5px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--bg-primary);
+  background: var(--brand-primary);
 }
 
 .contextMeterRing {
@@ -565,7 +565,7 @@
   position: absolute;
   inset: 4px;
   border-radius: 50%;
-  background: var(--bg-primary);
+  background: var(--brand-primary);
 }
 
 .contextMeterRing span {
@@ -596,7 +596,7 @@
   padding: 0 14px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   color: var(--text-primary);
   font-size: 0.82rem;
   font-weight: 700;
@@ -628,7 +628,7 @@
 .chatInputBar {
   padding: 0 24px 16px;
   border-top: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--brand-primary);
   padding-top: 12px;
 }
 
@@ -968,7 +968,7 @@
 .messageCopyIconBtn:hover {
   border-color: var(--accent-color);
   color: var(--text-primary);
-  background: var(--bg-primary);
+  background: var(--brand-primary);
 }
 
 .messageCopyIconBtn svg {
@@ -1117,7 +1117,7 @@
 .choiceBlock {
   margin-top: 0;
   border-top: 1px solid var(--border-color-light);
-  background: var(--bg-primary);
+  background: var(--brand-primary);
 }
 
 .choiceBlock + .choiceBlock {
@@ -1229,7 +1229,7 @@
 
 .choiceFreeform:focus {
   outline: none;
-  background: var(--bg-primary);
+  background: var(--brand-primary);
 }
 
 .choiceFreeformLocked {

@@ -34,6 +34,8 @@ jest.mock('../db/drizzle', () => {
         designDocs: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
         interviews: { findFirst: jest.fn() },
+        designPlans: { findFirst: jest.fn() },
+        designPrototypes: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -60,9 +62,14 @@ jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({
-  getSkillConfig: jest.fn().mockResolvedValue(null),
-}));
+jest.mock('../services/projectSettingsService', () => {
+  const getSkillConfig = jest.fn().mockResolvedValue(null);
+  return {
+    getSkillConfig,
+    resolveSkillConfig: jest.fn().mockImplementation((opts: { project: string }) => getSkillConfig(opts.project)),
+    getSkillSettingsName: jest.fn().mockResolvedValue(null),
+  };
+});
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn().mockResolvedValue('default-model'),
 }));
@@ -96,6 +103,7 @@ import {
   syncValidationResult,
   markValidationReady,
   startDesignDocWatcher,
+  startSingleFeatureDesignDocWatcher,
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -1170,5 +1178,130 @@ describe('two-stage design doc approval workflow', () => {
 
     expect(mockRecordApproverResponse).toHaveBeenCalled();
     expect(mockDb.update).not.toHaveBeenCalled();
+  });
+});
+
+// ── startSingleFeatureDesignDocWatcher — routing context injection ─────────────
+
+describe('startSingleFeatureDesignDocWatcher — routing context injection', () => {
+  const { createThread: mockCreateThread } = jest.requireMock('../services/chatAgentService') as { createThread: jest.Mock };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function setupCommonMocks() {
+    // No existing doc — proceed with generation.
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      id: 'prd-1',
+      project: 'proj-alpha',
+      authorId: 'user-1',
+      content: 'PRD content',
+      backlogJson: {
+        features: [
+          { id: 'feat-0', title: 'Feature 0' },
+          { id: 'feat-1', title: 'Feature 1', route: '/existing-page' },
+        ],
+      },
+      interviewId: null,
+      skillSettingsId: null,
+    });
+
+    mockDb.query.designPrototypes.findFirst.mockResolvedValue({
+      featureName: 'My Feature',
+      mockHtml: null,
+      mockVersion: 1,
+    });
+
+    // Default: no design plan row.
+    mockDb.query.designPlans.findFirst.mockResolvedValue(null);
+
+    // insert().values().returning() → return a design doc id.
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    // update().set().where()
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    mockCreateThread.mockResolvedValue({ id: 'thread-new' });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupCommonMocks();
+  });
+
+  it('injects decision and targetRoute from the design plan into the generation context', async () => {
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      features: [{ featureIndex: 0, decision: 'new-page', targetRoute: '/shift-scheduler' }],
+    });
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
+
+    expect(mockCreateThread).toHaveBeenCalledTimes(1);
+    const { freeformContext } = mockCreateThread.mock.calls[0][1];
+    expect(freeformContext).toContain('Decision: new-page');
+    expect(freeformContext).toContain('Target route: /shift-scheduler');
+    expect(freeformContext).toContain('## Target route');
+    expect(freeformContext).toContain('`/shift-scheduler`');
+    expect(freeformContext).toContain('## Page decision');
+    expect(freeformContext).toContain('`new-page`');
+  });
+
+  it('falls back to backlog feature.route when design plan targetRoute is absent', async () => {
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      features: [{ featureIndex: 1, decision: 'update-page' }],
+    });
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 1, 'prd-1', null);
+
+    expect(mockCreateThread).toHaveBeenCalledTimes(1);
+    const { freeformContext } = mockCreateThread.mock.calls[0][1];
+    expect(freeformContext).toContain('Decision: update-page');
+    expect(freeformContext).toContain('Target route: /existing-page');
+    expect(freeformContext).toContain('`/existing-page`');
+  });
+
+  it('emits N/A for targetRoute and still emits both headings when decision is no-ui', async () => {
+    mockDb.query.designPlans.findFirst.mockResolvedValue({
+      features: [{ featureIndex: 0, decision: 'no-ui', targetRoute: '/irrelevant' }],
+    });
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
+
+    expect(mockCreateThread).toHaveBeenCalledTimes(1);
+    const { freeformContext } = mockCreateThread.mock.calls[0][1];
+    expect(freeformContext).toContain('Decision: no-ui');
+    expect(freeformContext).toContain('Target route: N/A');
+    expect(freeformContext).toContain('`N/A`');
+    expect(freeformContext).toContain('`no-ui`');
+  });
+
+  it('defaults to new-page and N/A when no design plan exists', async () => {
+    mockDb.query.designPlans.findFirst.mockResolvedValue(null);
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
+
+    expect(mockCreateThread).toHaveBeenCalledTimes(1);
+    const { freeformContext } = mockCreateThread.mock.calls[0][1];
+    expect(freeformContext).toContain('Decision: new-page');
+    expect(freeformContext).toContain('Target route: N/A');
+  });
+
+  it('does not call createThread when the doc already exists (idempotency guard)', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-existing' });
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
+
+    expect(mockCreateThread).not.toHaveBeenCalled();
   });
 });

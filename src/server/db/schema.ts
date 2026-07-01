@@ -1,5 +1,5 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
@@ -9,6 +9,7 @@ import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSet
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
+import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ export const chatMessages = pgTable('chat_messages', {
   role: text('role').notNull(),
   text: text('text').notNull(),
   toolName: text('tool_name'),
+  hidden: boolean('hidden').notNull().default(false),
   ts: timestamp('ts', { withTimezone: true, mode: 'string' }).notNull(),
 });
 
@@ -81,8 +83,10 @@ export const devSessions = pgTable('dev_sessions', {
   chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'cascade' }),
   authorId: text('author_id').notNull(),
   branchName: text('branch_name'),
+  // status values: setting_up | in_progress | conflict | closed | failed
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
+  prUrl: text('pr_url'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -103,6 +107,7 @@ export const appUsers = pgTable('app_users', {
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
   lastSeenChangelogVersion: text('last_seen_changelog_version'),
   showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
+  dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
 });
 
 export const appRoles = pgTable('app_roles', {
@@ -270,6 +275,7 @@ export const interviews = pgTable('interviews', {
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
   testCaseApproverIds: jsonb('test_case_approver_ids').$type<string[]>(),
+  skillSettingsId: uuid('skill_settings_id'),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -301,6 +307,7 @@ export const prds = pgTable('prds', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
+  skillSettingsId: uuid('skill_settings_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -343,6 +350,7 @@ export const designDocs = pgTable('design_docs', {
   proposedTechSpecContent: text('proposed_tech_spec_content'),
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
+  skillSettingsId: uuid('skill_settings_id'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
@@ -431,9 +439,11 @@ export const designDocsRelations = relations(designDocs, ({ one }) => ({
 
 export const projectSkillSettings = pgTable('project_skill_settings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').unique().notNull(),
+  project: text('project').notNull(),
   skillRepo: text('skill_repo').notNull(),
   skillBranch: text('skill_branch').notNull(),
+  friendlyName: text('friendly_name').notNull(),
+  isDefault: boolean('is_default').notNull().default(false),
   updatedBy: text('updated_by'),
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
@@ -473,28 +483,36 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   uiLabSkillPath: text('ui_lab_skill_path'),
   developmentSkillPath: text('development_skill_path'),
   developmentModel: text('development_model'),
+  standupSkillPath: text('standup_skill_path'),
+  standupModel: text('standup_model'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // Exactly one default repo config per project.
+  oneDefaultPerProject: uniqueIndex('project_skill_settings_one_default_per_project')
+    .on(t.project)
+    .where(sql`is_default`),
+  projectFriendlyName: unique('project_skill_settings_project_friendly_name_key').on(t.project, t.friendlyName),
+}));
 
 export const projectApprovers = pgTable('project_approvers', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   documentType: text('document_type').notNull(),
   assignedBy: text('assigned_by'),
   assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
-  uniq: unique().on(t.project, t.userId, t.documentType),
+  uniq: unique().on(t.settingsId, t.userId, t.documentType),
 }));
 
 export const projectApproversRelations = relations(projectApprovers, ({ one }) => ({
   projectSkillSetting: one(projectSkillSettings, {
-    fields: [projectApprovers.project],
-    references: [projectSkillSettings.project],
+    fields: [projectApprovers.settingsId],
+    references: [projectSkillSettings.id],
   }),
   user: one(appUsers, {
     fields: [projectApprovers.userId],
@@ -505,19 +523,19 @@ export const projectApproversRelations = relations(projectApprovers, ({ one }) =
 // Live group references in a project's approver pool, expanded to members at read time.
 export const projectApproverGroups = pgTable('project_approver_groups', {
   id: uuid('id').primaryKey().defaultRandom(),
-  project: text('project').notNull().references(() => projectSkillSettings.project, { onDelete: 'cascade' }),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
   groupId: uuid('group_id').notNull().references(() => appGroups.id, { onDelete: 'cascade' }),
   documentType: text('document_type').notNull(),
   assignedBy: text('assigned_by'),
   assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
-  uniq: unique().on(t.project, t.groupId, t.documentType),
+  uniq: unique().on(t.settingsId, t.groupId, t.documentType),
 }));
 
 export const projectApproverGroupsRelations = relations(projectApproverGroups, ({ one }) => ({
   projectSkillSetting: one(projectSkillSettings, {
-    fields: [projectApproverGroups.project],
-    references: [projectSkillSettings.project],
+    fields: [projectApproverGroups.settingsId],
+    references: [projectSkillSettings.id],
   }),
   group: one(appGroups, {
     fields: [projectApproverGroups.groupId],
@@ -794,6 +812,173 @@ export const documentOwnerApprovalsRelations = relations(documentOwnerApprovals,
   owner: one(appUsers, {
     fields: [documentOwnerApprovals.ownerUserId],
     references: [appUsers.oid],
+  }),
+}));
+
+// ── ESLint burn-down snapshots (persisted from nightly pipeline artifacts) ────
+
+export const eslintBurnDownSnapshots = pgTable('eslint_burn_down_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  pipelineBuildId: integer('pipeline_build_id').notNull().unique(),
+  buildNumber: text('build_number').notNull(),
+  definitionName: text('definition_name').notNull(),
+  capturedAt: timestamp('captured_at', { withTimezone: true, mode: 'string' }).notNull(),
+  totalFiles: integer('total_files').notNull().default(0),
+  filesWithProblems: integer('files_with_problems').notNull().default(0),
+  totalErrors: integer('total_errors').notNull().default(0),
+  totalWarnings: integer('total_warnings').notNull().default(0),
+  issueCount: integer('issue_count').notNull().default(0),
+  fixableCount: integer('fixable_count').notNull().default(0),
+  syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  capturedAtIdx: index('idx_eslint_burn_down_snapshots_captured_at').on(t.capturedAt),
+}));
+
+// ── Standup Ceremony Tables ───────────────────────────────────────────────────
+
+export const standupConfigs = pgTable('standup_configs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** @deprecated use groupIds instead — kept nullable for FK integrity of migrated data */
+  groupId: uuid('group_id').references(() => appGroups.id, { onDelete: 'set null' }),
+  groupIds: jsonb('group_ids').$type<string[]>().notNull().default([]),
+  project: text('project').notNull(),
+  areaPath: text('area_path'),
+  iterationMode: text('iteration_mode').notNull().default('current'),
+  iterationPath: text('iteration_path'),
+  scheduleTime: text('schedule_time').notNull().default('09:00'),
+  timezone: text('timezone').notNull().default('America/New_York'),
+  weekdays: jsonb('weekdays').$type<number[]>().notNull().default([1, 2, 3, 4, 5]),
+  skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
+  reminderDelayMin: integer('reminder_delay_min').notNull().default(30),
+  reminderIntervalMin: integer('reminder_interval_min').notNull().default(60),
+  facilitatorDeadlineMin: integer('facilitator_deadline_min').notNull().default(120),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const standupSessions = pgTable('standup_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  configId: uuid('config_id').notNull().references(() => standupConfigs.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').references(() => appGroups.id, { onDelete: 'set null' }),
+  sessionDate: text('session_date').notNull(),
+  status: text('status').notNull().default('open'),
+  facilitatorThreadId: uuid('facilitator_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  summaryMarkdown: text('summary_markdown'),
+  lastRemindedAt: timestamp('last_reminded_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  configDateUniq: uniqueIndex('idx_standup_sessions_config_date').on(t.configId, t.sessionDate),
+}));
+
+export const standupParticipants = pgTable('standup_participants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => standupSessions.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  status: text('status').notNull().default('pending'),
+  structuredUpdate: jsonb('structured_update').$type<{ yesterday?: string; today?: string; blockers?: string; atRisk?: string; handoffs?: string; capacity?: string }>(),
+  adoAccessToken: text('ado_access_token'),
+  adoTokenExpiresAt: timestamp('ado_token_expires_at', { withTimezone: true, mode: 'string' }),
+  submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),
+});
+
+export const standupFollowups = pgTable('standup_followups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => standupSessions.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  description: text('description'),
+  participantUserIds: jsonb('participant_user_ids').$type<string[]>().notNull().default([]),
+  relatedWorkItemIds: jsonb('related_work_item_ids').$type<number[]>().notNull().default([]),
+  status: text('status').notNull().default('open'),
+  followupThreadId: uuid('followup_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+// ── Standup Relations ─────────────────────────────────────────────────────────
+
+export const standupConfigsRelations = relations(standupConfigs, ({ one, many }) => ({
+  group: one(appGroups, { fields: [standupConfigs.groupId], references: [appGroups.id] }),
+  skillSettings: one(projectSkillSettings, { fields: [standupConfigs.skillSettingsId], references: [projectSkillSettings.id] }),
+  sessions: many(standupSessions),
+}));
+
+export const standupSessionsRelations = relations(standupSessions, ({ one, many }) => ({
+  config: one(standupConfigs, { fields: [standupSessions.configId], references: [standupConfigs.id] }),
+  group: one(appGroups, { fields: [standupSessions.groupId], references: [appGroups.id] }),
+  facilitatorThread: one(chatThreads, { fields: [standupSessions.facilitatorThreadId], references: [chatThreads.id] }),
+  participants: many(standupParticipants),
+  followups: many(standupFollowups),
+}));
+
+export const standupParticipantsRelations = relations(standupParticipants, ({ one }) => ({
+  session: one(standupSessions, { fields: [standupParticipants.sessionId], references: [standupSessions.id] }),
+  user: one(appUsers, { fields: [standupParticipants.userId], references: [appUsers.oid] }),
+  thread: one(chatThreads, { fields: [standupParticipants.threadId], references: [chatThreads.id] }),
+}));
+
+export const standupFollowupsRelations = relations(standupFollowups, ({ one }) => ({
+  session: one(standupSessions, { fields: [standupFollowups.sessionId], references: [standupSessions.id] }),
+  followupThread: one(chatThreads, { fields: [standupFollowups.followupThreadId], references: [chatThreads.id] }),
+}));
+
+// ── Feature Flags Tables ──────────────────────────────────────────────────────
+
+export const featureFlags = pgTable('feature_flags', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  key: text('key').unique().notNull(),
+  description: text('description'),
+  enabled: boolean('enabled').notNull().default(false),
+  lifecycle: text('lifecycle').$type<FlagLifecycle>().notNull().default('active'),
+  cleanupReady: boolean('cleanup_ready').notNull().default(false),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const featureFlagRules = pgTable('feature_flag_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  flagId: uuid('flag_id').notNull().references(() => featureFlags.id, { onDelete: 'cascade' }),
+  type: text('type').$type<FlagRuleType>().notNull(),
+  value: text('value'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  flagIdx: index('idx_feature_flag_rules_flag_id').on(t.flagId),
+}));
+
+export const featureFlagAudit = pgTable('feature_flag_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  flagId: uuid('flag_id').references(() => featureFlags.id, { onDelete: 'set null' }),
+  flagKey: text('flag_key').notNull(),
+  action: text('action').$type<FlagAuditAction>().notNull(),
+  actorId: text('actor_id'),
+  actorEmail: text('actor_email'),
+  details: jsonb('details'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  flagCreatedAtIdx: index('idx_feature_flag_audit_flag_created').on(t.flagId, t.createdAt),
+}));
+
+// ── Feature Flags Relations ───────────────────────────────────────────────────
+
+export const featureFlagsRelations = relations(featureFlags, ({ many }) => ({
+  rules: many(featureFlagRules),
+  auditLog: many(featureFlagAudit),
+}));
+
+export const featureFlagRulesRelations = relations(featureFlagRules, ({ one }) => ({
+  flag: one(featureFlags, {
+    fields: [featureFlagRules.flagId],
+    references: [featureFlags.id],
+  }),
+}));
+
+export const featureFlagAuditRelations = relations(featureFlagAudit, ({ one }) => ({
+  flag: one(featureFlags, {
+    fields: [featureFlagAudit.flagId],
+    references: [featureFlags.id],
   }),
 }));
 

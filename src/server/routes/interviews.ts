@@ -65,7 +65,7 @@ import {
   syncValidationResult,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
-import { getApproverPool, getSkillConfig } from '../services/projectSettingsService';
+import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
@@ -94,12 +94,13 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, model, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
+    const { project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
       project: string;
       repo: string;
       title?: string;
       chatThreadId: string;
       model?: string;
+      skillSettingsId?: string;
       prdOwnerId?: string;
       designDocOwnerId?: string;
       designPrototypeOwnerId?: string;
@@ -115,7 +116,7 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
@@ -405,7 +406,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       return;
     }
 
-    const skillConfig = await getSkillConfig(prd.project);
+    const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
 
     // ── Build enriched context: PRD + backlog + design plan + existing page code ──
@@ -521,6 +522,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       chatThreadId: thread.id,
       title: prd.title,
       model,
+      skillSettingsId: prd.skillSettingsId ?? null,
     });
 
     startSingleFeatureDocWatcher(designDocId, thread.id, req.params.prdId, prd.project);
@@ -571,7 +573,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       return;
     }
 
-    const skillConfig = await getSkillConfig(prd.project);
+    const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
     const model = skillConfig?.prdAssistantModel ?? globalModel;
 
@@ -734,7 +736,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       return;
     }
 
-    const projectConfig = await getSkillConfig(prd.project);
+    const projectConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
     const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
 
@@ -809,7 +811,7 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
       return;
     }
 
-    const projectConfig = await getSkillConfig(prd.project);
+    const projectConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
     const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
 
@@ -1148,7 +1150,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       return;
     }
 
-    const skillConfig = await getSkillConfig(doc.project);
+    const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const prd = await getPrd(doc.prdId);
 
     const contextParts: string[] = [
@@ -1261,7 +1263,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       return;
     }
 
-    const skillConfig = await getSkillConfig(doc.project);
+    const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
     const model = skillConfig?.designDocAssistantModel ?? globalModel;
 
@@ -1638,7 +1640,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
       return;
     }
 
-    const projectConfig = await getSkillConfig(doc.project);
+    const projectConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
     const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
 
@@ -1725,7 +1727,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
       return;
     }
 
-    const projectConfig = await getSkillConfig(doc.project);
+    const projectConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
     const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
 
@@ -1917,7 +1919,7 @@ router.get('/approver-pool/:project/:documentType', requirePermission('interview
     }
     const excludeSelf = req.query.excludeSelf === 'true';
     const userId = excludeSelf ? getUserId(req) : undefined;
-    const pool = await getApproverPool(
+    const pool = await getApproverPoolForProject(
       project,
       documentType as 'prd' | 'design_doc' | 'design_prototype' | 'test_case',
     );
@@ -1995,6 +1997,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       chatThreadId,
       title,
       model,
+      skillSettingsId: interview.skillSettingsId ?? null,
     });
     startPrdWatcher(result.prdId, chatThreadId);
     res.status(201).json(result);

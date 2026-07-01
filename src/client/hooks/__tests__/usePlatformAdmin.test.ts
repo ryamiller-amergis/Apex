@@ -6,6 +6,7 @@ import {
   usePlatformAdminMenuConfigs,
   usePlatformAdminPendingAssignments,
   usePlatformAdminUsers,
+  usePlatformAdminGroups,
   useRemovePlatformAdminPendingAssignment,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
@@ -83,6 +84,32 @@ describe('usePlatformAdminUsers', () => {
       { userId: 'user-2', displayName: 'Grace Hopper', email: 'grace@example.com' },
     ]);
     expect(global.fetch).toHaveBeenCalledWith('/api/platform-admin/users', {
+      credentials: 'include',
+    });
+  });
+});
+
+describe('usePlatformAdminGroups', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches platform groups for feature-flag targeting pickers', async () => {
+    mockFetchOk({
+      groups: [
+        { id: 'group-1', name: 'Developer', project: 'MaxView' },
+        { id: 'group-2', name: 'QA', project: 'MaxView' },
+      ],
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => usePlatformAdminGroups(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([
+      { id: 'group-1', name: 'Developer', project: 'MaxView' },
+      { id: 'group-2', name: 'QA', project: 'MaxView' },
+    ]);
+    expect(global.fetch).toHaveBeenCalledWith('/api/platform-admin/groups', {
       credentials: 'include',
     });
   });

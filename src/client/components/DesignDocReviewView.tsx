@@ -612,7 +612,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     }
   }, [handleSend]);
 
-  const visibleMessages = messages.filter((m) => m.role !== 'tool');
+  const visibleMessages = messages.filter((m) => m.role !== 'tool' && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
   return (
     <>
@@ -1924,6 +1924,9 @@ export const DesignDocReviewView: React.FC = () => {
                   <span className={styles.metaValue}>{doc.model}</span>
                 </span>
               )}
+              {doc.skillSettingsName && (
+                <span className={styles.repoBadge}>{doc.skillSettingsName}</span>
+              )}
             </div>
             {sourcePrd && (
               <div className={styles.parentLinks}>
@@ -2591,6 +2594,7 @@ export const DesignDocReviewView: React.FC = () => {
           isSubmitting={reassignApprovers.isPending}
         />
       )}
+
     </div>
   );
 };

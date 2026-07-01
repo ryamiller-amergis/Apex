@@ -406,8 +406,8 @@ describe('GET /api/admin/project-settings', () => {
   });
 
   const configs = [
-    { project: 'proj-alpha', skillRepo: 'org/skills', skillBranch: 'main', updatedBy: 'alice', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
-    { project: 'proj-beta', skillRepo: 'org/skills', skillBranch: 'develop', updatedBy: null, createdAt: '2026-01-03T00:00:00Z', updatedAt: '2026-01-04T00:00:00Z' },
+    { id: 'cfg-1', project: 'proj-alpha', friendlyName: 'Primary', isDefault: true, skillRepo: 'org/skills', skillBranch: 'main', updatedBy: 'alice', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    { id: 'cfg-2', project: 'proj-beta', friendlyName: 'Primary', isDefault: true, skillRepo: 'org/skills', skillBranch: 'develop', updatedBy: null, createdAt: '2026-01-03T00:00:00Z', updatedAt: '2026-01-04T00:00:00Z' },
   ];
 
   it('returns 200 with the list of project skill configs', async () => {
@@ -425,10 +425,10 @@ describe('GET /api/admin/project-settings', () => {
   it('includes approver counts per project', async () => {
     mockProjectSettings.listSkillConfigs.mockResolvedValue([configs[0]]);
     mockProjectSettings.listApproversForAllProjects.mockResolvedValue({
-      'proj-alpha': [
-        { id: 'a1', project: 'proj-alpha', userId: 'u1', documentType: 'design_doc', displayName: 'Alice', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
-        { id: 'a2', project: 'proj-alpha', userId: 'u2', documentType: 'design_doc', displayName: 'Bob', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
-        { id: 'a3', project: 'proj-alpha', userId: 'u3', documentType: 'prd', displayName: 'Carol', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+      'cfg-1': [
+        { id: 'a1', settingsId: 'cfg-1', userId: 'u1', documentType: 'design_doc', displayName: 'Alice', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+        { id: 'a2', settingsId: 'cfg-1', userId: 'u2', documentType: 'design_doc', displayName: 'Bob', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+        { id: 'a3', settingsId: 'cfg-1', userId: 'u3', documentType: 'prd', displayName: 'Carol', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
       ],
     });
 
@@ -444,9 +444,9 @@ describe('GET /api/admin/project-settings', () => {
 
   it('includes approver group counts in reviewer totals', async () => {
     mockProjectSettings.listSkillConfigs.mockResolvedValue([configs[0]]);
-    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({ 'proj-alpha': [] });
+    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({ 'cfg-1': [] });
     mockProjectSettings.listApproverGroupsForAllProjects.mockResolvedValue({
-      'proj-alpha': [
+      'cfg-1': [
         { groupId: 'g1', groupName: 'QA', documentType: 'test_case' },
         { groupId: 'g2', groupName: 'BA', documentType: 'prd' },
       ],
@@ -479,7 +479,10 @@ describe('PUT /api/admin/project-settings/:project', () => {
   beforeEach(() => jest.clearAllMocks());
 
   const savedConfig = {
+    id: 'cfg-1',
     project: 'proj-alpha',
+    friendlyName: 'Primary',
+    isDefault: true,
     skillRepo: 'org/updated-skills',
     skillBranch: 'release',
     updatedBy: 'admin-oid',
@@ -497,44 +500,11 @@ describe('PUT /api/admin/project-settings/:project', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ project: 'proj-alpha', skillRepo: 'org/updated-skills' });
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/updated-skills',
-      'release',
-      undefined,   // updatedBy
-      undefined,   // interviewSkillPath
-      undefined,   // prdSkillPath
-      undefined,   // designDocSkillPath
-      undefined,   // interviewModel
-      undefined,   // prdModel
-      undefined,   // designDocModel
-      undefined,   // designDocAssistantSkillPath
-      undefined,   // designDocAssistantModel
-      undefined,   // designPrototypeSkillPath
-      undefined,   // designPrototypeModel
-      undefined,   // designDocValidationSkillPath
-      undefined,   // designDocValidationModel
-      undefined,   // quickSkillPills
-      undefined,   // defaultModel
-      undefined,   // approvalMode
-      undefined,   // quickMcpPills
-      undefined,   // prdAssistantSkillPath
-      undefined,   // prdAssistantModel
-      undefined,   // prdReviewBedrockModelId
-      undefined,   // prdReviewBedrockMaxTokens
-      undefined,   // designPrototypeBedrockModelId
-      undefined,   // designPrototypeBedrockMaxTokens
-      undefined,   // designPrototypeBedrockTimeoutMs
-      undefined,   // designPrototypeRegenBedrockModelId
-      undefined,   // designPrototypeRegenBedrockMaxTokens
-      undefined,   // testCaseSkillPath
-      undefined,   // testCaseModel
-      undefined,   // prdValidationSkillPath
-      undefined,   // prdValidationModel
-      undefined,   // designPlanBedrockModelId
-      undefined,   // designPlanBedrockMaxTokens
-      undefined,   // developmentSkillPath
-      undefined,   // developmentModel
-      undefined,   // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/updated-skills',
+        skillBranch: 'release',
+      }),
     );
   });
 
@@ -574,44 +544,12 @@ describe('PUT /api/admin/project-settings/:project', () => {
       .send({ skillRepo: 'org/repo', skillBranch: 'main' });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      'Alice Admin',
-      undefined,   // interviewSkillPath
-      undefined,   // prdSkillPath
-      undefined,   // designDocSkillPath
-      undefined,   // interviewModel
-      undefined,   // prdModel
-      undefined,   // designDocModel
-      undefined,   // designDocAssistantSkillPath
-      undefined,   // designDocAssistantModel
-      undefined,   // designPrototypeSkillPath
-      undefined,   // designPrototypeModel
-      undefined,   // designDocValidationSkillPath
-      undefined,   // designDocValidationModel
-      undefined,   // quickSkillPills
-      undefined,   // defaultModel
-      undefined,   // approvalMode
-      undefined,   // quickMcpPills
-      undefined,   // prdAssistantSkillPath
-      undefined,   // prdAssistantModel
-      undefined,   // prdReviewBedrockModelId
-      undefined,   // prdReviewBedrockMaxTokens
-      undefined,   // designPrototypeBedrockModelId
-      undefined,   // designPrototypeBedrockMaxTokens
-      undefined,   // designPrototypeBedrockTimeoutMs
-      undefined,   // designPrototypeRegenBedrockModelId
-      undefined,   // designPrototypeRegenBedrockMaxTokens
-      undefined,   // testCaseSkillPath
-      undefined,   // testCaseModel
-      undefined,   // prdValidationSkillPath
-      undefined,   // prdValidationModel
-      undefined,   // designPlanBedrockModelId
-      undefined,   // designPlanBedrockMaxTokens
-      undefined,   // developmentSkillPath
-      undefined,   // developmentModel
-      undefined,   // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        updatedBy: 'Alice Admin',
+      }),
     );
   });
 
@@ -631,44 +569,12 @@ describe('PUT /api/admin/project-settings/:project', () => {
       .send({ skillRepo: 'org/repo', skillBranch: 'main' });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      'alice@example.com',
-      undefined,   // interviewSkillPath
-      undefined,   // prdSkillPath
-      undefined,   // designDocSkillPath
-      undefined,   // interviewModel
-      undefined,   // prdModel
-      undefined,   // designDocModel
-      undefined,   // designDocAssistantSkillPath
-      undefined,   // designDocAssistantModel
-      undefined,   // designPrototypeSkillPath
-      undefined,   // designPrototypeModel
-      undefined,   // designDocValidationSkillPath
-      undefined,   // designDocValidationModel
-      undefined,   // quickSkillPills
-      undefined,   // defaultModel
-      undefined,   // approvalMode
-      undefined,   // quickMcpPills
-      undefined,   // prdAssistantSkillPath
-      undefined,   // prdAssistantModel
-      undefined,   // prdReviewBedrockModelId
-      undefined,   // prdReviewBedrockMaxTokens
-      undefined,   // designPrototypeBedrockModelId
-      undefined,   // designPrototypeBedrockMaxTokens
-      undefined,   // designPrototypeBedrockTimeoutMs
-      undefined,   // designPrototypeRegenBedrockModelId
-      undefined,   // designPrototypeRegenBedrockMaxTokens
-      undefined,   // testCaseSkillPath
-      undefined,   // testCaseModel
-      undefined,   // prdValidationSkillPath
-      undefined,   // prdValidationModel
-      undefined,   // designPlanBedrockModelId
-      undefined,   // designPlanBedrockMaxTokens
-      undefined,   // developmentSkillPath
-      undefined,   // developmentModel
-      undefined,   // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        updatedBy: 'alice@example.com',
+      }),
     );
   });
 
@@ -686,44 +592,14 @@ describe('PUT /api/admin/project-settings/:project', () => {
       });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      undefined,               // updatedBy
-      undefined,               // interviewSkillPath
-      undefined,               // prdSkillPath
-      undefined,               // designDocSkillPath
-      'claude-3.5-sonnet',     // interviewModel
-      'gpt-4o',                // prdModel
-      'claude-3-opus',         // designDocModel
-      undefined,               // designDocAssistantSkillPath
-      undefined,               // designDocAssistantModel
-      undefined,               // designPrototypeSkillPath
-      undefined,               // designPrototypeModel
-      undefined,               // designDocValidationSkillPath
-      undefined,               // designDocValidationModel
-      undefined,               // quickSkillPills
-      undefined,               // defaultModel
-      undefined,               // approvalMode
-      undefined,               // quickMcpPills
-      undefined,               // prdAssistantSkillPath
-      undefined,               // prdAssistantModel
-      undefined,               // prdReviewBedrockModelId
-      undefined,               // prdReviewBedrockMaxTokens
-      undefined,               // designPrototypeBedrockModelId
-      undefined,               // designPrototypeBedrockMaxTokens
-      undefined,               // designPrototypeBedrockTimeoutMs
-      undefined,               // designPrototypeRegenBedrockModelId
-      undefined,               // designPrototypeRegenBedrockMaxTokens
-      undefined,               // testCaseSkillPath
-      undefined,               // testCaseModel
-      undefined,               // prdValidationSkillPath
-      undefined,               // prdValidationModel
-      undefined,               // designPlanBedrockModelId
-      undefined,               // designPlanBedrockMaxTokens
-      undefined,               // developmentSkillPath
-      undefined,               // developmentModel
-      undefined,               // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        interviewModel: 'claude-3.5-sonnet',
+        prdModel: 'gpt-4o',
+        designDocModel: 'claude-3-opus',
+      }),
     );
   });
 
@@ -740,44 +616,13 @@ describe('PUT /api/admin/project-settings/:project', () => {
       });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      undefined,                            // updatedBy
-      undefined,                            // interviewSkillPath
-      undefined,                            // prdSkillPath
-      undefined,                            // designDocSkillPath
-      undefined,                            // interviewModel
-      undefined,                            // prdModel
-      undefined,                            // designDocModel
-      undefined,                            // designDocAssistantSkillPath
-      undefined,                            // designDocAssistantModel
-      undefined,                            // designPrototypeSkillPath
-      undefined,                            // designPrototypeModel
-      '.cursor/skills/validate/SKILL.md',   // designDocValidationSkillPath
-      'claude-3-opus',                      // designDocValidationModel
-      undefined,                            // quickSkillPills
-      undefined,                            // defaultModel
-      undefined,                            // approvalMode
-      undefined,                            // quickMcpPills
-      undefined,                            // prdAssistantSkillPath
-      undefined,                            // prdAssistantModel
-      undefined,                            // prdReviewBedrockModelId
-      undefined,                            // prdReviewBedrockMaxTokens
-      undefined,                            // designPrototypeBedrockModelId
-      undefined,                            // designPrototypeBedrockMaxTokens
-      undefined,                            // designPrototypeBedrockTimeoutMs
-      undefined,                            // designPrototypeRegenBedrockModelId
-      undefined,                            // designPrototypeRegenBedrockMaxTokens
-      undefined,                            // testCaseSkillPath
-      undefined,                            // testCaseModel
-      undefined,                            // prdValidationSkillPath
-      undefined,                            // prdValidationModel
-      undefined,                            // designPlanBedrockModelId
-      undefined,                            // designPlanBedrockMaxTokens
-      undefined,                            // developmentSkillPath
-      undefined,                            // developmentModel
-      undefined,                            // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
+        designDocValidationModel: 'claude-3-opus',
+      }),
     );
   });
 
@@ -789,44 +634,12 @@ describe('PUT /api/admin/project-settings/:project', () => {
       .send({ skillRepo: 'org/repo', skillBranch: 'main', defaultModel: 'composer-2' });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,   // designPrototypeSkillPath
-      undefined,   // designPrototypeModel
-      'composer-2',
-      undefined,   // approvalMode
-      undefined,   // quickMcpPills
-      undefined,   // prdAssistantSkillPath
-      undefined,   // prdAssistantModel
-      undefined,   // prdReviewBedrockModelId
-      undefined,   // prdReviewBedrockMaxTokens
-      undefined,   // designPrototypeBedrockModelId
-      undefined,   // designPrototypeBedrockMaxTokens
-      undefined,   // designPrototypeBedrockTimeoutMs
-      undefined,   // designPrototypeRegenBedrockModelId
-      undefined,   // designPrototypeRegenBedrockMaxTokens
-      undefined,   // testCaseSkillPath
-      undefined,   // testCaseModel
-      undefined,   // prdValidationSkillPath
-      undefined,   // prdValidationModel
-      undefined,   // designPlanBedrockModelId
-      undefined,   // designPlanBedrockMaxTokens
-      undefined,   // developmentSkillPath
-      undefined,   // developmentModel
-      undefined,   // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        defaultModel: 'composer-2',
+      }),
     );
   });
 
@@ -842,44 +655,12 @@ describe('PUT /api/admin/project-settings/:project', () => {
       });
 
     expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
-      'proj-alpha',
-      'org/repo',
-      'main',
-      undefined,         // updatedBy
-      undefined,         // interviewSkillPath
-      undefined,         // prdSkillPath
-      undefined,         // designDocSkillPath
-      undefined,         // interviewModel
-      undefined,         // prdModel
-      undefined,         // designDocModel
-      undefined,         // designDocAssistantSkillPath
-      undefined,         // designDocAssistantModel
-      undefined,         // designPrototypeSkillPath
-      undefined,         // designPrototypeModel
-      undefined,         // designDocValidationSkillPath
-      undefined,         // designDocValidationModel
-      undefined,         // quickSkillPills
-      undefined,         // defaultModel
-      'all_required',    // approvalMode
-      undefined,         // quickMcpPills
-      undefined,         // prdAssistantSkillPath
-      undefined,         // prdAssistantModel
-      undefined,         // prdReviewBedrockModelId
-      undefined,         // prdReviewBedrockMaxTokens
-      undefined,         // designPrototypeBedrockModelId
-      undefined,         // designPrototypeBedrockMaxTokens
-      undefined,         // designPrototypeBedrockTimeoutMs
-      undefined,         // designPrototypeRegenBedrockModelId
-      undefined,         // designPrototypeRegenBedrockMaxTokens
-      undefined,         // testCaseSkillPath
-      undefined,         // testCaseModel
-      undefined,         // prdValidationSkillPath
-      undefined,         // prdValidationModel
-      undefined,         // designPlanBedrockModelId
-      undefined,         // designPlanBedrockMaxTokens
-      undefined,         // developmentSkillPath
-      undefined,         // developmentModel
-      undefined,         // prdValidationScoreThreshold
+      expect.objectContaining({
+        id: 'proj-alpha',
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalMode: 'all_required',
+      }),
     );
   });
 
@@ -928,7 +709,7 @@ describe('GET /api/admin/project-settings/:project/approvers', () => {
   const approvers = [
     {
       id: 'a1',
-      project: 'proj-alpha',
+      settingsId: 'cfg-1',
       userId: 'user-1',
       documentType: 'design_doc' as const,
       displayName: 'Alice',
@@ -964,7 +745,7 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
   const designDoc = [
     {
       id: 'a1',
-      project: 'proj-alpha',
+      settingsId: 'cfg-1',
       userId: 'user-1',
       documentType: 'design_doc' as const,
       displayName: 'Alice',
@@ -976,7 +757,7 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
   const prd = [
     {
       id: 'a2',
-      project: 'proj-alpha',
+      settingsId: 'cfg-1',
       userId: 'user-2',
       documentType: 'prd' as const,
       displayName: 'Bob',

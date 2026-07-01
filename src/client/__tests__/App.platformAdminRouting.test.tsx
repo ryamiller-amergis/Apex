@@ -19,6 +19,22 @@ jest.mock('../hooks/useChatThreads', () => ({
   useStartChat: jest.fn(),
 }));
 
+jest.mock('../hooks/useFeatureFlags', () => ({
+  useFeatureFlag: jest.fn().mockReturnValue(false),
+}));
+
+jest.mock('../components/BetaAnnouncementModal', () => ({
+  BetaAnnouncementModal: () => null,
+}));
+
+jest.mock('../hooks/useProjectRepoConfigs', () => ({
+  useProjectRepoConfigs: jest.fn().mockReturnValue({ data: [], isLoading: false, isSuccess: true }),
+}));
+
+jest.mock('../hooks/useProjectSkillConfig', () => ({
+  useProjectSkillConfig: jest.fn().mockReturnValue({ data: null }),
+}));
+
 jest.mock('../components/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header" />,
 }));
@@ -84,6 +100,8 @@ function setupAppShell() {
     showChangelogOnLogin: false,
     handleMarkChangelogAsRead: jest.fn(),
     handleToggleShowChangelogOnLogin: jest.fn(),
+    betaAnnouncementDismissed: false,
+    handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),
     selectedProject: 'MaxView',
     selectedAreaPath: 'MaxView',

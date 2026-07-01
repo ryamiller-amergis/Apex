@@ -1,6 +1,7 @@
 /**
- * Unit tests for projectSettingsService.
+ * Unit tests for projectSettingsService (multi-repo project settings).
  * The Drizzle `db` instance is fully mocked so no real database is needed.
+ * Mock shape follows src/server/__tests__/rbacService.test.ts.
  */
 
 // ── DB mock ────────────────────────────────────────────────────────────────────
@@ -36,36 +37,34 @@ jest.mock('../db/drizzle', () => {
       update: jest.fn().mockImplementation(makeUpdateChain),
       delete: jest.fn().mockImplementation(makeDeleteChain),
       select: jest.fn().mockImplementation(makeSelectChain),
-      transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
-        const tx = {
-          delete: jest.fn().mockImplementation(makeDeleteChain),
-          insert: jest.fn().mockImplementation(makeInsertChain),
-        };
-        await fn(tx);
-      }),
+      transaction: jest.fn(),
     },
   };
 });
 
+// groupService.seedDefaultGroupsForProject is a side-effect of upsert; stub it out.
+jest.mock('../services/groupService', () => ({
+  seedDefaultGroupsForProject: jest.fn().mockResolvedValue(undefined),
+}));
+
 import {
   getSkillConfig,
-  listSkillConfigs,
+  getSkillConfigById,
+  listSkillConfigsForProject,
+  resolveSkillConfig,
   upsertSkillConfig,
   deleteSkillConfig,
-  listApprovers,
-  listApproversForAllProjects,
-  listApproverGroupsForAllProjects,
-  setApprovers,
-  getApproversForDocument,
 } from '../services/projectSettingsService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
-const configRow = {
-  id: 'cfg-1',
+const defaultRow = {
+  id: 'cfg-default',
   project: 'proj-alpha',
+  friendlyName: 'Primary repo',
+  isDefault: true,
   skillRepo: 'org/skills-repo',
   skillBranch: 'main',
   updatedBy: 'alice',
@@ -73,571 +72,315 @@ const configRow = {
   updatedAt: '2026-01-02T00:00:00Z',
 };
 
-// ── getSkillConfig ─────────────────────────────────────────────────────────────
+const secondRow = {
+  ...defaultRow,
+  id: 'cfg-second',
+  friendlyName: 'Secondary repo',
+  isDefault: false,
+  skillRepo: 'org/other-repo',
+};
 
-describe('getSkillConfig', () => {
+function makeUpsertInput(overrides: Record<string, unknown> = {}) {
+  return {
+    project: 'proj-alpha',
+    friendlyName: 'Primary repo',
+    skillRepo: 'org/skills-repo',
+    skillBranch: 'main',
+    updatedBy: 'alice',
+    ...overrides,
+  } as Parameters<typeof upsertSkillConfig>[0];
+}
+
+/** A read-only select chain whose terminal resolves `rows`. */
+function selectResolving(rows: unknown[], terminal: 'where' | 'orderBy' | 'limit') {
+  const chain: Record<string, jest.Mock> = {
+    from: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+  };
+  chain[terminal] = jest.fn().mockResolvedValue(rows);
+  return chain;
+}
+
+// ── getSkillConfigById ──────────────────────────────────────────────────────────
+
+describe('getSkillConfigById', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns the config when it exists', async () => {
-    const limitMock = jest.fn().mockResolvedValue([configRow]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const fromMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await getSkillConfig('proj-alpha');
-
-    expect(result).toEqual(configRow);
+  it('returns the config row for the id', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow], 'limit'));
+    const result = await getSkillConfigById('cfg-default');
+    expect(result).toMatchObject({ id: 'cfg-default', project: 'proj-alpha' });
   });
 
-  it('returns null when no config exists for the project', async () => {
-    const limitMock = jest.fn().mockResolvedValue([]);
-    const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
-    const fromMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await getSkillConfig('proj-missing');
-
+  it('returns null when no row exists for the id', async () => {
+    mockDb.select.mockReturnValue(selectResolving([], 'limit'));
+    const result = await getSkillConfigById('cfg-missing');
     expect(result).toBeNull();
   });
 });
 
-// ── listSkillConfigs ───────────────────────────────────────────────────────────
+// ── getSkillConfig (back-compat: returns the project default) ─────────────────────
 
-describe('listSkillConfigs', () => {
+describe('getSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns all configs ordered by project', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([configRow]);
-    const fromMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await listSkillConfigs();
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ project: 'proj-alpha', skillRepo: 'org/skills-repo' });
+  it('returns the default config for the project', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow], 'limit'));
+    const result = await getSkillConfig('proj-alpha');
+    expect(result).toMatchObject({ id: 'cfg-default', isDefault: true });
   });
 
-  it('returns an empty array when no configs exist', async () => {
-    const orderByMock = jest.fn().mockResolvedValue([]);
-    const fromMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await listSkillConfigs();
-
-    expect(result).toEqual([]);
+  it('returns null when the project has no default config', async () => {
+    mockDb.select.mockReturnValue(selectResolving([], 'limit'));
+    const result = await getSkillConfig('proj-empty');
+    expect(result).toBeNull();
   });
 });
 
-// ── upsertSkillConfig ──────────────────────────────────────────────────────────
+// ── listSkillConfigsForProject ────────────────────────────────────────────────────
+
+describe('listSkillConfigsForProject', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns every config for the project (default first)', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow, secondRow], 'orderBy'));
+    const result = await listSkillConfigsForProject('proj-alpha');
+    expect(result).toHaveLength(2);
+    expect(result.map((c) => c.id)).toEqual(['cfg-default', 'cfg-second']);
+  });
+});
+
+// ── resolveSkillConfig ────────────────────────────────────────────────────────────
+
+describe('resolveSkillConfig', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('resolves the specific config when a settingsId is provided', async () => {
+    mockDb.select.mockReturnValue(selectResolving([secondRow], 'limit'));
+    const result = await resolveSkillConfig({ project: 'proj-alpha', settingsId: 'cfg-second' });
+    expect(result).toMatchObject({ id: 'cfg-second' });
+  });
+
+  it('falls back to the project default when no settingsId is provided', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow], 'limit'));
+    const result = await resolveSkillConfig({ project: 'proj-alpha' });
+    expect(result).toMatchObject({ id: 'cfg-default', isDefault: true });
+  });
+});
+
+// ── upsertSkillConfig — one-default enforcement ───────────────────────────────────
 
 describe('upsertSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('inserts (or updates on conflict) and returns the upserted row', async () => {
-    const returningMock = jest.fn().mockResolvedValue([configRow]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+  it('forces the first config of a project to be the default', async () => {
+    const insertedRow = { ...defaultRow, isDefault: true };
+    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
+    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
 
-    const result = await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
-
-    expect(result).toEqual(configRow);
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        project: 'proj-alpha',
-        skillRepo: 'org/skills-repo',
-        skillBranch: 'main',
-        updatedBy: 'alice',
-      }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({ skillRepo: 'org/skills-repo', skillBranch: 'main' }),
-      }),
-    );
-  });
-
-  it('works without an updatedBy value', async () => {
-    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, updatedBy: undefined }]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig('proj-beta', 'org/repo', 'develop');
-
-    expect(result).toMatchObject({ project: 'proj-alpha' });
-  });
-
-  it('persists interviewModel, prdModel, and designDocModel when provided', async () => {
-    const configWithModels = {
-      ...configRow,
-      interviewModel: 'claude-3.5-sonnet',
-      prdModel: 'gpt-4o',
-      designDocModel: 'claude-3-opus',
-    };
-    const returningMock = jest.fn().mockResolvedValue([configWithModels]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined,
-      undefined,
-      undefined,
-      'claude-3.5-sonnet',
-      'gpt-4o',
-      'claude-3-opus',
-    );
-
-    expect(result).toMatchObject({
-      interviewModel: 'claude-3.5-sonnet',
-      prdModel: 'gpt-4o',
-      designDocModel: 'claude-3-opus',
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        // existing-config lookup → none for this project
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        }),
+        insert: insertMock,
+        update: updateMock,
+      };
+      return fn(tx);
     });
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        interviewModel: 'claude-3.5-sonnet',
-        prdModel: 'gpt-4o',
-        designDocModel: 'claude-3-opus',
-      }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({
-          interviewModel: 'claude-3.5-sonnet',
-          prdModel: 'gpt-4o',
-          designDocModel: 'claude-3-opus',
+
+    const result = await upsertSkillConfig(makeUpsertInput({ isDefault: false }));
+
+    expect(result).toMatchObject({ id: 'cfg-default', isDefault: true });
+    // even though isDefault:false was requested, the first config is forced default
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true, project: 'proj-alpha' }));
+    // nothing to clear when it's the first config
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('clears other defaults when creating a new default config', async () => {
+    const insertedRow = { ...secondRow, isDefault: true };
+    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
+    const clearSet = jest.fn().mockReturnThis();
+    const clearWhere = jest.fn().mockResolvedValue(undefined);
+    const updateMock = jest.fn().mockReturnValue({ set: clearSet, where: clearWhere });
+
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([{ id: 'cfg-default' }]),
         }),
-      }),
-    );
-  });
-
-  it('persists defaultModel when provided', async () => {
-    const configWithDefault = { ...configRow, defaultModel: 'composer-2' };
-    const returningMock = jest.fn().mockResolvedValue([configWithDefault]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined, // designPrototypeSkillPath
-      undefined, // designPrototypeModel
-      'composer-2',
-    );
-
-    expect(result).toMatchObject({ defaultModel: 'composer-2' });
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModel: 'composer-2' }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({ defaultModel: 'composer-2' }),
-      }),
-    );
-  });
-
-  it('stores null for model fields when not provided (omitted)', async () => {
-    const configNoModels = {
-      ...configRow,
-      interviewModel: null,
-      prdModel: null,
-      designDocModel: null,
-    };
-    const returningMock = jest.fn().mockResolvedValue([configNoModels]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
-
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        interviewModel: null,
-        prdModel: null,
-        designDocModel: null,
-      }),
-    );
-  });
-
-  it('persists designDocValidationSkillPath and designDocValidationModel when provided', async () => {
-    const configWithValidation = {
-      ...configRow,
-      designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
-      designDocValidationModel: 'claude-3-opus',
-    };
-    const returningMock = jest.fn().mockResolvedValue([configWithValidation]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined, // interviewSkillPath
-      undefined, // prdSkillPath
-      undefined, // designDocSkillPath
-      undefined, // interviewModel
-      undefined, // prdModel
-      undefined, // designDocModel
-      undefined, // designDocAssistantSkillPath
-      undefined, // designDocAssistantModel
-      undefined, // designPrototypeSkillPath
-      undefined, // designPrototypeModel
-      '.cursor/skills/validate/SKILL.md', // designDocValidationSkillPath
-      'claude-3-opus', // designDocValidationModel
-    );
-
-    expect(result).toMatchObject({
-      designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
-      designDocValidationModel: 'claude-3-opus',
+        insert: insertMock,
+        update: updateMock,
+      };
+      return fn(tx);
     });
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
-        designDocValidationModel: 'claude-3-opus',
-      }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({
-          designDocValidationSkillPath: '.cursor/skills/validate/SKILL.md',
-          designDocValidationModel: 'claude-3-opus',
+
+    await upsertSkillConfig(makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: true }));
+
+    // siblings' defaults are cleared, and the new row is written as default
+    expect(updateMock).toHaveBeenCalled();
+    expect(clearSet).toHaveBeenCalledWith(expect.objectContaining({ isDefault: false }));
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true }));
+  });
+
+  it('does not clear defaults when adding a non-default config alongside an existing default', async () => {
+    const insertedRow = { ...secondRow, isDefault: false };
+    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
+    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
+
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([{ id: 'cfg-default' }]),
         }),
-      }),
-    );
+        insert: insertMock,
+        update: updateMock,
+      };
+      return fn(tx);
+    });
+
+    await upsertSkillConfig(makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: false }));
+
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: false }));
   });
 
-  it('persists approvalMode when provided', async () => {
-    const configWithMode = { ...configRow, approvalMode: 'all_required' };
-    const returningMock = jest.fn().mockResolvedValue([configWithMode]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
+  it('updates an existing config by id without inserting', async () => {
+    const updatedRow = { ...secondRow, skillBranch: 'release' };
+    const updateReturning = jest.fn().mockResolvedValue([updatedRow]);
+    const updateMock = jest.fn().mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnValue({ returning: updateReturning }),
+    });
+    const insertMock = jest.fn();
 
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined, // interviewSkillPath
-      undefined, // prdSkillPath
-      undefined, // designDocSkillPath
-      undefined, // interviewModel
-      undefined, // prdModel
-      undefined, // designDocModel
-      undefined, // designDocAssistantSkillPath
-      undefined, // designDocAssistantModel
-      undefined, // designPrototypeSkillPath
-      undefined, // designPrototypeModel
-      undefined, // designDocValidationSkillPath
-      undefined, // designDocValidationModel
-      undefined, // quickSkillPills
-      undefined, // defaultModel
-      'all_required', // approvalMode
-    );
-
-    expect(result).toMatchObject({ approvalMode: 'all_required' });
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalMode: 'all_required' }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({ approvalMode: 'all_required' }),
-      }),
-    );
-  });
-
-  it('defaults approvalMode to any_one when not provided', async () => {
-    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, approvalMode: 'any_one' }]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
-
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalMode: 'any_one' }),
-    );
-  });
-
-  it('persists quickMcpPills when provided', async () => {
-    const mcpPills = [
-      { label: 'SendGrid', mcpServerName: 'sendgrid', transport: 'stdio' as const, command: 'npx', args: ['-y', 'mcp-sendgrid-server'], env: { SENDGRID_API_KEY: '${SENDGRID_API_KEY}' } },
-      { label: 'Twilio Docs', mcpServerName: 'twilio-docs', transport: 'http' as const, url: 'https://mcp.twilio.com/docs' },
-    ];
-    const configWithMcpPills = { ...configRow, quickMcpPills: mcpPills };
-    const returningMock = jest.fn().mockResolvedValue([configWithMcpPills]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined, // interviewSkillPath
-      undefined, // prdSkillPath
-      undefined, // designDocSkillPath
-      undefined, // interviewModel
-      undefined, // prdModel
-      undefined, // designDocModel
-      undefined, // designDocAssistantSkillPath
-      undefined, // designDocAssistantModel
-      undefined, // designPrototypeSkillPath
-      undefined, // designPrototypeModel
-      undefined, // designDocValidationSkillPath
-      undefined, // designDocValidationModel
-      undefined, // quickSkillPills
-      undefined, // defaultModel
-      undefined, // approvalMode
-      mcpPills,  // quickMcpPills
-    );
-
-    expect(result).toMatchObject({ quickMcpPills: mcpPills });
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ quickMcpPills: mcpPills }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({ quickMcpPills: mcpPills }),
-      }),
-    );
-  });
-
-  it('stores null for quickMcpPills when not provided', async () => {
-    const returningMock = jest.fn().mockResolvedValue([{ ...configRow, quickMcpPills: null }]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    await upsertSkillConfig('proj-alpha', 'org/skills-repo', 'main', 'alice');
-
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ quickMcpPills: null }),
-    );
-  });
-
-  it('persists test-case and PRD validation skill/model settings when provided', async () => {
-    const configWithQaSettings = {
-      ...configRow,
-      testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
-      testCaseModel: 'gpt-5.5-test',
-      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
-      prdValidationModel: 'gpt-5.5-validation',
-    };
-    const returningMock = jest.fn().mockResolvedValue([configWithQaSettings]);
-    const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoUpdate: onConflictMock });
-    mockDb.insert.mockReturnValueOnce({ values: valuesMock });
-
-    const result = await upsertSkillConfig(
-      'proj-alpha',
-      'org/skills-repo',
-      'main',
-      'alice',
-      undefined, // interviewSkillPath
-      undefined, // prdSkillPath
-      undefined, // designDocSkillPath
-      undefined, // interviewModel
-      undefined, // prdModel
-      undefined, // designDocModel
-      undefined, // designDocAssistantSkillPath
-      undefined, // designDocAssistantModel
-      undefined, // designPrototypeSkillPath
-      undefined, // designPrototypeModel
-      undefined, // designDocValidationSkillPath
-      undefined, // designDocValidationModel
-      undefined, // quickSkillPills
-      undefined, // defaultModel
-      undefined, // approvalMode
-      undefined, // quickMcpPills
-      undefined, // prdAssistantSkillPath
-      undefined, // prdAssistantModel
-      undefined, // prdReviewBedrockModelId
-      undefined, // prdReviewBedrockMaxTokens
-      undefined, // designPrototypeBedrockModelId
-      undefined, // designPrototypeBedrockMaxTokens
-      undefined, // designPrototypeBedrockTimeoutMs
-      undefined, // designPrototypeRegenBedrockModelId
-      undefined, // designPrototypeRegenBedrockMaxTokens
-      '.cursor/skills/test-cases/SKILL.md',
-      'gpt-5.5-test',
-      '.cursor/skills/prd-validation/SKILL.md',
-      'gpt-5.5-validation',
-    );
-
-    expect(result).toMatchObject(configWithQaSettings);
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
-        testCaseModel: 'gpt-5.5-test',
-        prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
-        prdValidationModel: 'gpt-5.5-validation',
-      }),
-    );
-    expect(onConflictMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({
-          testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
-          testCaseModel: 'gpt-5.5-test',
-          prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
-          prdValidationModel: 'gpt-5.5-validation',
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
         }),
-      }),
-    );
+        insert: insertMock,
+        update: updateMock,
+      };
+      return fn(tx);
+    });
+
+    const result = await upsertSkillConfig(makeUpsertInput({ id: 'cfg-second', friendlyName: 'Secondary repo', skillBranch: 'release' }));
+
+    expect(result).toMatchObject({ id: 'cfg-second', skillBranch: 'release' });
+    expect(insertMock).not.toHaveBeenCalled();
   });
 });
 
-// ── deleteSkillConfig ──────────────────────────────────────────────────────────
+// ── deleteSkillConfig — delete-last guard + default promotion ─────────────────────
 
 describe('deleteSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('deletes the config for the specified project', async () => {
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    mockDb.delete.mockReturnValue({ where: whereMock });
-
-    await deleteSkillConfig('proj-alpha');
-
-    expect(mockDb.delete).toHaveBeenCalledTimes(1);
-    expect(whereMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ── Approver management ───────────────────────────────────────────────────────
-
-const approverRow = {
-  id: 'appr-1',
-  project: 'proj-alpha',
-  userId: 'user-oid-1',
-  displayName: 'Alice Admin',
-  email: 'alice@example.com',
-  documentType: 'design_doc',
-  assignedBy: 'admin-oid',
-  assignedAt: '2026-01-01T00:00:00Z',
-};
-
-describe('listApprovers', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('returns approvers joined with user display data', async () => {
-    const whereMock = jest.fn().mockResolvedValue([approverRow]);
-    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await listApprovers('proj-alpha');
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      project: 'proj-alpha',
-      userId: 'user-oid-1',
-      documentType: 'design_doc',
-      displayName: 'Alice Admin',
+  it('blocks deleting the last remaining config for a project', async () => {
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn()
+          // target lookup (SELECT ... LIMIT 1)
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ id: 'cfg-default', project: 'proj-alpha', isDefault: true }]),
+          })
+          // siblings lookup → only the one row
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }]),
+          }),
+        delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+        update: jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) }),
+      };
+      return fn(tx);
     });
-  });
-});
 
-describe('listApproversForAllProjects', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('groups approvers by project', async () => {
-    const innerJoinMock = jest.fn().mockResolvedValue([
-      approverRow,
-      { ...approverRow, id: 'appr-2', documentType: 'prd', userId: 'user-oid-2' },
-      { ...approverRow, id: 'appr-3', project: 'proj-beta', userId: 'user-oid-3' },
-    ]);
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await listApproversForAllProjects();
-
-    expect(result['proj-alpha']).toHaveLength(2);
-    expect(result['proj-beta']).toHaveLength(1);
+    await expect(deleteSkillConfig('cfg-default')).rejects.toThrow(/only repo config/i);
   });
 
-  it('returns an empty object when no approvers exist', async () => {
-    const innerJoinMock = jest.fn().mockResolvedValue([]);
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+  it('promotes another config to default when the deleted config was the default', async () => {
+    const deleteWhere = jest.fn().mockResolvedValue(undefined);
+    const deleteMock = jest.fn().mockReturnValue({ where: deleteWhere });
+    const promoteSet = jest.fn().mockReturnThis();
+    const promoteWhere = jest.fn().mockResolvedValue(undefined);
+    const updateMock = jest.fn().mockReturnValue({ set: promoteSet, where: promoteWhere });
 
-    const result = await listApproversForAllProjects();
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn()
+          // target lookup
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ id: 'cfg-default', project: 'proj-alpha', isDefault: true }]),
+          })
+          // siblings lookup → two rows so the guard passes
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
+          })
+          // promotion lookup (oldest surviving config)
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ id: 'cfg-second' }]),
+          }),
+        delete: deleteMock,
+        update: updateMock,
+      };
+      return fn(tx);
+    });
 
-    expect(result).toEqual({});
+    await deleteSkillConfig('cfg-default');
+
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    // a surviving sibling is promoted to default
+    expect(promoteSet).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true }));
   });
-});
 
-describe('listApproverGroupsForAllProjects', () => {
-  beforeEach(() => jest.clearAllMocks());
+  it('does not promote when a non-default config is deleted', async () => {
+    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
 
-  it('groups approver groups by project', async () => {
-    const innerJoinMock = jest.fn().mockResolvedValue([
-      { project: 'proj-alpha', groupId: 'g1', groupName: 'QA', documentType: 'test_case' },
-      { project: 'proj-alpha', groupId: 'g2', groupName: 'BA', documentType: 'prd' },
-      { project: 'proj-beta', groupId: 'g3', groupName: 'QA', documentType: 'test_case' },
-    ]);
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        select: jest.fn()
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ id: 'cfg-second', project: 'proj-alpha', isDefault: false }]),
+          })
+          .mockReturnValueOnce({
+            from: jest.fn().mockReturnThis(),
+            where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
+          }),
+        delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+        update: updateMock,
+      };
+      return fn(tx);
+    });
 
-    const result = await listApproverGroupsForAllProjects();
+    await deleteSkillConfig('cfg-second');
 
-    expect(result['proj-alpha']).toHaveLength(2);
-    expect(result['proj-beta']).toHaveLength(1);
-    expect(result['proj-alpha']![0]).toMatchObject({ groupName: 'QA', documentType: 'test_case' });
-  });
-});
-
-describe('setApprovers', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('replaces approvers in a transaction and returns the new list', async () => {
-    const whereMock = jest.fn().mockResolvedValue([approverRow]);
-    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await setApprovers('proj-alpha', 'design_doc', ['user-oid-1'], 'admin-oid');
-
-    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    expect(result).toHaveLength(1);
-    expect(result[0].documentType).toBe('design_doc');
-  });
-});
-
-describe('getApproversForDocument', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('returns approvers filtered by project and document type', async () => {
-    const whereMock = jest.fn().mockResolvedValue([{ ...approverRow, documentType: 'prd' }]);
-    const innerJoinMock = jest.fn().mockReturnValue({ where: whereMock });
-    const fromMock = jest.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
-
-    const result = await getApproversForDocument('proj-alpha', 'prd');
-
-    expect(result).toHaveLength(1);
-    expect(result[0].documentType).toBe('prd');
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
