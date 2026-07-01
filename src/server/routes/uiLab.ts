@@ -1,9 +1,13 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction, type RequestHandler } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getMenuConfig } from '../services/menuSettingsService';
 import {
   listDesigns,
   getDesign,
+  getDesignProject,
+  getCommentProject,
   createDesign,
   deleteDesign,
   saveHtml,
@@ -22,8 +26,56 @@ import type {
 
 const router = Router();
 
+/**
+ * Resolves the project a request targets. Returns undefined when the project
+ * cannot be determined (e.g. missing param or a record that doesn't exist), in
+ * which case enforcement defers to the route handler's own 400/404 handling.
+ */
+type ProjectResolver = (req: Request) => Promise<string | null | undefined> | string | null | undefined;
+
+async function isUiLabEnabled(project: string): Promise<boolean> {
+  const config = await getMenuConfig(project);
+  return !!config && config.enabledViews.includes('ui-lab');
+}
+
+/**
+ * Blocks a request when `ui-lab` is not enabled in the target project's menu
+ * settings. Super admins always bypass, mirroring the RBAC middleware.
+ */
+function requireUiLabEnabled(resolveProject: ProjectResolver): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (isSuperAdminRequest(req)) {
+        next();
+        return;
+      }
+      const project = await resolveProject(req);
+      if (!project) {
+        // Let the route handler surface the appropriate 400/404 for the
+        // missing project param or non-existent record.
+        next();
+        return;
+      }
+      if (!(await isUiLabEnabled(project))) {
+        res.status(403).json({ error: 'UI Lab is not enabled for this project' });
+        return;
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+const uiLabEnabledFromQuery = requireUiLabEnabled((req) => req.query.project as string | undefined);
+const uiLabEnabledFromBody = requireUiLabEnabled(
+  (req) => (req.body as { project?: string } | undefined)?.project,
+);
+const uiLabEnabledFromDesignId = requireUiLabEnabled((req) => getDesignProject(req.params.id));
+const uiLabEnabledFromCommentId = requireUiLabEnabled((req) => getCommentProject(req.params.commentId));
+
 // GET / — list designs for a project
-router.get('/', requirePermission('ui-lab:view'), async (req, res, next) => {
+router.get('/', requirePermission('ui-lab:view'), uiLabEnabledFromQuery, async (req, res, next) => {
   try {
     const project = req.query.project as string | undefined;
     if (!project) {
@@ -38,7 +90,7 @@ router.get('/', requirePermission('ui-lab:view'), async (req, res, next) => {
 });
 
 // POST / — create a new design (kicks off async generation via SSE)
-router.post('/', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.post('/', requirePermission('ui-lab:manage'), uiLabEnabledFromBody, async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const body = req.body as CreateUiLabDesignRequest & { project?: string };
@@ -58,7 +110,7 @@ router.post('/', requirePermission('ui-lab:manage'), async (req, res, next) => {
 });
 
 // GET /:id — get a single design (full HTML)
-router.get('/:id', requirePermission('ui-lab:view'), async (req, res, next) => {
+router.get('/:id', requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     const design = await getDesign(req.params.id);
     if (!design) {
@@ -72,7 +124,7 @@ router.get('/:id', requirePermission('ui-lab:view'), async (req, res, next) => {
 });
 
 // DELETE /:id
-router.delete('/:id', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.delete('/:id', requirePermission('ui-lab:manage'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     await deleteDesign(req.params.id);
     res.status(204).send();
@@ -82,7 +134,7 @@ router.delete('/:id', requirePermission('ui-lab:manage'), async (req, res, next)
 });
 
 // PATCH /:id/html — manual HTML edit (from BoundaryEditor)
-router.patch('/:id/html', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.patch('/:id/html', requirePermission('ui-lab:manage'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     const { html } = req.body as { html?: string };
     if (typeof html !== 'string') {
@@ -97,7 +149,7 @@ router.patch('/:id/html', requirePermission('ui-lab:manage'), async (req, res, n
 });
 
 // GET /:id/stream — SSE endpoint for initial generation
-router.get('/:id/stream', requirePermission('ui-lab:view'), async (req, res) => {
+router.get('/:id/stream', requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res) => {
   const { id } = req.params;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -124,7 +176,7 @@ router.get('/:id/stream', requirePermission('ui-lab:view'), async (req, res) => 
 });
 
 // POST /:id/regenerate — SSE-capable regeneration (whole design or scoped element)
-router.post('/:id/regenerate', requirePermission('ui-lab:manage'), async (req, res) => {
+router.post('/:id/regenerate', requirePermission('ui-lab:manage'), uiLabEnabledFromDesignId, async (req, res) => {
   const { id } = req.params;
   const body = req.body as RegenerateUiLabDesignRequest;
 
@@ -157,7 +209,7 @@ router.post('/:id/regenerate', requirePermission('ui-lab:manage'), async (req, r
 });
 
 // GET /:id/comments
-router.get('/:id/comments', requirePermission('ui-lab:view'), async (req, res, next) => {
+router.get('/:id/comments', requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     const comments = await listComments(req.params.id);
     res.json(comments);
@@ -167,7 +219,7 @@ router.get('/:id/comments', requirePermission('ui-lab:view'), async (req, res, n
 });
 
 // POST /:id/comments
-router.post('/:id/comments', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.post('/:id/comments', requirePermission('ui-lab:manage'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const body = req.body as AddUiLabCommentRequest;
@@ -183,7 +235,7 @@ router.post('/:id/comments', requirePermission('ui-lab:manage'), async (req, res
 });
 
 // POST /comments/:commentId/resolve
-router.post('/comments/:commentId/resolve', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.post('/comments/:commentId/resolve', requirePermission('ui-lab:manage'), uiLabEnabledFromCommentId, async (req, res, next) => {
   try {
     const userId = getUserId(req);
     await resolveComment(req.params.commentId, userId);
@@ -194,7 +246,7 @@ router.post('/comments/:commentId/resolve', requirePermission('ui-lab:manage'), 
 });
 
 // POST /comments/:commentId/reopen
-router.post('/comments/:commentId/reopen', requirePermission('ui-lab:manage'), async (req, res, next) => {
+router.post('/comments/:commentId/reopen', requirePermission('ui-lab:manage'), uiLabEnabledFromCommentId, async (req, res, next) => {
   try {
     await reopenComment(req.params.commentId);
     res.json({ ok: true });

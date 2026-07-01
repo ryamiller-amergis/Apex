@@ -49,6 +49,27 @@ export async function getDesign(id: string): Promise<UiLabDesign | null> {
   return rows[0] ? toDesign(rows[0] as Record<string, unknown>) : null;
 }
 
+/** Resolve the owning project for a design id, or null when it doesn't exist. */
+export async function getDesignProject(id: string): Promise<string | null> {
+  const rows = await db
+    .select({ project: uiLabDesigns.project })
+    .from(uiLabDesigns)
+    .where(eq(uiLabDesigns.id, id))
+    .limit(1);
+  return rows[0]?.project ?? null;
+}
+
+/** Resolve the owning project for a comment id (via its design), or null when it doesn't exist. */
+export async function getCommentProject(commentId: string): Promise<string | null> {
+  const rows = await db
+    .select({ project: uiLabDesigns.project })
+    .from(uiLabComments)
+    .innerJoin(uiLabDesigns, eq(uiLabComments.designId, uiLabDesigns.id))
+    .where(eq(uiLabComments.id, commentId))
+    .limit(1);
+  return rows[0]?.project ?? null;
+}
+
 export async function createDesign(
   project: string,
   authorId: string,
@@ -187,6 +208,8 @@ export async function runRegeneration(
       instruction: req.feedback,
       selectedSelector: req.selectedSelector,
       selectedHtml: req.selectedHtml,
+      targetRoute: design.targetRoute,
+      featureText: design.prompt,
       modelId,
       maxTokens: maxTokens ?? undefined,
       timeoutMs: timeoutMs ?? undefined,

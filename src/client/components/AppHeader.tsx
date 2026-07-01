@@ -100,7 +100,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'my-work') {
       return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
     }
-    if (item.view === 'ui-lab') return isSuperAdmin || can('ui-lab:view');
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
     return true;

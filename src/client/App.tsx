@@ -172,7 +172,7 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
-    if (currentView === 'ui-lab'        && !isSuperAdmin && !can('ui-lab:view')) navigate('/home');
+    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');

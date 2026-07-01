@@ -27,8 +27,10 @@ import type {
 } from '../../shared/types/platformAdmin';
 import styles from './PlatformAdmin.module.css';
 
+const MENU_ITEM_KEYS = CONFIGURABLE_MENU_ITEMS.map((item) => item.key) as [MenuItemKey, ...MenuItemKey[]];
+
 const menuSchema = z.object({
-  enabledViews: z.array(z.enum(['calendar', 'planning', 'cloudcost', 'backlog'])),
+  enabledViews: z.array(z.enum(MENU_ITEM_KEYS)),
 });
 
 type MenuFormValues = z.infer<typeof menuSchema>;

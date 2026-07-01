@@ -7,18 +7,18 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 4 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(4);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 5 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(5);
   });
 
   it('contains the expected keys in order', () => {
     const keys = CONFIGURABLE_MENU_ITEMS.map((item) => item.key);
-    expect(keys).toEqual(['calendar', 'planning', 'cloudcost', 'backlog']);
+    expect(keys).toEqual(['calendar', 'planning', 'cloudcost', 'backlog', 'ui-lab']);
   });
 
   it('contains the expected labels matching AppHeader nav items', () => {
     const labels = CONFIGURABLE_MENU_ITEMS.map((item) => item.label);
-    expect(labels).toEqual(['Calendar', 'Planning', 'Cloud Cost', 'Interview']);
+    expect(labels).toEqual(['Calendar', 'Planning', 'Cloud Cost', 'Interview', 'UI Lab']);
   });
 
   it('MenuItemKey union is exercised through the catalog keys', () => {
@@ -27,6 +27,7 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('planning');
     expect(keys).toContain('cloudcost');
     expect(keys).toContain('backlog');
+    expect(keys).toContain('ui-lab');
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

@@ -93,6 +93,32 @@ describe('AppHeader — menuEnabledViews=[calendar] + calendar:view permission',
   });
 });
 
+// ── UI Lab now follows the standard admin-gated pattern ───────────────────────
+
+describe('AppHeader — UI Lab admin-gated behavior', () => {
+  it('does NOT render UI Lab when user has ui-lab:view but it is not in enabledViews', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={[]} />);
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('renders UI Lab when both enabled in menu AND has ui-lab:view permission', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={['ui-lab']} />);
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+
+  it('does NOT render UI Lab when in enabledViews but lacks ui-lab:view permission', () => {
+    render(<AppHeader {...baseProps} can={(_k) => false} menuEnabledViews={['ui-lab']} />);
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('renders UI Lab for a super admin even when not in enabledViews', () => {
+    render(<AppHeader {...baseProps} can={(_k) => false} isSuperAdmin menuEnabledViews={[]} />);
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+});
+
 // ── Super admin sees all feature views ─────────────────────────────────────────
 
 describe('AppHeader — isSuperAdmin=true', () => {

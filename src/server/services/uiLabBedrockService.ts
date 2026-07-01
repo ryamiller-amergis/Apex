@@ -74,7 +74,10 @@ function buildCatalogSection(): string {
   return catalog.uiKnowledgeBase ?? '';
 }
 
-async function buildContextSection(): Promise<string> {
+async function buildContextSection(
+  targetRoute?: string | null,
+  featureText?: string,
+): Promise<string> {
   const parts: string[] = [];
 
   const skillMarkdown = loadLocalSkill();
@@ -126,7 +129,20 @@ async function buildContextSection(): Promise<string> {
   try {
     const inventory = await getScreenInventory();
     if (inventory.length) {
-      const rows = inventory
+      // Keep the target route's row from being truncated by the 30-row cap by
+      // ordering any rows matching the target route first.
+      const normTarget = targetRoute
+        ? targetRoute.trim().toLowerCase().replace(/^\//, '').split(/[?#]/)[0]
+        : '';
+      const isTarget = (r: { route: string }) =>
+        normTarget.length > 0 &&
+        r.route
+          .split(',')
+          .some((seg) => seg.trim().toLowerCase().replace(/^\//, '').split(/[?#]/)[0].includes(normTarget));
+      const ordered = normTarget
+        ? [...inventory.filter(isTarget), ...inventory.filter((r) => !isTarget(r))]
+        : inventory;
+      const rows = ordered
         .slice(0, 30)
         .map((r) => `- **${r.route}** — ${r.purpose ?? ''}${r.userTypes?.length ? ` (${r.userTypes.join(', ')})` : ''}`)
         .join('\n');
@@ -134,6 +150,29 @@ async function buildContextSection(): Promise<string> {
     }
   } catch {
     // non-fatal
+  }
+
+  // EXTEND mode: when a target route is set, pull the ACTUAL existing page source
+  // (page component + relevant child components, keyword-guided) so the generated
+  // design faithfully extends the real page rather than approximating from a
+  // screenshot. Non-fatal — falls back to the catalog-only context on any failure.
+  if (targetRoute?.trim()) {
+    try {
+      const { fetchExistingPageContext } = await import('./designSystemService');
+      const pageContext = await fetchExistingPageContext(targetRoute, featureText);
+      if (pageContext.trim()) {
+        parts.push(
+          `## Existing page source — extend this (ground truth)\n\n` +
+            `The following is the real source of the page at \`${targetRoute}\` and its ` +
+            `relevant child components. Reproduce its actual layout, columns, controls, and ` +
+            `data shape, and add the requested new behavior INTO this structure — do not ` +
+            `invent a different layout or let the brief override the existing structure.\n\n` +
+            pageContext.trim(),
+        );
+      }
+    } catch {
+      // non-fatal — existing-page source unavailable
+    }
   }
 
   return parts.join('\n\n---\n\n');
@@ -277,6 +316,10 @@ export interface UiLabEditOptions {
   instruction: string;
   selectedSelector?: string | null;
   selectedHtml?: string | null;
+  /** Route the design targets — enables EXTEND-mode existing-page grounding on edits. */
+  targetRoute?: string | null;
+  /** Original design prompt — guides keyword-based import traversal for page context. */
+  featureText?: string | null;
   modelId?: string;
   maxTokens?: number;
   timeoutMs?: number;
@@ -376,7 +419,7 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
     // non-fatal
   }
 
-  const contextSection = await buildContextSection();
+  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt);
   const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64);
 
   return invokeStreaming(
@@ -395,7 +438,10 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
   const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
 
-  const contextSection = await buildContextSection();
+  const contextSection = await buildContextSection(
+    opts.targetRoute,
+    opts.featureText ?? undefined,
+  );
   const prompt = buildEditPrompt(
     opts.instruction,
     opts.currentHtml,
