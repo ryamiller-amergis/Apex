@@ -4,7 +4,8 @@ import type { ChangelogEntry } from '../../shared/types/changelog';
 import { getAppSetting } from './appSettingsService';
 
 function resolveChangelogPath(): string {
-  const fromDist = path.resolve(__dirname, '../client/CHANGELOG.json');
+  // Compiled to dist/server/services — client build lives at dist/client (see index.ts).
+  const fromDist = path.resolve(__dirname, '../../client/CHANGELOG.json');
   if (fs.existsSync(fromDist)) return fromDist;
   return path.resolve(process.cwd(), 'public/CHANGELOG.json');
 }
