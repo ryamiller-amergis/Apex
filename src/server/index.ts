@@ -42,6 +42,8 @@ import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
 import featureFlagRoutes from './routes/featureFlags';
+import featureRequestRoutes from './routes/featureRequests';
+import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { resolveDataRoot } from './utils/dataDir';
 
@@ -179,6 +181,8 @@ app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
+app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
+app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 

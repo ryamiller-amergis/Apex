@@ -57,6 +57,7 @@ const DevSessionView = lazy(() => import('./components/DevSessionView').then(m =
 const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'));
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
+const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -85,7 +86,7 @@ function App() {
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -113,6 +114,8 @@ function App() {
                     ? 'standup-summary'
                     : location.pathname === '/standup'
                     ? 'standup'
+                    : location.pathname === '/feature-requests'
+                    ? 'feature-requests'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -227,6 +230,7 @@ function App() {
     if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
+    if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -255,6 +259,7 @@ function App() {
           project: selectedProject,
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
+          skillProvider: activeSkillConfig?.skillProvider ?? undefined,
           model: DEFAULT_MODEL_ID,
           skillSettingsId: selectedSkillSettingsId ?? undefined,
         },
@@ -381,7 +386,7 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary'}
+            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests'}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
@@ -390,6 +395,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
+            selectedProject={selectedProject}
             repoConfigs={repoConfigs}
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={changeSkillSettings}
@@ -401,6 +407,7 @@ function App() {
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
+            onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
@@ -591,6 +598,12 @@ function App() {
                 </Suspense>
               </ErrorBoundary>
             </div>
+          ) : currentView === 'feature-requests' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <FeatureRequestsView />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'planning' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">

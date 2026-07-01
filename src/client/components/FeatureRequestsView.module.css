@@ -1,0 +1,432 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 56px);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sortSelect {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.loading,
+.error,
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.error {
+  color: var(--error-color);
+}
+
+/* ── Table ─────────────────────────────────────── */
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  vertical-align: top;
+}
+
+.table tr:hover td {
+  background: var(--bg-secondary);
+}
+
+.titleCell {
+  max-width: 280px;
+}
+
+.titleText {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.submitterMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.rationaleCell {
+  max-width: 320px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.rankCell {
+  white-space: nowrap;
+  min-width: 80px;
+}
+
+/* ── Badges ────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+}
+
+/* Priority */
+.priorityCritical {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.priorityHigh {
+  background: #ffedd5;
+  color: #9a3412;
+}
+.priorityMedium {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.priorityLow {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* Risk */
+.riskHigh {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.riskMedium {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.riskLow {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* AI status indicators */
+.aiStatusPending {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+.aiStatusAnalyzing {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.aiStatusComplete {
+  background: #dcfce7;
+  color: #166534;
+}
+.aiStatusFailed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Dark mode overrides for badge backgrounds */
+[data-theme="dark"] .priorityCritical {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+[data-theme="dark"] .priorityHigh {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fdba74;
+}
+[data-theme="dark"] .priorityMedium {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+}
+[data-theme="dark"] .priorityLow {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+[data-theme="dark"] .riskHigh {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+[data-theme="dark"] .riskMedium {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+}
+[data-theme="dark"] .riskLow {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+[data-theme="dark"] .aiStatusPending {
+  background: rgba(161, 161, 170, 0.15);
+  color: #a1a1aa;
+}
+[data-theme="dark"] .aiStatusAnalyzing {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+[data-theme="dark"] .aiStatusComplete {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+[data-theme="dark"] .aiStatusFailed {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+/* ── Spinner (for analyzing state) ─────────────── */
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Dropdowns / controls ──────────────────────── */
+
+.controlSelect {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.controlSelect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Rank arrows ───────────────────────────────── */
+
+.rankControls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rankValue {
+  min-width: 24px;
+  text-align: center;
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.rankBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.rankBtn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.rankBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── Re-analyze button ─────────────────────────── */
+
+.reanalyzeBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--accent-color);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.reanalyzeBtn:hover:not(:disabled) {
+  background: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+.reanalyzeBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── AI analysis cell ──────────────────────────── */
+
+.aiAnalysis {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aiBadges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Status badge (workflow) ───────────────────── */
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.statusNew {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.statusUnderReview {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.statusPlanned {
+  background: #dcfce7;
+  color: #166534;
+}
+.statusDeclined {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+.statusDone {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+[data-theme="dark"] .statusNew {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+[data-theme="dark"] .statusUnderReview {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+}
+[data-theme="dark"] .statusPlanned {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+[data-theme="dark"] .statusDeclined {
+  background: rgba(161, 161, 170, 0.15);
+  color: #a1a1aa;
+}
+[data-theme="dark"] .statusDone {
+  background: rgba(5, 150, 105, 0.2);
+  color: #6ee7b7;
+}
+
+/* ── Actions cell ──────────────────────────────── */
+
+.actionsCell {
+  white-space: nowrap;
+}
+
+/* ── Responsive ────────────────────────────────── */
+
+@media (max-width: 1024px) {
+  .table th:nth-child(6),
+  .table td:nth-child(6) {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .content {
+    padding: 16px;
+  }
+
+  .table th:nth-child(4),
+  .table td:nth-child(4),
+  .table th:nth-child(5),
+  .table td:nth-child(5) {
+    display: none;
+  }
+}

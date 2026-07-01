@@ -268,9 +268,12 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
  * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
  */
 function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Record<string, McpServerConfig> {
-  const servers: Record<string, McpServerConfig> = {
-    'ado-skills': { url: adoSkillsUrl },
-  };
+  const servers: Record<string, McpServerConfig> = {};
+
+  // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
+  if (kickoff.skillProvider !== 'github') {
+    servers['ado-skills'] = { url: adoSkillsUrl };
+  }
 
   if (kickoff.mcpPill) {
     const pill = kickoff.mcpPill;
@@ -320,30 +323,45 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.branch ?? 'main';
+  const isGitHub = kickoff.skillProvider === 'github';
+  const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
   const parts: string[] = [
     `# Sandbox workspace`,
     `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
-    `It is NOT a clone of the project repo. Project files live in the ADO repo and must be fetched via MCP — never search the local filesystem for them.`,
+    `It is NOT a clone of the project repo. Project files live in the ${repoLabel} and must be fetched via MCP — never search the local filesystem for them.`,
     ``,
     `# Session context`,
     `  project: "${kickoff.project}"`,
     `  repo:    "${kickoff.repo}"`,
     `  branch:  "${branch}"`,
+    `  provider: "${kickoff.skillProvider ?? 'ado'}"`,
     ``,
-    `# Available MCP tools (via \`ado-skills\` server)`,
-    `- \`get_skill\`       — load a SKILL.md from the repo`,
-    `- \`list_repo_dir\`   — browse repo directory structure`,
-    `- \`get_skill_file\`  — read any file from the repo`,
-    `- \`search_repo_code\`— search code in the repo`,
-    ``,
-    `# Mode`,
-    `You are the internal project assistant for the **${kickoff.project}** team.`,
-    ``,
-    `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
-    ``,
-    `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
-    ...buildScopePolicyLines(kickoff),
   ];
+
+  if (isGitHub) {
+    parts.push(
+      `# Mode`,
+      `You are the internal project assistant for the **${kickoff.project}** team.`,
+      `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
+      ...buildScopePolicyLines(kickoff),
+    );
+  } else {
+    parts.push(
+      `# Available MCP tools (via \`ado-skills\` server)`,
+      `- \`get_skill\`       — load a SKILL.md from the repo`,
+      `- \`list_repo_dir\`   — browse repo directory structure`,
+      `- \`get_skill_file\`  — read any file from the repo`,
+      `- \`search_repo_code\`— search code in the repo`,
+      ``,
+      `# Mode`,
+      `You are the internal project assistant for the **${kickoff.project}** team.`,
+      ``,
+      `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
+      ``,
+      `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
+      ...buildScopePolicyLines(kickoff),
+    );
+  }
 
   if (kickoff.mcpPill) {
     const pill = kickoff.mcpPill;
@@ -599,24 +617,43 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   const branch = kickoff.branch ?? 'main';
+  const isGitHub = kickoff.skillProvider === 'github';
   const parts: string[] = [
     `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
-    `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
+    isGitHub
+      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the GitHub repo.`
+      : `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
     ``,
-    `# MCP tools (ado-skills server)`,
-    `- \`get_skill\`        — load a SKILL.md from the repo`,
-    `- \`list_repo_dir\`    — browse repo directory structure`,
-    `- \`get_skill_file\`   — read any file from the repo`,
-    `- \`search_repo_code\` — search code in the repo`,
-    ...buildScopePolicyLines(kickoff),
-    ``,
-    `# Your task`,
-    `Call \`get_skill\` with the following parameters to load the skill:`,
-    `  project: "${kickoff.project}"`,
-    `  repo:    "${kickoff.repo}"`,
-    `  path:    "${kickoff.skillPath}"`,
-    `  branch:  "${branch}"`,
+  ];
+
+  if (isGitHub) {
+    parts.push(
+      ...buildScopePolicyLines(kickoff),
+      ``,
+      `# Your task`,
+      `The skill content has been pre-loaded below. Follow its instructions exactly and completely.`,
+    );
+  } else {
+    parts.push(
+      `# MCP tools (ado-skills server)`,
+      `- \`get_skill\`        — load a SKILL.md from the repo`,
+      `- \`list_repo_dir\`    — browse repo directory structure`,
+      `- \`get_skill_file\`   — read any file from the repo`,
+      `- \`search_repo_code\` — search code in the repo`,
+      ...buildScopePolicyLines(kickoff),
+      ``,
+      `# Your task`,
+      `Call \`get_skill\` with the following parameters to load the skill:`,
+      `  project: "${kickoff.project}"`,
+      `  repo:    "${kickoff.repo}"`,
+      `  path:    "${kickoff.skillPath}"`,
+      `  branch:  "${branch}"`,
+      ``,
+    );
+  }
+
+  parts.push(
     ``,
     `Then follow the skill's instructions exactly and completely. The skill defines everything:`,
     `which repo files to load, how to interact with the user, what to produce, and when to produce it.`,
@@ -634,7 +671,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `as \`a. text\`, \`b. text\`, etc. on its own line — the chat UI renders these as clickable`,
     `buttons. This is a rendering hint only; it does not change when, whether, or how many`,
     `questions the skill asks.`,
-  ];
+  );
 
   if (kickoff.transcript) {
     parts.push(
@@ -1422,9 +1459,32 @@ export async function sendMessage(
 
   // Build initial prompt on first turn
   const isFirstTurn = !state.thread.cursorAgentId;
-  const prompt = isFirstTurn
-    ? `${buildInitialPrompt(state.thread.kickoff)}\n\n---\n\n${promptText}`
-    : promptText;
+  let prompt: string;
+  if (isFirstTurn) {
+    let initialPrompt = buildInitialPrompt(state.thread.kickoff);
+
+    // For GitHub-backed projects with a skill path, pre-fetch the skill content
+    // and inject it directly into the system prompt (no MCP round-trip needed)
+    if (state.thread.kickoff.skillProvider === 'github' && state.thread.kickoff.skillPath) {
+      try {
+        const { getSkillFile } = await import('./skillCatalogGitHub');
+        const skillContent = await getSkillFile(
+          state.thread.kickoff.repo,
+          state.thread.kickoff.skillPath,
+          state.thread.kickoff.branch,
+          state.thread.kickoff.project,
+        );
+        initialPrompt += `\n\n# Pre-loaded skill content (${state.thread.kickoff.skillPath})\n\n${skillContent}`;
+      } catch (err) {
+        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
+        initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub: ${(err as Error).message}. Inform the user.`;
+      }
+    }
+
+    prompt = `${initialPrompt}\n\n---\n\n${promptText}`;
+  } else {
+    prompt = promptText;
+  }
 
   try {
     // Create or resume the agent (retry up to 3x on transient errors)

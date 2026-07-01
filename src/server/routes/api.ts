@@ -4014,6 +4014,8 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prdModel: config.prdModel ?? null,
       designDocModel: config.designDocModel ?? null,
       testCaseModel: config.testCaseModel ?? null,
+      featureRequestSkillPath: config.featureRequestSkillPath ?? null,
+      featureRequestModel: config.featureRequestModel ?? null,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });

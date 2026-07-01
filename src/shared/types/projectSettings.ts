@@ -1,6 +1,8 @@
 import type { ApprovalMode } from './approvals';
 import type { GroupWithMembers } from './groups';
 
+export type SkillProvider = 'ado' | 'github';
+
 /**
  * Configuration for a Quick MCP Pill — a home-page shortcut that wires an
  * external MCP server into the chat agent for the duration of a thread.
@@ -64,6 +66,7 @@ export interface ProjectSkillConfig {
   project: string;
   friendlyName: string;
   isDefault: boolean;
+  skillProvider?: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   updatedBy?: string | null;
@@ -100,6 +103,8 @@ export interface ProjectSkillConfig {
   developmentModel?: string | null;
   standupSkillPath?: string | null;
   standupModel?: string | null;
+  featureRequestSkillPath?: string | null;
+  featureRequestModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -114,6 +119,7 @@ export interface ProjectSkillConfig {
 export interface UpsertProjectSkillConfigRequest {
   friendlyName: string;
   isDefault?: boolean;
+  skillProvider?: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath?: string | null;
@@ -149,6 +155,8 @@ export interface UpsertProjectSkillConfigRequest {
   developmentModel?: string | null;
   standupSkillPath?: string | null;
   standupModel?: string | null;
+  featureRequestSkillPath?: string | null;
+  featureRequestModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -189,6 +197,7 @@ export interface ProjectSkillConfigResponse {
   project: string;
   friendlyName: string;
   isDefault: boolean;
+  skillProvider?: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath?: string | null;
@@ -212,6 +221,8 @@ export interface ProjectSkillConfigResponse {
   defaultModel?: string | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  featureRequestSkillPath?: string | null;
+  featureRequestModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -221,6 +232,7 @@ export interface ProjectSkillConfigResponse {
 export interface ProjectRepoConfigSummary {
   id: string;
   project: string;
+  skillProvider?: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   friendlyName: string;
