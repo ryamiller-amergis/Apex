@@ -14,6 +14,19 @@ export function getWorkspaceDir(sessionId: string): string {
  * Non-alphanumeric characters become hyphens; leading/trailing/consecutive
  * hyphens are collapsed.
  */
+/**
+ * Removes credentials from text so a Personal Access Token embedded in a
+ * clone URL can never surface in an error message or log line. Strips both
+ * the exact PAT value and any `user:secret@host` userinfo in a URL.
+ */
+export function redactSecrets(text: string, pat?: string): string {
+  let out = text;
+  if (pat) {
+    out = out.split(pat).join('***');
+  }
+  return out.replace(/\/\/[^/@\s:]*:[^/@\s]*@/g, '//***:***@');
+}
+
 export function slugify(title: string): string {
   return title
     .toLowerCase()
@@ -45,12 +58,19 @@ export async function checkoutDefaultBranch(opts: {
 
   fs.mkdirSync(workspaceDir, { recursive: true });
 
-  // Full clone (no --depth / --single-branch) so all branch history is
-  // available for pre-push base-branch merges.
-  execSync(
-    `git clone -c core.longpaths=true --branch "${branch}" "${urlObj.toString()}" .`,
-    { cwd: workspaceDir, stdio: 'pipe', timeout: 300000 },
-  );
+  // Blobless partial clone: fetches all commits/trees (so pre-push
+  // base-branch merges still work) but defers historical file blobs,
+  // fetching them on demand. Dramatically smaller/faster than a full
+  // clone on large monorepos, which matters on constrained hosts.
+  try {
+    execSync(
+      `git clone -c core.longpaths=true --filter=blob:none --branch "${branch}" "${urlObj.toString()}" .`,
+      { cwd: workspaceDir, stdio: 'pipe', timeout: 600000 },
+    );
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(`git clone failed: ${redactSecrets(raw, pat)}`);
+  }
 
   return workspaceDir;
 }
