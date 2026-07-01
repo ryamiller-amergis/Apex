@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       migrations: ${{ steps.detect.outputs.has_migration_changes }}
+      markdown_only: ${{ steps.markdown_only.outputs.markdown_only }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,7 +28,25 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: node scripts/ci/has-migration-changes.mjs
 
+      - name: Detect markdown-only changes
+        id: markdown_only
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/ci/is-markdown-only-changes.mjs
+
+  docs-only:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.markdown_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip tests and dev deploy for documentation-only PRs
+        run: echo "Markdown-only PR — skipping unit tests and dev deployment."
+
   test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.markdown_only != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -91,7 +110,7 @@ jobs:
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
     # PRs should still deploy to dev.
-    if: ${{ always() && !cancelled() && needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
+    if: ${{ always() && !cancelled() && needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
