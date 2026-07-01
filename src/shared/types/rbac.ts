@@ -73,4 +73,11 @@ export interface MyPermissionsResponse {
   isSuperAdmin: boolean;
   changelogUnread: boolean;
   showChangelogOnLogin: boolean;
+  betaAnnouncementDismissed: boolean;
+}
+
+export interface UpdatePreferencesRequest {
+  markChangelogRead?: boolean;
+  showChangelogOnLogin?: boolean;
+  dismissBetaAnnouncement?: boolean;
 }

@@ -3,7 +3,7 @@
   flex-direction: row;
   flex: 1;
   overflow: hidden;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .historyToggleBtn {

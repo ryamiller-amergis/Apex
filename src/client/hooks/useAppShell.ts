@@ -70,6 +70,7 @@ export function useAppShell() {
   const [showChangelog, setShowChangelog] = useState(false);
   const [hasUnreadChangelog, setHasUnreadChangelog] = useState(false);
   const [showChangelogOnLogin, setShowChangelogOnLogin] = useState(true);
+  const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -114,6 +115,7 @@ export function useAppShell() {
           setIsSuperAdmin(d.isSuperAdmin ?? false);
           setHasUnreadChangelog(d.changelogUnread);
           setShowChangelogOnLogin(d.showChangelogOnLogin);
+          setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
         }
       })
       .catch(() => { /* ignore */ })
@@ -244,6 +246,16 @@ export function useAppShell() {
     });
   }, []);
 
+  const handleDismissBetaAnnouncement = useCallback(() => {
+    setBetaAnnouncementDismissed(true);
+    void fetch('/api/me/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ dismissBetaAnnouncement: true }),
+    });
+  }, []);
+
   const handleToggleShowChangelogOnLogin = useCallback((show: boolean) => {
     setShowChangelogOnLogin(show);
     void fetch('/api/me/preferences', {
@@ -297,6 +309,8 @@ export function useAppShell() {
     showChangelogOnLogin,
     handleMarkChangelogAsRead,
     handleToggleShowChangelogOnLogin,
+    betaAnnouncementDismissed,
+    handleDismissBetaAnnouncement,
     handleLogout,
     selectedProject,
     selectedAreaPath,
