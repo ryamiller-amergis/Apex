@@ -7,18 +7,34 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 6 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(6);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 7 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(7);
   });
 
   it('contains the expected keys in order', () => {
     const keys = CONFIGURABLE_MENU_ITEMS.map((item) => item.key);
-    expect(keys).toEqual(['calendar', 'planning', 'cloudcost', 'backlog', 'my-work', 'standup']);
+    expect(keys).toEqual([
+      'calendar',
+      'planning',
+      'cloudcost',
+      'backlog',
+      'my-work',
+      'standup',
+      'feature-requests',
+    ]);
   });
 
   it('contains the expected labels matching AppHeader nav items', () => {
     const labels = CONFIGURABLE_MENU_ITEMS.map((item) => item.label);
-    expect(labels).toEqual(['Calendar', 'Planning', 'Cloud Cost', 'Interview', 'My Work', 'Standup']);
+    expect(labels).toEqual([
+      'Calendar',
+      'Planning',
+      'Cloud Cost',
+      'Interview',
+      'My Work',
+      'Standup',
+      'Feature Requests',
+    ]);
   });
 
   it('MenuItemKey union is exercised through the catalog keys', () => {
@@ -27,6 +43,7 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('planning');
     expect(keys).toContain('cloudcost');
     expect(keys).toContain('backlog');
+    expect(keys).toContain('feature-requests');
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

@@ -1,16 +1,17 @@
 import { Router, Request, Response } from 'express';
 import {
   listProjects,
-  listRepos,
-  listBranches,
-  listSkills,
-  getSkill,
-  getSkillFile,
   searchSkills,
   invalidateCache,
 } from '../services/skillCatalog';
+import * as facade from '../services/skillCatalogFacade';
+import type { SkillProvider } from '../../shared/types/projectSettings';
 
 const router = Router();
+
+function resolveProvider(raw?: string): SkillProvider {
+  return raw === 'github' ? 'github' : 'ado';
+}
 
 /**
  * GET /api/skills/projects
@@ -27,15 +28,16 @@ router.get('/projects', async (_req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/repos?project=<name>
- * List repos in a project.
+ * GET /api/skills/repos?project=<name>&provider=<ado|github>
+ * List repos in a project (or GitHub org).
  */
 router.get('/repos', async (req: Request, res: Response) => {
-  const { project } = req.query as { project?: string };
+  const { project, provider: providerRaw } = req.query as { project?: string; provider?: string };
   if (!project) return res.status(400).json({ error: 'project is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const repos = await listRepos(project);
+    const repos = await facade.listRepos(project, provider);
     res.json(repos);
   } catch (err: any) {
     console.error('[skills] listRepos error:', err.message);
@@ -44,16 +46,17 @@ router.get('/repos', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/branches?project=<name>&repo=<name>
+ * GET /api/skills/branches?project=<name>&repo=<name>&provider=<ado|github>
  * List branch names for a repo, sorted with defaultBranch first.
  */
 router.get('/branches', async (req: Request, res: Response) => {
-  const { project, repo } = req.query as { project?: string; repo?: string };
+  const { project, repo, provider: providerRaw } = req.query as { project?: string; repo?: string; provider?: string };
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const branches = await listBranches(project, repo);
+    const branches = await facade.listBranches(project, repo, provider);
     res.json(branches);
   } catch (err: any) {
     console.error('[skills] listBranches error:', err.message);
@@ -62,21 +65,23 @@ router.get('/branches', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/list?project=<name>&repo=<name>&branch=<name>
+ * GET /api/skills/list?project=<name>&repo=<name>&branch=<name>&provider=<ado|github>
  * List all skills (SKILL.md files) in a repo.
  */
 router.get('/list', async (req: Request, res: Response) => {
-  const { project, repo, branch } = req.query as {
+  const { project, repo, branch, provider: providerRaw } = req.query as {
     project?: string;
     repo?: string;
     branch?: string;
+    provider?: string;
   };
 
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const skills = await listSkills(project, repo, branch);
+    const skills = await facade.listSkills(project, repo, branch, provider);
     res.json(skills);
   } catch (err: any) {
     console.error('[skills] listSkills error:', err.message);
@@ -85,23 +90,25 @@ router.get('/list', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/get?project=<name>&repo=<name>&path=<path>&branch=<name>
+ * GET /api/skills/get?project=<name>&repo=<name>&path=<path>&branch=<name>&provider=<ado|github>
  * Get full skill detail (content + frontmatter + supporting files).
  */
 router.get('/get', async (req: Request, res: Response) => {
-  const { project, repo, path, branch } = req.query as {
+  const { project, repo, path, branch, provider: providerRaw } = req.query as {
     project?: string;
     repo?: string;
     path?: string;
     branch?: string;
+    provider?: string;
   };
 
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
   if (!path) return res.status(400).json({ error: 'path is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const skill = await getSkill(project, repo, path, branch);
+    const skill = await facade.getSkill(project, repo, path, branch, provider);
     res.json(skill);
   } catch (err: any) {
     console.error('[skills] getSkill error:', err.message);
@@ -110,23 +117,25 @@ router.get('/get', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/file?project=<name>&repo=<name>&path=<path>&branch=<name>
+ * GET /api/skills/file?project=<name>&repo=<name>&path=<path>&branch=<name>&provider=<ado|github>
  * Get raw content of a skill supporting file.
  */
 router.get('/file', async (req: Request, res: Response) => {
-  const { project, repo, path, branch } = req.query as {
+  const { project, repo, path, branch, provider: providerRaw } = req.query as {
     project?: string;
     repo?: string;
     path?: string;
     branch?: string;
+    provider?: string;
   };
 
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
   if (!path) return res.status(400).json({ error: 'path is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const content = await getSkillFile(project, repo, path, branch);
+    const content = await facade.getSkillFile(project, repo, path, branch, provider);
     res.type('text/markdown').send(content);
   } catch (err: any) {
     console.error('[skills] getSkillFile error:', err.message);
@@ -135,24 +144,26 @@ router.get('/file', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/search?q=<query>&project=<name>&repo=<name>&limit=<n>
- * Search skills by name/description across a repo (or all loaded skills if no repo given).
+ * GET /api/skills/search?q=<query>&project=<name>&repo=<name>&limit=<n>&provider=<ado|github>
+ * Search skills by name/description across a repo.
  */
 router.get('/search', async (req: Request, res: Response) => {
-  const { q, project, repo, branch, limit } = req.query as {
+  const { q, project, repo, branch, limit, provider: providerRaw } = req.query as {
     q?: string;
     project?: string;
     repo?: string;
     branch?: string;
     limit?: string;
+    provider?: string;
   };
 
   if (!q) return res.status(400).json({ error: 'q is required' });
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
 
+  const provider = resolveProvider(providerRaw);
   try {
-    const allSkills = await listSkills(project, repo, branch);
+    const allSkills = await facade.listSkills(project, repo, branch, provider);
     const results = searchSkills(allSkills, q, limit ? parseInt(limit, 10) : 10);
     res.json(results);
   } catch (err: any) {
@@ -162,12 +173,16 @@ router.get('/search', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/skills/refresh?project=<name>&repo=<name>
+ * POST /api/skills/refresh?project=<name>&repo=<name>&provider=<ado|github>
  * Manually invalidate the skill cache for a project/repo.
  */
 router.post('/refresh', (req: Request, res: Response) => {
-  const { project, repo } = req.query as { project?: string; repo?: string };
-  invalidateCache(project, repo);
+  const { project, repo, provider: providerRaw } = req.query as { project?: string; repo?: string; provider?: string };
+  const provider = resolveProvider(providerRaw);
+  facade.invalidateCache(project, repo, provider);
+  if (provider === 'ado') {
+    invalidateCache(project, repo);
+  }
   res.json({ ok: true });
 });
 

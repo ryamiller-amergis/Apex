@@ -324,6 +324,7 @@ const NewInterviewCompose: React.FC = () => {
           project: selectedProject,
           repo: resolvedRepoName,
           branch: resolvedBranch,
+          skillProvider: skillConfig?.skillProvider ?? undefined,
           skillPath: grillSkill?.path,
           model,
           skillSettingsId: skillConfig?.id ?? undefined,

@@ -153,6 +153,8 @@ jobs:
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
+              GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
+              GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
               WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
 
