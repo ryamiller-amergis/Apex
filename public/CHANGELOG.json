@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.32.0",
+    "date": "2026-06-30",
+    "title": "Feature Flag Management",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Platform admins can create and manage feature flags with targeting rules for everyone, specific projects, users, or groups — including enable/disable toggles, lifecycle status, and a full audit log"
+      },
+      {
+        "type": "feature",
+        "description": "Client apps can gate features with useFeatureFlag — flags are evaluated per user and project so rollouts can be scoped without redeploying"
+      },
+      {
+        "type": "improvement",
+        "description": "Platform Admin is now organized into tabs for Access & Users, Menu Visibility, and Feature Flags"
+      },
+      {
+        "type": "improvement",
+        "description": "My Work and Standup menu items respect per-project menu visibility settings configured in Platform Admin"
+      },
+      {
+        "type": "bugfix",
+        "description": "Fixed login and OAuth failures on scaled Azure App Service instances by persisting sessions to shared storage across workers"
+      }
+    ]
+  },
+  {
     "version": "1.31.0",
     "date": "2026-06-30",
     "title": "Daily Standup Ceremony",

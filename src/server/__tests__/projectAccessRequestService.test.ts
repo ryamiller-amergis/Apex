@@ -14,6 +14,10 @@ jest.mock('../services/projectCatalogService', () => ({
   listProjectCatalog: jest.fn(),
 }));
 
+jest.mock('../services/notificationService', () => ({
+  createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+}));
+
 import {
   approveProjectAccessRequest,
   createProjectAccessRequests,
@@ -22,10 +26,12 @@ import {
 } from '../services/projectAccessRequestService';
 import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import { listProjectCatalog } from '../services/projectCatalogService';
+import { createNotification } from '../services/notificationService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const mockGetAssignmentsForUser = getAssignmentsForUser as jest.Mock;
 const mockListProjectCatalog = listProjectCatalog as jest.Mock;
+const mockCreateNotification = createNotification as jest.Mock;
 
 const pendingRequestRow = {
   id: 'request-1',
@@ -84,7 +90,22 @@ describe('projectAccessRequestService', () => {
       { id: '3', name: 'Existing', description: '' },
     ]);
     mockGetAssignmentsForUser.mockResolvedValue(['Existing']);
-    mockSelectWhere([]);
+    mockDb.select
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([{ displayName: 'Ada Lovelace', email: 'ada@example.com' }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockResolvedValue([
+          { oid: 'admin-1', email: 'ryamiller@amergis.com' },
+        ]),
+      });
     mockInsertReturning([
       { ...pendingRequestRow, id: 'request-1', project: 'MaxView' },
       { ...pendingRequestRow, id: 'request-2', project: 'MatterWorx' },
@@ -94,6 +115,14 @@ describe('projectAccessRequestService', () => {
 
     expect(result.map((request) => request.project)).toEqual(['MaxView', 'MatterWorx']);
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'admin-1',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'New project access request',
+        link: '/platform-admin',
+      }),
+    );
   });
 
   it('does not create duplicate pending requests', async () => {

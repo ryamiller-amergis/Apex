@@ -10,28 +10,44 @@ import {
   usePlatformAdminMenuConfigs,
   usePlatformAdminProjects,
   usePlatformAdminUsers,
+  usePlatformAdminGroups,
   useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
 } from '../hooks/usePlatformAdmin';
+import {
+  useFeatureFlagsList,
+  useCreateFeatureFlag,
+  useUpdateFeatureFlag,
+  useDeleteFeatureFlag,
+  useAddFlagRule,
+  useRemoveFlagRule,
+  useFlagAudit,
+} from '../hooks/usePlatformAdminFeatureFlags';
 import { UserMenu } from './UserMenu';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
-import { CONFIGURABLE_MENU_ITEMS } from '../../shared/types/menuSettings';
-import type { MenuItemKey } from '../../shared/types/menuSettings';
+import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey } from '../../shared/types/menuSettings';
 import type {
   PendingProjectAssignment,
   PlatformAdminAccessRequest,
   PlatformAdminUser,
+  PlatformAdminGroup,
   ProjectAssignmentGroup,
 } from '../../shared/types/platformAdmin';
+import type { FeatureFlagRule, FeatureFlagWithRules, FlagLifecycle, FlagRuleType } from '../../shared/types/featureFlags';
 import styles from './PlatformAdmin.module.css';
 
+const MENU_ITEM_KEYS = CONFIGURABLE_MENU_ITEMS.map((item) => item.key) as [MenuItemKey, ...MenuItemKey[]];
+
 const menuSchema = z.object({
-  enabledViews: z.array(z.enum(['calendar', 'planning', 'cloudcost', 'backlog'])),
+  enabledViews: z.array(z.enum(MENU_ITEM_KEYS)),
 });
 
 type MenuFormValues = z.infer<typeof menuSchema>;
+
+type PlatformAdminTab = 'access' | 'menu' | 'flags';
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
@@ -131,6 +147,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
   onLogout,
 }) => {
   const [selectedMenuProject, setSelectedMenuProject] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<PlatformAdminTab>('access');
   const [assignmentSavedProject, setAssignmentSavedProject] = useState<string | null>(null);
   const [menuSavedProject, setMenuSavedProject] = useState<string | null>(null);
 
@@ -260,49 +277,117 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
         </div>
       ) : (
         <main className={styles.content}>
-          <AccessRequestsSection
-            requests={accessRequests}
-            isApproving={approveAccessRequest.isPending}
-            isRejecting={rejectAccessRequest.isPending}
-            onApprove={handleApproveAccessRequest}
-            onReject={handleRejectAccessRequest}
-          />
+          <div className={styles.tabBar} role="tablist" aria-label="Platform admin sections">
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-access"
+              aria-selected={activeTab === 'access'}
+              aria-controls="platform-admin-panel-access"
+              className={`${styles.tabButton} ${activeTab === 'access' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('access')}
+            >
+              Access &amp; Users
+              {accessRequests.length > 0 && (
+                <span className={styles.tabBadge} aria-label={`${accessRequests.length} pending requests`}>
+                  {accessRequests.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-menu"
+              aria-selected={activeTab === 'menu'}
+              aria-controls="platform-admin-panel-menu"
+              className={`${styles.tabButton} ${activeTab === 'menu' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('menu')}
+            >
+              Menu Visibility
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-flags"
+              aria-selected={activeTab === 'flags'}
+              aria-controls="platform-admin-panel-flags"
+              className={`${styles.tabButton} ${activeTab === 'flags' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('flags')}
+            >
+              Feature Flags
+            </button>
+          </div>
 
-          <section className={styles.section} aria-labelledby="user-project-access-title">
-            <div className={styles.sectionHeader}>
-              <div>
-                <h2 id="user-project-access-title" className={styles.sectionTitle}>User-Project Access</h2>
-                <p className={styles.sectionHint}>
-                  Search users who have logged in, select one or more per project, or import a CSV/TXT list of emails or user IDs.
-                </p>
-              </div>
-            </div>
-            <div className={styles.assignmentGrid}>
-              {projectNames.map((project) => {
-                const group = assignmentsByProject.get(project) ?? emptyAssignmentsByProject.get(project)!;
-                return (
-                  <AssignmentCard
-                    key={project}
-                    group={group}
-                    availableUsers={availableUsers}
-                    isSaving={setAssignments.isPending}
-                    wasSaved={assignmentSavedProject === project}
-                    onSave={handleSaveAssignments}
-                  />
-                );
-              })}
-            </div>
-          </section>
+          {activeTab === 'access' && (
+            <div
+              id="platform-admin-panel-access"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-access"
+              className={styles.tabPanel}
+            >
+              <AccessRequestsSection
+                requests={accessRequests}
+                isApproving={approveAccessRequest.isPending}
+                isRejecting={rejectAccessRequest.isPending}
+                onApprove={handleApproveAccessRequest}
+                onReject={handleRejectAccessRequest}
+              />
 
-          <MenuVisibilitySection
-            projectNames={projectNames}
-            selectedProject={selectedMenuProject}
-            enabledViews={menuConfigByProject.get(selectedMenuProject)?.enabledViews ?? []}
-            isSaving={setMenuConfig.isPending}
-            wasSaved={menuSavedProject === selectedMenuProject}
-            onSelectProject={setSelectedMenuProject}
-            onSave={handleSaveMenuConfig}
-          />
+              <section className={styles.section} aria-labelledby="user-project-access-title">
+                <div className={styles.sectionHeader}>
+                  <div>
+                    <h2 id="user-project-access-title" className={styles.sectionTitle}>User-Project Access</h2>
+                    <p className={styles.sectionHint}>
+                      Search users who have logged in, select one or more per project, or import a CSV/TXT list of emails or user IDs.
+                    </p>
+                  </div>
+                </div>
+                <div className={styles.assignmentGrid}>
+                  {projectNames.map((project) => {
+                    const group = assignmentsByProject.get(project) ?? emptyAssignmentsByProject.get(project)!;
+                    return (
+                      <AssignmentCard
+                        key={project}
+                        group={group}
+                        availableUsers={availableUsers}
+                        isSaving={setAssignments.isPending}
+                        wasSaved={assignmentSavedProject === project}
+                        onSave={handleSaveAssignments}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+          )}
+          {activeTab === 'menu' && (
+            <div
+              id="platform-admin-panel-menu"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-menu"
+              className={styles.tabPanel}
+            >
+              <MenuVisibilitySection
+                projectNames={projectNames}
+                selectedProject={selectedMenuProject}
+                enabledViews={menuConfigByProject.get(selectedMenuProject)?.enabledViews ?? []}
+                isSaving={setMenuConfig.isPending}
+                wasSaved={menuSavedProject === selectedMenuProject}
+                onSelectProject={setSelectedMenuProject}
+                onSave={handleSaveMenuConfig}
+              />
+            </div>
+          )}
+          {activeTab === 'flags' && (
+            <div
+              id="platform-admin-panel-flags"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-flags"
+              className={styles.tabPanel}
+            >
+              <FeatureFlagsSection />
+            </div>
+          )}
         </main>
       )}
     </div>
@@ -737,7 +822,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
         <div>
           <h2 id="menu-visibility-title" className={styles.sectionTitle}>Menu Visibility</h2>
           <p className={styles.sectionHint}>
-            Choose which configurable app views appear in navigation for each project.
+            Choose which app views appear in navigation for each project. Users still need the matching role permission (and Developer group for My Work).
           </p>
         </div>
       </div>
@@ -788,6 +873,651 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
         </form>
       </div>
     </section>
+  );
+};
+
+const createFlagSchema = z.object({
+  key: z
+    .string()
+    .min(1, 'Key is required')
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Must be kebab-case (e.g. my-feature)'),
+  description: z.string().optional(),
+});
+
+type CreateFlagFormValues = z.infer<typeof createFlagSchema>;
+
+interface TypeaheadOption {
+  value: string;
+  label: string;
+  searchText: string;
+}
+
+interface TypeaheadMultiSelectProps {
+  id: string;
+  label: string;
+  placeholder: string;
+  options: TypeaheadOption[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  disabled?: boolean;
+  emptyMessage?: string;
+}
+
+const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
+  id,
+  label,
+  placeholder,
+  options,
+  selectedValues,
+  onChange,
+  disabled = false,
+  emptyMessage = 'No matches found.',
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
+  const selectedOptions = useMemo(
+    () => selectedValues.map((value) => {
+      const option = options.find((entry) => entry.value === value);
+      return { value, label: option?.label ?? value };
+    }),
+    [options, selectedValues],
+  );
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return options
+      .filter((option) => !selectedSet.has(option.value))
+      .filter((option) => !normalizedQuery || option.searchText.toLowerCase().includes(normalizedQuery))
+      .slice(0, 12);
+  }, [options, searchQuery, selectedSet]);
+
+  const handleAdd = (value: string) => {
+    if (selectedSet.has(value)) return;
+    onChange([...selectedValues, value]);
+    setSearchQuery('');
+  };
+
+  const handleRemove = (value: string) => {
+    onChange(selectedValues.filter((entry) => entry !== value));
+  };
+
+  return (
+    <div className={styles.flagAddRuleTarget}>
+      <label className={styles.label} htmlFor={id}>{label}</label>
+      <div className={styles.selectedUserList} aria-label={`${label} selected`}>
+        {selectedOptions.length === 0 ? (
+          <p className={styles.muted}>None selected</p>
+        ) : (
+          selectedOptions.map((option) => (
+            <span key={option.value} className={styles.userChip}>
+              <span>{option.label}</span>
+              <button
+                type="button"
+                className={styles.chipRemoveButton}
+                onClick={() => handleRemove(option.value)}
+                disabled={disabled}
+                aria-label={`Remove ${option.label}`}
+              >
+                &times;
+              </button>
+            </span>
+          ))
+        )}
+      </div>
+      <input
+        id={id}
+        className={styles.input}
+        type="search"
+        value={searchQuery}
+        placeholder={placeholder}
+        disabled={disabled || options.length === 0}
+        onChange={(event) => setSearchQuery(event.target.value)}
+        autoComplete="off"
+      />
+      {options.length === 0 ? (
+        <p className={styles.muted}>{emptyMessage}</p>
+      ) : (
+        <div className={styles.suggestionList} role="listbox" aria-label={`${label} matches`}>
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={styles.suggestionButton}
+                onClick={() => handleAdd(option.value)}
+                disabled={disabled}
+                role="option"
+              >
+                <span className={styles.userName}>{option.label}</span>
+              </button>
+            ))
+          ) : (
+            <p className={styles.muted}>{emptyMessage}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface FlagTargetingCatalog {
+  projects: string[];
+  users: PlatformAdminUser[];
+  groups: PlatformAdminGroup[];
+}
+
+const LIFECYCLE_OPTIONS: FlagLifecycle[] = ['active', 'stale', 'archived'];
+
+const FeatureFlagsSection: React.FC = () => {
+  const { data: flags = [], isLoading, isError, error } = useFeatureFlagsList();
+  const { data: projectList = [] } = usePlatformAdminProjects();
+  const { data: users = [] } = usePlatformAdminUsers();
+  const { data: groups = [] } = usePlatformAdminGroups();
+  const createFlag = useCreateFeatureFlag();
+  const updateFlag = useUpdateFeatureFlag();
+  const deleteFlag = useDeleteFeatureFlag();
+  const [expandedFlagId, setExpandedFlagId] = useState<string | null>(null);
+  const [auditFlagId, setAuditFlagId] = useState<string | null>(null);
+  const [pendingDeleteFlag, setPendingDeleteFlag] = useState<FeatureFlagWithRules | null>(null);
+  const targetingCatalog = useMemo<FlagTargetingCatalog>(() => ({
+    projects: [...new Set(projectList.map((project) => project.name))].sort((a, b) => a.localeCompare(b)),
+    users,
+    groups,
+  }), [projectList, users, groups]);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors: formErrors, isSubmitting },
+  } = useForm<CreateFlagFormValues>({
+    resolver: zodResolver(createFlagSchema),
+    defaultValues: { key: '', description: '' },
+  });
+
+  const onCreateSubmit = async (values: CreateFlagFormValues) => {
+    await createFlag.mutateAsync({
+      key: values.key,
+      description: values.description || undefined,
+    });
+    reset();
+  };
+
+  const handleToggleEnabled = (flag: FeatureFlagWithRules) => {
+    void updateFlag.mutateAsync({ id: flag.id, enabled: !flag.enabled });
+  };
+
+  const handleLifecycleChange = (flag: FeatureFlagWithRules, lifecycle: FlagLifecycle) => {
+    void updateFlag.mutateAsync({ id: flag.id, lifecycle });
+  };
+
+  const handleCleanupReadyChange = (flag: FeatureFlagWithRules, cleanupReady: boolean) => {
+    void updateFlag.mutateAsync({ id: flag.id, cleanupReady });
+  };
+
+  const handleDeleteRequest = (flag: FeatureFlagWithRules) => {
+    setPendingDeleteFlag(flag);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!pendingDeleteFlag) return;
+
+    const flagId = pendingDeleteFlag.id;
+    deleteFlag.mutate(
+      { id: flagId },
+      {
+        onSuccess: () => {
+          setPendingDeleteFlag(null);
+          setExpandedFlagId((current) => (current === flagId ? null : current));
+          setAuditFlagId((current) => (current === flagId ? null : current));
+        },
+      },
+    );
+  };
+
+  if (isLoading) return <p className={styles.muted}>Loading feature flags...</p>;
+  if (isError) return <p className={styles.fieldError}>{formatError(error)}</p>;
+
+  return (
+    <section className={styles.section} aria-labelledby="feature-flags-title">
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2 id="feature-flags-title" className={styles.sectionTitle}>Feature Flags</h2>
+          <p className={styles.sectionHint}>
+            Create, toggle, and manage targeting rules for feature flags across the platform.
+          </p>
+        </div>
+        <span className={styles.countBadge}>{flags.length} flags</span>
+      </div>
+
+      <form className={styles.flagCreateForm} onSubmit={(e) => void handleSubmit(onCreateSubmit)(e)}>
+        <h3 className={styles.cardTitle}>Create new flag</h3>
+        <div className={styles.flagCreateFields}>
+          <div className={styles.flagField}>
+            <label className={styles.label} htmlFor="flag-key-input">Key</label>
+            <input
+              id="flag-key-input"
+              className={styles.input}
+              placeholder="my-new-feature"
+              disabled={isSubmitting || createFlag.isPending}
+              {...register('key')}
+            />
+            {formErrors.key && <p className={styles.fieldError}>{formErrors.key.message}</p>}
+          </div>
+          <div className={styles.flagField}>
+            <label className={styles.label} htmlFor="flag-desc-input">Description (optional)</label>
+            <input
+              id="flag-desc-input"
+              className={styles.input}
+              placeholder="What this flag controls"
+              disabled={isSubmitting || createFlag.isPending}
+              {...register('description')}
+            />
+          </div>
+          <button
+            type="submit"
+            className={styles.primaryButton}
+            disabled={isSubmitting || createFlag.isPending}
+          >
+            {createFlag.isPending ? 'Creating...' : 'Create flag'}
+          </button>
+        </div>
+        {createFlag.error && <p className={styles.fieldError}>{formatError(createFlag.error)}</p>}
+      </form>
+
+      {flags.length === 0 ? (
+        <p className={styles.muted}>No feature flags yet. Create one above.</p>
+      ) : (
+        <div className={styles.flagList}>
+          {flags.map((flag) => (
+            <FlagCard
+              key={flag.id}
+              flag={flag}
+              targetingCatalog={targetingCatalog}
+              isExpanded={expandedFlagId === flag.id}
+              showAudit={auditFlagId === flag.id}
+              onToggleExpand={() => setExpandedFlagId(expandedFlagId === flag.id ? null : flag.id)}
+              onToggleAudit={() => setAuditFlagId(auditFlagId === flag.id ? null : flag.id)}
+              onToggleEnabled={() => handleToggleEnabled(flag)}
+              onLifecycleChange={(lc) => handleLifecycleChange(flag, lc)}
+              onCleanupReadyChange={(cr) => handleCleanupReadyChange(flag, cr)}
+              onDelete={() => handleDeleteRequest(flag)}
+            />
+          ))}
+        </div>
+      )}
+
+      {deleteFlag.error && !pendingDeleteFlag && (
+        <p className={styles.fieldError}>{formatError(deleteFlag.error)}</p>
+      )}
+
+      {pendingDeleteFlag && (
+        <ConfirmDeleteModal
+          title="Delete Feature Flag"
+          itemName={pendingDeleteFlag.key}
+          description="Are you sure you want to permanently delete the feature flag"
+          isPending={deleteFlag.isPending}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => {
+            if (!deleteFlag.isPending) {
+              setPendingDeleteFlag(null);
+              deleteFlag.reset();
+            }
+          }}
+        />
+      )}
+    </section>
+  );
+};
+
+interface FlagCardProps {
+  flag: FeatureFlagWithRules;
+  targetingCatalog: FlagTargetingCatalog;
+  isExpanded: boolean;
+  showAudit: boolean;
+  onToggleExpand: () => void;
+  onToggleAudit: () => void;
+  onToggleEnabled: () => void;
+  onLifecycleChange: (lifecycle: FlagLifecycle) => void;
+  onCleanupReadyChange: (cleanupReady: boolean) => void;
+  onDelete: () => void;
+}
+
+const FlagCard: React.FC<FlagCardProps> = ({
+  flag,
+  targetingCatalog,
+  isExpanded,
+  showAudit,
+  onToggleExpand,
+  onToggleAudit,
+  onToggleEnabled,
+  onLifecycleChange,
+  onCleanupReadyChange,
+  onDelete,
+}) => {
+  const addRule = useAddFlagRule();
+  const removeRule = useRemoveFlagRule();
+  const { data: auditEntries = [], isLoading: auditLoading } = useFlagAudit(showAudit ? flag.id : null);
+  const [ruleType, setRuleType] = useState<FlagRuleType>('project');
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
+
+  const usersById = useMemo(() => {
+    const lookup = new Map<string, PlatformAdminUser>();
+    targetingCatalog.users.forEach((user) => lookup.set(user.userId, user));
+    return lookup;
+  }, [targetingCatalog.users]);
+
+  const groupsById = useMemo(() => {
+    const lookup = new Map<string, PlatformAdminGroup>();
+    targetingCatalog.groups.forEach((group) => lookup.set(group.id, group));
+    return lookup;
+  }, [targetingCatalog.groups]);
+
+  const hasEveryoneRule = useMemo(
+    () => flag.rules.some((rule) => rule.type === 'everyone'),
+    [flag.rules],
+  );
+
+  useEffect(() => {
+    setSelectedTargets([]);
+  }, [ruleType]);
+
+  const targetOptions = useMemo<TypeaheadOption[]>(() => {
+    if (ruleType === 'project') {
+      return targetingCatalog.projects
+        .filter((project) => !flag.rules.some((rule) => rule.type === 'project' && rule.value === project))
+        .map((project) => ({
+          value: project,
+          label: project,
+          searchText: project,
+        }));
+    }
+
+    if (ruleType === 'user') {
+      return targetingCatalog.users
+        .filter((user) => !flag.rules.some((rule) => rule.type === 'user' && rule.value === user.userId))
+        .map((user) => ({
+          value: user.userId,
+          label: getUserLabel(user),
+          searchText: [user.displayName, user.email, user.userId].filter(Boolean).join(' '),
+        }));
+    }
+
+    if (ruleType === 'group') {
+      const seenNames = new Set<string>();
+      const options: TypeaheadOption[] = [];
+
+      targetingCatalog.groups.forEach((group) => {
+        if (seenNames.has(group.name)) return;
+        seenNames.add(group.name);
+
+        const groupIds = targetingCatalog.groups
+          .filter((entry) => entry.name === group.name)
+          .map((entry) => entry.id);
+        const allAdded = groupIds.every((groupId) =>
+          flag.rules.some((rule) => rule.type === 'group' && rule.value === groupId),
+        );
+        if (allAdded) return;
+
+        options.push({
+          value: group.name,
+          label: group.name,
+          searchText: group.name,
+        });
+      });
+
+      return options.sort((a, b) => a.label.localeCompare(b.label));
+    }
+
+    return [];
+  }, [flag.rules, ruleType, targetingCatalog.groups, targetingCatalog.projects, targetingCatalog.users]);
+
+  const formatRuleLabel = (rule: FeatureFlagRule): string | null => {
+    if (!rule.value) return null;
+    if (rule.type === 'user') {
+      const user = usersById.get(rule.value);
+      return user ? getUserLabel(user) : rule.value;
+    }
+    if (rule.type === 'group') {
+      const group = groupsById.get(rule.value);
+      if (!group) return rule.value;
+      return group.project ? `${group.name} (${group.project})` : group.name;
+    }
+    return rule.value;
+  };
+
+  const handleAddRules = async () => {
+    if (ruleType === 'everyone') {
+      if (hasEveryoneRule) return;
+      await addRule.mutateAsync({ flagId: flag.id, type: 'everyone' });
+      return;
+    }
+
+    if (selectedTargets.length === 0) return;
+
+    const payloads: Array<{ type: FlagRuleType; value?: string }> = [];
+
+    if (ruleType === 'project' || ruleType === 'user') {
+      selectedTargets.forEach((value) => {
+        if (!flag.rules.some((rule) => rule.type === ruleType && rule.value === value)) {
+          payloads.push({ type: ruleType, value });
+        }
+      });
+    } else if (ruleType === 'group') {
+      selectedTargets.forEach((groupName) => {
+        targetingCatalog.groups
+          .filter((group) => group.name === groupName)
+          .forEach((group) => {
+            if (!flag.rules.some((rule) => rule.type === 'group' && rule.value === group.id)) {
+              payloads.push({ type: 'group', value: group.id });
+            }
+          });
+      });
+    }
+
+    for (const payload of payloads) {
+      await addRule.mutateAsync({ flagId: flag.id, ...payload });
+    }
+
+    setSelectedTargets([]);
+  };
+
+  const handleRemoveRule = (ruleId: string) => {
+    void removeRule.mutateAsync({ flagId: flag.id, ruleId });
+  };
+
+  const rulePending = addRule.isPending;
+  const canAddEveryone = ruleType === 'everyone' && !hasEveryoneRule;
+  const canAddTargets = ruleType !== 'everyone' && selectedTargets.length > 0;
+
+  return (
+    <article className={styles.flagCard}>
+      <div className={styles.flagCardHeader}>
+        <div className={styles.flagCardMeta}>
+          <code className={styles.flagKey}>{flag.key}</code>
+          <span className={`${styles.lifecycleBadge} ${styles[`lifecycle_${flag.lifecycle}`]}`}>
+            {flag.lifecycle}
+          </span>
+          {flag.cleanupReady && <span className={styles.cleanupBadge}>cleanup ready</span>}
+        </div>
+        <div className={styles.flagCardActions}>
+          <label className={styles.toggleLabel}>
+            <input
+              type="checkbox"
+              className={styles.toggleInput}
+              checked={flag.enabled}
+              onChange={onToggleEnabled}
+            />
+            <span className={`${styles.toggleTrack} ${flag.enabled ? styles.toggleTrackOn : ''}`}>
+              <span className={styles.toggleThumb} />
+            </span>
+            <span className={styles.toggleText}>{flag.enabled ? 'On' : 'Off'}</span>
+          </label>
+          <button type="button" className={styles.secondaryButton} onClick={onDelete}>
+            Delete
+          </button>
+        </div>
+      </div>
+
+      {flag.description && <p className={styles.muted}>{flag.description}</p>}
+
+      <div className={styles.flagControls}>
+        <div className={styles.flagField}>
+          <label className={styles.label}>Lifecycle</label>
+          <select
+            className={styles.input}
+            value={flag.lifecycle}
+            onChange={(e) => onLifecycleChange(e.target.value as FlagLifecycle)}
+          >
+            {LIFECYCLE_OPTIONS.map((lc) => (
+              <option key={lc} value={lc}>{lc}</option>
+            ))}
+          </select>
+        </div>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            className={styles.checkbox}
+            checked={flag.cleanupReady}
+            onChange={(e) => onCleanupReadyChange(e.target.checked)}
+          />
+          <span>Cleanup ready</span>
+        </label>
+      </div>
+
+      <div className={styles.flagExpandRow}>
+        <button type="button" className={styles.secondaryButton} onClick={onToggleExpand}>
+          {isExpanded ? 'Hide rules' : `Rules (${flag.rules.length})`}
+        </button>
+        <button type="button" className={styles.secondaryButton} onClick={onToggleAudit}>
+          {showAudit ? 'Hide audit' : 'Audit log'}
+        </button>
+      </div>
+
+      {isExpanded && (
+        <div className={styles.flagRulesSection}>
+          {flag.rules.length === 0 ? (
+            <p className={styles.muted}>No targeting rules. Flag applies to no one (unless toggled with &quot;everyone&quot; rule).</p>
+          ) : (
+            <div className={styles.flagRuleList}>
+              {flag.rules.map((rule) => {
+                const ruleLabel = formatRuleLabel(rule);
+                return (
+                <div key={rule.id} className={styles.flagRuleRow}>
+                  <span className={styles.flagRuleType}>{rule.type}</span>
+                  {ruleLabel && (
+                    <span className={styles.flagRuleValue}>{ruleLabel}</span>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    onClick={() => handleRemoveRule(rule.id)}
+                    disabled={removeRule.isPending}
+                  >
+                    Remove
+                  </button>
+                </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={styles.flagAddRuleForm}>
+            <div className={styles.flagAddRuleRow}>
+              <div className={styles.flagField}>
+                <label className={styles.label} htmlFor={`flag-rule-type-${flag.id}`}>Target type</label>
+                <select
+                  id={`flag-rule-type-${flag.id}`}
+                  className={styles.input}
+                  value={ruleType}
+                  disabled={rulePending}
+                  onChange={(event) => setRuleType(event.target.value as FlagRuleType)}
+                >
+                  <option value="everyone">everyone</option>
+                  <option value="project">project</option>
+                  <option value="user">user</option>
+                  <option value="group">group</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={rulePending || (!canAddEveryone && !canAddTargets)}
+                onClick={() => void handleAddRules()}
+              >
+                {rulePending ? 'Adding...' : ruleType === 'everyone' ? 'Add rule' : 'Add rules'}
+              </button>
+            </div>
+
+            {ruleType === 'project' && (
+              <TypeaheadMultiSelect
+                id={`flag-rule-projects-${flag.id}`}
+                label="Projects"
+                placeholder="Search projects"
+                options={targetOptions}
+                selectedValues={selectedTargets}
+                onChange={setSelectedTargets}
+                disabled={rulePending}
+                emptyMessage="No matching projects found."
+              />
+            )}
+
+            {ruleType === 'user' && (
+              <TypeaheadMultiSelect
+                id={`flag-rule-users-${flag.id}`}
+                label="Users"
+                placeholder="Search by name, email, or user ID"
+                options={targetOptions}
+                selectedValues={selectedTargets}
+                onChange={setSelectedTargets}
+                disabled={rulePending}
+                emptyMessage="No matching users found."
+              />
+            )}
+
+            {ruleType === 'group' && (
+              <TypeaheadMultiSelect
+                id={`flag-rule-groups-${flag.id}`}
+                label="Groups"
+                placeholder="Search group names"
+                options={targetOptions}
+                selectedValues={selectedTargets}
+                onChange={setSelectedTargets}
+                disabled={rulePending}
+                emptyMessage="No matching groups found."
+              />
+            )}
+
+            {ruleType === 'everyone' && hasEveryoneRule && (
+              <p className={styles.muted}>An &quot;everyone&quot; rule already exists for this flag.</p>
+            )}
+          </div>
+          {addRule.error && <p className={styles.fieldError}>{formatError(addRule.error)}</p>}
+        </div>
+      )}
+
+      {showAudit && (
+        <div className={styles.flagAuditSection}>
+          {auditLoading ? (
+            <p className={styles.muted}>Loading audit log...</p>
+          ) : auditEntries.length === 0 ? (
+            <p className={styles.muted}>No audit entries.</p>
+          ) : (
+            <div className={styles.flagAuditList}>
+              {auditEntries.map((entry) => (
+                <div key={entry.id} className={styles.flagAuditRow}>
+                  <span className={styles.flagAuditAction}>{entry.action}</span>
+                  <span className={styles.muted}>{entry.actorEmail ?? entry.actorId ?? 'system'}</span>
+                  <span className={styles.muted}>{new Date(entry.createdAt).toLocaleString()}</span>
+                  {entry.details && (
+                    <code className={styles.flagAuditDetails}>{JSON.stringify(entry.details)}</code>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </article>
   );
 };
 

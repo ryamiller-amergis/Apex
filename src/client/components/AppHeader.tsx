@@ -105,7 +105,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'home') return true;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
       return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+    }
+    if (item.view === 'standup') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
+      if (!isSuperAdmin && !can('standup:participate')) return false;
+      return true;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;

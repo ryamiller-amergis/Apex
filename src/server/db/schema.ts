@@ -8,6 +8,7 @@ import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSet
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
+import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -911,4 +912,63 @@ export const standupParticipantsRelations = relations(standupParticipants, ({ on
 export const standupFollowupsRelations = relations(standupFollowups, ({ one }) => ({
   session: one(standupSessions, { fields: [standupFollowups.sessionId], references: [standupSessions.id] }),
   followupThread: one(chatThreads, { fields: [standupFollowups.followupThreadId], references: [chatThreads.id] }),
+}));
+
+// ── Feature Flags Tables ──────────────────────────────────────────────────────
+
+export const featureFlags = pgTable('feature_flags', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  key: text('key').unique().notNull(),
+  description: text('description'),
+  enabled: boolean('enabled').notNull().default(false),
+  lifecycle: text('lifecycle').$type<FlagLifecycle>().notNull().default('active'),
+  cleanupReady: boolean('cleanup_ready').notNull().default(false),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const featureFlagRules = pgTable('feature_flag_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  flagId: uuid('flag_id').notNull().references(() => featureFlags.id, { onDelete: 'cascade' }),
+  type: text('type').$type<FlagRuleType>().notNull(),
+  value: text('value'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  flagIdx: index('idx_feature_flag_rules_flag_id').on(t.flagId),
+}));
+
+export const featureFlagAudit = pgTable('feature_flag_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  flagId: uuid('flag_id').references(() => featureFlags.id, { onDelete: 'set null' }),
+  flagKey: text('flag_key').notNull(),
+  action: text('action').$type<FlagAuditAction>().notNull(),
+  actorId: text('actor_id'),
+  actorEmail: text('actor_email'),
+  details: jsonb('details'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  flagCreatedAtIdx: index('idx_feature_flag_audit_flag_created').on(t.flagId, t.createdAt),
+}));
+
+// ── Feature Flags Relations ───────────────────────────────────────────────────
+
+export const featureFlagsRelations = relations(featureFlags, ({ many }) => ({
+  rules: many(featureFlagRules),
+  auditLog: many(featureFlagAudit),
+}));
+
+export const featureFlagRulesRelations = relations(featureFlagRules, ({ one }) => ({
+  flag: one(featureFlags, {
+    fields: [featureFlagRules.flagId],
+    references: [featureFlags.id],
+  }),
+}));
+
+export const featureFlagAuditRelations = relations(featureFlagAudit, ({ one }) => ({
+  flag: one(featureFlags, {
+    fields: [featureFlagAudit.flagId],
+    references: [featureFlags.id],
+  }),
 }));

@@ -62,6 +62,16 @@ export interface PlatformAdminUsersResponse {
   users: PlatformAdminUser[];
 }
 
+export interface PlatformAdminGroup {
+  id: string;
+  name: string;
+  project: string | null;
+}
+
+export interface PlatformAdminGroupsResponse {
+  groups: PlatformAdminGroup[];
+}
+
 export interface PlatformAdminProjectsResponse {
   projects: PlatformAdminProject[];
 }

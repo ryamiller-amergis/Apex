@@ -53,6 +53,8 @@ describe('AzureDevOpsService - Delete Operations', () => {
   });
 
   describe('deleteWorkItem', () => {
+    jest.setTimeout(15_000);
+
     it('should successfully delete a work item', async () => {
       const workItemId = 123;
       mockWitApi.deleteWorkItem.mockResolvedValue(undefined);

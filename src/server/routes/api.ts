@@ -3887,8 +3887,7 @@ import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelo
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { getAppSetting } from '../services/appSettingsService';
-import type { MenuItemKey } from '../../shared/types/menuSettings';
-const ALL_MENU_VIEWS: MenuItemKey[] = ['calendar', 'planning', 'cloudcost', 'backlog'];
+import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
 
 async function getCurrentChangelogVersion(): Promise<string> {
   const dbValue = await getAppSetting('current_changelog_version');

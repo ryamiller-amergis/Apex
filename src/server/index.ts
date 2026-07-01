@@ -5,7 +5,6 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
-import createFileStore from 'session-file-store';
 import passport from 'passport';
 
 // Load environment variables BEFORE importing routes
@@ -42,10 +41,13 @@ import { startRecoveryLoop, registerGracefulShutdown } from './services/startupR
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
+import featureFlagRoutes from './routes/featureFlags';
 import { standupScheduler } from './services/standupScheduler';
 import { resolveDataRoot } from './utils/dataDir';
 
-const FileStore = createFileStore(session);
+type FileStoreFactory = (
+  sessionMiddleware: typeof session,
+) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -83,6 +85,10 @@ let sessionStore: session.Store | undefined;
 if (process.env.NODE_ENV === 'production') {
   const sessionsDir = path.join(resolveDataRoot(), 'sessions');
   fs.mkdirSync(sessionsDir, { recursive: true });
+  // Loaded via require so local dev (ts-node) does not need session-file-store typings.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const createFileStore = require('session-file-store') as FileStoreFactory;
+  const FileStore = createFileStore(session);
   sessionStore = new FileStore({
     path: sessionsDir,
     ttl: 86400,
@@ -172,6 +178,7 @@ app.use('/api/deployment-outcomes', ensureAuthenticated, deploymentOutcomesRoute
 app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
+app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 
