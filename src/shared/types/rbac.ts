@@ -72,6 +72,8 @@ export interface MyPermissionsResponse {
   userId: string;
   isSuperAdmin: boolean;
   changelogUnread: boolean;
+  currentChangelogVersion: string;
+  lastSeenChangelogVersion: string | null;
   showChangelogOnLogin: boolean;
   betaAnnouncementDismissed: boolean;
 }

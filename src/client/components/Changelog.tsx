@@ -1,17 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import type { ChangelogEntry } from '../../shared/types/changelog';
+import { useChangelog } from '../hooks/useChangelog';
 import styles from './Changelog.module.css';
-
-interface ChangelogChange {
-  type: 'feature' | 'improvement' | 'bugfix' | 'breaking';
-  description: string;
-}
-
-interface ChangelogEntry {
-  version: string;
-  date: string;
-  title: string;
-  changes: ChangelogChange[];
-}
 
 interface ChangelogProps {
   isOpen: boolean;
@@ -22,18 +12,16 @@ interface ChangelogProps {
 }
 
 export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsRead, showOnLogin, onToggleShowOnLogin }) => {
-  const [changelog, setChangelog] = useState<ChangelogEntry[]>([]);
+  const { data, isLoading } = useChangelog(isOpen);
+  const changelog: ChangelogEntry[] = data?.entries ?? [];
+  const currentVersion = data?.currentVersion ?? null;
   const [expandedVersions, setExpandedVersions] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetch('/CHANGELOG.json')
-      .then(res => res.json())
-      .then(data => {
-        setChangelog(data);
-        if (data.length > 0) setExpandedVersions(new Set([data[0].version]));
-      })
-      .catch(err => console.error('Failed to load changelog:', err));
-  }, []);
+    if (currentVersion) {
+      setExpandedVersions(new Set([currentVersion]));
+    }
+  }, [currentVersion]);
 
   const toggleVersion = (version: string) => {
     const newExpanded = new Set(expandedVersions);
@@ -74,11 +62,13 @@ export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsR
         </div>
 
         <div className={styles['changelog-content']}>
-          {changelog.length === 0 ? (
+          {isLoading ? (
             <div className={styles['changelog-loading']}>Loading changelog...</div>
+          ) : changelog.length === 0 ? (
+            <div className={styles['changelog-loading']}>No release notes available.</div>
           ) : (
             <div className={styles['changelog-list']}>
-              {changelog.map((entry, index) => (
+              {changelog.map((entry) => (
                 <div key={entry.version} className={styles['changelog-entry']}>
                   <div
                     className={styles['changelog-entry-header']}
@@ -87,7 +77,9 @@ export const Changelog: React.FC<ChangelogProps> = ({ isOpen, onClose, onMarkAsR
                     <div className={styles['changelog-entry-info']}>
                       <div className={styles['changelog-version-row']}>
                         <span className={styles['changelog-version']}>v{entry.version}</span>
-                        {index === 0 && <span className={styles['changelog-new-badge']}>NEW</span>}
+                        {entry.version === currentVersion && (
+                          <span className={styles['changelog-new-badge']}>NEW</span>
+                        )}
                       </div>
                       <h3 className={styles['changelog-title']}>{entry.title}</h3>
                       <span className={styles['changelog-date']}>

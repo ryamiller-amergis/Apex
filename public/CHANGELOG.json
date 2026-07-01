@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.33.2",
+    "date": "2026-07-01",
+    "title": "What's New Reliability",
+    "changes": [
+      {
+        "type": "improvement",
+        "description": "What's New now loads release notes from a unified server API so the modal always reflects the version actually deployed"
+      },
+      {
+        "type": "improvement",
+        "description": "Unread release badge and What's New banner now appear throughout the app — not only on the project picker"
+      },
+      {
+        "type": "improvement",
+        "description": "What's New modal opens automatically on login when a new release is available and auto-show is enabled"
+      },
+      {
+        "type": "bugfix",
+        "description": "Fixed release notes and unread state falling out of sync when the deployed app was newer than the database version record"
+      }
+    ]
+  },
+  {
     "version": "1.33.1",
     "date": "2026-07-01",
     "title": "Feature Request Polish",
