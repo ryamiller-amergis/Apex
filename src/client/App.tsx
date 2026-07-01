@@ -22,6 +22,7 @@ import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
+import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
@@ -216,10 +217,10 @@ function App() {
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
-    if (currentView === 'my-work'       && !isSuperAdmin && !can('dev-workbench:view')) navigate('/home');
-    if (currentView === 'standup'        && !isSuperAdmin && !can('standup:participate')) navigate('/home');
-    if (currentView === 'standup-manage' && !isSuperAdmin && !can('standup:manage'))      navigate('/home');
-    if (currentView === 'standup-summary' && !isSuperAdmin && !can('standup:participate')) navigate('/home');
+    if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
+    if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
+    if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
+    if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -404,6 +405,8 @@ function App() {
 
           {currentView === 'home' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              {/* Top-level split: demo component gated by "example-flag-demo" flag */}
+              <FeatureFlagDemo project={selectedProject} />
               <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} />
             </ErrorBoundary>
           ) : currentView === 'calendar' ? (

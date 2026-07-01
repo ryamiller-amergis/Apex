@@ -12,6 +12,8 @@ import type {
   PlatformAdminProjectsResponse,
   PlatformAdminUser,
   PlatformAdminUsersResponse,
+  PlatformAdminGroup,
+  PlatformAdminGroupsResponse,
   ProjectAccessRequest,
   ProjectAccessRequestCatalogResponse,
   ProjectAccessRequestsResponse,
@@ -26,6 +28,7 @@ export const platformAdminQueryKeys = {
   assignment: (project: string | null) => ['platform-admin', 'assignments', project] as const,
   pendingAssignments: (project: string | null) => ['platform-admin', 'pending-assignments', project] as const,
   users: ['platform-admin', 'users'] as const,
+  groups: ['platform-admin', 'groups'] as const,
   accessRequests: (status: ProjectAccessRequestStatus | 'all' = 'pending') => ['platform-admin', 'access-requests', status] as const,
   menuSettings: ['platform-admin', 'menu-settings'] as const,
   menuSetting: (project: string | null) => ['platform-admin', 'menu-settings', project] as const,
@@ -85,6 +88,17 @@ export function usePlatformAdminUsers() {
     queryFn: async () => {
       const data = await platformAdminFetch<PlatformAdminUsersResponse>('/api/platform-admin/users');
       return data.users;
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function usePlatformAdminGroups() {
+  return useQuery<PlatformAdminGroup[]>({
+    queryKey: platformAdminQueryKeys.groups,
+    queryFn: async () => {
+      const data = await platformAdminFetch<PlatformAdminGroupsResponse>('/api/platform-admin/groups');
+      return data.groups;
     },
     staleTime: 60_000,
   });

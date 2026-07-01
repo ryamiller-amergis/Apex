@@ -66,6 +66,62 @@
   margin: 0 auto;
 }
 
+.tabBar {
+  display: flex;
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  width: fit-content;
+}
+
+.tabButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tabButton:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.tabButtonActive {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.tabBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 .section {
   padding: 24px;
   border: 1px solid var(--border-color);
@@ -602,6 +658,271 @@
   color: var(--text-muted);
   font-size: 0.85rem;
   line-height: 1.5;
+}
+
+/* Feature Flags */
+
+.flagCreateForm {
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  margin-bottom: 16px;
+}
+
+.flagCreateFields {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.flagField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 160px;
+}
+
+.flagList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flagCard {
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flagCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.flagCardMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.flagKey {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.lifecycleBadge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lifecycle_active {
+  border: 1px solid var(--success-color);
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 10%, var(--bg-primary));
+}
+
+.lifecycle_stale {
+  border: 1px solid var(--text-muted);
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+}
+
+.lifecycle_archived {
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.cleanupBadge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-primary));
+  color: var(--accent-color);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.flagCardActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggleLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.toggleInput {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggleTrack {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.toggleTrackOn {
+  background: var(--success-color);
+  border-color: var(--success-color);
+}
+
+.toggleThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  transition: all 0.2s ease;
+}
+
+.toggleTrackOn .toggleThumb {
+  left: 18px;
+}
+
+.toggleText {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.flagControls {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.flagExpandRow {
+  display: flex;
+  gap: 8px;
+}
+
+.flagRulesSection {
+  padding: 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.flagRuleList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flagRuleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.flagRuleType {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-color);
+}
+
+.flagRuleValue {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.flagAddRuleForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flagAddRuleRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.flagAddRuleTarget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 280px;
+  min-width: 240px;
+}
+
+.flagAuditSection {
+  padding: 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.flagAuditList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flagAuditRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  flex-wrap: wrap;
+}
+
+.flagAuditAction {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.flagAuditDetails {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  word-break: break-all;
 }
 
 @media (max-width: 760px) {

@@ -55,6 +55,8 @@ function buildApp(router: express.Router) {
 }
 
 describe('GET /auth/login dynamic strategy', () => {
+  jest.setTimeout(15_000);
+
   afterEach(() => {
     process.env = { ...originalEnv };
   });

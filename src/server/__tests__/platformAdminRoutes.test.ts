@@ -5,6 +5,7 @@ import * as assignmentService from '../services/userProjectAssignmentService';
 import * as menuSettingsService from '../services/menuSettingsService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
+import * as groupService from '../services/groupService';
 import { requireSuperAdmin } from '../middleware/rbac';
 
 jest.mock('../services/userProjectAssignmentService', () => ({
@@ -31,6 +32,21 @@ jest.mock('../services/projectAccessRequestService', () => ({
   rejectProjectAccessRequest: jest.fn(),
 }));
 
+jest.mock('../services/groupService', () => ({
+  listGroups: jest.fn(),
+}));
+
+jest.mock('../services/featureFlagService', () => ({
+  listFlags: jest.fn(),
+  getFlag: jest.fn(),
+  createFlag: jest.fn(),
+  updateFlag: jest.fn(),
+  addRule: jest.fn(),
+  removeRule: jest.fn(),
+  deleteFlag: jest.fn(),
+  getFlagAudit: jest.fn(),
+}));
+
 jest.mock('../middleware/rbac', () => ({
   requireSuperAdmin: jest.fn((_req: any, _res: any, next: any) => next()),
 }));
@@ -39,6 +55,7 @@ const mockAssignments = assignmentService as jest.Mocked<typeof assignmentServic
 const mockMenuSettings = menuSettingsService as jest.Mocked<typeof menuSettingsService>;
 const mockProjectCatalog = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequests = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
+const mockGroupService = groupService as jest.Mocked<typeof groupService>;
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
 function buildApp(userProfile: Record<string, unknown> = { oid: 'super-admin', displayName: 'Platform Admin' }) {
@@ -155,6 +172,61 @@ describe('platformAdminRouter', () => {
           { userId: 'user-2', displayName: 'Bob', email: 'bob@example.com' },
         ],
       });
+    });
+  });
+
+  describe('GET /api/platform-admin/groups', () => {
+    it('returns platform groups for targeting pickers', async () => {
+      mockGroupService.listGroups.mockResolvedValue([
+        {
+          id: 'group-1',
+          name: 'Developer',
+          description: null,
+          project: 'MaxView',
+          isDefault: true,
+          createdBy: null,
+          createdAt: '2026-06-30T00:00:00Z',
+        },
+        {
+          id: 'group-2',
+          name: 'Developer',
+          description: null,
+          project: 'Apex',
+          isDefault: true,
+          createdBy: null,
+          createdAt: '2026-06-30T00:00:00Z',
+        },
+        {
+          id: 'group-3',
+          name: 'QA',
+          description: null,
+          project: 'MaxView',
+          isDefault: true,
+          createdBy: null,
+          createdAt: '2026-06-30T00:00:00Z',
+        },
+      ]);
+
+      const res = await request(buildApp()).get('/api/platform-admin/groups');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        groups: [
+          { id: 'group-1', name: 'Developer', project: 'MaxView' },
+          { id: 'group-2', name: 'Developer', project: 'Apex' },
+          { id: 'group-3', name: 'QA', project: 'MaxView' },
+        ],
+      });
+      expect(mockGroupService.listGroups).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 500 when listGroups throws', async () => {
+      mockGroupService.listGroups.mockRejectedValue(new Error('DB error'));
+
+      const res = await request(buildApp()).get('/api/platform-admin/groups');
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'Internal server error' });
     });
   });
 

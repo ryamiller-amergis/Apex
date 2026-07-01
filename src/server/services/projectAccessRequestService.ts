@@ -3,6 +3,8 @@ import { db } from '../db/drizzle';
 import { appUsers, projectAccessRequests, userProjectAssignments } from '../db/schema';
 import { getAssignmentsForUser } from './userProjectAssignmentService';
 import { listProjectCatalog } from './projectCatalogService';
+import { createNotification } from './notificationService';
+import { isSuperAdminEmail } from '../utils/superAdmin';
 import type {
   PlatformAdminAccessRequest,
   PlatformAdminProject,
@@ -81,6 +83,44 @@ function adminRequestSelect() {
   };
 }
 
+async function notifySuperAdminsOfAccessRequests(
+  requesterUserId: string,
+  createdRequests: ProjectAccessRequest[],
+): Promise<void> {
+  if (createdRequests.length === 0) return;
+
+  const [requester] = await db
+    .select({ displayName: appUsers.displayName, email: appUsers.email })
+    .from(appUsers)
+    .where(eq(appUsers.oid, requesterUserId));
+
+  const requesterLabel = requester?.displayName || requester?.email || requesterUserId;
+  const projectList = createdRequests.map((request) => request.project).join(', ');
+  const body =
+    createdRequests.length === 1
+      ? `${requesterLabel} requested access to ${projectList}.`
+      : `${requesterLabel} requested access to ${createdRequests.length} projects: ${projectList}.`;
+
+  const superAdminRows = await db
+    .select({ oid: appUsers.oid, email: appUsers.email })
+    .from(appUsers);
+
+  const notifyTargets = superAdminRows.filter(
+    (row) => row.email && isSuperAdminEmail(row.email) && row.oid !== requesterUserId,
+  );
+
+  await Promise.allSettled(
+    notifyTargets.map((admin) =>
+      createNotification(admin.oid, {
+        type: 'user-action',
+        title: 'New project access request',
+        body,
+        link: '/platform-admin',
+      }),
+    ),
+  );
+}
+
 export async function listCurrentUserAccessRequests(userId: string): Promise<ProjectAccessRequest[]> {
   const rows = await db
     .select(requestSelect())
@@ -143,7 +183,14 @@ export async function createProjectAccessRequests(
     .onConflictDoNothing()
     .returning(requestSelect());
 
-  return rows.map(toRequest);
+  const created = rows.map(toRequest);
+  try {
+    await notifySuperAdminsOfAccessRequests(userId, created);
+  } catch (err) {
+    console.error('[projectAccessRequest] Failed to notify super admins:', (err as Error).message);
+  }
+
+  return created;
 }
 
 export async function listPlatformAdminAccessRequests(

@@ -1,0 +1,21 @@
+---
+description: When introducing, modifying, or removing a feature flag, load the feature-flags skill and follow its workflows
+globs: src/server/services/featureFlagService.ts,src/server/routes/featureFlags.ts,src/client/hooks/useFeatureFlags.ts,src/client/components/PlatformAdmin.tsx,**/featureFlag*,**/useFeatureFlag*
+alwaysApply: false
+---
+
+# Feature Flag Governance
+
+When any change introduces, modifies, or removes a feature flag:
+
+1. **Load the skill**: Read `.cursor/skills/feature-flags/SKILL.md` and follow the appropriate workflow (wrap or cleanup).
+
+2. **Top-level split only**: Feature flag checks belong at the feature's entry point (route handler or top-level component). Never scatter `useFeatureFlag()` or `isFeatureEnabled()` deep inside nested components or utility functions.
+
+3. **Audit trail**: All flag changes (create, toggle, add/remove rules, lifecycle transitions) are automatically audited by the service. Do not bypass the service layer for direct DB writes.
+
+4. **Lifecycle discipline**: Every new flag starts as `active`. When fully rolled out, transition to `stale`. When cleanup is approved, mark `cleanup_ready: true`. After code cleanup, archive or delete.
+
+5. **Naming**: Flag keys are kebab-case, named after the feature (not the ticket). Must be unique.
+
+6. **Cleanup plan**: When creating a flag, document the expected cleanup criteria (e.g. "remove after 2 sprints of stable rollout to all projects").
