@@ -115,6 +115,7 @@ export function useAskApex() {
 
   const sendMessage = useCallback(async (text: string) => {
     if (!sessionId || !text.trim()) return;
+    setStatus('streaming');
     try {
       await apiFetch(`/api/ask-apex/sessions/${sessionId}/messages`, {
         method: 'POST',
@@ -123,6 +124,7 @@ export function useAskApex() {
       });
     } catch (err) {
       console.error('[useAskApex] sendMessage error:', err);
+      setStatus('error');
     }
   }, [sessionId]);
 

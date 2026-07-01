@@ -16,6 +16,7 @@ import {
   FEATURE_REQUEST_PRIORITIES,
   FEATURE_REQUEST_RISKS,
 } from '../../shared/types/featureRequest';
+import { FeatureRequestDetailPanel } from './FeatureRequestDetailPanel';
 import styles from './FeatureRequestsView.module.css';
 
 type SortMode = 'rank' | 'newest' | 'priority';
@@ -81,6 +82,9 @@ export const FeatureRequestsView: React.FC = () => {
   const reanalyzeMutation = useReanalyzeFeatureRequest();
 
   const [sortMode, setSortMode] = useState<SortMode>('rank');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
 
   const canManage = can('feature-requests:manage');
 
@@ -143,6 +147,27 @@ export const FeatureRequestsView: React.FC = () => {
     [sorted, handleUpdate],
   );
 
+  const handleReorder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+      const reordered = [...sorted];
+      const [moved] = reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, moved);
+      reordered.forEach((item, i) => {
+        const newRank = i + 1;
+        if (item.rank !== newRank) {
+          handleUpdate(item.id, { rank: newRank });
+        }
+      });
+    },
+    [sorted, handleUpdate],
+  );
+
+  const selectedRequest = useMemo(
+    () => (selectedId ? requests?.find((r) => r.id === selectedId) ?? null : null),
+    [requests, selectedId],
+  );
+
   if (isLoading) return <div className={styles['loading']}>Loading feature requests…</div>;
   if (error) return <div className={styles['error']}>Failed to load feature requests: {(error as Error).message}</div>;
   if (!requests || requests.length === 0) return <div className={styles['empty']}>No feature requests yet.</div>;
@@ -188,9 +213,24 @@ export const FeatureRequestsView: React.FC = () => {
                 total={sorted.length}
                 canManage={canManage}
                 showRank={canManage && sortMode === 'rank'}
+                isDragging={dragIndex === idx}
+                isDropTarget={dropTargetIndex === idx && dragIndex !== null && dragIndex !== idx}
+                onSelect={() => setSelectedId(fr.id)}
                 onUpdate={handleUpdate}
                 onMoveUp={handleMoveUp}
                 onMoveDown={handleMoveDown}
+                onDragStart={() => setDragIndex(idx)}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setDropTargetIndex(null);
+                }}
+                onDragOver={() => setDropTargetIndex(idx)}
+                onDragLeave={() => setDropTargetIndex((prev) => (prev === idx ? null : prev))}
+                onDrop={() => {
+                  if (dragIndex !== null) handleReorder(dragIndex, idx);
+                  setDragIndex(null);
+                  setDropTargetIndex(null);
+                }}
                 onReanalyze={(id) => reanalyzeMutation.mutate(id)}
                 isReanalyzing={reanalyzeMutation.isPending}
               />
@@ -198,6 +238,17 @@ export const FeatureRequestsView: React.FC = () => {
           </tbody>
         </table>
       </div>
+
+      {selectedRequest && (
+        <FeatureRequestDetailPanel
+          fr={selectedRequest}
+          canManage={canManage}
+          onClose={() => setSelectedId(null)}
+          onUpdate={handleUpdate}
+          onReanalyze={(id) => reanalyzeMutation.mutate(id)}
+          isReanalyzing={reanalyzeMutation.isPending}
+        />
+      )}
     </div>
   );
 };
@@ -210,37 +261,87 @@ interface RowProps {
   total: number;
   canManage: boolean;
   showRank: boolean;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  onSelect: () => void;
   onUpdate: (id: string, patch: Partial<{ status: FeatureRequestStatus; teamPriority: FeatureRequestPriority | null; teamRisk: FeatureRequestRisk | null; rank: number | null }>) => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOver: () => void;
+  onDragLeave: () => void;
+  onDrop: () => void;
   onReanalyze: (id: string) => void;
   isReanalyzing: boolean;
 }
 
 const FeatureRequestRow: React.FC<RowProps> = ({
   fr, index, total, canManage, showRank,
-  onUpdate, onMoveUp, onMoveDown, onReanalyze, isReanalyzing,
+  isDragging, isDropTarget, onSelect,
+  onUpdate, onMoveUp, onMoveDown,
+  onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
+  onReanalyze, isReanalyzing,
 }) => {
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', fr.id);
+    onDragStart();
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    onDragOver();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    onDrop();
+  };
+
+  const rowClass = [
+    isDragging ? styles['rowDragging'] : '',
+    isDropTarget ? styles['rowDropTarget'] : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <tr>
+    <tr
+      className={rowClass || undefined}
+      onDragOver={showRank ? handleDragOver : undefined}
+      onDragLeave={showRank ? onDragLeave : undefined}
+      onDrop={showRank ? handleDrop : undefined}
+    >
       {/* Rank controls */}
       {showRank && (
         <td className={styles['rankCell']}>
           <div className={styles['rankControls']}>
+            <span
+              className={styles['dragHandle']}
+              draggable
+              onDragStart={handleDragStart}
+              onDragEnd={onDragEnd}
+              title="Drag to reorder"
+              aria-label="Drag to reorder"
+            >
+              ⠿
+            </span>
             <button
               className={styles['rankBtn']}
               disabled={index === 0}
               onClick={() => onMoveUp(index)}
               title="Move up"
+              type="button"
             >
               ▲
             </button>
-            <span className={styles['rankValue']}>{fr.rank ?? '—'}</span>
+            <span className={styles['rankValue']}>{fr.rank ?? index + 1}</span>
             <button
               className={styles['rankBtn']}
               disabled={index === total - 1}
               onClick={() => onMoveDown(index)}
               title="Move down"
+              type="button"
             >
               ▼
             </button>
@@ -250,10 +351,13 @@ const FeatureRequestRow: React.FC<RowProps> = ({
 
       {/* Title / submitter / source / date */}
       <td className={styles['titleCell']}>
-        <div className={styles['titleText']}>{fr.title}</div>
-        <div className={styles['submitterMeta']}>
-          {fr.submitterName ?? 'Unknown'} · {fr.sourceProject} · {formatDate(fr.createdAt)}
-        </div>
+        <button className={styles['titleButton']} type="button" onClick={onSelect}>
+          <div className={styles['titleText']}>{fr.title}</div>
+          <div className={styles['submitterMeta']}>
+            {fr.submitterName ?? 'Unknown'} · {fr.sourceProject} · {formatDate(fr.createdAt)}
+          </div>
+          <span className={styles['viewDetailsHint']}>View details</span>
+        </button>
       </td>
 
       {/* Status */}
@@ -345,6 +449,7 @@ const FeatureRequestRow: React.FC<RowProps> = ({
         <td className={styles['actionsCell']}>
           <button
             className={styles['reanalyzeBtn']}
+            type="button"
             disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
             onClick={() => onReanalyze(fr.id)}
           >

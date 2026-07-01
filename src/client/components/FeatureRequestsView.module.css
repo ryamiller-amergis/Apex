@@ -100,9 +100,40 @@
   max-width: 280px;
 }
 
+.titleButton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: color 0.2s ease;
+}
+
+.titleButton:hover .titleText {
+  color: var(--accent-color);
+}
+
+.titleButton:hover .viewDetailsHint {
+  opacity: 1;
+}
+
 .titleText {
   font-weight: 500;
   margin-bottom: 2px;
+  transition: color 0.2s ease;
+}
+
+.viewDetailsHint {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: var(--accent-color);
+  opacity: 0.75;
+  transition: opacity 0.2s ease;
 }
 
 .submitterMeta {
@@ -272,6 +303,32 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  color: var(--text-muted);
+  cursor: grab;
+  font-size: 0.85rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.rowDragging td {
+  opacity: 0.45;
+}
+
+.rowDropTarget td {
+  background: var(--bg-tertiary) !important;
+  box-shadow: inset 0 2px 0 var(--accent-color);
 }
 
 .rankValue {

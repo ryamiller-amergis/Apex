@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useAskApex } from '../hooks/useAskApex';
 import type { AskApexMessage } from '../hooks/useAskApex';
 import styles from './AskApexChat.module.css';
@@ -83,12 +85,20 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
                 msg.role === 'user' ? styles['message-user'] : styles['message-assistant']
               }`}
             >
-              {msg.text}
+              {msg.role === 'assistant' ? (
+                <div className={styles['markdown-body']}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                </div>
+              ) : (
+                msg.text
+              )}
             </div>
           ))}
           {isStreaming && streamingText && (
             <div className={styles['streaming-indicator']}>
-              {streamingText}
+              <div className={styles['markdown-body']}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+              </div>
             </div>
           )}
           {isStreaming && !streamingText && (

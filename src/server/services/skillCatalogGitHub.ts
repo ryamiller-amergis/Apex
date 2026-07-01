@@ -82,13 +82,16 @@ function getDefaultOrg(): string {
   return process.env.GITHUB_ORG || '';
 }
 
-async function ghFetch<T>(path: string): Promise<T> {
+async function ghFetch<T>(path: string, textMatchAccept = false): Promise<T> {
   const token = getToken();
   const url = path.startsWith('http') ? path : `${GITHUB_API}${path}`;
+  const accept = textMatchAccept
+    ? 'application/vnd.github.text-match+json'
+    : 'application/vnd.github.v3+json';
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3+json',
+      Accept: accept,
       'User-Agent': 'ai-pilot-skill-catalog',
     },
   });
@@ -304,6 +307,73 @@ export async function getSkillFile(
   const content = await fetchFileContent(resolvedOrg, repo, normalizedPath, resolvedBranch);
   fileContentCache.set(cacheKey, content);
   return content;
+}
+
+export interface RepoFileEntry {
+  path: string;
+  name: string;
+  isFolder: boolean;
+}
+
+export async function listRepoDir(
+  repo: string,
+  dirPath: string,
+  branch?: string,
+  org?: string,
+): Promise<RepoFileEntry[]> {
+  const resolvedOrg = org || getDefaultOrg();
+  if (!resolvedOrg) throw new Error('GitHub org is required');
+
+  const resolvedBranch = branch || 'main';
+  const normalizedPath = dirPath.replace(/^\/+/, '') || '';
+  const encodedPath = normalizedPath ? encodeURIComponent(normalizedPath) : '';
+  const url = `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(resolvedBranch)}`;
+
+  const items = await ghFetch<Array<{ name: string; path: string; type: string }>>(url);
+
+  return items
+    .map((item) => ({
+      path: `/${item.path}`,
+      name: item.name,
+      isFolder: item.type === 'dir',
+    }))
+    .sort((a, b) => {
+      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+export interface CodeSearchResult {
+  path: string;
+  url: string;
+  matches: Array<{ fragment: string }>;
+}
+
+export async function searchRepoCode(
+  repo: string,
+  query: string,
+  branch?: string,
+  org?: string,
+  limit = 10,
+): Promise<CodeSearchResult[]> {
+  const resolvedOrg = org || getDefaultOrg();
+  if (!resolvedOrg) throw new Error('GitHub org is required');
+
+  const q = encodeURIComponent(`${query} repo:${resolvedOrg}/${repo}`);
+  const response = await ghFetch<{
+    items: Array<{
+      name: string;
+      path: string;
+      html_url: string;
+      text_matches?: Array<{ fragment: string }>;
+    }>;
+  }>(`/search/code?q=${q}&per_page=${limit}`, true);
+
+  return response.items.map((item) => ({
+    path: `/${item.path}`,
+    url: item.html_url,
+    matches: (item.text_matches ?? []).map((m) => ({ fragment: m.fragment })),
+  }));
 }
 
 export function invalidateCache(org?: string, repo?: string) {

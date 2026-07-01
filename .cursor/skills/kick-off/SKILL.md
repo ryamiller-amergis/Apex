@@ -282,6 +282,50 @@ Report to the user after each phase gate:
 
 ---
 
+## Phase 7: Product Knowledge Update
+
+After all implementation phases pass the verification gate, evaluate whether `AGENTS.md` and/or `context.md` at the repo root need to be updated to reflect the work just completed.
+
+**Always run this phase.** Even if no updates are needed, explicitly state that and why.
+
+### Evaluation criteria
+
+Read both files and assess whether the completed work introduces any of the following:
+
+1. **New user-facing feature or module** — a new nav item, view, modal, or workflow that users interact with
+2. **New AI capability** — a new skill, agent behavior, or AI-assisted workflow
+3. **Changed navigation or access patterns** — new routes, RBAC permissions, menu items, or project-scoping changes
+4. **New or changed admin configuration** — settings, toggles, or management interfaces
+5. **Architectural changes** — new services, tables, or integration patterns that affect how the system works
+6. **Removed or renamed features** — anything that would make existing documentation inaccurate
+
+### Decision matrix
+
+| Condition | Update `context.md`? | Update `AGENTS.md`? |
+|-----------|---------------------|---------------------|
+| New user-facing feature or module | Yes — add to features list, user workflows, and module descriptions | Yes — add file map entry and terminology |
+| New AI capability or skill | Yes — add to AI capabilities section | Yes — add skill path to file map |
+| Changed nav, routes, or RBAC | Yes — update modules/navigation and admin sections | No (unless new terminology introduced) |
+| New admin configuration only | Yes — update admin capabilities section | No |
+| Architectural change (no UI) | Maybe — update architecture section if significant | Yes — add key files to map |
+| Removed or renamed feature | Yes — remove or update stale references | Yes — remove or update stale references |
+| Bug fix, refactor, or small enhancement with no new concepts | No | No |
+
+### Execution
+
+If updates are needed:
+
+1. Read the current `context.md` and `AGENTS.md`
+2. Draft the specific additions or changes (keep the existing structure and tone)
+3. Apply edits using StrReplace — do not rewrite the entire file
+4. After editing, read back both files to confirm accuracy
+5. Report to the user what was updated and why
+
+If no updates are needed, state:
+> "Phase 7: `AGENTS.md` and `context.md` are up to date — no changes needed for this work."
+
+---
+
 ## Quick-Reference Checklist
 
 Copy and track per `/kick-off` session:
@@ -294,4 +338,5 @@ Copy and track per `/kick-off` session:
 [ ] Phase 4 — Subagent prompts produced for all applicable phases (not just Phase 1)
 [ ] Phase 5 — TDD blocks embedded in each subagent prompt
 [ ] Phase 6 — Gate passed after each phase before dispatching next
+[ ] Phase 7 — `AGENTS.md` and `context.md` evaluated and updated if needed
 ```

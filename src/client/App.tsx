@@ -10,6 +10,7 @@ import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
+import { AppSidebar } from './components/AppSidebar';
 import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
@@ -84,6 +85,21 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('apex-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('apex-sidebar-collapsed', String(next)); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
   type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests';
@@ -369,6 +385,26 @@ function App() {
       <DndProvider backend={HTML5Backend}>
       <NotificationWrapper can={can}>
         <div className="app">
+          <AppSidebar
+            currentView={currentView}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={handleToggleSidebar}
+            can={can}
+            isInAnyGroup={isInAnyGroup}
+            menuEnabledViews={enabledViews}
+            isSuperAdmin={isSuperAdmin}
+            selectedProject={selectedProject}
+            onNavigateHome={() => navigate('/home')}
+            onNavigateCalendar={() => navigate('/calendar')}
+            onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
+            onNavigateCloudCost={() => navigate('/cloud-cost')}
+            onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateMyWork={() => navigate('/my-work')}
+            onNavigateStandup={() => navigate('/standup')}
+            onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateAdmin={() => navigate('/admin/roles')}
+          />
+          <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
           {isLoading && currentView === 'calendar' && (
             <div className="loading-overlay">
               <div className="loading-spinner-container">
@@ -386,7 +422,7 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests'}
+            currentView={currentView}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
@@ -669,6 +705,7 @@ function App() {
               </div>
             </ErrorBoundary>
           ) : null}
+          </div>
         </div>
         <Changelog
           isOpen={showChangelog}

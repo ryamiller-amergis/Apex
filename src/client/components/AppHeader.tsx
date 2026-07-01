@@ -18,7 +18,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests';
+  currentView: string;
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -154,7 +154,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </span>
         </button>
 
-        {isMobile ? (
+        {isMobile && (
           <button
             className={styles['hamburger-btn']}
             onClick={() => setMenuOpen(true)}
@@ -168,18 +168,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               <span />
             </span>
           </button>
-        ) : (
-          <div className="view-switcher">
-            {visibleNavItems.map((item) => (
-              <button
-                key={item.view}
-                className={`view-btn ${currentView === item.view ? 'active' : ''}`}
-                onClick={item.onNavigate}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
         )}
       </div>
 

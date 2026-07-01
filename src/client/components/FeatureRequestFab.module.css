@@ -55,6 +55,7 @@
   min-width: 220px;
   padding: 8px;
   animation: menuSlideUp 0.2s ease;
+  z-index: 1001;
 }
 
 @keyframes menuSlideUp {
