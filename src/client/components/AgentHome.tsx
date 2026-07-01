@@ -483,8 +483,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
-  const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
+  const { data: repos = [] } = useSkillRepos(selectedProject || null, skillConfig?.skillProvider);
 
   // Prefer admin-configured repo/branch; fall back to heuristic (match project name, then first repo)
   const defaultRepo = skillConfig
@@ -500,6 +500,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     selectedProject || null,
     resolvedRepoName,
     defaultBranch,
+    skillConfig?.skillProvider,
   );
 
   const startChat = useStartChat();
@@ -793,6 +794,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             project: selectedProject,
             repo: resolvedRepoName!,
             branch: defaultBranch,
+            skillProvider: skillConfig?.skillProvider ?? undefined,
             skillPath: effectiveSkillPath,
             freeformContext,
             model,

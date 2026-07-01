@@ -218,7 +218,9 @@ jobs:
               MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}"
+              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
+              GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
+              GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}"
 
           az webapp config set \
             --name $APP_NAME \

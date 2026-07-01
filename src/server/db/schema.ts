@@ -148,6 +148,7 @@ export const appUsersRelations = relations(appUsers, ({ many }) => ({
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
+  featureRequests: many(featureRequests),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -485,6 +486,9 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   developmentModel: text('development_model'),
   standupSkillPath: text('standup_skill_path'),
   standupModel: text('standup_model'),
+  featureRequestSkillPath: text('feature_request_skill_path'),
+  featureRequestModel: text('feature_request_model'),
+  skillProvider: text('skill_provider').notNull().default('ado'),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
@@ -1022,5 +1026,38 @@ export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
   design: one(uiLabDesigns, {
     fields: [uiLabComments.designId],
     references: [uiLabDesigns.id],
+  }),
+}));
+
+// ── Feature Requests ──────────────────────────────────────────────────────────
+
+export const featureRequests = pgTable('feature_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: text('title').notNull(),
+  request: text('request').notNull(),
+  advantage: text('advantage').notNull(),
+  submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  sourceProject: text('source_project').notNull(),
+  status: text('status').notNull().default('new'),
+  aiStatus: text('ai_status').notNull().default('pending'),
+  aiPriority: text('ai_priority'),
+  aiRisk: text('ai_risk'),
+  aiRationale: text('ai_rationale'),
+  aiThreadId: text('ai_thread_id'),
+  teamPriority: text('team_priority'),
+  teamRisk: text('team_risk'),
+  rank: integer('rank'),
+  reviewedBy: text('reviewed_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
+  submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+}));
+
+export const featureRequestsRelations = relations(featureRequests, ({ one }) => ({
+  submitter: one(appUsers, {
+    fields: [featureRequests.submittedBy],
+    references: [appUsers.oid],
   }),
 }));

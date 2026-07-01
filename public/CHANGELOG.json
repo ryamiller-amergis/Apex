@@ -1,5 +1,71 @@
 [
   {
+    "version": "1.33.1",
+    "date": "2026-07-01",
+    "title": "Feature Request Polish",
+    "changes": [
+      {
+        "type": "improvement",
+        "description": "Floating action button is now draggable — reposition it anywhere on screen and your placement is remembered across sessions"
+      },
+      {
+        "type": "improvement",
+        "description": "Feature Requests admins can drag-and-drop rows to set team priority order when sorted by rank"
+      },
+      {
+        "type": "improvement",
+        "description": "Feature Requests now appears in project menu visibility settings so admins can control who sees it"
+      },
+      {
+        "type": "bugfix",
+        "description": "Feature request AI analysis now respects the configured skill provider (GitHub or ADO)"
+      },
+      {
+        "type": "bugfix",
+        "description": "GitHub-hosted skills load correctly when starting agent conversations"
+      },
+      {
+        "type": "bugfix",
+        "description": "Admins can view and update feature requests regardless of which project submitted them"
+      }
+    ]
+  },
+  {
+    "version": "1.33.0",
+    "date": "2026-07-01",
+    "title": "Ask Apex & Feature Requests",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Added Ask Apex — a product assistant chat that answers questions about features, workflows, navigation, and the roadmap, accessible from the floating action button on every page"
+      },
+      {
+        "type": "feature",
+        "description": "Added Feature Requests — any user can submit product ideas via the floating action button, and Apex admins can triage, rank, and manage requests from the new Feature Requests view"
+      },
+      {
+        "type": "feature",
+        "description": "Incoming feature requests are automatically analyzed by AI with suggested priority, risk level, and rationale to help the team prioritize"
+      },
+      {
+        "type": "feature",
+        "description": "Added a collapsible sidebar for primary navigation on desktop — replaces the header view switcher and remembers your collapsed/expanded preference"
+      },
+      {
+        "type": "improvement",
+        "description": "Ask Apex now loads live product documentation and can search the codebase for deeper answers beyond its baseline knowledge"
+      },
+      {
+        "type": "improvement",
+        "description": "Project admins can configure the feature request analysis skill and AI model in Project Settings"
+      },
+      {
+        "type": "improvement",
+        "description": "Skills can now be loaded from GitHub repositories as an alternative to the local skill catalog"
+      }
+    ]
+  },
+  {
     "version": "1.32.0",
     "date": "2026-06-30",
     "title": "Feature Flag Management",

@@ -4,7 +4,9 @@ export type MenuItemKey =
   | 'cloudcost'
   | 'backlog'
   | 'my-work'
-  | 'standup' | 'ui-lab';
+  | 'standup'
+  | 'ui-lab'
+  | 'feature-requests';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -14,6 +16,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'my-work', label: 'My Work' },
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },
+  { key: 'feature-requests', label: 'Feature Requests' },
 ];
 
 /** Default enabled views when a project has no explicit menu config row. */

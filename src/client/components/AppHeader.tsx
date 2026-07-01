@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
+import { FeatureRequestFab } from './FeatureRequestFab';
+import { FeatureRequestModal } from './FeatureRequestModal';
 import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
@@ -16,7 +18,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'ui-lab';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -40,9 +42,11 @@ interface AppHeaderProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateFeatureRequests?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
+  selectedProject?: string;
   onLogout: () => void;
   onOpenAgentChat?: () => void;
 }
@@ -68,13 +72,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateFeatureRequests,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
   onLogout,
+  selectedProject,
   onOpenAgentChat: _onOpenAgentChat,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
   const { isMobile } = useBreakpoint();
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -101,6 +108,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+    { label: 'Feature Requests', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -114,6 +122,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
       if (!isSuperAdmin && !can('standup:participate')) return false;
+      return true;
+    }
+    if (item.view === 'feature-requests') {
+      if (selectedProject !== 'Apex') return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
+      if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
@@ -143,7 +157,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </span>
         </button>
 
-        {isMobile ? (
+        {isMobile && (
           <button
             className={styles['hamburger-btn']}
             onClick={() => setMenuOpen(true)}
@@ -157,18 +171,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               <span />
             </span>
           </button>
-        ) : (
-          <div className="view-switcher">
-            {visibleNavItems.map((item) => (
-              <button
-                key={item.view}
-                className={`view-btn ${currentView === item.view ? 'active' : ''}`}
-                onClick={item.onNavigate}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
         )}
       </div>
 
@@ -236,6 +238,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </div>
           </nav>
         </>
+      )}
+
+      {can('feature-requests:submit') && selectedProject && (
+        <FeatureRequestFab onRequestFeature={() => setFeatureRequestOpen(true)} />
+      )}
+
+      {featureRequestOpen && selectedProject && (
+        <FeatureRequestModal
+          selectedProject={selectedProject}
+          onClose={() => setFeatureRequestOpen(false)}
+        />
       )}
     </div>
   );

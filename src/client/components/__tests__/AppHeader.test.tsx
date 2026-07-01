@@ -1,8 +1,19 @@
+import type { ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import { AppHeader } from '../AppHeader';
 
+jest.mock('react-markdown', () => ({
+  __esModule: true,
+  default: ({ children }: { children: ReactNode }) => children,
+}));
+
+jest.mock('remark-gfm', () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+
 jest.mock('../../hooks/useBreakpoint', () => ({
-  useBreakpoint: () => ({ isMobile: false, isTablet: false, isDesktop: true }),
+  useBreakpoint: () => ({ isMobile: true, isTablet: false, isDesktop: false }),
 }));
 
 const baseProps = {

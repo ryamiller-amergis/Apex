@@ -25,6 +25,7 @@ import designPrototypeRoutes from './routes/designPrototypes';
 import designPlanRoutes from './routes/designPlans';
 import pageScreenshotRoutes from './routes/pageScreenshots';
 import { mountAdoMcp } from './mcp/ado/express';
+import { mountGitHubMcp } from './mcp/github/express';
 import { ensureAuthenticated } from './middleware/auth';
 import { handleIncoming } from './services/teamsBotService';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
@@ -42,6 +43,8 @@ import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
 import featureFlagRoutes from './routes/featureFlags';
+import featureRequestRoutes from './routes/featureRequests';
+import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { resolveDataRoot } from './utils/dataDir';
 
@@ -181,8 +184,11 @@ app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
+app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
+app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
+mountGitHubMcp(app);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

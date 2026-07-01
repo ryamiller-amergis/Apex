@@ -8,7 +8,7 @@ import {
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
-import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
@@ -261,6 +261,7 @@ const SKILL_FIELDS = [
   { key: 'prdValidationSkillPath' as const, label: 'PRD Validation Skill', desc: 'Validates PRD spec after all artifacts are ready', emptyLabel: 'None (skip PRD validation)' },
   { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
   { key: 'standupSkillPath' as const, label: 'Standup Skill', desc: 'Custom standup procedure for participant conversations', emptyLabel: 'None (use built-in default)' },
+  { key: 'featureRequestSkillPath' as const, label: 'Feature Request Analysis Skill', desc: 'Analyzes feature requests for feasibility and impact', emptyLabel: 'None (use default)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -273,6 +274,7 @@ const MODEL_FIELDS = [
   { key: 'prdValidationModel' as const, label: 'PRD Validation Model' },
   { key: 'developmentModel' as const, label: 'Development Model' },
   { key: 'standupModel' as const, label: 'Standup Model' },
+  { key: 'featureRequestModel' as const, label: 'Feature Request Analysis Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -428,6 +430,7 @@ interface EditState {
   project: string;
   friendlyName: string;
   isDefault: boolean;
+  skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath: string;
@@ -440,6 +443,7 @@ interface EditState {
   prdValidationSkillPath: string;
   developmentSkillPath: string;
   standupSkillPath: string;
+  featureRequestSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
@@ -450,6 +454,7 @@ interface EditState {
   prdValidationModel: string;
   developmentModel: string;
   standupModel: string;
+  featureRequestModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -475,13 +480,13 @@ interface EditState {
 
 const emptyEdit = (): EditState => ({
   id: null, project: '', friendlyName: '', isDefault: false,
-  skillRepo: '', skillBranch: '',
+  skillProvider: 'ado', skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
-  developmentSkillPath: '', standupSkillPath: '',
+  developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
-  developmentModel: '', standupModel: '',
+  developmentModel: '', standupModel: '', featureRequestModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -543,15 +548,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [testCaseApproverGroupIds, setTestCaseApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
-  const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null);
+  const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null, edit?.skillProvider);
   const { data: branches = [], isLoading: isLoadingBranches } = useSkillBranches(
     edit?.project || null,
     edit?.skillRepo || null,
+    edit?.skillProvider,
   );
   const { data: skillList = [], isLoading: isLoadingSkills } = useSkillList(
     edit?.project || null,
     edit?.skillRepo || null,
     edit?.skillBranch || undefined,
+    edit?.skillProvider,
   );
   const { data: approversData } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
@@ -620,6 +627,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       project: config.project,
       friendlyName: config.friendlyName,
       isDefault: config.isDefault,
+      skillProvider: config.skillProvider ?? 'ado',
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? '',
@@ -632,6 +640,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       prdValidationSkillPath: config.prdValidationSkillPath ?? '',
       developmentSkillPath: config.developmentSkillPath ?? '',
       standupSkillPath: config.standupSkillPath ?? '',
+      featureRequestSkillPath: config.featureRequestSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
@@ -642,6 +651,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       prdValidationModel: config.prdValidationModel ?? '',
       developmentModel: config.developmentModel ?? '',
       standupModel: config.standupModel ?? '',
+      featureRequestModel: config.featureRequestModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -691,6 +701,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       const body: UpsertProjectSkillConfigRequest = {
         friendlyName: edit.friendlyName.trim(),
         isDefault: edit.isDefault,
+        skillProvider: edit.skillProvider,
         skillRepo: edit.skillRepo.trim(),
         skillBranch: edit.skillBranch.trim(),
         interviewSkillPath: edit.interviewSkillPath || null,
@@ -703,6 +714,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         prdValidationSkillPath: edit.prdValidationSkillPath || null,
         developmentSkillPath: edit.developmentSkillPath || null,
         standupSkillPath: edit.standupSkillPath || null,
+        featureRequestSkillPath: edit.featureRequestSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         designDocModel: edit.designDocModel || null,
@@ -713,6 +725,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         prdValidationModel: edit.prdValidationModel || null,
         developmentModel: edit.developmentModel || null,
         standupModel: edit.standupModel || null,
+        featureRequestModel: edit.featureRequestModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
@@ -855,7 +868,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               onToggle={() => toggleSection('repo')}
             >
               <p className={styles.accordionHelp}>
-                Select the Azure DevOps repository and branch containing your agent skills.
+                Select the repository and branch containing your agent skills.
               </p>
               <div className={styles.formGridThreeCol}>
                 <div className={styles.field}>
@@ -897,9 +910,27 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               </div>
 
+              <div className={styles.field} style={{ marginBottom: '8px' }}>
+                <label className={styles.label}>Provider</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['ado', 'github'] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`${styles.btnAction} ${edit.skillProvider === p ? styles.transportActive : ''}`}
+                      style={{ padding: '4px 14px', fontSize: '0.82rem' }}
+                      onClick={() => setEdit((prev) => prev ? { ...prev, skillProvider: p, skillRepo: '', skillBranch: '' } : prev)}
+                      disabled={upsert.isPending}
+                    >
+                      {p === 'ado' ? 'Azure DevOps' : 'GitHub'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className={styles.formGridThreeCol}>
                 <div className={styles.field}>
-                  <label className={styles.label} htmlFor="ps-repo">Skill Repo</label>
+                  <label className={styles.label} htmlFor="ps-repo">{edit.skillProvider === 'github' ? 'GitHub Repository' : 'Skill Repo'}</label>
                   <select
                     id="ps-repo"
                     className={styles.select}
@@ -1770,6 +1801,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                         )}
                       </td>
                       <td className={styles.td}>
+                        {config.skillProvider === 'github' && (
+                          <span className={styles.approverBadge} style={{ marginRight: '6px', fontSize: '0.7rem' }}>GitHub</span>
+                        )}
                         <span className={styles.repoText}>{config.skillRepo}</span>
                         <span className={styles.approverBadgeSeparator}> / </span>
                         <span className={styles.branchText}>{config.skillBranch}</span>

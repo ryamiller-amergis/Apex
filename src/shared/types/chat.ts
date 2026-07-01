@@ -37,6 +37,8 @@ export interface ChatThreadKickoff {
   project: string;
   repo: string;
   branch?: string;
+  /** Skill provider — 'ado' (default) or 'github' */
+  skillProvider?: import('./projectSettings').SkillProvider;
   /** Optional — omit for a free-chat session with no skill pre-loaded */
   skillPath?: string;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */

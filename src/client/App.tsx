@@ -10,6 +10,7 @@ import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
+import { AppSidebar } from './components/AppSidebar';
 import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
@@ -57,6 +58,7 @@ const DevSessionView = lazy(() => import('./components/DevSessionView').then(m =
 const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'));
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
+const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -84,9 +86,24 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('apex-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('apex-sidebar-collapsed', String(next)); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'ui-lab';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -114,6 +131,8 @@ function App() {
                     ? 'standup-summary'
                     : location.pathname === '/standup'
                     ? 'standup'
+                    : location.pathname === '/feature-requests'
+                    ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
                     : 'calendar';
@@ -230,6 +249,7 @@ function App() {
     if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
+    if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
@@ -259,6 +279,7 @@ function App() {
           project: selectedProject,
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
+          skillProvider: activeSkillConfig?.skillProvider ?? undefined,
           model: DEFAULT_MODEL_ID,
           skillSettingsId: selectedSkillSettingsId ?? undefined,
         },
@@ -368,6 +389,26 @@ function App() {
       <DndProvider backend={HTML5Backend}>
       <NotificationWrapper can={can}>
         <div className="app">
+          <AppSidebar
+            currentView={currentView}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={handleToggleSidebar}
+            can={can}
+            isInAnyGroup={isInAnyGroup}
+            menuEnabledViews={enabledViews}
+            isSuperAdmin={isSuperAdmin}
+            selectedProject={selectedProject}
+            onNavigateHome={() => navigate('/home')}
+            onNavigateCalendar={() => navigate('/calendar')}
+            onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
+            onNavigateCloudCost={() => navigate('/cloud-cost')}
+            onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateMyWork={() => navigate('/my-work')}
+            onNavigateStandup={() => navigate('/standup')}
+            onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateAdmin={() => navigate('/admin/roles')}
+          />
+          <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
           {isLoading && currentView === 'calendar' && (
             <div className="loading-overlay">
               <div className="loading-spinner-container">
@@ -385,7 +426,7 @@ function App() {
             </div>
           )}
           <AppHeader
-            currentView={currentView as 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary'}
+            currentView={currentView}
             planningTab={planningTab}
             theme={theme}
             user={authenticatedUser}
@@ -394,6 +435,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
+            selectedProject={selectedProject}
             repoConfigs={repoConfigs}
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={changeSkillSettings}
@@ -405,6 +447,7 @@ function App() {
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
+            onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -596,6 +639,12 @@ function App() {
                 </Suspense>
               </ErrorBoundary>
             </div>
+          ) : currentView === 'feature-requests' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <FeatureRequestsView />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'ui-lab' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
@@ -669,6 +718,7 @@ function App() {
               </div>
             </ErrorBoundary>
           ) : null}
+          </div>
         </div>
         <Changelog
           isOpen={showChangelog}

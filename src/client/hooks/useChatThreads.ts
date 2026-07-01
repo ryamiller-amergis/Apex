@@ -149,33 +149,36 @@ export function useSkillProjects() {
   });
 }
 
-export function useSkillRepos(project: string | null) {
+export function useSkillRepos(project: string | null, provider?: string) {
+  const providerParam = provider ? `&provider=${encodeURIComponent(provider)}` : '';
   return useQuery<{ id: string; name: string; defaultBranch: string }[]>({
-    queryKey: ['skill-repos', project],
-    queryFn: () => apiFetch(`/api/skills/repos?project=${encodeURIComponent(project!)}`),
+    queryKey: ['skill-repos', project, provider],
+    queryFn: () => apiFetch(`/api/skills/repos?project=${encodeURIComponent(project!)}${providerParam}`),
     enabled: !!project,
     staleTime: 5 * 60_000,
   });
 }
 
-export function useSkillBranches(project: string | null, repo: string | null) {
+export function useSkillBranches(project: string | null, repo: string | null, provider?: string) {
+  const providerParam = provider ? `&provider=${encodeURIComponent(provider)}` : '';
   return useQuery<string[]>({
-    queryKey: ['skill-branches', project, repo],
-    queryFn: () => apiFetch(`/api/skills/branches?project=${encodeURIComponent(project!)}&repo=${encodeURIComponent(repo!)}`),
+    queryKey: ['skill-branches', project, repo, provider],
+    queryFn: () => apiFetch(`/api/skills/branches?project=${encodeURIComponent(project!)}&repo=${encodeURIComponent(repo!)}${providerParam}`),
     enabled: !!project && !!repo,
     staleTime: 5 * 60_000,
   });
 }
 
-export function useSkillList(project: string | null, repo: string | null, branch?: string) {
+export function useSkillList(project: string | null, repo: string | null, branch?: string, provider?: string) {
   const branchParam = branch ? `&branch=${encodeURIComponent(branch)}` : '';
+  const providerParam = provider ? `&provider=${encodeURIComponent(provider)}` : '';
   return useQuery<
     { id: string; name: string; description: string; path: string }[]
   >({
-    queryKey: ['skill-list', project, repo, branch],
+    queryKey: ['skill-list', project, repo, branch, provider],
     queryFn: () =>
       apiFetch(
-        `/api/skills/list?project=${encodeURIComponent(project!)}&repo=${encodeURIComponent(repo!)}${branchParam}`,
+        `/api/skills/list?project=${encodeURIComponent(project!)}&repo=${encodeURIComponent(repo!)}${branchParam}${providerParam}`,
       ),
     enabled: !!project && !!repo,
     staleTime: 5 * 60_000,

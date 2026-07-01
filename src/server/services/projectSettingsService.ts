@@ -2,7 +2,7 @@ import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, ApproverPoolResponse } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, ApproverPoolResponse, SkillProvider } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
@@ -63,6 +63,7 @@ export interface UpsertSkillConfigOptions {
   id?: string;
   project: string;
   friendlyName: string;
+  skillProvider?: SkillProvider;
   skillRepo: string;
   skillBranch: string;
   isDefault?: boolean;
@@ -97,6 +98,8 @@ export interface UpsertSkillConfigOptions {
   designPlanBedrockMaxTokens?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  featureRequestSkillPath?: string | null;
+  featureRequestModel?: string | null;
   prdValidationScoreThreshold?: number | null;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
@@ -117,6 +120,7 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
   const values = {
     project: opts.project,
     friendlyName: opts.friendlyName,
+    skillProvider: opts.skillProvider ?? 'ado',
     skillRepo: opts.skillRepo,
     skillBranch: opts.skillBranch,
     isDefault: opts.isDefault ?? false,
@@ -150,6 +154,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     designPlanBedrockMaxTokens: opts.designPlanBedrockMaxTokens ?? null,
     developmentSkillPath: opts.developmentSkillPath ?? null,
     developmentModel: opts.developmentModel ?? null,
+    featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
+    featureRequestModel: opts.featureRequestModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
     uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
     uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,
