@@ -3,6 +3,7 @@ import { relations, sql } from 'drizzle-orm';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
+import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
@@ -474,6 +475,13 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
   designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
   prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
+  uiLabBedrockModelId: text('ui_lab_bedrock_model_id'),
+  uiLabBedrockMaxTokens: integer('ui_lab_bedrock_max_tokens'),
+  uiLabBedrockTimeoutMs: integer('ui_lab_bedrock_timeout_ms'),
+  uiLabRegenBedrockModelId: text('ui_lab_regen_bedrock_model_id'),
+  uiLabRegenBedrockMaxTokens: integer('ui_lab_regen_bedrock_max_tokens'),
+  uiLabBedrockTemperature: real('ui_lab_bedrock_temperature'),
+  uiLabSkillPath: text('ui_lab_skill_path'),
   developmentSkillPath: text('development_skill_path'),
   developmentModel: text('development_model'),
   standupSkillPath: text('standup_skill_path'),
@@ -975,6 +983,49 @@ export const featureFlagAuditRelations = relations(featureFlagAudit, ({ one }) =
   flag: one(featureFlags, {
     fields: [featureFlagAudit.flagId],
     references: [featureFlags.id],
+  }),
+}));
+
+// ── UI Lab Tables ─────────────────────────────────────────────────────────────
+
+export const uiLabDesigns = pgTable('ui_lab_designs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  authorId: text('author_id').notNull(),
+  title: text('title').notNull(),
+  prompt: text('prompt').notNull(),
+  targetRoute: text('target_route'),
+  model: text('model'),
+  status: text('status').notNull().default('generating'),
+  html: text('html'),
+  version: integer('version').notNull().default(1),
+  history: jsonb('history').$type<UiLabHistoryEntry[]>().notNull().default([]),
+  generationError: text('generation_error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const uiLabComments = pgTable('ui_lab_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  designId: uuid('design_id').notNull().references(() => uiLabDesigns.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull(),
+  text: text('text').notNull(),
+  pinX: real('pin_x'),
+  pinY: real('pin_y'),
+  version: integer('version').notNull(),
+  resolved: boolean('resolved').notNull().default(false),
+  resolvedBy: text('resolved_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const uiLabDesignsRelations = relations(uiLabDesigns, ({ many }) => ({
+  comments: many(uiLabComments),
+}));
+
+export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
+  design: one(uiLabDesigns, {
+    fields: [uiLabComments.designId],
+    references: [uiLabDesigns.id],
   }),
 }));
 

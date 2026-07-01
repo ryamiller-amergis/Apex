@@ -112,6 +112,13 @@ export interface ProjectSkillConfig {
   prdApproverCount?: number;
   designPrototypeApproverCount?: number;
   testCaseApproverCount?: number;
+  uiLabBedrockModelId?: string | null;
+  uiLabBedrockMaxTokens?: number | null;
+  uiLabBedrockTimeoutMs?: number | null;
+  uiLabRegenBedrockModelId?: string | null;
+  uiLabRegenBedrockMaxTokens?: number | null;
+  uiLabBedrockTemperature?: number | null;
+  uiLabSkillPath?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -160,6 +167,13 @@ export interface UpsertProjectSkillConfigRequest {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+  uiLabBedrockModelId?: string | null;
+  uiLabBedrockMaxTokens?: number | null;
+  uiLabBedrockTimeoutMs?: number | null;
+  uiLabRegenBedrockModelId?: string | null;
+  uiLabRegenBedrockMaxTokens?: number | null;
+  uiLabBedrockTemperature?: number | null;
+  uiLabSkillPath?: string | null;
 }
 
 export interface ProjectApprover {

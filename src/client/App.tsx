@@ -60,6 +60,7 @@ const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
+const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -103,7 +104,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -133,6 +134,8 @@ function App() {
                     ? 'standup'
                     : location.pathname === '/feature-requests'
                     ? 'feature-requests'
+                    : location.pathname.startsWith('/ui-lab')
+                    ? 'ui-lab'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -248,6 +251,7 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
+    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -256,7 +260,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, can, isInAnyGroup, isSuperAdmin, enabledViews, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -402,6 +406,7 @@ function App() {
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
+            onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
@@ -445,6 +450,7 @@ function App() {
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
@@ -648,6 +654,14 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <FeatureRequestsView />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'ui-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <UiLabView project={selectedProject} />
+                </div>
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (

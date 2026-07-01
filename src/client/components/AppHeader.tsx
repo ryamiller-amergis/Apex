@@ -18,7 +18,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: string;
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -41,6 +41,7 @@ interface AppHeaderProps {
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
+  onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
@@ -70,6 +71,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateBacklog,
   onNavigateMyWork,
   onNavigateStandup,
+  onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigateAdmin,
   onOpenChangelog,
@@ -105,6 +107,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
+    { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Feature Requests', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -126,6 +129,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
+    }
+    if (item.view === 'ui-lab') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
+      if (!isSuperAdmin && !can('ui-lab:view')) return false;
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;

@@ -101,6 +101,13 @@ export interface UpsertSkillConfigOptions {
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
   prdValidationScoreThreshold?: number | null;
+  uiLabBedrockModelId?: string | null;
+  uiLabBedrockMaxTokens?: number | null;
+  uiLabBedrockTimeoutMs?: number | null;
+  uiLabRegenBedrockModelId?: string | null;
+  uiLabRegenBedrockMaxTokens?: number | null;
+  uiLabBedrockTemperature?: number | null;
+  uiLabSkillPath?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -150,6 +157,13 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
     featureRequestModel: opts.featureRequestModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
+    uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
+    uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,
+    uiLabBedrockTimeoutMs: opts.uiLabBedrockTimeoutMs ?? null,
+    uiLabRegenBedrockModelId: opts.uiLabRegenBedrockModelId ?? null,
+    uiLabRegenBedrockMaxTokens: opts.uiLabRegenBedrockMaxTokens ?? null,
+    uiLabBedrockTemperature: opts.uiLabBedrockTemperature ?? null,
+    uiLabSkillPath: opts.uiLabSkillPath ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     defaultModel: opts.defaultModel ?? null,

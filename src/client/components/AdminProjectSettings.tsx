@@ -466,6 +466,12 @@ interface EditState {
   designPlanBedrockModelId: string;
   designPlanBedrockMaxTokens: number;
   prdValidationScoreThreshold: number;
+  uiLabBedrockModelId: string;
+  uiLabBedrockMaxTokens: number;
+  uiLabBedrockTimeoutMs: number;
+  uiLabRegenBedrockModelId: string;
+  uiLabRegenBedrockMaxTokens: number;
+  uiLabBedrockTemperature: number;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -492,6 +498,12 @@ const emptyEdit = (): EditState => ({
   designPlanBedrockModelId: '',
   designPlanBedrockMaxTokens: 4000,
   prdValidationScoreThreshold: 90,
+  uiLabBedrockModelId: '',
+  uiLabBedrockMaxTokens: 16000,
+  uiLabBedrockTimeoutMs: 600000,
+  uiLabRegenBedrockModelId: '',
+  uiLabRegenBedrockMaxTokens: 16000,
+  uiLabBedrockTemperature: 0,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
 });
 
@@ -651,6 +663,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designPlanBedrockModelId: config.designPlanBedrockModelId ?? '',
       designPlanBedrockMaxTokens: config.designPlanBedrockMaxTokens ?? 4000,
       prdValidationScoreThreshold: config.prdValidationScoreThreshold ?? 90,
+      uiLabBedrockModelId: config.uiLabBedrockModelId ?? '',
+      uiLabBedrockMaxTokens: config.uiLabBedrockMaxTokens ?? 16000,
+      uiLabBedrockTimeoutMs: config.uiLabBedrockTimeoutMs ?? 600000,
+      uiLabRegenBedrockModelId: config.uiLabRegenBedrockModelId ?? '',
+      uiLabRegenBedrockMaxTokens: config.uiLabRegenBedrockMaxTokens ?? 16000,
+      uiLabBedrockTemperature: config.uiLabBedrockTemperature ?? 0,
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
@@ -719,6 +737,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
         designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
         prdValidationScoreThreshold: edit.prdValidationScoreThreshold !== 90 ? edit.prdValidationScoreThreshold : null,
+          uiLabBedrockModelId: edit.uiLabBedrockModelId || null,
+          uiLabBedrockMaxTokens: edit.uiLabBedrockMaxTokens || null,
+          uiLabBedrockTimeoutMs: edit.uiLabBedrockTimeoutMs || null,
+          uiLabRegenBedrockModelId: edit.uiLabRegenBedrockModelId || null,
+          uiLabRegenBedrockMaxTokens: edit.uiLabRegenBedrockMaxTokens || null,
+          uiLabBedrockTemperature: edit.uiLabBedrockTemperature > 0 ? edit.uiLabBedrockTemperature : null,
         quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
         quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
         approvalMode: edit.approvalMode,
@@ -1242,6 +1266,112 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="90">90% (default)</option>
                     <option value="95">95%</option>
                     <option value="100">100%</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 24, fontWeight: 600 }}>Apex UI Lab Generation</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used for freeform UI Lab design generation. Defaults to Sonnet if not set.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-ui-lab-bedrock-model"
+                    className={styles.select}
+                    value={edit.uiLabBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Use service default</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-bedrock-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-ui-lab-bedrock-max-tokens"
+                    className={styles.select}
+                    value={String(edit.uiLabBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000</option>
+                    <option value="64000">64 000</option>
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-bedrock-timeout">Bedrock Timeout</label>
+                  <select
+                    id="ps-ui-lab-bedrock-timeout"
+                    className={styles.select}
+                    value={String(edit.uiLabBedrockTimeoutMs)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockTimeoutMs: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="300000">5 min</option>
+                    <option value="480000">8 min</option>
+                    <option value="600000">10 min (default)</option>
+                    <option value="720000">12 min</option>
+                    <option value="900000">15 min</option>
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-temperature">Temperature</label>
+                  <select
+                    id="ps-ui-lab-temperature"
+                    className={styles.select}
+                    value={String(edit.uiLabBedrockTemperature)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockTemperature: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="0">0 — deterministic (default)</option>
+                    <option value="0.3">0.3 — slight variation</option>
+                    <option value="0.5">0.5 — balanced</option>
+                    <option value="0.7">0.7 — creative</option>
+                    <option value="1">1.0 — max variation</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>Apex UI Lab Regeneration (Edit Pass)</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Model used when applying feedback or element-scoped edits in UI Lab. Defaults to the generation model above.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-regen-model">Bedrock Model</label>
+                  <select
+                    id="ps-ui-lab-regen-model"
+                    className={styles.select}
+                    value={edit.uiLabRegenBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabRegenBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="">Same as generation model</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-ui-lab-regen-max-tokens">Max Output Tokens</label>
+                  <select
+                    id="ps-ui-lab-regen-max-tokens"
+                    className={styles.select}
+                    value={String(edit.uiLabRegenBedrockMaxTokens)}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabRegenBedrockMaxTokens: Number(e.target.value) } : prev)}
+                    disabled={upsert.isPending}
+                  >
+                    <option value="8000">8 000</option>
+                    <option value="16000">16 000 (default)</option>
+                    <option value="32000">32 000</option>
+                    <option value="64000">64 000</option>
                   </select>
                 </div>
               </div>

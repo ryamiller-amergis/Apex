@@ -104,6 +104,40 @@ describe('AppHeader — menuEnabledViews=[calendar] + calendar:view permission',
   });
 });
 
+// ── UI Lab now follows the standard admin-gated pattern ───────────────────────
+
+describe('AppHeader — UI Lab admin-gated behavior', () => {
+  const inUiUxGroup = (groups: string[]) => groups.includes('UI/UX');
+
+  it('does NOT render UI Lab when user has ui-lab:view but it is not in enabledViews', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={[]} isInAnyGroup={inUiUxGroup} />);
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('renders UI Lab when enabled in menu, has ui-lab:view permission, AND is in the UI/UX group', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={['ui-lab']} isInAnyGroup={inUiUxGroup} />);
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+
+  it('does NOT render UI Lab when the user is not in the UI/UX group even with permission and menu-enable', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(<AppHeader {...baseProps} can={can} menuEnabledViews={['ui-lab']} isInAnyGroup={() => false} />);
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render UI Lab when in enabledViews but lacks ui-lab:view permission', () => {
+    render(<AppHeader {...baseProps} can={(_k) => false} menuEnabledViews={['ui-lab']} isInAnyGroup={inUiUxGroup} />);
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('renders UI Lab for a super admin even when not in enabledViews or the UI/UX group', () => {
+    render(<AppHeader {...baseProps} can={(_k) => false} isSuperAdmin menuEnabledViews={[]} isInAnyGroup={() => false} />);
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+});
+
 // ── Super admin sees all feature views ─────────────────────────────────────────
 
 describe('AppHeader — isSuperAdmin=true', () => {

@@ -406,5 +406,24 @@ describe('platformAdminRouter', () => {
       expect(res.status).toBe(400);
       expect(mockMenuSettings.upsertMenuConfig).not.toHaveBeenCalled();
     });
+
+    it('accepts ui-lab as a valid menu item key', async () => {
+      mockMenuSettings.upsertMenuConfig.mockResolvedValue({
+        project: 'MaxView',
+        enabledViews: ['calendar', 'ui-lab'],
+        updatedBy: 'Platform Admin',
+      });
+
+      const res = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .put('/api/platform-admin/menu-settings/MaxView')
+        .send({ enabledViews: ['calendar', 'ui-lab'] });
+
+      expect(res.status).toBe(200);
+      expect(mockMenuSettings.upsertMenuConfig).toHaveBeenCalledWith(
+        'MaxView',
+        ['calendar', 'ui-lab'],
+        'Platform Admin',
+      );
+    });
   });
 });

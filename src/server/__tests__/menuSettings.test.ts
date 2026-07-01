@@ -7,8 +7,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 7 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(7);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 8 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(8);
   });
 
   it('contains the expected keys in order', () => {
@@ -20,6 +20,7 @@ describe('menuSettings shared types', () => {
       'backlog',
       'my-work',
       'standup',
+      'ui-lab',
       'feature-requests',
     ]);
   });
@@ -33,6 +34,7 @@ describe('menuSettings shared types', () => {
       'Interview',
       'My Work',
       'Standup',
+      'UI Lab',
       'Feature Requests',
     ]);
   });
@@ -43,6 +45,7 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('planning');
     expect(keys).toContain('cloudcost');
     expect(keys).toContain('backlog');
+    expect(keys).toContain('ui-lab');
     expect(keys).toContain('feature-requests');
   });
 
