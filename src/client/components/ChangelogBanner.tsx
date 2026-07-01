@@ -1,10 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useChangelog } from '../hooks/useChangelog';
 import styles from './ChangelogBanner.module.css';
-
-interface ChangelogEntry {
-  version: string;
-  title: string;
-}
 
 interface ChangelogBannerProps {
   onOpenChangelog: () => void;
@@ -17,16 +13,8 @@ export const ChangelogBanner: React.FC<ChangelogBannerProps> = ({
   onMarkAsRead,
   onToggleShowOnLogin,
 }) => {
-  const [latest, setLatest] = useState<ChangelogEntry | null>(null);
-
-  useEffect(() => {
-    fetch('/CHANGELOG.json')
-      .then(res => res.json())
-      .then((data: ChangelogEntry[]) => {
-        if (data.length > 0) setLatest({ version: data[0].version, title: data[0].title });
-      })
-      .catch(err => console.error('Failed to load changelog:', err));
-  }, []);
+  const { data } = useChangelog(true);
+  const latest = data?.entries[0] ?? null;
 
   if (!latest) return null;
 

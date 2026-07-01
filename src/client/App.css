@@ -160,6 +160,18 @@ body {
   margin-left: 56px;
 }
 
+.changelog-banner-row {
+  flex-shrink: 0;
+  padding: 12px 16px 0;
+  display: flex;
+  justify-content: center;
+}
+
+.changelog-banner-row > * {
+  max-width: 960px;
+  width: 100%;
+}
+
 @media (max-width: 768px) {
   .app-main.sidebar-expanded,
   .app-main.sidebar-collapsed {

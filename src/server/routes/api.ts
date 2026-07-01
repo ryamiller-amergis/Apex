@@ -3880,26 +3880,24 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 // Returns the current user's permission keys, role names, and changelog state.
 // ensureAuthenticated is applied upstream in index.ts for all /api routes.
 
-import fs from 'fs';
-import path from 'path';
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
-import { getAppSetting } from '../services/appSettingsService';
 import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { getChangelogPayload, getCurrentChangelogVersion } from '../services/changelogService';
 
-async function getCurrentChangelogVersion(): Promise<string> {
-  const dbValue = await getAppSetting('current_changelog_version');
-  if (dbValue) return dbValue;
+router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const raw = fs.readFileSync(path.resolve(process.cwd(), 'public/CHANGELOG.json'), 'utf8');
-    const entries = JSON.parse(raw) as Array<{ version: string }>;
-    return entries[0]?.version ?? '0.0.0';
+    const payload = await getChangelogPayload();
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json(payload);
   } catch {
-    return '0.0.0';
+    res.status(500).json({ error: 'Failed to load changelog' });
   }
-}
+});
 
 router.get('/me/permissions', attachPermissions, async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3926,6 +3924,8 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       userId,
       isSuperAdmin: superAdmin,
       changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
+      currentChangelogVersion: currentVersion,
+      lastSeenChangelogVersion: changelogPrefs.lastSeenVersion,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
     });

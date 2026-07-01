@@ -6,6 +6,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
 import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
+import { ChangelogBanner } from './components/ChangelogBanner';
 import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
@@ -450,6 +451,15 @@ function App() {
             onLogout={handleLogout}
             onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
           />
+          {hasUnreadChangelog && showChangelogOnLogin && (
+            <div className="changelog-banner-row">
+              <ChangelogBanner
+                onOpenChangelog={() => setShowChangelog(true)}
+                onMarkAsRead={handleMarkChangelogAsRead}
+                onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+              />
+            </div>
+          )}
           {error && <div className="error-banner">{error}</div>}
 
           {currentView === 'home' ? (

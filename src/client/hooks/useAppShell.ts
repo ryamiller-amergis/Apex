@@ -116,6 +116,9 @@ export function useAppShell() {
           setHasUnreadChangelog(d.changelogUnread);
           setShowChangelogOnLogin(d.showChangelogOnLogin);
           setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
+          if (d.changelogUnread && d.showChangelogOnLogin) {
+            setShowChangelog(true);
+          }
         }
       })
       .catch(() => { /* ignore */ })

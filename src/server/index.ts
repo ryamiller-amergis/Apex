@@ -194,8 +194,8 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client'), {
     maxAge: '1y', // Cache versioned assets for 1 year (Vite adds hashes to filenames)
     setHeaders: (res, filePath) => {
-      // Don't cache index.html to ensure users get the latest version
-      if (filePath.endsWith('index.html')) {
+      // Don't cache shell or changelog — both must reflect the latest deploy
+      if (filePath.endsWith('index.html') || filePath.endsWith('CHANGELOG.json')) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
