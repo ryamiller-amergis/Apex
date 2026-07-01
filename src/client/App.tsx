@@ -4,6 +4,7 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
+import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
 import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
@@ -23,6 +24,7 @@ import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThrea
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
+import { useFeatureFlag } from './hooks/useFeatureFlags';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
@@ -167,7 +169,11 @@ function App() {
     handleConfirmDueDateChange,
     handleCancelDueDateChange,
     handleFieldUpdate,
+    betaAnnouncementDismissed,
+    handleDismissBetaAnnouncement,
   } = useAppShell();
+
+  const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
 
   const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
     : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
@@ -658,6 +664,12 @@ function App() {
           showOnLogin={showChangelogOnLogin}
           onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
         />
+        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+          <BetaAnnouncementModal
+            isSuperAdmin={isSuperAdmin}
+            onDismiss={handleDismissBetaAnnouncement}
+          />
+        )}
 
         <ChatAgentPanel
           thread={activeThread}

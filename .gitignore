@@ -47,6 +47,9 @@ tmp/
 temp/
 *.tmp
 
+# Migration output (contains real data, never commit)
+scripts/output/
+
 # Local AI Pilot runtime/scratch artifacts
 .ai-pilot/
 data/chat-threads/

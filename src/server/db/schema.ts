@@ -106,6 +106,7 @@ export const appUsers = pgTable('app_users', {
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
   lastSeenChangelogVersion: text('last_seen_changelog_version'),
   showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
+  dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
 });
 
 export const appRoles = pgTable('app_roles', {

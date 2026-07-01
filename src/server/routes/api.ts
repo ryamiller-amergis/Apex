@@ -3927,6 +3927,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       isSuperAdmin: superAdmin,
       changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
       showChangelogOnLogin: changelogPrefs.showOnLogin,
+      betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -3935,7 +3936,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
 
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean }
+// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3944,13 +3945,15 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, showChangelogOnLogin } = req.body as {
+    const { markChangelogRead, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
       markChangelogRead?: boolean;
       showChangelogOnLogin?: boolean;
+      dismissBetaAnnouncement?: boolean;
     };
     const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
     if (markChangelogRead === true) updates.lastSeenChangelogVersion = await getCurrentChangelogVersion();
     if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
+    if (dismissBetaAnnouncement === true) updates.dismissedBetaProdAnnouncement = true;
     await updateChangelogPrefs(userId, updates);
     res.json({ ok: true });
   } catch {

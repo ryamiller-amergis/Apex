@@ -233,11 +233,13 @@ export async function getUserRoleNames(userId: string): Promise<string[]> {
 export async function getChangelogPrefs(userId: string): Promise<{
   lastSeenVersion: string | null;
   showOnLogin: boolean;
+  dismissedBetaProdAnnouncement: boolean;
 }> {
   const user = await db.query.appUsers.findFirst({ where: eq(appUsers.oid, userId) });
   return {
     lastSeenVersion: user?.lastSeenChangelogVersion ?? null,
     showOnLogin: user?.showChangelogOnLogin ?? true,
+    dismissedBetaProdAnnouncement: user?.dismissedBetaProdAnnouncement ?? false,
   };
 }
 
@@ -245,11 +247,12 @@ export async function getChangelogPrefs(userId: string): Promise<{
 
 export async function updateChangelogPrefs(
   userId: string,
-  updates: { lastSeenChangelogVersion?: string; showChangelogOnLogin?: boolean },
+  updates: { lastSeenChangelogVersion?: string; showChangelogOnLogin?: boolean; dismissedBetaProdAnnouncement?: boolean },
 ): Promise<void> {
   const set: Partial<typeof appUsers.$inferInsert> = {};
   if (updates.lastSeenChangelogVersion !== undefined) set.lastSeenChangelogVersion = updates.lastSeenChangelogVersion;
   if (updates.showChangelogOnLogin !== undefined) set.showChangelogOnLogin = updates.showChangelogOnLogin;
+  if (updates.dismissedBetaProdAnnouncement !== undefined) set.dismissedBetaProdAnnouncement = updates.dismissedBetaProdAnnouncement;
   if (Object.keys(set).length === 0) return;
   await db.update(appUsers).set(set).where(eq(appUsers.oid, userId));
 }

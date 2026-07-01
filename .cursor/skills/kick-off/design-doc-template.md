@@ -123,6 +123,16 @@ export function useFeatureList() {
 - **Decision 2**: Another trade-off. Example: "Pagination via limit/offset rather than cursor — simpler for the current scale; cursor pagination can be added later without a breaking API change."
 - **Decision 3**: Add as many as needed.
 
+## Feature Flag
+
+> Include this section when the kick-off interview chose feature-flag gating. Omit when the answer was **no**.
+
+- **Flag key**: `my-feature-key` (kebab-case; create in Platform Admin > Feature Flags)
+- **Server gating** (if applicable): `isFeatureEnabled('my-feature-key', { userId, project })` at route entry — return 404 when disabled
+- **Client gating**: `useFeatureFlag('my-feature-key')` at the feature entry component (top-level split — not inside nested children)
+- **Disabled path**: Describe what renders when the flag is off (legacy UI, `null`, or prior behavior)
+- **Targeting**: Document initial rollout rules (project, user OID, or group)
+
 ## Phase Summary and Parallelization
 
 ```mermaid
