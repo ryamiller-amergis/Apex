@@ -157,26 +157,19 @@ export async function listBranches(repo: string, org?: string): Promise<string[]
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
 
-  const cacheKey = `branches:${resolvedOrg}:${repo}`;
-  const cached = branchCache.get(cacheKey);
-  if (cached) return cached;
-
   const branches = await ghFetch<Array<{ name: string }>>(`/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/branches?per_page=100`);
 
   const repos = await listRepos(resolvedOrg);
   const repoObj = repos.find((r) => r.name === repo);
   const defaultBranch = repoObj?.defaultBranch ?? 'main';
 
-  const result = branches
+  return branches
     .map((b) => b.name)
     .sort((a, b) => {
       if (a === defaultBranch) return -1;
       if (b === defaultBranch) return 1;
       return a.localeCompare(b);
     });
-
-  branchCache.set(cacheKey, result);
-  return result;
 }
 
 export async function listSkills(
