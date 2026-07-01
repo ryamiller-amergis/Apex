@@ -16,11 +16,13 @@ import {
 
 const mockedGetAppSetting = getAppSetting as jest.MockedFunction<typeof getAppSetting>;
 
-let tmpDir: string;
+let tmpDir: string | undefined;
+let originalCwd: string;
 
 beforeEach(() => {
   resetChangelogCache();
   mockedGetAppSetting.mockReset();
+  originalCwd = process.cwd();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'changelog-test-'));
   process.chdir(tmpDir);
   fs.mkdirSync('public', { recursive: true });
@@ -28,6 +30,11 @@ beforeEach(() => {
 
 afterEach(() => {
   resetChangelogCache();
+  if (tmpDir) {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  }
 });
 
 describe('compareVersions', () => {
