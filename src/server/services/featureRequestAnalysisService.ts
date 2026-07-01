@@ -119,6 +119,7 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
     project,
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
+    skillProvider: skillConfig.skillProvider ?? 'ado',
     skillPath,
     freeformContext,
     model,

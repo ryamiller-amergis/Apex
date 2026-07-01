@@ -57,6 +57,52 @@ export function useUpdateFeatureRequest() {
   });
 }
 
+export function useReorderFeatureRequests() {
+  const qc = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { id: string; rank: number }[],
+    { previous: FeatureRequest[] | undefined }
+  >({
+    onMutate: async (updates) => {
+      await qc.cancelQueries({ queryKey: ['feature-requests'] });
+      const previous = qc.getQueryData<FeatureRequest[]>(['feature-requests']);
+
+      qc.setQueryData<FeatureRequest[]>(['feature-requests'], (old) => {
+        if (!old) return old;
+        const rankMap = new Map(updates.map((u) => [u.id, u.rank]));
+        return old.map((item) => {
+          const newRank = rankMap.get(item.id);
+          return newRank !== undefined ? { ...item, rank: newRank } : item;
+        });
+      });
+
+      return { previous };
+    },
+    mutationFn: async (updates) => {
+      if (updates.length === 0) return;
+      await Promise.all(
+        updates.map(({ id, rank }) =>
+          apiFetch(`/api/feature-requests/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rank }),
+          }),
+        ),
+      );
+    },
+    onError: (_err, _updates, context) => {
+      if (context?.previous) {
+        qc.setQueryData(['feature-requests'], context.previous);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['feature-requests'] });
+    },
+  });
+}
+
 export function useReanalyzeFeatureRequest() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({

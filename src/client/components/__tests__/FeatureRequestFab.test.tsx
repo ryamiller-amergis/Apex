@@ -9,6 +9,10 @@ jest.mock('../AskApexChat', () => ({
   ),
 }));
 
+jest.mock('../BrandLogo', () => ({
+  BrandLogo: () => <span data-testid="apex-brand-mark" />,
+}));
+
 describe('FeatureRequestFab', () => {
   const onRequestFeature = jest.fn();
 
@@ -42,5 +46,24 @@ describe('FeatureRequestFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menuitem', { name: /Ask Apex/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the Apex brand mark on the FAB', () => {
+    render(<FeatureRequestFab onRequestFeature={onRequestFeature} />);
+    expect(screen.getByTestId('apex-brand-mark')).toBeInTheDocument();
+  });
+
+  it('opens the menu on click but not after a drag gesture', () => {
+    render(<FeatureRequestFab onRequestFeature={onRequestFeature} />);
+    const fab = screen.getByRole('button', { name: 'Open Apex menu' });
+
+    fireEvent.pointerDown(fab, { clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(fab, { clientX: 140, clientY: 140, pointerId: 1 });
+    fireEvent.pointerUp(fab, { clientX: 140, clientY: 140, pointerId: 1 });
+
+    expect(screen.queryByRole('menuitem', { name: /Ask Apex/i })).not.toBeInTheDocument();
+
+    fireEvent.click(fab);
+    expect(screen.getByRole('menuitem', { name: /Ask Apex/i })).toBeInTheDocument();
   });
 });

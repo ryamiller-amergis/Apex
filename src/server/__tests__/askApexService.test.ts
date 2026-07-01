@@ -5,9 +5,14 @@
  */
 
 jest.mock('fs', () => ({
+  ...jest.requireActual<typeof import('fs')>('fs'),
   mkdirSync: jest.fn(),
   existsSync: jest.fn().mockReturnValue(false),
   rmSync: jest.fn(),
+}));
+
+jest.mock('../services/projectSettingsService', () => ({
+  listSkillConfigs: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('uuid', () => ({

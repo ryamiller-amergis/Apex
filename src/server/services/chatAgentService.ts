@@ -1467,12 +1467,13 @@ export async function sendMessage(
     // and inject it directly into the system prompt (no MCP round-trip needed)
     if (state.thread.kickoff.skillProvider === 'github' && state.thread.kickoff.skillPath) {
       try {
-        const { getSkillFile } = await import('./skillCatalogGitHub');
+        const { getSkillFile } = await import('./skillCatalogFacade');
         const skillContent = await getSkillFile(
+          state.thread.kickoff.project,
           state.thread.kickoff.repo,
           state.thread.kickoff.skillPath,
           state.thread.kickoff.branch,
-          state.thread.kickoff.project,
+          'github',
         );
         initialPrompt += `\n\n# Pre-loaded skill content (${state.thread.kickoff.skillPath})\n\n${skillContent}`;
       } catch (err) {

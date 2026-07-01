@@ -46,7 +46,9 @@ router.post('/', requirePermission('feature-requests:submit'), async (req, res, 
     }
 
     // Fire-and-forget analysis
-    autoStartFeatureRequestAnalysis(created.id).catch(() => {});
+    autoStartFeatureRequestAnalysis(created.id).catch((err) => {
+      console.error('[featureRequests] autoStartFeatureRequestAnalysis failed:', err);
+    });
 
     return res.status(201).json(created);
   } catch (err) {
@@ -76,9 +78,6 @@ router.get('/:id', requirePermission('feature-requests:view'), async (req, res, 
     if (!featureRequest) {
       return res.status(404).json({ error: 'Feature request not found' });
     }
-    if (featureRequest.sourceProject !== 'Apex') {
-      return res.status(404).json({ error: 'Feature request not found' });
-    }
     return res.json(featureRequest);
   } catch (err) {
     next(err);
@@ -97,9 +96,6 @@ router.patch('/:id', requirePermission('feature-requests:manage'), async (req, r
 
     const existing = await getFeatureRequest(req.params.id);
     if (!existing) {
-      return res.status(404).json({ error: 'Feature request not found' });
-    }
-    if (existing.sourceProject !== 'Apex') {
       return res.status(404).json({ error: 'Feature request not found' });
     }
 

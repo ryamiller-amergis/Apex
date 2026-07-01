@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.33.1",
+    "date": "2026-07-01",
+    "title": "Feature Request Polish",
+    "changes": [
+      {
+        "type": "improvement",
+        "description": "Floating action button is now draggable — reposition it anywhere on screen and your placement is remembered across sessions"
+      },
+      {
+        "type": "improvement",
+        "description": "Feature Requests admins can drag-and-drop rows to set team priority order when sorted by rank"
+      },
+      {
+        "type": "improvement",
+        "description": "Feature Requests now appears in project menu visibility settings so admins can control who sees it"
+      },
+      {
+        "type": "bugfix",
+        "description": "Feature request AI analysis now respects the configured skill provider (GitHub or ADO)"
+      },
+      {
+        "type": "bugfix",
+        "description": "GitHub-hosted skills load correctly when starting agent conversations"
+      },
+      {
+        "type": "bugfix",
+        "description": "Admins can view and update feature requests regardless of which project submitted them"
+      }
+    ]
+  },
+  {
     "version": "1.33.0",
     "date": "2026-07-01",
     "title": "Ask Apex & Feature Requests",

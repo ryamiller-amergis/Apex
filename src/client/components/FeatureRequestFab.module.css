@@ -1,41 +1,43 @@
 .container {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
   z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
 }
 
 .fab {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  border: none;
-  background: var(--accent-color);
-  color: #fff;
-  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  cursor: grab;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 6px;
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  touch-action: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.fab:hover {
-  transform: scale(1.1);
-  background: var(--accent-hover);
+.fab:hover:not(.fabDragging) {
+  transform: scale(1.06);
+  box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, var(--accent-color) 20%, transparent);
 }
 
-.fab:active {
-  transform: scale(0.95);
+.fab:active:not(.fabDragging) {
+  transform: scale(0.98);
 }
 
-.fab svg {
-  width: 24px;
-  height: 24px;
-  fill: currentColor;
+.fabDragging {
+  cursor: grabbing;
+  transform: scale(1.02);
+  box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+
+.fabLogo {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .menu-overlay {
@@ -45,14 +47,13 @@
 }
 
 .menu {
-  position: absolute;
-  bottom: 56px;
-  right: 0;
+  position: fixed;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   box-shadow: var(--shadow-md);
   min-width: 220px;
+  max-width: calc(100vw - 16px);
   padding: 8px;
   animation: menuSlideUp 0.2s ease;
   z-index: 1001;

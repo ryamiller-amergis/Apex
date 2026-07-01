@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useFeatureRequests,
   useUpdateFeatureRequest,
+  useReorderFeatureRequests,
   useReanalyzeFeatureRequest,
 } from '../hooks/useFeatureRequests';
 import type {
@@ -17,6 +18,7 @@ import {
   FEATURE_REQUEST_RISKS,
 } from '../../shared/types/featureRequest';
 import { FeatureRequestDetailPanel } from './FeatureRequestDetailPanel';
+import { reorderWithSequentialRanks, sortFeatureRequestsByRank } from '../utils/featureRequestRank';
 import styles from './FeatureRequestsView.module.css';
 
 type SortMode = 'rank' | 'newest' | 'priority';
@@ -79,30 +81,26 @@ export const FeatureRequestsView: React.FC = () => {
   const { can } = useAppShell();
   const { data: requests, isLoading, error } = useFeatureRequests();
   const updateMutation = useUpdateFeatureRequest();
+  const reorderMutation = useReorderFeatureRequests();
   const reanalyzeMutation = useReanalyzeFeatureRequest();
 
   const [sortMode, setSortMode] = useState<SortMode>('rank');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+  const dragIndexRef = useRef<number | null>(null);
 
   const canManage = can('feature-requests:manage');
 
   const sorted = useMemo(() => {
     if (!requests) return [];
-    const items = [...requests];
     switch (sortMode) {
       case 'rank':
-        return items.sort((a, b) => {
-          const ra = a.rank ?? Number.MAX_SAFE_INTEGER;
-          const rb = b.rank ?? Number.MAX_SAFE_INTEGER;
-          if (ra !== rb) return ra - rb;
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        });
+        return sortFeatureRequestsByRank(requests);
       case 'newest':
-        return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return [...requests].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       case 'priority': {
-        return items.sort((a, b) => {
+        return [...requests].sort((a, b) => {
           const pa = PRIORITY_ORDER[a.teamPriority ?? a.aiPriority ?? 'low'] ?? 3;
           const pb = PRIORITY_ORDER[b.teamPriority ?? b.aiPriority ?? 'low'] ?? 3;
           if (pa !== pb) return pa - pb;
@@ -110,7 +108,7 @@ export const FeatureRequestsView: React.FC = () => {
         });
       }
       default:
-        return items;
+        return [...requests];
     }
   }, [requests, sortMode]);
 
@@ -121,46 +119,36 @@ export const FeatureRequestsView: React.FC = () => {
     [updateMutation],
   );
 
+  const handleReorder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      const result = reorderWithSequentialRanks(sorted, fromIndex, toIndex);
+      if (!result) return;
+
+      const updates = result.order
+        .map((item, i) => ({ id: item.id, rank: i + 1 }))
+        .filter(({ id, rank }) => sorted.find((item) => item.id === id)?.rank !== rank);
+
+      if (updates.length > 0) {
+        reorderMutation.mutate(updates);
+      }
+    },
+    [sorted, reorderMutation],
+  );
+
   const handleMoveUp = useCallback(
     (index: number) => {
       if (index <= 0) return;
-      const current = sorted[index];
-      const above = sorted[index - 1];
-      const newRankCurrent = above.rank ?? index;
-      const newRankAbove = current.rank ?? index + 1;
-      handleUpdate(current.id, { rank: newRankCurrent });
-      handleUpdate(above.id, { rank: newRankAbove });
+      handleReorder(index, index - 1);
     },
-    [sorted, handleUpdate],
+    [handleReorder],
   );
 
   const handleMoveDown = useCallback(
     (index: number) => {
       if (index >= sorted.length - 1) return;
-      const current = sorted[index];
-      const below = sorted[index + 1];
-      const newRankCurrent = below.rank ?? index + 2;
-      const newRankBelow = current.rank ?? index + 1;
-      handleUpdate(current.id, { rank: newRankCurrent });
-      handleUpdate(below.id, { rank: newRankBelow });
+      handleReorder(index, index + 1);
     },
-    [sorted, handleUpdate],
-  );
-
-  const handleReorder = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
-      const reordered = [...sorted];
-      const [moved] = reordered.splice(fromIndex, 1);
-      reordered.splice(toIndex, 0, moved);
-      reordered.forEach((item, i) => {
-        const newRank = i + 1;
-        if (item.rank !== newRank) {
-          handleUpdate(item.id, { rank: newRank });
-        }
-      });
-    },
-    [sorted, handleUpdate],
+    [sorted.length, handleReorder],
   );
 
   const selectedRequest = useMemo(
@@ -219,15 +207,21 @@ export const FeatureRequestsView: React.FC = () => {
                 onUpdate={handleUpdate}
                 onMoveUp={handleMoveUp}
                 onMoveDown={handleMoveDown}
-                onDragStart={() => setDragIndex(idx)}
+                onDragStart={() => {
+                  dragIndexRef.current = idx;
+                  setDragIndex(idx);
+                }}
                 onDragEnd={() => {
+                  dragIndexRef.current = null;
                   setDragIndex(null);
                   setDropTargetIndex(null);
                 }}
                 onDragOver={() => setDropTargetIndex(idx)}
                 onDragLeave={() => setDropTargetIndex((prev) => (prev === idx ? null : prev))}
                 onDrop={() => {
-                  if (dragIndex !== null) handleReorder(dragIndex, idx);
+                  const fromIndex = dragIndexRef.current;
+                  if (fromIndex !== null) handleReorder(fromIndex, idx);
+                  dragIndexRef.current = null;
                   setDragIndex(null);
                   setDropTargetIndex(null);
                 }}
@@ -335,7 +329,7 @@ const FeatureRequestRow: React.FC<RowProps> = ({
             >
               ▲
             </button>
-            <span className={styles['rankValue']}>{fr.rank ?? index + 1}</span>
+            <span className={styles['rankValue']}>{index + 1}</span>
             <button
               className={styles['rankBtn']}
               disabled={index === total - 1}

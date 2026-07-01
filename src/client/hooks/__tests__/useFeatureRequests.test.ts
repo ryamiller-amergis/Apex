@@ -5,6 +5,7 @@ import {
   useFeatureRequests,
   useSubmitFeatureRequest,
   useUpdateFeatureRequest,
+  useReorderFeatureRequests,
   useReanalyzeFeatureRequest,
 } from '../useFeatureRequests';
 
@@ -229,6 +230,47 @@ describe('useUpdateFeatureRequest', () => {
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+// ── useReorderFeatureRequests ──────────────────────────────────────────────────
+
+describe('useReorderFeatureRequests', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('PATCHes all rank updates in parallel and invalidates once', async () => {
+    mockFetchOk(featureRequest);
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useReorderFeatureRequests(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate([
+        { id: 'fr-1', rank: 2 },
+        { id: 'fr-2', rank: 1 },
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/feature-requests/fr-1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ rank: 2 }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/feature-requests/fr-2',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ rank: 1 }),
+      }),
+    );
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feature-requests'] });
   });
 });
 
