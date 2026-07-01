@@ -250,7 +250,7 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view'))) navigate('/home');
+    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -259,7 +259,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, can, isSuperAdmin, enabledViews, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, can, isInAnyGroup, isSuperAdmin, enabledViews, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -405,6 +405,7 @@ function App() {
             onNavigateBacklog={() => navigate('/backlog')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
+            onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />

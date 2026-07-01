@@ -26,6 +26,7 @@ interface AppSidebarProps {
   onNavigateBacklog: () => void;
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
+  onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAdmin: () => void;
 }
@@ -82,6 +83,15 @@ const IconStandup: React.FC = () => (
   </svg>
 );
 
+const IconUiLab: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="14" height="12" rx="2" />
+    <path d="M3 8h14" />
+    <path d="M6 6h.01" />
+    <path d="M7 12l2 2 4-4" />
+  </svg>
+);
+
 const IconFeatureRequests: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 3a4 4 0 014 4c0 1.5-.8 2.5-1.5 3.3-.5.5-.5 1-.5 1.7h-4c0-.7 0-1.2-.5-1.7C6.8 9.5 6 8.5 6 7a4 4 0 014-4z" />
@@ -124,6 +134,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateBacklog,
   onNavigateMyWork,
   onNavigateStandup,
+  onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigateAdmin,
 }) => {
@@ -138,6 +149,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
+    { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Feature Requests', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
   ];
 
@@ -156,6 +168,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
+    }
+    if (item.view === 'ui-lab') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
+      if (!isSuperAdmin && !can('ui-lab:view')) return false;
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;

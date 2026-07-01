@@ -130,6 +130,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
     }
+    if (item.view === 'ui-lab') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
+      if (!isSuperAdmin && !can('ui-lab:view')) return false;
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
+    }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
     return true;

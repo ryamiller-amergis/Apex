@@ -74,6 +74,77 @@ describe('AppSidebar — desktop navigation', () => {
     render(<AppSidebar {...baseProps} can={can} />);
     expect(screen.getByRole('button', { name: 'Admin' })).toBeInTheDocument();
   });
+
+  it('shows UI Lab for a super admin regardless of menu/permission', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+
+  it('shows UI Lab when enabled in menu, user has ui-lab:view permission, and is in the UI/UX group', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    const onNavigateUiLab = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['ui-lab']}
+        isInAnyGroup={(groups) => groups.includes('UI/UX')}
+        onNavigateUiLab={onNavigateUiLab}
+      />,
+    );
+    const uiLab = screen.getByRole('button', { name: 'UI Lab' });
+    expect(uiLab).toBeInTheDocument();
+    fireEvent.click(uiLab);
+    expect(onNavigateUiLab).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides UI Lab when the user is not in the UI/UX group even with permission and menu-enable', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['ui-lab']}
+        isInAnyGroup={() => false}
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('hides UI Lab when ui-lab is not in menuEnabledViews', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        isInAnyGroup={() => true}
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+
+  it('hides UI Lab when user lacks ui-lab:view permission', () => {
+    const can = (_key: string) => false;
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['ui-lab']}
+        isInAnyGroup={() => true}
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
 });
 
 describe('AppSidebar — mobile', () => {

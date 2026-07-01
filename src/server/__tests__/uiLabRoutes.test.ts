@@ -5,8 +5,19 @@ import * as uiLabService from '../services/uiLabService';
 import * as menuSettingsService from '../services/menuSettingsService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 
+let mockGroupMembershipGranted = true;
+
 jest.mock('../middleware/rbac', () => ({
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
+  requireGroupMembership: (...groups: string[]) => (req: any, res: any, next: any) => {
+    // Mirror the real middleware: super admins always bypass the group check.
+    const { isSuperAdminRequest: isSuperAdmin } = require('../utils/superAdmin');
+    if (isSuperAdmin(req) || mockGroupMembershipGranted) {
+      next();
+    } else {
+      res.status(403).json({ error: 'Forbidden', requiredGroups: groups });
+    }
+  },
 }));
 
 jest.mock('../services/uiLabService', () => ({
@@ -56,6 +67,7 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockIsSuperAdmin.mockReturnValue(false);
+    mockGroupMembershipGranted = true;
   });
 
   describe('GET /api/ui-lab', () => {
@@ -112,6 +124,41 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
 
       expect(res.status).toBe(403);
       expect(mockUiLab.getDesign).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('UI/UX group membership enforcement', () => {
+    it('returns 403 when the user is not in the UI/UX group', async () => {
+      mockGroupMembershipGranted = false;
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+
+      const res = await request(buildApp()).get('/api/ui-lab').query({ project: 'MaxView' });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ requiredGroups: ['UI/UX'] });
+      expect(mockUiLab.listDesigns).not.toHaveBeenCalled();
+    });
+
+    it('lists designs when the user is in the UI/UX group and ui-lab is enabled', async () => {
+      mockGroupMembershipGranted = true;
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.listDesigns.mockResolvedValue([{ id: 'd1' } as any]);
+
+      const res = await request(buildApp()).get('/api/ui-lab').query({ project: 'MaxView' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ id: 'd1' }]);
+    });
+
+    it('bypasses the group check for super admins', async () => {
+      mockGroupMembershipGranted = false;
+      mockIsSuperAdmin.mockReturnValue(true);
+      mockUiLab.listDesigns.mockResolvedValue([]);
+
+      const res = await request(buildApp()).get('/api/ui-lab').query({ project: 'MaxView' });
+
+      expect(res.status).toBe(200);
+      expect(mockUiLab.listDesigns).toHaveBeenCalledWith('MaxView');
     });
   });
 
