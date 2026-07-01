@@ -98,19 +98,19 @@ export interface UpsertSkillConfigOptions {
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
   prdValidationScoreThreshold?: number | null;
+  uiLabBedrockModelId?: string | null;
+  uiLabBedrockMaxTokens?: number | null;
+  uiLabBedrockTimeoutMs?: number | null;
+  uiLabRegenBedrockModelId?: string | null;
+  uiLabRegenBedrockMaxTokens?: number | null;
+  uiLabBedrockTemperature?: number | null;
+  uiLabSkillPath?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
 }
 
-export async function upsertSkillConfig(opts: UpsertSkillConfigOptions  uiLabBedrockModelId?: string | null,
-  uiLabBedrockMaxTokens?: number | null,
-  uiLabBedrockTimeoutMs?: number | null,
-  uiLabRegenBedrockModelId?: string | null,
-  uiLabRegenBedrockMaxTokens?: number | null,
-  uiLabBedrockTemperature?: number | null,
-  uiLabSkillPath?: string | null,
-): Promise<ProjectSkillConfig> {
+export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = opts.approvalMode ?? 'any_one';
 
