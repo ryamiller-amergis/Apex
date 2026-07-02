@@ -1,0 +1,305 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "apex-sdlc-backlog",
+  "title": "Apex SDLC Backlog",
+  "description": "Structured backlog output produced by the to-prd skill for the Apex platform.",
+  "type": "object",
+  "required": ["personas", "businessRules", "epics", "assumptionsMade"],
+  "additionalProperties": false,
+  "properties": {
+    "personas": {
+      "type": "array",
+      "description": "Active personas for this PRD. Names must match the Apex groups/roles enum.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "Product-Owner",
+              "BA",
+              "UI/UX",
+              "Manager",
+              "Developer",
+              "QA",
+              "Platform Admin",
+              "Project Admin",
+              "Authenticated User"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": ["Internal", "Admin", "Technical"]
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "businessRules": {
+      "type": "array",
+      "description": "Explicit and implied behavioral constraints extracted from the conversation.",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "appliesTo"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^BR-[0-9]{3}$",
+            "description": "Sequential identifier e.g. BR-001"
+          },
+          "rule": {
+            "type": "string",
+            "description": "Precise, unambiguous statement of the constraint."
+          },
+          "appliesTo": {
+            "type": "string",
+            "description": "Feature or PBI title this rule governs."
+          }
+        }
+      }
+    },
+    "epics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["title", "priority", "description", "successMetrics", "outOfScope", "assumptions", "dependencies", "features"],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "priority": {
+            "$ref": "#/definitions/moscowPriority"
+          },
+          "description": {
+            "type": "string",
+            "description": "Business narrative: problem, value, high-level scope. 2–4 sentences."
+          },
+          "successMetrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "outOfScope": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "assumptions": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "dependencies": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Other Epics, systems, or external factors. Use [\"None\"] if none."
+          },
+          "features": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/feature" }
+          }
+        }
+      }
+    },
+    "assumptionsMade": {
+      "type": "array",
+      "description": "Must mirror ## Assumptions Made in the PRD.",
+      "minItems": 1,
+      "items": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "moscowPriority": {
+      "type": "string",
+      "enum": ["Must Have", "Should Have", "Could Have", "Won't Have"]
+    },
+    "feature": {
+      "type": "object",
+      "required": ["title", "priority", "description", "affectedPersonas", "outOfScope", "dependencies", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "priority": { "$ref": "#/definitions/moscowPriority" },
+        "description": {
+          "type": "string",
+          "description": "Business narrative naming beneficiaries using affectedPersonas enum names only."
+        },
+        "affectedPersonas": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "Product-Owner",
+              "BA",
+              "UI/UX",
+              "Manager",
+              "Developer",
+              "QA",
+              "Platform Admin",
+              "Project Admin",
+              "Authenticated User"
+            ]
+          }
+        },
+        "outOfScope": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "dependencies": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "featureFlag": {
+          "type": "object",
+          "description": "Optional. Include only when the PRD ## Feature Flag section has Flag required: Yes.",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Kebab-case flag key matching the PRD."
+            }
+          }
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/pbi" },
+              { "$ref": "#/definitions/tbi" }
+            ]
+          }
+        }
+      }
+    },
+    "pbi": {
+      "type": "object",
+      "required": ["type", "id", "title", "priority", "dependsOn", "userStory", "businessRules", "nonFunctionalRequirements", "outOfScope", "acceptanceCriteria"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "PBI" },
+        "id": { "type": "string", "pattern": "^PBI-[0-9]{3}$" },
+        "title": { "type": "string" },
+        "priority": { "$ref": "#/definitions/moscowPriority" },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" }
+        },
+        "parallelGroup": {
+          "type": ["string", "null"],
+          "description": "Items sharing the same group label are safe to work in parallel."
+        },
+        "userStory": {
+          "type": "object",
+          "required": ["persona", "iWant", "soThat"],
+          "additionalProperties": false,
+          "properties": {
+            "persona": {
+              "type": "string",
+              "enum": [
+                "Product-Owner",
+                "BA",
+                "UI/UX",
+                "Manager",
+                "Developer",
+                "QA",
+                "Platform Admin",
+                "Project Admin",
+                "Authenticated User"
+              ]
+            },
+            "iWant": { "type": "string" },
+            "soThat": { "type": "string" }
+          }
+        },
+        "businessRules": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "nonFunctionalRequirements": {
+          "type": "object",
+          "required": ["performance", "accessibility", "security"],
+          "additionalProperties": false,
+          "properties": {
+            "performance": { "type": "string" },
+            "accessibility": { "type": "string" },
+            "security": { "type": "string" }
+          }
+        },
+        "outOfScope": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "description": "Must include: (a) happy path, (b) error/failure, (c) edge case/boundary, (d) negative scenario.",
+          "minItems": 4,
+          "items": {
+            "type": "object",
+            "required": ["given", "when", "then"],
+            "additionalProperties": false,
+            "properties": {
+              "given": { "type": "string" },
+              "when": { "type": "string" },
+              "then": { "type": "string" }
+            }
+          }
+        },
+        "sizingNote": {
+          "type": "string",
+          "description": "Present only when AC exceeds 5 items."
+        },
+        "testCaseCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "tbi": {
+      "type": "object",
+      "required": ["type", "id", "title", "priority", "dependsOn", "description", "technicalDependencies", "nonFunctionalRequirements", "definitionOfDone"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "TBI" },
+        "id": { "type": "string", "pattern": "^TBI-[0-9]{3}$" },
+        "title": { "type": "string" },
+        "priority": { "$ref": "#/definitions/moscowPriority" },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" }
+        },
+        "parallelGroup": { "type": ["string", "null"] },
+        "description": { "type": "string" },
+        "technicalDependencies": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "nonFunctionalRequirements": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "definitionOfDone": {
+          "type": "array",
+          "minItems": 3,
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

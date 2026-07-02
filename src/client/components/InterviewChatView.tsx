@@ -21,6 +21,7 @@ import {
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import type { InterviewStatus } from '../../shared/types/interview';
+import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
@@ -249,10 +250,22 @@ const NewInterviewCompose: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
 
+  const [selectedSkillOption, setSelectedSkillOption] = useState<InterviewSkillOption | null>(null);
+
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+
+  const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
+
+  useEffect(() => {
+    if (interviewSkillOptions.length === 1) {
+      setSelectedSkillOption(interviewSkillOptions[0]);
+    } else if (interviewSkillOptions.length >= 2 && !selectedSkillOption) {
+      setSelectedSkillOption(interviewSkillOptions[0]);
+    }
+  }, [interviewSkillOptions.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resolve repo + branch: admin config takes priority, then heuristic fallback
   const resolvedRepoName = skillConfig?.skillRepo
@@ -268,8 +281,13 @@ const NewInterviewCompose: React.FC = () => {
     resolvedRepoName,
     resolvedBranch,
   );
-  const grillSkill = skillConfig?.interviewSkillPath
-    ? skills.find((s) => s.path === skillConfig.interviewSkillPath)
+
+  const resolvedSkillPath = interviewSkillOptions.length > 0
+    ? selectedSkillOption?.path
+    : (skillConfig?.interviewSkillPath ?? undefined);
+
+  const grillSkill = resolvedSkillPath
+    ? skills.find((s) => s.path === resolvedSkillPath)
     : skills.find((s) => s.name === 'grill-with-docs');
 
   const {
@@ -413,9 +431,39 @@ const NewInterviewCompose: React.FC = () => {
             </span>
           ) : null}
 
-          <span className={`${styles.composePill} ${grillSkill ? styles.composePillSkill : styles.composePillError}`}>
-            {grillSkill ? `✨ ${grillSkill.name}` : '⚠ No interview skill configured'}
-          </span>
+          {interviewSkillOptions.length === 0 && (
+            <span className={`${styles.composePill} ${grillSkill ? styles.composePillSkill : styles.composePillError}`}>
+              {grillSkill ? `✨ ${grillSkill.name}` : '⚠ No interview skill configured'}
+            </span>
+          )}
+          {interviewSkillOptions.length === 1 && (
+            <span className={`${styles.composePill} ${styles.composePillSkill}`}>
+              ✨ {interviewSkillOptions[0].friendlyName}
+            </span>
+          )}
+          {interviewSkillOptions.length >= 2 && (
+            <span className={`${styles.composePill} ${styles.composePillSelect} ${styles.composePillSkill}`}>
+              <span className={styles.composePillSelectLabel}>
+                ✨ {selectedSkillOption?.friendlyName ?? 'Select skill…'}
+              </span>
+              <select
+                className={styles.composePillSelectEl}
+                value={selectedSkillOption?.path ?? ''}
+                onChange={(e) => {
+                  const opt = interviewSkillOptions.find((o) => o.path === e.target.value);
+                  if (opt) setSelectedSkillOption(opt);
+                }}
+                disabled={isSending}
+              >
+                {interviewSkillOptions.map((opt) => (
+                  <option key={opt.path} value={opt.path}>{opt.friendlyName}</option>
+                ))}
+              </select>
+              <svg className={styles.composePillChevron} viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1.5 3L4 5.5L6.5 3" />
+              </svg>
+            </span>
+          )}
         </div>
 
         <div className={styles.composeInputBox}>
@@ -549,14 +597,14 @@ const NewInterviewCompose: React.FC = () => {
           )}
         </div>
 
-        {!grillSkill && skillConfig && (
+        {!grillSkill && skillConfig && interviewSkillOptions.length === 0 && (
           <div className={styles.composeError}>
             No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
           </div>
         )}
         {grillSkill && (
           <p className={styles.composeHint}>
-            Enter to send · Shift+Enter for new line · The <strong>{grillSkill.name}</strong> skill will guide this structured interview
+            Enter to send · Shift+Enter for new line · The <strong>{selectedSkillOption?.friendlyName ?? grillSkill.name}</strong> skill will guide this structured interview
           </p>
         )}
       </div>

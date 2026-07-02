@@ -311,9 +311,13 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
     const { approved } = await reviewPrd(req.params.prdId, userId, body);
 
     if (approved) {
-      generateDesignPlan(req.params.prdId).catch(err => {
-        console.error('[interviews] Design plan generation failed:', err);
-      });
+      const prd = await getPrd(req.params.prdId);
+      const skillConfig = prd ? await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }) : null;
+      if (skillConfig?.prototypeStageEnabled !== false) {
+        generateDesignPlan(req.params.prdId).catch(err => {
+          console.error('[interviews] Design plan generation failed:', err);
+        });
+      }
     }
 
     res.json({ ok: true, prdId: req.params.prdId, approved });
@@ -2069,9 +2073,12 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
         updatedAt: new Date().toISOString(),
       }).where(eq(prdsTable.id, prdId));
 
-      generateDesignPlan(prdId).catch(err => {
-        console.error('[owner-approve] Design plan generation failed:', err);
-      });
+      const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+      if (skillConfig?.prototypeStageEnabled !== false) {
+        generateDesignPlan(prdId).catch(err => {
+          console.error('[owner-approve] Design plan generation failed:', err);
+        });
+      }
     } else {
       await db.update(prdsTable).set({
         status: 'revision_requested',

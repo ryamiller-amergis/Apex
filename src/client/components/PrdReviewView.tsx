@@ -1769,7 +1769,7 @@ export const PrdReviewView: React.FC = () => {
       />
 
       <div className={styles.bannerRow}>
-        {prd.status === 'approved' && designPlanResponse?.plan && (
+        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {designPlanResponse.plan.status === 'generating'
@@ -1788,7 +1788,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length > 0 && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {relatedPrototypes.length === 1
@@ -1807,7 +1807,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               No design prototypes exist for this PRD. Generate them to continue the design flow.

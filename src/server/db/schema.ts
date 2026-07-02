@@ -5,7 +5,7 @@ import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, V
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
-import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
@@ -489,6 +489,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
   skillProvider: text('skill_provider').notNull().default('ado'),
+  interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
+  prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),

@@ -1,0 +1,138 @@
+{
+  "_comment": "Worked example — Notification Preferences. Use this as the canonical shape reference when generating backlog JSON for Apex. featureFlag is present here because this feature uses controlled rollout; omit featureFlag entirely on Features when the PRD ## Feature Flag section has Flag required: No.",
+  "personas": [
+    {
+      "name": "Authenticated User",
+      "type": "Internal",
+      "description": "Any logged-in Apex user who receives notifications and wants to control their preferences"
+    },
+    {
+      "name": "Platform Admin",
+      "type": "Admin",
+      "description": "Administrator who manages platform-wide notification settings and defaults"
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "A user may only modify their own notification preferences",
+      "appliesTo": "Configure Personal Notification Preferences (PBI)"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Platform-wide notification defaults are set by Platform Admin and apply to all new users",
+      "appliesTo": "Manage Platform Notification Defaults (PBI)"
+    }
+  ],
+  "epics": [
+    {
+      "title": "Notification Preferences",
+      "priority": "Must Have",
+      "description": "Enable users to control which notifications they receive and how they are delivered. Currently all notifications are sent to all users with no opt-out mechanism, leading to notification fatigue and reduced engagement with important alerts.",
+      "successMetrics": [
+        "80% of active users configure at least one preference within 30 days of release"
+      ],
+      "outOfScope": [
+        "Per-project notification routing rules"
+      ],
+      "assumptions": [
+        "Notification types are stable and do not change frequently"
+      ],
+      "dependencies": [
+        "None"
+      ],
+      "features": [
+        {
+          "title": "Configure Personal Notification Preferences",
+          "priority": "Must Have",
+          "description": "Authenticated Users will be able to toggle notifications on/off per notification type and choose whether toast alerts appear for each type.",
+          "affectedPersonas": ["Authenticated User"],
+          "outOfScope": [
+            "Per-project notification preferences"
+          ],
+          "dependencies": [
+            "Notification type registry must be queryable from the server"
+          ],
+          "featureFlag": {
+            "name": "notification-preferences"
+          },
+          "items": [
+            {
+              "type": "PBI",
+              "id": "PBI-001",
+              "title": "Toggle notification preferences per type",
+              "priority": "Must Have",
+              "dependsOn": ["TBI-001"],
+              "parallelGroup": null,
+              "userStory": {
+                "persona": "Authenticated User",
+                "iWant": "toggle individual notification types on or off",
+                "soThat": "I only receive notifications relevant to my work"
+              },
+              "businessRules": [
+                "BR-001: Own preferences only"
+              ],
+              "nonFunctionalRequirements": {
+                "performance": "Preference save must complete within 1 second",
+                "accessibility": "Toggle controls must be keyboard-navigable and screen-reader labeled",
+                "security": "Endpoint must validate user identity before saving preferences"
+              },
+              "outOfScope": [
+                "Bulk preference import/export"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "given": "I am on the Notification Preferences page",
+                  "when": "I toggle a notification type off",
+                  "then": "The preference is saved and I no longer receive notifications of that type"
+                },
+                {
+                  "given": "I am on the Notification Preferences page and the save fails",
+                  "when": "I toggle a notification type",
+                  "then": "An error toast is shown and the toggle reverts to its previous state"
+                },
+                {
+                  "given": "I am a new user with no saved preferences",
+                  "when": "I visit the Notification Preferences page",
+                  "then": "All toggles reflect the platform defaults set by the admin"
+                },
+                {
+                  "given": "I am on the Notification Preferences page",
+                  "when": "I attempt to access another user's preferences via API",
+                  "then": "I receive a 403 error and no changes are made"
+                }
+              ]
+            },
+            {
+              "type": "TBI",
+              "id": "TBI-001",
+              "title": "Create notification_preferences table and API endpoints",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "parallelGroup": null,
+              "description": "Create a PostgreSQL migration for the notification_preferences table with user_id, notification_type, enabled, and toast_enabled columns. Add Express API endpoints for GET and PUT operations with user-scoped access control.",
+              "technicalDependencies": [
+                "Drizzle ORM schema update required after migration"
+              ],
+              "nonFunctionalRequirements": [
+                "Must validate user identity — return 403 on cross-user access",
+                "Preference read must complete within 500ms"
+              ],
+              "definitionOfDone": [
+                "Migration creates notification_preferences table with proper indexes",
+                "Drizzle schema updated in src/server/db/schema.ts",
+                "GET /api/notification-preferences returns current user's preferences",
+                "PUT /api/notification-preferences updates current user's preferences",
+                "Unit tests cover: success, unauthorized, and not-found scenarios"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "assumptionsMade": [
+    "Notification types are a stable enum that does not change per deployment",
+    "WCAG 2.1 AA is the agreed accessibility standard for this project"
+  ]
+}

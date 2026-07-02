@@ -10,9 +10,9 @@ Apex is an internal product-building and project-management platform. It central
 
 | Feature | Design Docs | Skills | Key Services | Key Components |
 |---------|------------|--------|-------------|----------------|
-| Design Interviews | `design-docs/interview-prd-workflow.md` | `.cursor/skills/kick-off/SKILL.md` | `interviewService.ts` | `InterviewChatView.tsx`, `InterviewsDashboard.tsx` |
-| PRD Generation & Review | `design-docs/interview-prd-workflow.md`, `design-docs/prd-spec-review.md`, `design-docs/prd-generation-ux.md` | — | `prdService.ts`, `chatAgentService.ts` | `PrdReviewView.tsx`, `PrdAssistantPanel.tsx`, `BacklogViewer.tsx` |
-| Design Documents | `design-docs/claude-design-prototype.md`, `design-docs/per-feature-design-doc-kickoff.md` | — | `designDocService.ts`, `documentValidationService.ts` | `DesignDocReviewView.tsx`, `DesignPrototypeReviewView.tsx` |
+| Design Interviews | `design-docs/interview-prd-workflow.md` | `.cursor/skills/kick-off/SKILL.md`, `.cursor/skills/grill-with-docs/SKILL.md`, `.cursor/skills/grill-design/SKILL.md` | `interviewService.ts` | `InterviewChatView.tsx`, `InterviewsDashboard.tsx` |
+| PRD Generation & Review | `design-docs/interview-prd-workflow.md`, `design-docs/prd-spec-review.md`, `design-docs/prd-generation-ux.md` | `.cursor/skills/to-prd/SKILL.md`, `.cursor/skills/prd-spec-review/SKILL.md` | `prdService.ts`, `chatAgentService.ts` | `PrdReviewView.tsx`, `PrdAssistantPanel.tsx`, `BacklogViewer.tsx` |
+| Design Documents | `design-docs/claude-design-prototype.md`, `design-docs/per-feature-design-doc-kickoff.md` | `.cursor/skills/prd-design-spec/SKILL.md`, `.cursor/skills/design-spec-review/SKILL.md` | `designDocService.ts`, `documentValidationService.ts` | `DesignDocReviewView.tsx`, `DesignPrototypeReviewView.tsx` |
 | Design Prototypes | `design-docs/claude-design-prototype.md` | — | `designPrototypeService.ts`, `designSystemService.ts` | `DesignPrototypeReviewView.tsx`, `DesignPlanReviewView.tsx` |
 | Daily Standups | `design-docs/standup_ceremony_bot_cf0fc810.plan.md` | `.cursor/skills/daily-standup/SKILL.md` | `standupService.ts`, `standupScheduler.ts` | `StandupCeremonyView.tsx`, `StandupManageView.tsx`, `StandupSummaryView.tsx` |
 | In-App Notifications | `design-docs/in-app-notifications.md`, `design-docs/ai-completion-notifications.md` | `.cursor/skills/in-app-notifications/SKILL.md` | `notificationService.ts`, `aiCompletionNotifier.ts` | `NotificationBell.tsx`, `NotificationCenter.tsx`, `ToastContainer.tsx` |
@@ -103,6 +103,11 @@ src/
 | What AI models are available? | `src/client/config/models.ts`, `src/server/services/modelsService.ts` |
 | How does ADO integration work? | `src/server/services/azureDevOps.ts` |
 | What are the project settings? | `src/server/services/projectSettingsService.ts`, `src/client/components/AdminProjectSettings.tsx` |
+| How do I start a feature interview? | `.cursor/skills/grill-with-docs/SKILL.md` (feature building) or `.cursor/skills/grill-design/SKILL.md` (technical design) |
+| How do I generate a PRD from an interview? | `.cursor/skills/to-prd/SKILL.md` — reads `.ai-pilot/kickoff-transcript.md` |
+| How do I review/score a PRD? | `.cursor/skills/prd-spec-review/SKILL.md` — deterministic rubric scoring |
+| How do I generate design specs from a PRD? | `.cursor/skills/prd-design-spec/SKILL.md` — produces per-Feature design/tech-spec/assumptions |
+| How do I review design specs? | `.cursor/skills/design-spec-review/SKILL.md` — quality gate before implementation |
 
 ## Agent Guidelines
 
