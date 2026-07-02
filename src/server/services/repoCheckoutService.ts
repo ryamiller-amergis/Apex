@@ -10,11 +10,6 @@ export function getWorkspaceDir(sessionId: string): string {
 }
 
 /**
- * Produces a URL-safe kebab-case slug from a title, max 40 chars.
- * Non-alphanumeric characters become hyphens; leading/trailing/consecutive
- * hyphens are collapsed.
- */
-/**
  * Removes credentials from text so a Personal Access Token embedded in a
  * clone URL can never surface in an error message or log line. Strips both
  * the exact PAT value and any `user:secret@host` userinfo in a URL.
@@ -25,6 +20,48 @@ export function redactSecrets(text: string, pat?: string): string {
     out = out.split(pat).join('***');
   }
   return out.replace(/\/\/[^/@\s:]*:[^/@\s]*@/g, '//***:***@');
+}
+
+/**
+ * Builds a `git` invocation that explicitly trusts the given repo directory,
+ * sidestepping git's "dubious ownership" guard. On Azure App Service the
+ * workspace lives on an SMB-mounted Azure Files share whose files are owned
+ * by a different uid than the runtime user, which otherwise blocks every git
+ * command run inside the clone. The path is an absolute directory (no glob),
+ * so quoting it is safe from shell expansion.
+ */
+function gitIn(workspaceDir: string, args: string): string {
+  return `git -c safe.directory="${workspaceDir}" ${args}`;
+}
+
+let safeDirectoryConfigured = false;
+
+/**
+ * Trusts all repo directories at the global/system git config level so that
+ * git commands run OUTSIDE this service — notably the Cursor agent, which
+ * operates in the cloned workspace — also clear the dubious-ownership guard.
+ * Only needed on Azure App Service; a no-op locally. Best-effort: the
+ * per-command {@link gitIn} guard still protects this service's own calls if
+ * the global write fails.
+ */
+function ensureGitSafeDirectory(): void {
+  if (safeDirectoryConfigured) return;
+  safeDirectoryConfigured = true;
+
+  // WEBSITE_SITE_NAME / WEBSITE_INSTANCE_ID are only present on Azure App Service.
+  const onAzureAppService = Boolean(
+    process.env.WEBSITE_SITE_NAME || process.env.WEBSITE_INSTANCE_ID,
+  );
+  if (!onAzureAppService) return;
+
+  for (const scope of ['--system', '--global']) {
+    try {
+      execSync(`git config ${scope} --add safe.directory "*"`, { stdio: 'pipe' });
+      return;
+    } catch {
+      // Try the next scope; --system needs root, --global needs a writable HOME.
+    }
+  }
 }
 
 export function slugify(title: string): string {
@@ -44,6 +81,8 @@ export async function checkoutDefaultBranch(opts: {
 }): Promise<string> {
   const { project, repo, branch, sessionId } = opts;
   const workspaceDir = getWorkspaceDir(sessionId);
+
+  ensureGitSafeDirectory();
 
   const orgUrl = process.env.ADO_ORG;
   const pat = process.env.ADO_PAT;
@@ -86,20 +125,20 @@ export function createFeatureBranch(
 ): string {
   const slug = slugify(workItemTitle);
   const branchName = `feature/apex-${workItemId}-${slug}`;
-  execSync(`git checkout -b "${branchName}"`, { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, `checkout -b "${branchName}"`), { cwd: workspaceDir, stdio: 'pipe' });
   return branchName;
 }
 
 export function computeDiff(workspaceDir: string): { diffText: string; changedFiles: string[] } {
-  execSync('git add -A', { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, 'add -A'), { cwd: workspaceDir, stdio: 'pipe' });
 
-  const diffText = execSync('git diff --cached', {
+  const diffText = execSync(gitIn(workspaceDir, 'diff --cached'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
     maxBuffer: 10 * 1024 * 1024,
   });
 
-  const filesOutput = execSync('git diff --cached --name-only', {
+  const filesOutput = execSync(gitIn(workspaceDir, 'diff --cached --name-only'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
   });
@@ -113,15 +152,15 @@ export function computeDiff(workspaceDir: string): { diffText: string; changedFi
  * and returns the branch name. Only commits if there are changes.
  */
 export function pushBranch(workspaceDir: string, branchName: string): void {
-  execSync('git add -A', { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, 'add -A'), { cwd: workspaceDir, stdio: 'pipe' });
 
-  const status = execSync('git status --porcelain', {
+  const status = execSync(gitIn(workspaceDir, 'status --porcelain'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
   }).trim();
 
   if (status) {
-    execSync('git commit -m "Dev workbench: agent changes"', {
+    execSync(gitIn(workspaceDir, 'commit -m "Dev workbench: agent changes"'), {
       cwd: workspaceDir,
       stdio: 'pipe',
       env: {
@@ -134,7 +173,7 @@ export function pushBranch(workspaceDir: string, branchName: string): void {
     });
   }
 
-  execSync(`git push -u origin "${branchName}"`, {
+  execSync(gitIn(workspaceDir, `push -u origin "${branchName}"`), {
     cwd: workspaceDir,
     stdio: 'pipe',
     timeout: 120000,
@@ -161,13 +200,13 @@ export interface SyncResult {
  */
 export function syncWithBase(workspaceDir: string, baseBranch: string): SyncResult {
   // Commit any outstanding agent edits before merging.
-  execSync('git add -A', { cwd: workspaceDir, stdio: 'pipe' });
-  const pendingStatus = execSync('git status --porcelain', {
+  execSync(gitIn(workspaceDir, 'add -A'), { cwd: workspaceDir, stdio: 'pipe' });
+  const pendingStatus = execSync(gitIn(workspaceDir, 'status --porcelain'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
   }).trim();
   if (pendingStatus) {
-    execSync('git commit -m "Dev workbench: agent changes"', {
+    execSync(gitIn(workspaceDir, 'commit -m "Dev workbench: agent changes"'), {
       cwd: workspaceDir,
       stdio: 'pipe',
       env: {
@@ -181,7 +220,7 @@ export function syncWithBase(workspaceDir: string, baseBranch: string): SyncResu
   }
 
   // Fetch the latest base branch tip.
-  execSync(`git fetch origin "${baseBranch}"`, {
+  execSync(gitIn(workspaceDir, `fetch origin "${baseBranch}"`), {
     cwd: workspaceDir,
     stdio: 'pipe',
     timeout: 60000,
@@ -189,7 +228,7 @@ export function syncWithBase(workspaceDir: string, baseBranch: string): SyncResu
 
   // Attempt merge.
   try {
-    execSync(`git merge --no-ff "origin/${baseBranch}" -m "Merge latest ${baseBranch} into feature branch"`, {
+    execSync(gitIn(workspaceDir, `merge --no-ff "origin/${baseBranch}" -m "Merge latest ${baseBranch} into feature branch"`), {
       cwd: workspaceDir,
       stdio: 'pipe',
     });
@@ -206,7 +245,7 @@ export function syncWithBase(workspaceDir: string, baseBranch: string): SyncResu
  * raw content (including conflict markers).
  */
 export function listConflicts(workspaceDir: string): ConflictedFile[] {
-  const output = execSync('git diff --name-only --diff-filter=U', {
+  const output = execSync(gitIn(workspaceDir, 'diff --name-only --diff-filter=U'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
   });
@@ -225,7 +264,7 @@ export function writeResolvedFile(workspaceDir: string, filePath: string, conten
   const fullPath = path.join(workspaceDir, filePath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, content, 'utf-8');
-  execSync(`git add "${filePath}"`, { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, `add "${filePath}"`), { cwd: workspaceDir, stdio: 'pipe' });
 }
 
 /**
@@ -233,7 +272,7 @@ export function writeResolvedFile(workspaceDir: string, filePath: string, conten
  * staged. Throws if any files are still unmerged.
  */
 export function completeMerge(workspaceDir: string): void {
-  const remaining = execSync('git diff --name-only --diff-filter=U', {
+  const remaining = execSync(gitIn(workspaceDir, 'diff --name-only --diff-filter=U'), {
     cwd: workspaceDir,
     encoding: 'utf-8',
   })
@@ -246,7 +285,7 @@ export function completeMerge(workspaceDir: string): void {
     );
   }
 
-  execSync('git commit --no-edit', {
+  execSync(gitIn(workspaceDir, 'commit --no-edit'), {
     cwd: workspaceDir,
     stdio: 'pipe',
     env: {
@@ -263,7 +302,7 @@ export function completeMerge(workspaceDir: string): void {
  * Aborts a conflicted merge and restores the working tree to pre-merge state.
  */
 export function abortMerge(workspaceDir: string): void {
-  execSync('git merge --abort', { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, 'merge --abort'), { cwd: workspaceDir, stdio: 'pipe' });
 }
 
 /**
@@ -271,7 +310,7 @@ export function abortMerge(workspaceDir: string): void {
  * Unlike pushBranch this does NOT commit first — call after completeMerge.
  */
 export function pushMergedBranch(workspaceDir: string, branchName: string): void {
-  execSync(`git push -u origin "${branchName}"`, {
+  execSync(gitIn(workspaceDir, `push -u origin "${branchName}"`), {
     cwd: workspaceDir,
     stdio: 'pipe',
     timeout: 120000,
