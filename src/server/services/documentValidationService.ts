@@ -80,6 +80,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     project,
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
+    skillProvider: skillConfig.skillProvider ?? undefined,
     skillPath,
     freeformContext: context,
     model,

@@ -1,0 +1,186 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "apex-test-cases",
+  "title": "Apex Test Cases",
+  "description": "Structured test-case output produced by the create-test-case skill. PBI-only; traceable to to-prd backlog JSON.",
+  "type": "object",
+  "required": ["slug", "sourceBacklog", "generatedAt", "suites", "coverageMatrix", "assumptions"],
+  "additionalProperties": false,
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "Kebab-slug matching the source backlog file"
+    },
+    "sourceBacklog": {
+      "type": "string",
+      "description": "Filename of the backlog JSON used as input"
+    },
+    "sourcePrd": {
+      "type": ["string", "null"],
+      "description": "Filename of the optional PRD markdown. null when --no-prd or file missing."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["full", "pbi", "feature"] },
+        "pbiId": { "type": ["string", "null"], "pattern": "^PBI-[0-9]{3}$" },
+        "featureTitle": { "type": ["string", "null"] }
+      }
+    },
+    "suites": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/suite" }
+    },
+    "coverageMatrix": { "$ref": "#/definitions/coverageMatrix" },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "moscowPriority": {
+      "type": "string",
+      "enum": ["Must Have", "Should Have", "Could Have", "Won't Have"]
+    },
+    "testType": {
+      "type": "string",
+      "enum": ["functional", "api", "integration", "e2e", "accessibility", "security", "performance"]
+    },
+    "testTier": {
+      "type": "string",
+      "enum": ["happy", "error", "edge", "negative", "realistic", "nfr"]
+    },
+    "automationTier": {
+      "type": "string",
+      "enum": ["unit", "integration", "e2e-playwright", "manual"]
+    },
+    "personaName": {
+      "type": "string",
+      "enum": [
+        "Product-Owner",
+        "BA",
+        "UI/UX",
+        "Manager",
+        "Developer",
+        "QA",
+        "Platform Admin",
+        "Project Admin",
+        "Authenticated User"
+      ]
+    },
+    "step": {
+      "type": "object",
+      "required": ["order", "action", "expected"],
+      "additionalProperties": false,
+      "properties": {
+        "order": { "type": "integer", "minimum": 1 },
+        "action": { "type": "string" },
+        "expected": { "type": "string" }
+      }
+    },
+    "traceability": {
+      "type": "object",
+      "required": ["pbiId"],
+      "additionalProperties": false,
+      "properties": {
+        "pbiId": { "type": "string", "pattern": "^PBI-[0-9]{3}$" },
+        "acceptanceCriteriaIndex": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "businessRules": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^BR-[0-9]{3}$" }
+        },
+        "userStory": { "type": "string" }
+      }
+    },
+    "automation": {
+      "type": "object",
+      "required": ["candidate", "recommendedTier"],
+      "additionalProperties": false,
+      "properties": {
+        "candidate": { "type": "boolean" },
+        "recommendedTier": { "$ref": "#/definitions/automationTier" },
+        "rationale": { "type": "string" }
+      }
+    },
+    "testCase": {
+      "type": "object",
+      "required": ["id", "title", "type", "tier", "priority", "persona", "preconditions", "steps", "expectedResult", "traceability", "automation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^TC-PBI-[0-9]{3}-[0-9]{3}$" },
+        "title": { "type": "string" },
+        "type": { "$ref": "#/definitions/testType" },
+        "tier": { "$ref": "#/definitions/testTier" },
+        "priority": { "$ref": "#/definitions/moscowPriority" },
+        "persona": { "$ref": "#/definitions/personaName" },
+        "featureFlag": { "type": ["string", "null"] },
+        "featureFlagState": { "type": ["string", "null"], "enum": ["on", "off", null] },
+        "preconditions": { "type": "array", "items": { "type": "string" } },
+        "testData": { "type": "object", "additionalProperties": { "type": "string" } },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/step" } },
+        "expectedResult": { "type": "string" },
+        "traceability": { "$ref": "#/definitions/traceability" },
+        "automation": { "$ref": "#/definitions/automation" }
+      }
+    },
+    "suite": {
+      "type": "object",
+      "required": ["epicTitle", "featureTitle", "featureFlag", "pbiId", "pbiTitle", "testCaseCount", "testCases"],
+      "additionalProperties": false,
+      "properties": {
+        "epicTitle": { "type": "string" },
+        "featureTitle": { "type": "string" },
+        "featureFlag": { "type": ["string", "null"] },
+        "pbiId": { "type": "string", "pattern": "^PBI-[0-9]{3}$" },
+        "pbiTitle": { "type": "string" },
+        "testCaseCount": { "type": "integer", "minimum": 0 },
+        "testCases": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/testCase" } }
+      }
+    },
+    "coverageMatrix": {
+      "type": "object",
+      "required": ["acceptanceCriteria", "businessRules", "gaps", "explicitlyOutOfScope"],
+      "additionalProperties": false,
+      "properties": {
+        "acceptanceCriteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pbiId", "index", "covered", "testCaseIds"],
+            "additionalProperties": false,
+            "properties": {
+              "pbiId": { "type": "string", "pattern": "^PBI-[0-9]{3}$" },
+              "index": { "type": "integer", "minimum": 0 },
+              "covered": { "type": "boolean" },
+              "testCaseIds": { "type": "array", "items": { "type": "string", "pattern": "^TC-PBI-[0-9]{3}-[0-9]{3}$" } }
+            }
+          }
+        },
+        "businessRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "covered", "testCaseIds"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^BR-[0-9]{3}$" },
+              "covered": { "type": "boolean" },
+              "testCaseIds": { "type": "array", "items": { "type": "string", "pattern": "^TC-PBI-[0-9]{3}-[0-9]{3}$" } }
+            }
+          }
+        },
+        "gaps": { "type": "array", "items": { "type": "string" } },
+        "explicitlyOutOfScope": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

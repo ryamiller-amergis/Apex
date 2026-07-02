@@ -826,7 +826,11 @@ describe('POST /api/interviews/prds/:prdId/review (approve) — prototype trigge
 // ── POST /api/interviews/prds/:prdId/design-docs — model resolution ───────────
 
 describe('POST /api/interviews/prds/:prdId/design-docs — design doc model resolution', () => {
-  const approvedPrd = { ...prd, status: 'approved' as const };
+  const approvedPrd = {
+    ...prd,
+    status: 'approved' as const,
+    backlogJson: { features: [{ title: 'Feature A' }] },
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -888,7 +892,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     );
   });
 
-  it('returns 201 with designDocId and threadId', async () => {
+  it('returns 201 with designDocIds and count', async () => {
     mockPrdService.getPrd.mockResolvedValue(approvedPrd);
     mockGetSkillConfig.mockResolvedValue({
       project: 'proj-alpha',
@@ -901,7 +905,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ designDocId: 'design-doc-1', threadId: 'thread-mock' });
+    expect(res.body).toMatchObject({ designDocIds: ['design-doc-1'], count: 1 });
   });
 
   it('returns 404 when the PRD does not exist', async () => {
@@ -1704,6 +1708,13 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
     backlogJson: { features: [{ title: 'Feature A', points: 3 }] },
   };
 
+  const approvedPrdMinimal = {
+    ...prdSummary,
+    status: 'approved' as const,
+    content: 'PRD content',
+    backlogJson: { features: [{ title: 'Feature A' }] },
+  };
+
   const approvedPrdNoBacklog = {
     ...prdSummary,
     status: 'approved' as const,
@@ -1715,6 +1726,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
     jest.clearAllMocks();
     mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
     mockStartDesignDocWatcher.mockReturnValue(undefined);
+    mockStartSingleFeatureDocWatcher.mockReturnValue(undefined);
     mockGetSkillConfig.mockResolvedValue(null);
     mockGetDefaultModel.mockResolvedValue('global-default-model');
     // Default: no design plan found
@@ -1723,7 +1735,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
   });
 
   it('always includes PRD content in freeformContext', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
 
     await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
@@ -1742,22 +1754,25 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
     expect(freeformContext).toContain('"features"');
   });
 
-  it('omits the backlog section from freeformContext when the PRD has no backlog', async () => {
+  it('returns 422 when the PRD backlog has no features', async () => {
     mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
 
-    await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
-    const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
-    expect(freeformContext).not.toContain('# Backlog');
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({
+      error: 'PRD backlog has no features to generate design docs for',
+    });
+    expect(mockCreateThread).not.toHaveBeenCalled();
   });
 
   it('includes design plan features in freeformContext when a plan exists', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
     mockDb.query.designPlans.findFirst.mockResolvedValue({
       prdId: 'prd-1',
       features: [
         {
-          featureName: 'Timecard Dashboard',
+          featureName: 'Feature A',
           decision: 'new-page',
           targetRoute: '/timecard',
           designBrief: 'A new dashboard page for timecards',
@@ -1769,13 +1784,13 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
 
     const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
     expect(freeformContext).toContain('# Design Plan');
-    expect(freeformContext).toContain('Timecard Dashboard');
+    expect(freeformContext).toContain('Feature A');
     expect(freeformContext).toContain('new-page');
     expect(freeformContext).toContain('/timecard');
   });
 
   it('proceeds and returns 201 when design plan lookup fails (graceful degradation)', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
     mockDb.query.designPlans.findFirst.mockRejectedValue(new Error('DB error'));
 
     const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
@@ -1787,7 +1802,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
   });
 
   it('always includes existing-code protection rules in freeformContext', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
 
     await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
@@ -1798,12 +1813,12 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
   });
 
   it('calls fetchExistingPageContext for update-page features when a plan exists', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
     mockDb.query.designPlans.findFirst.mockResolvedValue({
       prdId: 'prd-1',
       features: [
         {
-          featureName: 'Timecard Entry',
+          featureName: 'Feature A',
           decision: 'update-page',
           targetRoute: '/timecard/entry',
         },
@@ -1813,19 +1828,19 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
 
     await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
-    expect(mockFetchExistingPageContext).toHaveBeenCalledWith('/timecard/entry', 'Timecard Entry');
+    expect(mockFetchExistingPageContext).toHaveBeenCalledWith('/timecard/entry', 'Feature A');
     const { freeformContext } = mockCreateThread.mock.calls[0][1] as { freeformContext: string };
     expect(freeformContext).toContain('Existing Page Context');
     expect(freeformContext).toContain('Existing React component code');
   });
 
   it('does not call fetchExistingPageContext for new-page features', async () => {
-    mockPrdService.getPrd.mockResolvedValue(approvedPrdNoBacklog);
+    mockPrdService.getPrd.mockResolvedValue(approvedPrdMinimal);
     mockDb.query.designPlans.findFirst.mockResolvedValue({
       prdId: 'prd-1',
       features: [
         {
-          featureName: 'New Dashboard',
+          featureName: 'Feature A',
           decision: 'new-page',
           targetRoute: '/new-dashboard',
         },

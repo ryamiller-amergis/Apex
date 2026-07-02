@@ -11,6 +11,7 @@ export function ensureAuthenticated(req: Request, res: Response, next: NextFunct
     return next();
   }
   res.status(401).json({ error: 'Not authenticated' });
+  return;
 }
 
 export function getAuthUser(req: Request) {

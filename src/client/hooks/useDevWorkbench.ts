@@ -29,7 +29,7 @@ export function useAssignedWorkItems(project: string | null) {
 
 export function useStartDevSession() {
   const queryClient = useQueryClient();
-  return useMutation<StartDevSessionResponse, Error, { workItemId: number; project: string; model?: string }>({
+  return useMutation<StartDevSessionResponse, Error, { workItemId?: number; project: string; model?: string; prdId?: string; featureId?: string }>({
     mutationFn: (body) =>
       apiFetch('/api/dev-workbench/start', {
         method: 'POST',

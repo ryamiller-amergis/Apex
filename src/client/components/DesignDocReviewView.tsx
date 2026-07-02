@@ -1731,11 +1731,11 @@ export const DesignDocReviewView: React.FC = () => {
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
-  const validationBlocking = doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
+  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
-  const isReviewer = canReview && (!isAuthor || isAdmin) && !isOwner;
+  const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
   const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
   const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
   const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';

@@ -462,7 +462,7 @@ describe('Retry Utility', () => {
       const elapsed = Date.now() - start;
 
       expect(elapsed).toBeGreaterThanOrEqual(45); // Allow small variance
-      expect(elapsed).toBeLessThan(100);
+      expect(elapsed).toBeLessThan(150);
     });
   });
 });

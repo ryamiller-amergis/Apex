@@ -8,7 +8,7 @@ import {
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
-import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
@@ -472,6 +472,8 @@ interface EditState {
   uiLabRegenBedrockModelId: string;
   uiLabRegenBedrockMaxTokens: number;
   uiLabBedrockTemperature: number;
+  interviewSkillOptions: InterviewSkillOption[];
+  prototypeStageEnabled: boolean;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -505,6 +507,7 @@ const emptyEdit = (): EditState => ({
   uiLabRegenBedrockMaxTokens: 16000,
   uiLabBedrockTemperature: 0,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
+  interviewSkillOptions: [], prototypeStageEnabled: true,
 });
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -672,6 +675,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
+      interviewSkillOptions: config.interviewSkillOptions ?? [],
+      prototypeStageEnabled: config.prototypeStageEnabled !== false,
       isNew: false,
     });
     setFormError(null);
@@ -745,6 +750,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           uiLabBedrockTemperature: edit.uiLabBedrockTemperature > 0 ? edit.uiLabBedrockTemperature : null,
         quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
         quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
+        interviewSkillOptions: edit.interviewSkillOptions.length > 0 ? edit.interviewSkillOptions : null,
+        prototypeStageEnabled: edit.prototypeStageEnabled,
         approvalMode: edit.approvalMode,
       };
 
@@ -973,6 +980,21 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </select>
                 <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
               </div>
+
+              <div className={styles.field} style={{ marginTop: '12px' }}>
+                <label className={styles.label} htmlFor="ps-prototypeStageEnabled">
+                  <input
+                    id="ps-prototypeStageEnabled"
+                    type="checkbox"
+                    checked={edit.prototypeStageEnabled}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeStageEnabled: e.target.checked } : prev)}
+                    disabled={upsert.isPending}
+                    style={{ marginRight: '6px' }}
+                  />
+                  Enable Design Prototype stage
+                </label>
+                <span className={styles.skillDescription}>When off, the workflow becomes Interview → PRD → Design Doc (skips prototype generation)</span>
+              </div>
             </AccordionSection>
 
             {/* Section 2: Process Skills */}
@@ -985,6 +1007,73 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               <p className={styles.accordionHelp}>
                 Assign skills from the selected repo to each stage of the document pipeline.
               </p>
+
+              {/* Interview Skill Options — repeatable list editor */}
+              <div className={styles.field} style={{ marginBottom: '16px' }}>
+                <label className={styles.label}>Interview Skill Options</label>
+                <span className={styles.skillDescription} style={{ marginBottom: '8px', display: 'block' }}>
+                  Configure one or more interview skills that users can choose from when starting an interview. Falls back to the single Interview Skill below if empty.
+                </span>
+                {edit.interviewSkillOptions.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                    {edit.interviewSkillOptions.map((opt, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <select
+                          className={styles.select}
+                          style={{ flex: 1 }}
+                          value={opt.path}
+                          onChange={(e) => {
+                            const options = [...edit.interviewSkillOptions];
+                            options[idx] = { ...options[idx], path: e.target.value };
+                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
+                          }}
+                          disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                        >
+                          <option value="">— select a skill —</option>
+                          {skillList.map((s) => (
+                            <option key={s.id} value={s.path}>{s.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          className={styles.input}
+                          style={{ flex: 1 }}
+                          placeholder="Friendly name (shown to users)"
+                          value={opt.friendlyName}
+                          onChange={(e) => {
+                            const options = [...edit.interviewSkillOptions];
+                            options[idx] = { ...options[idx], friendlyName: e.target.value };
+                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                        />
+                        <button
+                          type="button"
+                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
+                          onClick={() => {
+                            const options = edit.interviewSkillOptions.filter((_, i) => i !== idx);
+                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          title="Remove"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className={styles.btnAction}
+                  onClick={() => {
+                    setEdit((prev) => prev ? { ...prev, interviewSkillOptions: [...prev.interviewSkillOptions, { path: '', friendlyName: '' }] } : prev);
+                  }}
+                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                >
+                  + Add Interview Skill Option
+                </button>
+              </div>
+
               <div className={styles.formGrid}>
                 {SKILL_FIELDS.map((sf) => (
                   <div key={sf.key} className={styles.field}>

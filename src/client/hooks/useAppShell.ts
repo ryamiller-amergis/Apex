@@ -89,16 +89,29 @@ export function useAppShell() {
   const endDate = useMemo(() => endOfMonth(currentDate), [currentDate]);
 
   useEffect(() => {
-    fetch('/auth/status', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => {
+    let cancelled = false;
+    let retryTimer: number | null = null;
+
+    const checkAuth = async () => {
+      try {
+        const r = await fetch('/auth/status', { credentials: 'include' });
+        if (!r.ok) throw new Error(`auth status ${r.status}`);
+        const d = await r.json();
+        if (cancelled) return;
         setIsAuthenticated(d.authenticated);
         setAuthenticatedUser(d.authenticated ? d.user ?? null : null);
-      })
-      .catch(() => {
-        setIsAuthenticated(false);
-        setAuthenticatedUser(null);
-      });
+      } catch {
+        if (cancelled) return;
+        // Server may be restarting (nodemon) — retry instead of sending user to login.
+        retryTimer = window.setTimeout(checkAuth, 2000);
+      }
+    };
+
+    void checkAuth();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
   }, []);
 
   useEffect(() => {

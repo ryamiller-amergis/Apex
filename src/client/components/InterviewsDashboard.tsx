@@ -23,6 +23,7 @@ import {
   derivePrdReadiness,
   type PrdReadinessSeverity,
 } from '../../shared/utils/prdReadiness';
+import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import styles from './InterviewsDashboard.module.css';
 
@@ -610,6 +611,9 @@ export const InterviewsDashboard: React.FC = () => {
     ...(authorParam ? { author: authorParam } : {}),
   });
 
+  const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
+  const prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
+
   const canManage = can('interviews:manage');
   const canStartInterview = permissionsLoaded && canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
 
@@ -702,13 +706,15 @@ export const InterviewsDashboard: React.FC = () => {
         >
           PRDs ({prds.length})
         </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
-          onClick={() => setActiveTab('design-prototypes')}
-          type="button"
-        >
-          Design Prototypes ({prototypes.length})
-        </button>
+        {prototypeEnabled && (
+          <button
+            className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
+            onClick={() => setActiveTab('design-prototypes')}
+            type="button"
+          >
+            Design Prototypes ({prototypes.length})
+          </button>
+        )}
         <button
           className={`${styles.tab} ${activeTab === 'design-docs' ? styles.active : ''}`}
           onClick={() => setActiveTab('design-docs')}
@@ -863,7 +869,7 @@ export const InterviewsDashboard: React.FC = () => {
         </>
       )}
 
-      {activeTab === 'design-prototypes' && (
+      {prototypeEnabled && activeTab === 'design-prototypes' && (
         <>
           <div className={styles.filtersRow}>
             <div className={styles.filters}>

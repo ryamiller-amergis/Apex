@@ -85,21 +85,17 @@ const sessionCookie = {
   path: '/',
 };
 
-let sessionStore: session.Store | undefined;
-if (process.env.NODE_ENV === 'production') {
-  const sessionsDir = path.join(resolveDataRoot(), 'sessions');
-  fs.mkdirSync(sessionsDir, { recursive: true });
-  // Loaded via require so local dev (ts-node) does not need session-file-store typings.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const createFileStore = require('session-file-store') as FileStoreFactory;
-  const FileStore = createFileStore(session);
-  sessionStore = new FileStore({
-    path: sessionsDir,
-    ttl: 86400,
-    retries: 0,
-  });
-  console.log(`[session] Using file store at ${sessionsDir}`);
-}
+const sessionsDir = path.join(resolveDataRoot(), 'sessions');
+fs.mkdirSync(sessionsDir, { recursive: true });
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const createFileStore = require('session-file-store') as FileStoreFactory;
+const FileStore = createFileStore(session);
+const sessionStore = new FileStore({
+  path: sessionsDir,
+  ttl: 86400,
+  retries: 0,
+});
+console.log(`[session] Using file store at ${sessionsDir}`);
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
@@ -221,6 +217,10 @@ app.use((err: any, req: express.Request, res: express.Response, _next: express.N
       exception: err instanceof Error ? err : new Error(String(err)),
       properties: { path: req.path, method: req.method },
     });
+  }
+  if (res.headersSent) {
+    console.error('[error-handler] Response already sent for', req.method, req.path, err);
+    return;
   }
   const status = err.status ?? 500;
   res.status(status).json({ error: err.message ?? 'Internal server error' });

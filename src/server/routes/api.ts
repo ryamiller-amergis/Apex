@@ -4004,6 +4004,7 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       project: config.project,
       friendlyName: config.friendlyName,
       isDefault: config.isDefault,
+      skillProvider: config.skillProvider ?? null,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? null,
@@ -4016,6 +4017,8 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       testCaseModel: config.testCaseModel ?? null,
       featureRequestSkillPath: config.featureRequestSkillPath ?? null,
       featureRequestModel: config.featureRequestModel ?? null,
+      interviewSkillOptions: config.interviewSkillOptions ?? null,
+      prototypeStageEnabled: config.prototypeStageEnabled ?? true,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });

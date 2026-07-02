@@ -28,6 +28,7 @@ interface AppSidebarProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
+  onNavigatePdfTools?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -99,6 +100,13 @@ const IconFeatureRequests: React.FC = () => (
   </svg>
 );
 
+const IconPdfTools: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="2" width="12" height="16" rx="1.5" />
+    <path d="M7 6h6M7 9h6M7 12h4" />
+  </svg>
+);
+
 const IconAdmin: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -136,6 +144,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
+  onNavigatePdfTools,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -151,6 +160,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Feature Requests', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'PDF Tools', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
   ];
 
   const visibleModuleItems = moduleItems.filter((item) => {
@@ -167,6 +177,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
+      return true;
+    }
+    if (item.view === 'pdf-tools') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;
+      if (!isSuperAdmin && !can('pdf-assembly:use')) return false;
       return true;
     }
     if (item.view === 'ui-lab') {
@@ -214,6 +229,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             onClick={item.onNavigate}
             type="button"
             title={collapsed ? item.label : undefined}
+            data-testid={`nav-item-${item.view}`}
           >
             <span className={styles.icon}>{item.icon}</span>
             {!collapsed && <span className={styles.label}>{item.label}</span>}

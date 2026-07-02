@@ -22,21 +22,25 @@ async function loadPermissions(req: Request): Promise<Set<string>> {
 
 export function requirePermission(...keys: string[]): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    if (isSuperAdminRequest(req)) {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      if (isSuperAdminRequest(req)) {
+        next();
+        return;
+      }
+      const perms = await loadPermissions(req);
+      const missing = keys.filter((k) => !perms.has(k));
+      if (missing.length > 0) {
+        res.status(403).json({ error: 'Forbidden', missing });
+        return;
+      }
       next();
-      return;
+    } catch (err) {
+      next(err);
     }
-    const perms = await loadPermissions(req);
-    const missing = keys.filter((k) => !perms.has(k));
-    if (missing.length > 0) {
-      res.status(403).json({ error: 'Forbidden', missing });
-      return;
-    }
-    next();
   };
 }
 
@@ -78,31 +82,35 @@ export const requireSuperAdmin: RequestHandler = async (
 
 export function requireGroupMembership(...groupNames: string[]): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      if (isSuperAdminRequest(req)) {
+        next();
+        return;
+      }
+      const userId = (req.user as any)?.profile?.oid as string | undefined;
+      if (!userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      // Admins (users with admin:roles permission) bypass the group check
+      const perms = await loadPermissions(req);
+      if (perms.has('admin:roles')) {
+        next();
+        return;
+      }
+      const userGroups = await getUserGroupNames(userId);
+      if (groupNames.some(g => userGroups.includes(g))) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: 'Forbidden', requiredGroups: groupNames });
+    } catch (err) {
+      next(err);
     }
-    if (isSuperAdminRequest(req)) {
-      next();
-      return;
-    }
-    const userId = (req.user as any)?.profile?.oid as string | undefined;
-    if (!userId) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    // Admins (users with admin:roles permission) bypass the group check
-    const perms = await loadPermissions(req);
-    if (perms.has('admin:roles')) {
-      next();
-      return;
-    }
-    const userGroups = await getUserGroupNames(userId);
-    if (groupNames.some(g => userGroups.includes(g))) {
-      next();
-      return;
-    }
-    res.status(403).json({ error: 'Forbidden', requiredGroups: groupNames });
   };
 }
 

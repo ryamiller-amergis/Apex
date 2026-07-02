@@ -7,6 +7,7 @@ import {
   closeSession,
 } from '../services/askApexService';
 import { getUserId } from '../utils/requestUser';
+import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 
 const router = Router();
 
@@ -38,9 +39,7 @@ router.get('/sessions/:id/stream', (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  const sendEvent = (event: object) => {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  const sendEvent = (event: object) => writeSseEvent(res, event);
 
   // Replay existing messages
   const messages = getSessionMessages(sessionId, userId);
@@ -52,17 +51,15 @@ router.get('/sessions/:id/stream', (req: Request, res: Response) => {
 
   const unsubscribe = subscribeToSession(sessionId, userId, sendEvent);
   if (!unsubscribe) {
-    res.write(`data: ${JSON.stringify({ type: 'error', error: 'Session not found' })}\n\n`);
+    writeSseEvent(res, { type: 'error', error: 'Session not found' });
     res.end();
     return;
   }
 
-  const ping = setInterval(() => {
-    res.write(': ping\n\n');
-  }, 25000);
+  const stopHeartbeat = startSseHeartbeat(res);
 
   req.on('close', () => {
-    clearInterval(ping);
+    stopHeartbeat();
     unsubscribe();
   });
 });

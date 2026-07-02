@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import type { SkillProvider } from '../../shared/types/projectSettings';
 import { resolveDataRoot } from '../utils/dataDir';
 
 const CHECKOUT_BASE = path.join(resolveDataRoot(), 'dev-workspaces');
@@ -73,20 +74,36 @@ export function slugify(title: string): string {
     .replace(/-+$/, '');
 }
 
-export async function checkoutDefaultBranch(opts: {
-  project: string;
-  repo: string;
-  branch: string;
-  sessionId: string;
-}): Promise<string> {
-  const { project, repo, branch, sessionId } = opts;
-  const workspaceDir = getWorkspaceDir(sessionId);
+function getGitHubOrg(): string {
+  const org = process.env.GITHUB_ORG || '';
+  if (!org) {
+    throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
+  }
+  return org;
+}
+
+function getGitHubToken(): string {
+  const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT || process.env.GH_SKILL_TOKEN || '';
+  if (!token) {
+    throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set for GitHub repo checkout');
+  }
+  return token;
+}
+
+function buildCloneUrl(provider: SkillProvider, project: string, repo: string): { url: string; secret?: string } {
+  if (provider === 'github') {
+    const org = getGitHubOrg();
+    const token = getGitHubToken();
+    const urlObj = new URL(`https://github.com/${org}/${repo}.git`);
+    urlObj.username = 'x-access-token';
+    urlObj.password = token;
+    return { url: urlObj.toString(), secret: token };
+  }
 
   ensureGitSafeDirectory();
 
   const orgUrl = process.env.ADO_ORG;
   const pat = process.env.ADO_PAT;
-
   if (!orgUrl || !pat) {
     throw new Error('ADO_ORG and ADO_PAT must be set for repo checkout');
   }
@@ -94,6 +111,19 @@ export async function checkoutDefaultBranch(opts: {
   const urlObj = new URL(`${orgUrl}/${project}/_git/${repo}`);
   urlObj.username = 'pat';
   urlObj.password = pat;
+  return { url: urlObj.toString(), secret: pat };
+}
+
+export async function checkoutDefaultBranch(opts: {
+  project: string;
+  repo: string;
+  branch: string;
+  sessionId: string;
+  provider?: SkillProvider;
+}): Promise<string> {
+  const { project, repo, branch, sessionId, provider = 'ado' } = opts;
+  const workspaceDir = getWorkspaceDir(sessionId);
+  const { url: cloneUrl, secret } = buildCloneUrl(provider, project, repo);
 
   fs.mkdirSync(workspaceDir, { recursive: true });
 
@@ -103,12 +133,12 @@ export async function checkoutDefaultBranch(opts: {
   // clone on large monorepos, which matters on constrained hosts.
   try {
     execSync(
-      `git clone -c core.longpaths=true --filter=blob:none --branch "${branch}" "${urlObj.toString()}" .`,
+      `git clone -c core.longpaths=true --filter=blob:none --branch "${branch}" "${cloneUrl}" .`,
       { cwd: workspaceDir, stdio: 'pipe', timeout: 600000 },
     );
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    throw new Error(`git clone failed: ${redactSecrets(raw, pat)}`);
+    throw new Error(`git clone failed: ${redactSecrets(raw, secret)}`);
   }
 
   return workspaceDir;
@@ -127,6 +157,15 @@ export function createFeatureBranch(
   const branchName = `feature/apex-${workItemId}-${slug}`;
   execSync(gitIn(workspaceDir, `checkout -b "${branchName}"`), { cwd: workspaceDir, stdio: 'pipe' });
   return branchName;
+}
+
+/**
+ * Creates and checks out a feature branch with the given pre-computed name.
+ * Use this when the branch name is already known (e.g. Apex PRD path where
+ * the name is derived from the featureId, not an ADO work item title).
+ */
+export function checkoutNewBranch(workspaceDir: string, branchName: string): void {
+  execSync(`git checkout -b "${branchName}"`, { cwd: workspaceDir, stdio: 'pipe' });
 }
 
 export function computeDiff(workspaceDir: string): { diffText: string; changedFiles: string[] } {
