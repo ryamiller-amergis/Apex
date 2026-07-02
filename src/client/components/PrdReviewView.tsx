@@ -1898,24 +1898,18 @@ export const PrdReviewView: React.FC = () => {
         <div className={styles.designDocRow}>
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
-              Generate a design doc directly from the PRD and existing codebase, without requiring design prototypes.
+              Generate design docs (one per feature) directly from the PRD and existing codebase, without requiring design prototypes.
             </span>
             <button
               className={styles.designDocBannerLink}
               onClick={() => {
                 if (!id) return;
-                createDesignDoc.mutate({ prdId: id }, {
-                  onSuccess: (data) => {
-                    if (data?.designDocId) {
-                      navigate(`/backlog/design-doc/${data.designDocId}`);
-                    }
-                  },
-                });
+                createDesignDoc.mutate({ prdId: id });
               }}
               disabled={createDesignDoc.isPending}
               type="button"
             >
-              {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Doc'}
+              {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Docs'}
             </button>
           </div>
         </div>

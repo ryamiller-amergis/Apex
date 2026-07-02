@@ -393,9 +393,8 @@ router.post('/prds/:prdId/sync', requirePermission('interviews:manage'), async (
   }
 });
 
-// POST /prds/:prdId/design-docs — create a design doc from an approved PRD
-// Supports direct generation (skip prototypes) by enriching context with the
-// design plan and actual existing-page source code from ADO for update-page features.
+// POST /prds/:prdId/design-docs — create one design doc per feature from an approved PRD
+// Spawns a separate agent thread for each feature, mirroring the per-prototype path.
 router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -412,126 +411,163 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
 
     const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
+    const globalModel = await getDefaultModel();
+    const model = skillConfig?.designDocModel ?? globalModel;
 
-    // ── Build enriched context: PRD + backlog + design plan + existing page code ──
+    // ── Extract features from backlog ──
+    const { extractFeatures } = await import('../services/designPrototypeService');
+    const backlogFeatures = extractFeatures(prd.backlogJson);
 
-    const contextParts: string[] = [
-      '# PRD Content',
-      prd.content,
-    ];
-
-    if (prd.backlogJson) {
-      contextParts.push('\n# Backlog', JSON.stringify(prd.backlogJson, null, 2));
+    if (backlogFeatures.length === 0) {
+      res.status(422).json({ error: 'PRD backlog has no features to generate design docs for' });
+      return;
     }
 
-    contextParts.push(
-      '\n# CRITICAL: Output File Instructions',
-      '',
-      'You MUST write the following output files using the built-in file writing tool.',
-      'Do NOT only respond in chat. Do NOT use shell commands or scripts to create these files.',
-      'The app will not mark this design doc complete unless these exact files are present:',
-      '',
-      '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
-      '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification',
-      '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions',
-    );
-
-    // Load the design plan (if one exists) for feature decisions and target routes.
-    // Wrapped in try/catch: the plan is optional enrichment — generation works without it.
-    let planRow: { features: unknown } | null = null;
+    // ── Load design plan (optional enrichment) ──
+    type PlanFeature = {
+      featureName?: string; featureIndex?: number; decision?: string;
+      targetRoute?: string; designBrief?: string; layoutPattern?: string;
+      targetPageTitle?: string;
+    };
+    let planFeatures: PlanFeature[] = [];
     try {
       const { designPlans } = await import('../db/schema');
       const found = await db.query.designPlans.findFirst({
         where: eq(designPlans.prdId, req.params.prdId),
       });
-      if (found) planRow = found;
+      if (found?.features && Array.isArray(found.features)) {
+        planFeatures = found.features as PlanFeature[];
+      }
     } catch (err) {
-      console.warn('[interviews] Could not load design plan for direct design doc (non-fatal):', err);
+      console.warn('[interviews] Could not load design plan for design docs (non-fatal):', err);
     }
 
-    if (planRow?.features && Array.isArray(planRow.features) && planRow.features.length > 0) {
-      const features = planRow.features as Array<{
-        featureName?: string; decision?: string; targetRoute?: string;
-        designBrief?: string; layoutPattern?: string; targetPageTitle?: string;
-      }>;
+    // ── Fetch existing page context once for all update-page features ──
+    const existingPageContextMap = new Map<string, string>();
+    const updatePagePlanFeatures = planFeatures.filter(f => f.decision === 'update-page' && f.targetRoute);
+    if (updatePagePlanFeatures.length > 0) {
+      try {
+        const { fetchExistingPageContext } = await import('../services/designSystemService');
+        for (const f of updatePagePlanFeatures) {
+          const ctx = await fetchExistingPageContext(f.targetRoute!, f.featureName);
+          if (ctx.trim()) existingPageContextMap.set(f.featureName ?? '', ctx);
+        }
+      } catch (err) {
+        console.warn('[interviews] Failed to fetch existing page context:', err);
+      }
+    }
 
-      contextParts.push('\n# Design Plan');
-      for (const f of features) {
-        const parts = [`## Feature: ${f.featureName ?? 'Unnamed'}`];
-        parts.push(`- **Decision:** ${f.decision ?? 'unknown'}`);
-        if (f.targetRoute) parts.push(`- **Target route:** ${f.targetRoute}`);
-        if (f.targetPageTitle) parts.push(`- **Page title:** ${f.targetPageTitle}`);
-        if (f.layoutPattern) parts.push(`- **Layout:** ${f.layoutPattern}`);
-        if (f.designBrief) parts.push(`\n${f.designBrief}`);
+    // ── Spawn one agent thread + design doc per feature ──
+    const createdDocs: Array<{ designDocId: string; threadId: string; featureTitle: string }> = [];
+
+    for (let featureIndex = 0; featureIndex < backlogFeatures.length; featureIndex++) {
+      const feature = backlogFeatures[featureIndex];
+      const featureTitle = feature.title ?? `Feature ${featureIndex + 1}`;
+
+      try {
+      const planFeature = planFeatures.find(
+        (pf) => pf.featureIndex === featureIndex || pf.featureName === featureTitle,
+      );
+      const decision = planFeature?.decision ?? 'new-page';
+      const targetRoute = planFeature?.targetRoute?.trim() || feature.route?.trim() || undefined;
+
+      const contextParts: string[] = [
+        `# Design Doc Generation — Single Feature: "${featureTitle}"`,
+        '',
+        `Generate a design doc for the SINGLE feature "${featureTitle}" only. Do NOT produce design docs for other features in the PRD. Ground every section in the PRD and backlog below.`,
+        '',
+        '# PRD Content',
+        prd.content,
+      ];
+
+      if (prd.backlogJson) {
+        contextParts.push('\n# Backlog', JSON.stringify(prd.backlogJson, null, 2));
+      }
+
+      // Per-feature design plan context
+      if (planFeature) {
+        contextParts.push('\n# Design Plan for this Feature');
+        const parts = [`## Feature: ${planFeature.featureName ?? featureTitle}`];
+        parts.push(`- **Decision:** ${planFeature.decision ?? 'unknown'}`);
+        if (planFeature.targetRoute) parts.push(`- **Target route:** ${planFeature.targetRoute}`);
+        if (planFeature.targetPageTitle) parts.push(`- **Page title:** ${planFeature.targetPageTitle}`);
+        if (planFeature.layoutPattern) parts.push(`- **Layout:** ${planFeature.layoutPattern}`);
+        if (planFeature.designBrief) parts.push(`\n${planFeature.designBrief}`);
         contextParts.push(parts.join('\n'));
       }
 
-      // For update-page features, fetch the actual existing page source from ADO
-      const updatePageFeatures = features.filter(f => f.decision === 'update-page' && f.targetRoute);
-      if (updatePageFeatures.length > 0) {
-        try {
-          const { fetchExistingPageContext } = await import('../services/designSystemService');
-          contextParts.push('\n# Existing Page Context (from MaxView codebase)');
-          contextParts.push('The source code below is the ACTUAL existing implementation of the pages these features extend. Use this as the authoritative reference for understanding the current page structure, components, and patterns.\n');
+      // Existing page context for update-page features
+      const pageCtx = existingPageContextMap.get(planFeature?.featureName ?? '');
+      if (pageCtx) {
+        contextParts.push('\n# Existing Page Context (from MaxView codebase)');
+        contextParts.push(`## Existing page for: ${featureTitle} (route: ${targetRoute})\n`);
+        contextParts.push(pageCtx);
+      }
 
-          for (const f of updatePageFeatures) {
-            const pageContext = await fetchExistingPageContext(f.targetRoute!, f.featureName);
-            if (pageContext.trim()) {
-              contextParts.push(`## Existing page for: ${f.featureName} (route: ${f.targetRoute})\n`);
-              contextParts.push(pageContext);
-            }
-          }
-        } catch (err) {
-          console.warn('[interviews] Failed to fetch existing page context for direct design doc:', err);
-        }
+      contextParts.push('\n## CRITICAL — Existing Code Protection Rules');
+      contextParts.push('');
+      contextParts.push('1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.**');
+      contextParts.push('2. **ONLY implement the NEW feature component.**');
+      contextParts.push('3. **DO NOT generate code for the sidebar, header, navigation, or page shell.**');
+      contextParts.push('4. **For update-page features:** Add the new component INTO the existing page.');
+      contextParts.push('5. **For new-page features:** Create ONLY the new page component and route.');
+      contextParts.push('6. **Test cases must ONLY test the new feature behavior.**');
+
+      contextParts.push(
+        '\n# CRITICAL: Output File Instructions',
+        '',
+        'You MUST write the following output files using the built-in file writing tool.',
+        'Do NOT only respond in chat. Do NOT use shell commands or scripts to create these files.',
+        'The app will not mark this design doc complete unless all three files are present:',
+        '',
+        '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
+        '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification',
+        '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions',
+      );
+
+      const freeformContext = contextParts.join('\n');
+
+      const thread = await createThread(
+        userId,
+        {
+          project: prd.project,
+          repo: skillConfig?.skillRepo ?? prd.project,
+          branch: skillConfig?.skillBranch ?? 'main',
+          skillProvider: skillConfig?.skillProvider ?? undefined,
+          skillPath: designDocSkillPath,
+          freeformContext,
+          model,
+        },
+        {
+          kickoffMessage: `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+        },
+      );
+
+      const { designDocId } = await createDesignDoc({
+        prdId: req.params.prdId,
+        project: prd.project,
+        userId,
+        chatThreadId: thread.id,
+        featureIndex,
+        title: featureTitle,
+        model,
+        skillSettingsId: prd.skillSettingsId ?? null,
+      });
+
+      startSingleFeatureDocWatcher(designDocId, thread.id, req.params.prdId, prd.project);
+
+      createdDocs.push({ designDocId, threadId: thread.id, featureTitle });
+      console.log(`[interviews] Started design doc generation for feature "${featureTitle}" (docId=${designDocId}, threadId=${thread.id})`);
+
+      } catch (featureErr) {
+        console.error(`[interviews] Failed to start design doc generation for feature "${featureTitle}":`, featureErr);
       }
     }
 
-    // Add existing-code protection rules
-    contextParts.push('\n## CRITICAL — Existing Code Protection Rules');
-    contextParts.push('');
-    contextParts.push('The design doc and any generated code MUST follow these rules with ZERO exceptions:');
-    contextParts.push('');
-    contextParts.push('1. **DO NOT modify, replace, refactor, or restructure ANY existing page code.** The sidebar navigation, header bar, page layout, existing tabs, existing grids, existing forms, and all other pre-existing UI elements are OFF LIMITS. They already exist in the codebase and work correctly.');
-    contextParts.push('2. **ONLY implement the NEW feature component.** Everything else is existing code that must not be touched.');
-    contextParts.push('3. **DO NOT generate code for the sidebar, header, navigation, or page shell.** These are shared application components that already exist. The design doc must ONLY describe adding the new component/column/tab/section.');
-    contextParts.push('4. **For update-page features:** Add the new component INTO the existing page by importing it and placing it at the correct location (e.g. adding a new tab, appending a column to an existing grid, inserting a section). DO NOT rewrite or replace the existing page component.');
-    contextParts.push('5. **For new-page features:** Create ONLY the new page component and its route registration. DO NOT modify the sidebar navigation component or header — route registration handles menu visibility automatically.');
-    contextParts.push('6. **Test cases must ONLY test the new feature behavior.** Do not write tests that assert on existing page structure, existing sidebar items, or existing navigation behavior.');
-
-    const freeformContext = contextParts.join('\n');
-
-    const globalModel = await getDefaultModel();
-    const model = skillConfig?.designDocModel ?? globalModel;
-
-    const thread = await createThread(
-      userId,
-      {
-        project: prd.project,
-        repo: skillConfig?.skillRepo ?? prd.project,
-        branch: skillConfig?.skillBranch ?? 'main',
-        skillPath: designDocSkillPath,
-        freeformContext,
-        model,
-      },
-      {
-        kickoffMessage: `Generate the design doc for PRD "${prd.title}" using the PRD, backlog, design plan, and existing-page context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
-      },
-    );
-
-    const { designDocId } = await createDesignDoc({
-      prdId: req.params.prdId,
-      project: prd.project,
-      userId,
-      chatThreadId: thread.id,
-      title: prd.title,
-      model,
-      skillSettingsId: prd.skillSettingsId ?? null,
+    res.status(201).json({
+      designDocIds: createdDocs.map(d => d.designDocId),
+      count: createdDocs.length,
     });
-
-    startSingleFeatureDocWatcher(designDocId, thread.id, req.params.prdId, prd.project);
-
-    res.status(201).json({ designDocId, threadId: thread.id });
 
   } catch (err) {
     next(err);
@@ -651,6 +687,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       project: prd.project,
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: buildPrdContext('__THREAD_ID__'),
       model,
@@ -1158,13 +1195,16 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
     const prd = await getPrd(doc.prdId);
 
     const contextParts: string[] = [
+      `# Design Doc Generation — Single Feature: "${doc.title}"`,
+      '',
+      `Generate a design doc for the SINGLE feature "${doc.title}" only.`,
+      '',
       '# PRD Content',
       prd?.content ?? '(empty)',
       ...(prd?.backlogJson ? ['\n# Backlog', JSON.stringify(prd.backlogJson, null, 2)] : []),
     ];
 
-    // Include structured design plan data + actual React source (mirrors
-    // triggerDesignDocGeneration in designPrototypeService).
+    // Include structured design plan data + actual React source
     const { designPlans } = await import('../db/schema');
     const planRow = await db.query.designPlans.findFirst({
       where: eq(designPlans.prdId, doc.prdId),
@@ -1229,6 +1269,18 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
     contextParts.push('5. **For new-page features:** Create ONLY the new page component and route.');
     contextParts.push('6. **Test cases must ONLY test the new feature behavior.**');
 
+    contextParts.push(
+      '\n# CRITICAL: Output File Instructions',
+      '',
+      'You MUST write the following output files using the built-in file writing tool.',
+      'Do NOT only respond in chat. Do NOT use shell commands or scripts to create these files.',
+      'The app will not mark this design doc complete unless all three files are present:',
+      '',
+      '1. `.ai-pilot/output/design-doc-design.md` — the product/design specification',
+      '2. `.ai-pilot/output/design-doc-tech-spec.md` — the technical implementation specification',
+      '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions',
+    );
+
     const freeformContext = contextParts.join('\n');
 
     const globalModel = await getDefaultModel();
@@ -1238,6 +1290,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       project: doc.project,
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
@@ -1331,6 +1384,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       project: doc.project,
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,

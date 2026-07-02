@@ -18,9 +18,33 @@ export interface MarkdownBlock {
 
 export type MessagePart = MarkdownBlock | ChoiceBlock;
 
-// Matches lines like "a. text", "b) text", "A. text"
-// Also tolerates leading spaces/dashes: "  a. text", "- a. text", "* a. text"
-const OPTION_RE = /^[\s\-*]*([a-dA-D])[.)]\s+(.+)$/;
+// Single-line option: "a. text", "b) text", "A. text", "A **bold**"
+const OPTION_RE = /^[\s\-*]*([a-dA-D])(?:[.)]\s+|\s+(?=\*\*))(.+)$/;
+
+// Standalone letter on its own line: "A", "  B", "- C"
+const SOLO_LETTER_RE = /^[\s\-*]*([a-dA-D])\s*$/;
+
+/**
+ * Try to match an option starting at line index `i`.
+ * Handles both single-line ("A. text") and multi-line ("A\n**text**") formats.
+ * Returns [letter, text, linesConsumed] or null.
+ */
+function tryMatchOption(lines: string[], i: number): [string, string, number] | null {
+  const singleMatch = lines[i].match(OPTION_RE);
+  if (singleMatch) {
+    return [singleMatch[1].toLowerCase(), singleMatch[2].trim(), 1];
+  }
+
+  const soloMatch = lines[i].match(SOLO_LETTER_RE);
+  if (soloMatch && i + 1 < lines.length) {
+    const nextLine = lines[i + 1].trim();
+    if (nextLine.length > 0) {
+      return [soloMatch[1].toLowerCase(), nextLine, 2];
+    }
+  }
+
+  return null;
+}
 
 export function parseAgentMessage(text: string): MessagePart[] {
   const lines = text.split('\n');
@@ -38,17 +62,15 @@ export function parseAgentMessage(text: string): MessagePart[] {
 
   let i = 0;
   while (i < lines.length) {
-    const match = lines[i].match(OPTION_RE);
-    if (match) {
-      // Collect consecutive option lines (allow blank lines between options)
+    const optMatch = tryMatchOption(lines, i);
+    if (optMatch) {
       const options: ChoiceOption[] = [];
       while (i < lines.length) {
-        const m = lines[i].match(OPTION_RE);
+        const m = tryMatchOption(lines, i);
         if (m) {
-          options.push({ letter: m[1].toLowerCase(), text: m[2].trim() });
-          i++;
-        } else if (lines[i].trim() === '' && i + 1 < lines.length && lines[i + 1].match(OPTION_RE)) {
-          // Skip a single blank line between options
+          options.push({ letter: m[0], text: m[1] });
+          i += m[2];
+        } else if (lines[i].trim() === '' && i + 1 < lines.length && tryMatchOption(lines, i + 1)) {
           i++;
         } else {
           break;
@@ -56,7 +78,6 @@ export function parseAgentMessage(text: string): MessagePart[] {
       }
 
       if (options.length >= 2) {
-        // Pull the preceding paragraph off pendingLines as the question text
         const fullPending = pendingLines.join('\n').trimEnd();
         const lastBlankIdx = fullPending.lastIndexOf('\n\n');
         let questionText = '';
@@ -78,7 +99,6 @@ export function parseAgentMessage(text: string): MessagePart[] {
           options,
         });
       } else {
-        // Not enough options — treat as plain text
         for (const o of options) {
           pendingLines.push(`${o.letter}. ${o.text}`);
         }

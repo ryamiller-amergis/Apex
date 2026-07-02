@@ -185,6 +185,12 @@ function extractCoverageSummary(
     numberFrom(direct?.totalCases) ??
     numberFrom(direct?.total_cases) ??
     countCaseLikeItems(testCasesJson);
+
+  if (coveredPbis.size === 0) {
+    const suiteCounts = extractSuiteTestCaseCounts(testCasesJson);
+    for (const pbiId of suiteCounts.keys()) coveredPbis.add(pbiId);
+  }
+
   const pbisCovered =
     numberFrom(direct?.pbisCovered) ??
     numberFrom(direct?.pbis_covered) ??
@@ -214,27 +220,51 @@ function extractSuiteTestCaseCounts(
 ): Map<string, number> {
   const counts = new Map<string, number>();
   const root = asRecord(testCasesJson);
-  const suites = Array.isArray(root?.suites) ? root.suites : [];
+  if (!root) return counts;
 
-  for (const suite of suites) {
-    const record = asRecord(suite);
+  const suites = Array.isArray(root.suites) ? root.suites : [];
+
+  if (suites.length > 0) {
+    for (const suite of suites) {
+      const record = asRecord(suite);
+      if (!record) continue;
+
+      const pbiId =
+        stringFrom(record.pbiId) ??
+        stringFrom(record.pbi_id) ??
+        stringFrom(record.workItemId) ??
+        stringFrom(record.work_item_id);
+      if (!pbiId) continue;
+
+      const count =
+        numberFrom(record.testCaseCount) ??
+        numberFrom(record.test_case_count) ??
+        arrayLengthFrom(record.testCases) ??
+        arrayLengthFrom(record.test_cases) ??
+        arrayLengthFrom(record.cases);
+
+      if (count !== null) counts.set(pbiId, count);
+    }
+    return counts;
+  }
+
+  const flatCases = Array.isArray(root.testCases)
+    ? root.testCases
+    : Array.isArray(root.test_cases)
+      ? root.test_cases
+      : [];
+
+  for (const tc of flatCases) {
+    const record = asRecord(tc);
     if (!record) continue;
-
+    const traceability = asRecord(record.traceability);
     const pbiId =
       stringFrom(record.pbiId) ??
       stringFrom(record.pbi_id) ??
-      stringFrom(record.workItemId) ??
-      stringFrom(record.work_item_id);
+      stringFrom(traceability?.pbiId) ??
+      stringFrom(traceability?.pbi_id);
     if (!pbiId) continue;
-
-    const count =
-      numberFrom(record.testCaseCount) ??
-      numberFrom(record.test_case_count) ??
-      arrayLengthFrom(record.testCases) ??
-      arrayLengthFrom(record.test_cases) ??
-      arrayLengthFrom(record.cases);
-
-    if (count !== null) counts.set(pbiId, count);
+    counts.set(pbiId, (counts.get(pbiId) ?? 0) + 1);
   }
 
   return counts;
@@ -443,6 +473,7 @@ export async function triggerTestCaseGeneration(
       project: prdRow.project,
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
+      skillProvider: skillConfig.skillProvider ?? undefined,
       skillPath: skillConfig.testCaseSkillPath,
       freeformContext: context,
       model,

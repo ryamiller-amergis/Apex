@@ -4,7 +4,7 @@
   "title": "Apex SDLC Backlog",
   "description": "Structured backlog output produced by the to-prd skill for the Apex platform.",
   "type": "object",
-  "required": ["personas", "businessRules", "epics", "assumptionsMade"],
+  "required": ["personas", "businessRules", "epics", "implementationPhases", "assumptionsMade"],
   "additionalProperties": false,
   "properties": {
     "personas": {
@@ -116,6 +116,33 @@
       "description": "Must mirror ## Assumptions Made in the PRD.",
       "minItems": 1,
       "items": { "type": "string" }
+    },
+    "implementationPhases": {
+      "type": "array",
+      "description": "Ordered sequence of implementation phases. Phase 1 must complete before Phase 2 begins. Epics within the same phase are safe to execute in parallel.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["phase", "epics", "rationale"],
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based phase number. Lower numbers execute first."
+          },
+          "epics": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Epic titles assigned to this phase. Must match epic titles in the epics array exactly."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why this phase must precede later phases, or why these epics are safe to parallelize."
+          }
+        }
+      }
     }
   },
   "definitions": {
@@ -125,9 +152,14 @@
     },
     "feature": {
       "type": "object",
-      "required": ["title", "priority", "description", "affectedPersonas", "outOfScope", "dependencies", "items"],
+      "required": ["id", "title", "priority", "description", "affectedPersonas", "outOfScope", "dependsOn", "items"],
       "additionalProperties": false,
       "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^FEAT-[0-9]{3}$",
+          "description": "Sequential identifier e.g. FEAT-001. Unique across all features in the backlog."
+        },
         "title": { "type": "string" },
         "priority": { "$ref": "#/definitions/moscowPriority" },
         "description": {
@@ -157,10 +189,16 @@
           "minItems": 1,
           "items": { "type": "string" }
         },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^FEAT-[0-9]{3}$" },
+          "description": "Feature IDs this feature depends on. Empty array if no dependencies."
+        },
         "dependencies": {
           "type": "array",
           "minItems": 1,
-          "items": { "type": "string" }
+          "items": { "type": "string" },
+          "description": "Legacy free-text dependency descriptions for human readability."
         },
         "featureFlag": {
           "type": "object",
@@ -197,7 +235,8 @@
         "priority": { "$ref": "#/definitions/moscowPriority" },
         "dependsOn": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" }
+          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" },
+          "description": "IDs of PBIs/TBIs within the same Feature only. Cross-Feature relationships must be expressed via feature.dependsOn; shared/foundational work must be extracted into its own earlier-phase Feature. (JSON Schema cannot express this cross-object scope; the constraint is enforced by the /prd-spec-review hard gate.)"
         },
         "parallelGroup": {
           "type": ["string", "null"],
@@ -281,7 +320,8 @@
         "priority": { "$ref": "#/definitions/moscowPriority" },
         "dependsOn": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" }
+          "items": { "type": "string", "pattern": "^(PBI|TBI)-[0-9]{3}$" },
+          "description": "IDs of PBIs/TBIs within the same Feature only. Cross-Feature relationships must be expressed via feature.dependsOn; shared/foundational work must be extracted into its own earlier-phase Feature. (JSON Schema cannot express this cross-object scope; the constraint is enforced by the /prd-spec-review hard gate.)"
         },
         "parallelGroup": { "type": ["string", "null"] },
         "description": { "type": "string" },

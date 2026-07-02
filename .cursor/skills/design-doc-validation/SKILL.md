@@ -42,6 +42,25 @@ doc_id: {uuid}
 
 You are a deterministic scoring engine. Do not ask questions, request clarification, or produce conversational output. Your only job is to score the content and write the scorecard files.
 
+**CRITICAL CONSTRAINTS:**
+1. Score **ONLY** the sections listed in the rubric tables below. Do NOT invent, add, or check sections that are not in these tables (e.g., do not check for "Integration Host Decisions", "Operator Checklist", "E2E Coverage Candidates", or any other section not explicitly listed).
+2. Use **ONLY** the Apex platform enums defined below for persona, surface, and terminology checks. Apex is a product-building platform — it is NOT a timeclock, staffing, or healthcare application. Do not apply terms from other products.
+
+### Canonical Apex Enums
+
+**Persona names (Apex groups enum):** `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
+
+**Target surface labels:** `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`
+
+**Apex glossary terms:** `Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`, `RBAC`, `SSE`, `Facilitator`
+
+**System Boundary ownership questions (Apex-specific):**
+1. New or existing Express service in `src/server/services/`?
+2. New or existing route in `src/server/routes/`?
+3. New React component in `src/client/components/`?
+4. New shared type in `src/shared/types/`?
+5. Database migration needed?
+
 ---
 
 ## Phase 1 — Parse Input
@@ -65,46 +84,52 @@ Apply the scoring rubric below to each section. Every score is on a 0–3 scale.
 | 2 | Substantive | Addresses intent with specific, named modules/routes/layers; grounded in codebase |
 | 3 | Complete | Actionable, cross-referenced, and traceable; an implementer could work from this alone |
 
-### Design Doc Sections (weight sum = 100)
+### Design Doc Sections (weight sum = 100) — EXHAUSTIVE LIST
 
-| Section | Weight |
-|---------|--------|
-| Feature Summary | 10 |
-| Scope and Out-of-Scope | 7 |
-| Acceptance Criteria | 25 |
-| Target Surface | 8 |
-| Access Control | 10 |
-| UI/UX | 12 |
-| Tech spec link | 5 |
-| Assumptions link | 5 |
-| Apex terminology compliance | 12 |
-| No residual template tokens | 6 |
+Score **only** these sections. The design doc should follow the template structure from `prd-design-spec/design-template.md`.
 
-### Tech Spec Sections (weight sum = 100)
+| Section | Weight | What to look for |
+|---------|--------|-----------------|
+| Feature Summary | 10 | Header with PRD slug, priority, feature flag, parent Epic, affected personas; 2–3 sentence business narrative; work-item index table |
+| Scope and Out-of-Scope | 7 | In-scope behaviors and out-of-scope exclusions merged from Feature and PBI/TBI arrays |
+| Acceptance Criteria | 25 | Consolidated Given/When/Then from backlog PBIs; all four scenarios (happy, error, edge, negative) per PBI |
+| Target Surface | 8 | One of: `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`; plus experience notes |
+| Access Control | 10 | Action/who/scope table; feature flag name, rollout, and behavior when disabled |
+| UI/UX | 12 | Routes, component breakdown with states, validation, accessibility, data-testid; "Not applicable" for backend-only |
+| Tech spec link | 5 | Relative link to `{feature-slug}-tech-spec.md` |
+| Assumptions link | 5 | Link to `{feature-slug}-assumptions.md` with unresolved count |
+| Apex terminology compliance | 12 | Uses Apex glossary terms correctly (see enum list above) |
+| No residual template tokens | 6 | Zero `{token}`, `[TBD]`, or `TODO` patterns |
 
-| Section | Weight |
-|---------|--------|
-| System Boundary and Owning Layer | 10 |
-| Security Enforcement | 7 |
-| Architecture and Approach | 14 |
-| Data and Contracts | 10 |
-| Testing Strategy | 10 |
-| Verification Test Matrix | 14 |
-| Implementation Plan | 10 |
-| Mermaid Diagram 1 — Code Execution Flow | 4 |
-| Mermaid Diagram 2 — Implementation Dependency Map | 3 |
-| Observability | 5 |
-| Rollback and Deployment | 5 |
-| No residual template tokens | 8 |
+### Tech Spec Sections (weight sum = 100) — EXHAUSTIVE LIST
 
-### Assumptions Sections (weight sum = 100)
+Score **only** these sections. The tech spec should follow the template structure from `prd-design-spec/tech-spec-template.md`.
 
-| Section | Weight |
-|---------|--------|
-| Header metadata | 10 |
-| Unresolved Items | 40 |
-| Assumptions Accepted | 40 |
-| Cross-file consistency | 10 |
+| Section | Weight | What to look for |
+|---------|--------|-----------------|
+| System Boundary and Owning Layer | 10 | Owning layer named with rationale; answers the 5 Apex ownership questions (Express service? Route? React component? Shared type? DB migration?) — NOT other-product project names |
+| Security Enforcement | 7 | Authorization mechanism citing existing RBAC pattern; scope enforcement layer; sensitive data handling |
+| Architecture and Approach | 14 | Layers-touched table; per-PBI/TBI design decisions citing codebase patterns |
+| Data and Contracts | 10 | API endpoints (method, route, request/response, auth); schema changes (table intent, no DDL) |
+| Testing Strategy | 10 | Unit, integration, E2E guidance with module names and behaviors |
+| Verification Test Matrix | 14 | VT-xx rows with Layer, Arrange, Act, Assert, linked PBI/TBI |
+| Implementation Plan | 10 | Ordered checkable steps with VT-xx references and blocked-by notes |
+| Mermaid Diagram 1 — Code Execution Flow | 4 | Valid `sequenceDiagram` with actors, participants, request/response chain, `alt` error block |
+| Mermaid Diagram 2 — Implementation Dependency Map | 3 | Valid `flowchart TD` with step nodes, parallel subgraphs, test nodes, legend |
+| Observability | 5 | Custom events/metrics or "None beyond standard telemetry"; alerts |
+| Rollback and Deployment | 5 | Schema backward compatibility; rollback procedure; deployment dependencies; feature flag gate |
+| No residual template tokens | 8 | Zero `{token}`, `[TBD]`, or `TODO` patterns |
+
+### Assumptions Sections (weight sum = 100) — EXHAUSTIVE LIST
+
+Score **only** these sections. The assumptions file should follow `prd-design-spec/assumptions-template.md`.
+
+| Section | Weight | What to look for |
+|---------|--------|-----------------|
+| Header metadata | 10 | PRD slug, priority, feature flag (or None), relative links to both design doc and tech spec |
+| Unresolved Items | 40 | Each `⚠` has label, question, impact, decision needed; or "None — all resolved" |
+| Assumptions Accepted | 40 | Each assumption has label, what was assumed, derivation source, risk if wrong |
+| Cross-file consistency | 10 | Every `⚠` in design/tech-spec has a matching entry in assumptions |
 
 ### Confidence score formula
 
@@ -118,15 +143,16 @@ Overall score = weighted average of the three file scores.
 
 ### Cross-cutting checks
 
-Run these scans across all three files:
+Run **only** these scans across all three files. Do not add additional checks beyond this list.
 
 | Check | How |
 |-------|-----|
 | Template token scan | Count `\{[A-Za-z][^}]*\}` matches |
 | `[TBD]` / `TODO` scan | Count matches |
-| Terminology compliance | Flag non-canonical Apex terms (Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, Backlog, Epic, Feature) |
+| Terminology compliance | Flag non-canonical Apex terms — canonical list: `Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`, `RBAC`, `SSE`, `Facilitator`. Do NOT flag domain terms specific to the feature being designed (e.g. PDF, session, etc.) |
 | `⚠` consolidation | Every `⚠` in design/tech-spec must have a matching entry in assumptions |
 | Mermaid keyword presence | `sequenceDiagram` in diagram 1, `flowchart TD` in diagram 2 |
+| AC scenario coverage | Every PBI has all 4 acceptance criteria scenarios (happy, error, edge, negative) |
 
 ### Verdict
 

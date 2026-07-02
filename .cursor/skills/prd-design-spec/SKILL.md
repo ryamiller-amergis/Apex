@@ -100,6 +100,7 @@ Write `{feature-slug}-assumptions.md` first, then `{feature-slug}-design.md`, th
 - All open questions must have been surfaced in Phase 2 and answered before writing.
 - Do **not** leave sections as `[TBD]`. Either synthesize a concrete answer or flag it as `⚠ Unresolved`.
 - Use Apex terminology from `context.md` throughout.
+- **Template conformance is mandatory.** Each file must follow its template exactly — use the same section headings, ordering, and structure defined in the templates. Do NOT use alternative section names (e.g., "Feature Overview" instead of "Feature Summary", "Problem Context" instead of "Scope and Out-of-Scope", "Architecture Overview" instead of "System Boundary and Owning Layer"). The downstream validation rubric scores against the exact template section names.
 
 ### Skill routing (load before writing each feature's files)
 
@@ -127,7 +128,7 @@ Required sections:
 
 ### File 2 — `{feature-slug}-design.md` (product/UX audience)
 
-See [`design-template.md`](design-template.md). Written for product owners and UX reviewers.
+See [`design-template.md`](design-template.md). Written for product owners and UX reviewers. **Use the exact section headings from the template — the validation rubric scores against these names.**
 
 Required sections (in order):
 
@@ -149,7 +150,7 @@ Required sections (in order):
 
 ### File 3 — `{feature-slug}-tech-spec.md` (engineering audience)
 
-See [`tech-spec-template.md`](tech-spec-template.md). Written for the engineering team.
+See [`tech-spec-template.md`](tech-spec-template.md). Written for the engineering team. **Use the exact section headings from the template — the validation rubric scores against these names.**
 
 Required sections (in order):
 
@@ -191,11 +192,13 @@ Before writing each feature's files, verify:
 
 - [ ] Apex terminology used consistently
 - [ ] Every PBI and TBI referenced in at least one section
-- [ ] All four AC scenarios present per PBI
+- [ ] All four AC scenarios present per PBI (happy, error, edge, negative) as Given/When/Then rows
 - [ ] No section left as `[TBD]`
-- [ ] System boundary section answers ownership questions
-- [ ] VT matrix rows concrete enough for implementation
-- [ ] Mermaid diagrams syntactically valid
+- [ ] **Design doc** has all template sections: Feature Summary (with header metadata and work-item table), Scope and Out-of-Scope, Target Surface, Access Control, Acceptance Criteria, UI/UX (or "Not applicable"), Technical Specification link
+- [ ] **Tech spec** has all template sections: System Boundary and Owning Layer (with 5 ownership answers), Security Enforcement, Architecture and Approach (layers table + per-work-item decisions), Data and Contracts, Testing Strategy, Observability, Rollback and Deployment, Verification Test Matrix (VT-xx rows), Implementation Plan (checkable steps with execution lanes), Diagram 1 (sequenceDiagram), Diagram 2 (flowchart TD)
+- [ ] **Assumptions** has header metadata (PRD slug, priority, flag, links to both other files), Unresolved Items, Assumptions Accepted
+- [ ] VT matrix rows concrete enough for implementation with linked AC scenario IDs
+- [ ] Mermaid diagrams syntactically valid — Diagram 1 is `sequenceDiagram` with `alt` error block, Diagram 2 is `flowchart TD` with parallel subgraphs and legend
 - [ ] All `⚠` items consolidated in assumptions file
 - [ ] Output paths follow naming convention
 

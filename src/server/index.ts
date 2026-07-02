@@ -85,21 +85,17 @@ const sessionCookie = {
   path: '/',
 };
 
-let sessionStore: session.Store | undefined;
-if (process.env.NODE_ENV === 'production') {
-  const sessionsDir = path.join(resolveDataRoot(), 'sessions');
-  fs.mkdirSync(sessionsDir, { recursive: true });
-  // Loaded via require so local dev (ts-node) does not need session-file-store typings.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const createFileStore = require('session-file-store') as FileStoreFactory;
-  const FileStore = createFileStore(session);
-  sessionStore = new FileStore({
-    path: sessionsDir,
-    ttl: 86400,
-    retries: 0,
-  });
-  console.log(`[session] Using file store at ${sessionsDir}`);
-}
+const sessionsDir = path.join(resolveDataRoot(), 'sessions');
+fs.mkdirSync(sessionsDir, { recursive: true });
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const createFileStore = require('session-file-store') as FileStoreFactory;
+const FileStore = createFileStore(session);
+const sessionStore = new FileStore({
+  path: sessionsDir,
+  ttl: 86400,
+  retries: 0,
+});
+console.log(`[session] Using file store at ${sessionsDir}`);
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',

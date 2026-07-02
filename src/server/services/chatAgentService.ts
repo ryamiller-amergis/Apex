@@ -201,17 +201,26 @@ function sanitizeAttachmentName(name: string, index: number): string {
   return sanitized || fallback;
 }
 
-function writeMessageAttachments(
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
+}
+
+async function writeMessageAttachments(
   workspaceDir: string,
   turnId: string,
   attachments: ChatAttachment[],
-): ChatAttachmentMeta[] {
+): Promise<ChatAttachmentMeta[]> {
   if (attachments.length === 0) return [];
 
   const attachmentsDir = path.join(workspaceDir, '.ai-pilot', 'attachments', turnId);
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
-  return attachments.map((attachment, index) => {
+  const results: ChatAttachmentMeta[] = [];
+  for (let index = 0; index < attachments.length; index++) {
+    const attachment = attachments[index];
     const fileName = `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentName(attachment.name, index)}`;
     const absolutePath = path.join(attachmentsDir, fileName);
     if (attachment.encoding === 'base64') {
@@ -220,14 +229,37 @@ function writeMessageAttachments(
       fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
     }
 
-    return {
+    const isDocx = attachment.name.toLowerCase().endsWith('.docx')
+      || attachment.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    if (isDocx && attachment.encoding === 'base64') {
+      try {
+        const docxBuffer = Buffer.from(attachment.content, 'base64');
+        const extractedText = await extractDocxText(docxBuffer);
+        const txtFileName = fileName.replace(/\.docx$/i, '.txt');
+        fs.writeFileSync(path.join(attachmentsDir, txtFileName), extractedText, 'utf-8');
+        results.push({
+          id: attachment.id,
+          name: attachment.name.replace(/\.docx$/i, '.txt'),
+          type: 'text/plain',
+          size: Buffer.byteLength(extractedText, 'utf-8'),
+          path: path.posix.join('.ai-pilot', 'attachments', turnId, txtFileName),
+        });
+        continue;
+      } catch (err) {
+        console.warn(`[chat] Failed to extract text from ${attachment.name}, falling back to raw file:`, err);
+      }
+    }
+
+    results.push({
       id: attachment.id,
       name: attachment.name,
       type: attachment.type,
       size: attachment.size,
       path: path.posix.join('.ai-pilot', 'attachments', turnId, fileName),
-    };
-  });
+    });
+  }
+  return results;
 }
 
 function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMeta[]): string {
@@ -666,11 +698,14 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
     `File writes via shell/Python may silently fail in this environment.`,
     ``,
-    `# UI rendering note`,
-    `When the skill asks the user questions with multiple-choice options, format each option`,
-    `as \`a. text\`, \`b. text\`, etc. on its own line — the chat UI renders these as clickable`,
-    `buttons. This is a rendering hint only; it does not change when, whether, or how many`,
-    `questions the skill asks.`,
+    `# UI rendering — interactive questions`,
+    `This chat has an interactive question UI. When you ask the user a multiple-choice question:`,
+    ``,
+    `1. Format each option as \`a. text\`, \`b. text\`, etc. on its own line — the UI renders these as clickable buttons the user can select.`,
+    `2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.`,
+    `3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.`,
+    `4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.`,
+    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`,
   );
 
   if (kickoff.transcript) {
@@ -1434,7 +1469,7 @@ export async function sendMessage(
   const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
 
   const turnId = uuidv4();
-  const attachmentMeta = writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
 
   // Record the user message

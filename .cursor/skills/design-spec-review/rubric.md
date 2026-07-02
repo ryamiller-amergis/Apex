@@ -11,6 +11,28 @@ Overall score: unweighted average across all Features.
 
 ---
 
+## Canonical Apex Enums (use ONLY these values — do not substitute or invent alternatives)
+
+### Persona names (Apex groups enum)
+`Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
+
+### Target surface labels
+`Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`
+
+### Apex glossary terms
+`Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`, `RBAC`, `SSE`, `Facilitator`
+
+### System Boundary ownership questions (Apex-specific)
+1. New or existing Express service in `src/server/services/`?
+2. New or existing route in `src/server/routes/`?
+3. New React component in `src/client/components/`?
+4. New shared type in `src/shared/types/`?
+5. Database migration needed?
+
+**CRITICAL:** Apex is a product-building platform — it is NOT a timeclock, staffing, or healthcare application. Do not apply domain terms, personas, or project names from other products. Score **only** against the enums and section lists defined in this rubric. Do NOT invent or check sections not listed in the rubric tables below.
+
+---
+
 ## Score Scale
 
 | Score | Label | Meaning |
@@ -56,7 +78,7 @@ Overall score: unweighted average across all Features.
 | Score | Evidence |
 |-------|----------|
 | 0 | Section missing |
-| 1 | Surface label present but not from allowed values |
+| 1 | Surface label present but not from allowed values (`Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`) |
 | 2 | Valid label; notes incomplete |
 | 3 | Valid surface label with appropriate experience notes |
 
@@ -96,12 +118,14 @@ Overall score: unweighted average across all Features.
 
 ### Apex Terminology Compliance — weight 12
 
+Check against the Apex glossary terms listed at the top of this rubric. Do NOT flag domain terms specific to the feature being designed.
+
 | Score | Evidence |
 |-------|----------|
-| 0 | Multiple non-canonical terms (3+) |
-| 1 | 1–2 non-canonical uses |
-| 2 | Canonical terms mostly correct; 1 slip |
-| 3 | All Apex terms correct: Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, Backlog, Epic, Feature |
+| 0 | Multiple non-canonical Apex platform terms (3+) |
+| 1 | 1–2 non-canonical Apex term uses |
+| 2 | Canonical Apex terms mostly correct; 1 slip |
+| 3 | All Apex platform terms correct: Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, Backlog, Epic, Feature |
 
 ### No Residual Template Tokens — weight 6
 
@@ -118,12 +142,14 @@ Overall score: unweighted average across all Features.
 
 ### System Boundary and Owning Layer — weight 10
 
+The 5 Apex ownership questions are: (1) Express service in `src/server/services/`? (2) Route in `src/server/routes/`? (3) React component in `src/client/components/`? (4) Shared type in `src/shared/types/`? (5) Database migration?
+
 | Score | Evidence |
 |-------|----------|
 | 0 | Section missing or placeholder project |
 | 1 | Layer named but ownership questions unanswered |
-| 2 | Layer named with rationale; most questions answered |
-| 3 | Layer named; all 5 ownership questions answered (services, routes, components, shared types, migration) |
+| 2 | Layer named with rationale; most of the 5 Apex ownership questions answered |
+| 3 | Layer named; all 5 ownership questions answered with Yes/No + reason |
 
 ### Security Enforcement — weight 7
 

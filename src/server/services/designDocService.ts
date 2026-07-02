@@ -334,8 +334,10 @@ export async function reviewDesignDoc(
     throw err;
   }
 
+  const admin = await isAdminUser(reviewerId);
+
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
-  if (skillConfig?.designDocValidationSkillPath) {
+  if (skillConfig?.designDocValidationSkillPath && !admin) {
     if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
       const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
       (err as any).status = 409;
@@ -350,7 +352,6 @@ export async function reviewDesignDoc(
     throw err;
   }
 
-  const admin = await isAdminUser(reviewerId);
   const assigned = await isAssignedApprover(id, 'design_doc', reviewerId);
   if (!assigned && !admin) {
     throw forbidden('You are not an assigned approver for this design doc');
@@ -847,6 +848,7 @@ export async function startSingleFeatureDesignDocWatcher(
       project: prd.project,
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
@@ -981,6 +983,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     project: doc.project,
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
+    skillProvider: skillConfig.skillProvider ?? undefined,
     skillPath: skillConfig.designDocValidationSkillPath,
     freeformContext: context,
     model,
@@ -1310,6 +1313,7 @@ export async function triggerFixValidation(
       project: doc.project,
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,

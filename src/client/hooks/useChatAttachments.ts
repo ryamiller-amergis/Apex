@@ -56,10 +56,12 @@ export function useChatAttachments() {
       }
 
       const isImage = file.type.startsWith('image/');
+      const isBinary = isImage || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        || file.name.toLowerCase().endsWith('.docx');
       let content: string;
       let encoding: 'base64' | undefined;
 
-      if (isImage) {
+      if (isBinary) {
         content = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => {

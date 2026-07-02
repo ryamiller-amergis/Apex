@@ -4004,6 +4004,7 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       project: config.project,
       friendlyName: config.friendlyName,
       isDefault: config.isDefault,
+      skillProvider: config.skillProvider ?? null,
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? null,

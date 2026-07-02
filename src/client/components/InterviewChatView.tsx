@@ -280,6 +280,7 @@ const NewInterviewCompose: React.FC = () => {
     selectedProject || null,
     resolvedRepoName,
     resolvedBranch,
+    skillConfig?.skillProvider,
   );
 
   const resolvedSkillPath = interviewSkillOptions.length > 0
@@ -343,7 +344,7 @@ const NewInterviewCompose: React.FC = () => {
           repo: resolvedRepoName,
           branch: resolvedBranch,
           skillProvider: skillConfig?.skillProvider ?? undefined,
-          skillPath: grillSkill?.path,
+          skillPath: resolvedSkillPath ?? grillSkill?.path,
           model,
           skillSettingsId: skillConfig?.id ?? undefined,
         },
@@ -386,7 +387,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, grillSkill, startChat, createInterview, navigate, clearAttachments, model]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, navigate, clearAttachments, model]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -471,6 +472,7 @@ const NewInterviewCompose: React.FC = () => {
             ref={fileInputRef}
             type="file"
             multiple
+            accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={isSending}
@@ -577,7 +579,7 @@ const NewInterviewCompose: React.FC = () => {
             <button
               className={styles.sendBtn}
               onClick={() => void handleSend()}
-              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || !grillSkill}
+              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
               type="button"
               aria-label="Start interview"
             >
@@ -597,14 +599,14 @@ const NewInterviewCompose: React.FC = () => {
           )}
         </div>
 
-        {!grillSkill && skillConfig && interviewSkillOptions.length === 0 && (
+        {!grillSkill && !resolvedSkillPath && skillConfig && interviewSkillOptions.length === 0 && (
           <div className={styles.composeError}>
             No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
           </div>
         )}
-        {grillSkill && (
+        {(grillSkill || resolvedSkillPath) && (
           <p className={styles.composeHint}>
-            Enter to send · Shift+Enter for new line · The <strong>{selectedSkillOption?.friendlyName ?? grillSkill.name}</strong> skill will guide this structured interview
+            Enter to send · Shift+Enter for new line · The <strong>{selectedSkillOption?.friendlyName ?? grillSkill?.name ?? 'Interview'}</strong> skill will guide this structured interview
           </p>
         )}
       </div>
@@ -665,6 +667,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     interview?.project ?? null,
     resolvedPrdRepo,
     resolvedPrdBranch,
+    skillConfig?.skillProvider,
   );
   const toPrdSkill = skillConfig?.prdSkillPath
     ? skills.find((s) => s.path === skillConfig.prdSkillPath)
@@ -834,9 +837,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           project: interview.project,
           repo: resolvedPrdRepo ?? interview.repo,
           branch: resolvedPrdBranch,
+          skillProvider: skillConfig?.skillProvider ?? undefined,
           skillPath,
           transcript,
           model: prdModel,
+          skillSettingsId: skillConfig?.id ?? undefined,
         },
       });
 
@@ -1272,6 +1277,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             ref={fileInputRef}
             type="file"
             multiple
+            accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={isRunning || isSending}

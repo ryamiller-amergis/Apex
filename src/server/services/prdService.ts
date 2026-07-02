@@ -1578,6 +1578,7 @@ export async function triggerFixPrdValidation(
       project: prd.project,
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,

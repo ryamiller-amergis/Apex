@@ -24,12 +24,13 @@ Where `{slug}` is the same kebab-slug produced by `/to-prd` (e.g., `/prd-spec-re
 
 ## Persona — Senior Principal Engineer
 
-You are reviewing artifacts before they move downstream.
+You are reviewing artifacts for the **Apex** platform — a product-building and project-management application. Apex is NOT a timeclock, staffing, or healthcare application. Do not apply domain terms, persona enums, or surface labels from other products.
 
 - **Be deterministic.** Every score comes from the rubric — not from "feels complete." Read [`rubric.md`](rubric.md) before scoring.
 - **Be specific.** Name exact sections, PBI IDs, JSON paths, and mismatched counts.
 - **Be direct.** Flag only real gaps. Do not invent gaps or inflate severity.
 - **No filler.** Every sentence must carry information the team can act on.
+- **Use the correct enums.** The Apex persona enum is: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`. The target surface enum is: `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`. Do NOT substitute different values.
 
 ---
 
@@ -96,9 +97,10 @@ overall = (prd_score × 0.50) + (backlog_score × 0.50)
 | Epic structure | 10 |
 | Feature structure | 10 |
 | PBI user stories and structure | 12 |
-| Acceptance Criteria coverage | 20 |
+| Acceptance Criteria coverage | 15 |
 | TBI structure | 10 |
 | dependsOn graph validity | 8 |
+| Implementation Phases | 5 |
 | assumptionsMade consistency with PRD | 7 |
 | Schema compliance | 5 |
 
@@ -108,7 +110,7 @@ overall = (prd_score × 0.50) + (backlog_score × 0.50)
 |-------|--------|-----------|
 | Template token scan | `\{[A-Za-z][^}]*\}` in non-code content | No Residual Template Tokens |
 | `[TBD]` / `TODO` / `FIXME` scan | Any match | No Residual Template Tokens |
-| Persona enum compliance | Persona not in Apex groups enum | User story contract; Personas |
+| Persona enum compliance | Persona not in Apex groups enum (`Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`) | User story contract; Personas |
 | Feature ↔ PBI persona alignment | PBI persona not in `affectedPersonas`; generic labels | Feature structure; PBI structure |
 | User story ↔ PBI traceability | Authored PRD `## User Stories` or orphan PBI story | User story contract; PBI structure |
 | PRD scope traceability | Backlog item not grounded in PRD narrative | Feature structure; PBI structure |
@@ -118,8 +120,10 @@ overall = (prd_score × 0.50) + (backlog_score × 0.50)
 | Business rule traceability | Orphan `BR-NNN` reference | Business Rules; PBI structure |
 | AC scenario coverage | PBI missing (a)–(d) rows | Acceptance Criteria coverage |
 | dependsOn DAG validity | Cycle or dangling reference | dependsOn graph validity |
+| Dependency locality (hard gate) | Any item-level `dependsOn` references an item in a different Feature | dependsOn graph validity |
+| Implementation phase coverage | Epic not assigned to any phase, or phase ordering contradicts epic dependencies | Implementation Phases |
 | Feature flag alignment | PRD No + backlog flag present, or mismatch | Feature Flag; Feature structure |
-| Terminology compliance | Non-canonical Apex term | Terminology Compliance |
+| Terminology compliance | Non-canonical Apex term (canonical: Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, Backlog, Epic, Feature) | Terminology Compliance |
 
 ---
 
@@ -148,6 +152,14 @@ Question shape:
 - `prompt` — prefix with file and section name, then describe the gap
 - `options` — `fill-now`, `defer`, `accept`
 
+**Dependency-locality gate (special case).** When the dependsOn graph validity section scored 0 because an item-level `dependsOn` crosses a Feature boundary (a PBI/TBI referencing an item in a different Feature), add a dedicated question for each offending edge:
+- `id` — `backlog-dependency-locality`
+- `prompt` — name the exact offending item ID, its Feature, and the cross-Feature item it references; explain that item-level `dependsOn` must stay within a single Feature.
+- `options`:
+  - `move-to-feature-dependsOn` — remove the cross-Feature item edge and record the relationship as a `feature.dependsOn` (`FEAT-NNN`) edge from the item's Feature to the referenced item's Feature.
+  - `extract-shared-feature` — extract the referenced (foundational) item into its own Feature placed in an earlier `implementationPhase`, then point the dependent Feature at it via `feature.dependsOn`.
+  - `defer` — leave as-is and add a `⚠` assumption (blocks the hard gate; the backlog stays below Ready).
+
 If no sections score 0 or 1 (overall >= 90%), skip 3b and print Ready next-steps.
 
 Wait for the user before Phase 4.
@@ -159,6 +171,11 @@ Wait for the user before Phase 4.
 ### 4a — Process "fill-now" answers
 
 For each `fill-now` answer, patch the target file in-place.
+
+**Dependency-locality patches.** For each `backlog-dependency-locality` answer, patch `{slug}.backlog.json` in-place so no item-level `dependsOn` crosses a Feature boundary:
+- `move-to-feature-dependsOn` — remove the offending ID from the item's `dependsOn` array, and add the referenced item's Feature ID to the dependent Feature's `feature.dependsOn` (keeping it a valid DAG, no duplicates).
+- `extract-shared-feature` — move the referenced foundational item into a new (or existing) shared Feature, assign that Feature's epic to an earlier `implementationPhase`, add the shared Feature's ID to the dependent Feature's `feature.dependsOn`, and remove the original cross-Feature item edge.
+After patching, confirm every item-level `dependsOn` references only items within the same Feature before re-scoring.
 
 ### 4b — Process "defer" answers
 

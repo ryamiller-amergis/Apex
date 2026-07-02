@@ -78,11 +78,13 @@ export const attachmentsRelations = relations(chatMessageAttachments, ({ one }) 
 
 export const devSessions = pgTable('dev_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  workItemId: integer('work_item_id').notNull(),
+  workItemId: integer('work_item_id'),
   project: text('project').notNull(),
   chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'cascade' }),
   authorId: text('author_id').notNull(),
   branchName: text('branch_name'),
+  prdId: uuid('prd_id').references(() => prds.id, { onDelete: 'set null' }),
+  featureId: text('feature_id'),
   // status values: setting_up | in_progress | conflict | closed | failed
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
