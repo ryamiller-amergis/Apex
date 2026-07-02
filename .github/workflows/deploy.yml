@@ -167,11 +167,15 @@ jobs:
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
 
+          # The Azure Node/Linux image ships without git, and the Dev Workbench
+          # feature shells out to git at runtime. Install it on boot before
+          # starting the app. safe.directory is handled in application code
+          # (repoCheckoutService.ts), so it is intentionally not set here.
           az webapp config set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
-            --startup-file "node /home/site/wwwroot/dist/server/index.js"
+            --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
             --name ${{ env.APP_SERVICE_NAME }} \

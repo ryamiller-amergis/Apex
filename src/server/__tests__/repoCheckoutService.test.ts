@@ -114,7 +114,7 @@ describe('repoCheckoutService', () => {
 
       expect(branchName).toBe('feature/apex-50743-shift-scheduler-widget');
       expect(mockExecSync).toHaveBeenCalledWith(
-        'git checkout -b "feature/apex-50743-shift-scheduler-widget"',
+        'git -c safe.directory="/tmp/workspace" checkout -b "feature/apex-50743-shift-scheduler-widget"',
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });

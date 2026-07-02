@@ -222,10 +222,14 @@ jobs:
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}"
 
+          # The Azure Node/Linux image ships without git, and the Dev Workbench
+          # feature shells out to git at runtime. Install it on boot before
+          # starting the app. safe.directory is handled in application code
+          # (repoCheckoutService.ts), so it is intentionally not set here.
           az webapp config set \
             --name $APP_NAME \
             --resource-group $RG_NAME \
-            --startup-file "node /home/site/wwwroot/dist/server/index.js"
+            --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
             --name $APP_NAME \
