@@ -917,6 +917,16 @@ export const DevSessionView: React.FC = () => {
               );
             }
 
+            if (!isRunning && !isSettingUp && elements.length === 0 && messages.length > 0) {
+              elements.push(
+                <div key="orphaned-notice" className={styles['system-msg']}>
+                  The agent performed work in this session but the response was not captured
+                  (likely due to a server restart). You can send a follow-up message to continue,
+                  or check the Changes panel for any completed work.
+                </div>,
+              );
+            }
+
             return elements;
           })()}
 
