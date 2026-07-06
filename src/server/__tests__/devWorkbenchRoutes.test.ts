@@ -415,6 +415,68 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
   });
 });
 
+describe('POST /api/dev-workbench/features/complete', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('creates a synthetic closed session for the feature', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, sessionId: 'session-abc' });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'session-abc',
+        project: 'Apex',
+        authorId: 'user-1',
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        status: 'closed',
+      }),
+    );
+  });
+
+  it('returns the existing session if the feature is already complete', async () => {
+    mockFindFirst.mockResolvedValue({ id: 'existing-session' });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, sessionId: 'existing-session' });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when required fields are missing', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+
+  it('returns 500 when the insert fails', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+    mockInsertValues.mockRejectedValueOnce(new Error('DB insert failed'));
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/failed to mark feature/i);
+  });
+});
+
 describe('GET /api/dev-workbench/threads/:id/diff', () => {
   const { computeDiff, getWorkspaceDir } = jest.requireMock('../services/repoCheckoutService') as {
     computeDiff: jest.Mock;

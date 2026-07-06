@@ -133,6 +133,52 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   }
 });
 
+// POST /features/complete — mark a feature as complete by inserting a synthetic
+// closed session, which unblocks any downstream features that depend on it.
+router.post('/features/complete', async (req: Request, res: Response) => {
+  try {
+    const { prdId, featureId, project } = req.body as { prdId: string; featureId: string; project: string };
+    if (!prdId || !featureId || !project) {
+      res.status(400).json({ error: 'prdId, featureId, and project are required' });
+      return;
+    }
+
+    const userId = getUserId(req);
+
+    const existing = await db.query.devSessions.findFirst({
+      where: and(
+        eq(devSessions.prdId, prdId),
+        eq(devSessions.featureId, featureId),
+        eq(devSessions.status, 'closed'),
+      ),
+    });
+
+    if (existing) {
+      res.json({ ok: true, sessionId: existing.id });
+      return;
+    }
+
+    const sessionId = uuidv4();
+    const now = new Date().toISOString();
+
+    await db.insert(devSessions).values({
+      id: sessionId,
+      project,
+      authorId: userId,
+      prdId,
+      featureId,
+      status: 'closed',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    res.json({ ok: true, sessionId });
+  } catch (err) {
+    console.error('[dev-workbench] completeFeature failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to mark feature as complete' });
+  }
+});
+
 // POST /start — creates a session record immediately, then clones + sets up the thread async
 router.post('/start', async (req: Request, res: Response) => {
   try {
@@ -321,7 +367,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
 
     const conditions = [
       eq(devSessions.authorId, userId),
-      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict']),
+      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict', 'closed']),
     ];
     if (project) conditions.push(eq(devSessions.project, project));
 

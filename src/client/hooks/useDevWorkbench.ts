@@ -130,6 +130,21 @@ export function useAbortMerge(sessionId: string) {
   });
 }
 
+export function useCompleteFeature() {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: boolean; sessionId: string }, Error, { prdId: string; featureId: string; project: string }>({
+    mutationFn: (body) =>
+      apiFetch('/api/dev-workbench/features/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench'] });
+    },
+  });
+}
+
 export function useDevDiff(threadId: string | null) {
   return useQuery<DevDiff>({
     queryKey: ['dev-workbench', 'diff', threadId],

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
-import { useAssignedWorkItems, useStartDevSession, useActiveSessions, useCloseDevSession } from '../hooks/useDevWorkbench';
+import { useAssignedWorkItems, useStartDevSession, useActiveSessions, useCloseDevSession, useCompleteFeature } from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession } from '../../shared/types/devWorkbench';
 import styles from './DevWorkbenchView.module.css';
@@ -44,8 +44,10 @@ const ApexBacklogView: React.FC<{
   const { data: backlogGroups, isLoading, error } = useApexBacklogFeatures(project);
   const startSession = useStartDevSession();
   const closeSession = useCloseDevSession();
+  const completeFeature = useCompleteFeature();
   const [startingFeature, setStartingFeature] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [completingFeature, setCompletingFeature] = useState<string | null>(null);
   const [openPrds, setOpenPrds] = useState<Set<string>>(new Set());
   const [openEpics, setOpenEpics] = useState<Set<string>>(new Set());
 
@@ -98,6 +100,15 @@ const ApexBacklogView: React.FC<{
       await closeSession.mutateAsync(sessionId);
     } finally {
       setClosingId(null);
+    }
+  };
+
+  const handleComplete = async (feature: BacklogFeatureItem) => {
+    setCompletingFeature(feature.featureId);
+    try {
+      await completeFeature.mutateAsync({ prdId: feature.prdId, featureId: feature.featureId, project });
+    } finally {
+      setCompletingFeature(null);
     }
   };
 
@@ -171,13 +182,18 @@ const ApexBacklogView: React.FC<{
                               {readiness.state === 'in_pr' && (
                                 <span className={styles['active-badge']}>In PR</span>
                               )}
+                              {readiness.state === 'closed' && (
+                                <span className={styles['completed-badge']}>Completed</span>
+                              )}
                               {readiness.state === 'ready' && (
                                 <span className={styles['ready-badge']}>Ready</span>
                               )}
                             </div>
                           </div>
                           <div className={styles['item-actions']}>
-                            {readiness.state === 'in_progress' || readiness.state === 'in_pr' ? (
+                            {readiness.state === 'closed' ? (
+                              <span className={styles['completed-label']}>Done</span>
+                            ) : readiness.state === 'in_progress' || readiness.state === 'in_pr' ? (
                               <>
                                 <button
                                   className={styles['resume-btn']}
@@ -196,14 +212,25 @@ const ApexBacklogView: React.FC<{
                                 </button>
                               </>
                             ) : (
-                              <button
-                                className={styles['start-btn']}
-                                onClick={() => handleStart(feature)}
-                                disabled={readiness.state === 'blocked' || startingFeature !== null}
-                                type="button"
-                              >
-                                {startingFeature === feature.featureId ? 'Starting...' : 'Start Development'}
-                              </button>
+                              <>
+                                <button
+                                  className={styles['start-btn']}
+                                  onClick={() => handleStart(feature)}
+                                  disabled={readiness.state === 'blocked' || startingFeature !== null}
+                                  type="button"
+                                >
+                                  {startingFeature === feature.featureId ? 'Starting...' : 'Start Development'}
+                                </button>
+                                <button
+                                  className={styles['complete-btn']}
+                                  onClick={() => handleComplete(feature)}
+                                  disabled={completingFeature !== null}
+                                  type="button"
+                                  title="Mark this feature as complete to unblock dependent features"
+                                >
+                                  {completingFeature === feature.featureId ? 'Completing...' : 'Mark Complete'}
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>

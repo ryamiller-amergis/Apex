@@ -19,6 +19,7 @@ import {
   cleanupWorkspace,
   checkoutDefaultBranch,
   createFeatureBranch,
+  checkoutNewBranch,
 } from '../services/repoCheckoutService';
 
 const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
@@ -152,6 +153,17 @@ describe('repoCheckoutService', () => {
       expect(branchName).toBe('feature/apex-50743-shift-scheduler-widget');
       expect(mockExecSync).toHaveBeenCalledWith(
         'git -c safe.directory="/tmp/workspace" checkout -b "feature/apex-50743-shift-scheduler-widget"',
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+    });
+  });
+
+  describe('checkoutNewBranch', () => {
+    it('uses safe.directory to avoid dubious ownership errors', () => {
+      checkoutNewBranch('/tmp/workspace', 'feature/apex-feat-009-platform-integration');
+
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'git -c safe.directory="/tmp/workspace" checkout -b "feature/apex-feat-009-platform-integration"',
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });
