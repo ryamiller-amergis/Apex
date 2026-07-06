@@ -165,7 +165,7 @@ export function createFeatureBranch(
  * the name is derived from the featureId, not an ADO work item title).
  */
 export function checkoutNewBranch(workspaceDir: string, branchName: string): void {
-  execSync(`git checkout -b "${branchName}"`, { cwd: workspaceDir, stdio: 'pipe' });
+  execSync(gitIn(workspaceDir, `checkout -b "${branchName}"`), { cwd: workspaceDir, stdio: 'pipe' });
 }
 
 export function computeDiff(workspaceDir: string): { diffText: string; changedFiles: string[] } {
