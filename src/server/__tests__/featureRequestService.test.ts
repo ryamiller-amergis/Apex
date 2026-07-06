@@ -4,7 +4,7 @@
  */
 
 jest.mock('../utils/superAdmin', () => ({
-  SUPER_ADMIN_EMAILS: ['admin1@example.com', 'admin2@example.com'],
+  getSuperAdminEmails: jest.fn(() => ['admin1@example.com', 'admin2@example.com']),
 }));
 
 jest.mock('../db/drizzle', () => {

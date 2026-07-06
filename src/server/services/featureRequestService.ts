@@ -16,7 +16,7 @@ import type {
   FeatureRequestRisk,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
-import { SUPER_ADMIN_EMAILS } from '../utils/superAdmin';
+import { getSuperAdminEmails } from '../utils/superAdmin';
 
 // ── Row → shared type mapper ──────────────────────────────────────────────────
 
@@ -198,12 +198,13 @@ export async function resolveApexReviewers(): Promise<string[]> {
 
   const userIds = new Set(permissionRows.map((r) => r.userId));
 
-  // Union with super admins (looked up by email)
-  if (SUPER_ADMIN_EMAILS.length > 0) {
+  // Union with super admins (looked up by email) for the current environment
+  const superAdminEmails = getSuperAdminEmails();
+  if (superAdminEmails.length > 0) {
     const superAdminRows = await db
       .select({ oid: appUsers.oid })
       .from(appUsers)
-      .where(inArray(appUsers.email, SUPER_ADMIN_EMAILS));
+      .where(inArray(appUsers.email, superAdminEmails));
 
     for (const r of superAdminRows) {
       userIds.add(r.oid);
