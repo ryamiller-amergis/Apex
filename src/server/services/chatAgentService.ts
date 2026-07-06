@@ -24,7 +24,7 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs, testCases } from '../db/schema';
+import { interviews, prds, designDocs, testCases, devSessions } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -1486,6 +1486,51 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
   }
 }
 
+/**
+ * After an agent run completes, check if the thread backs a dev session.
+ * If so, commit any uncommitted changes and push the branch to remote
+ * so the work survives ephemeral workspace loss (app restarts, scaling).
+ * Also caches the diff in the DB for the changes panel.
+ */
+async function eagerPushDevSession(threadId: string): Promise<void> {
+  const session = await db.query.devSessions.findFirst({
+    where: eq(devSessions.chatThreadId, threadId),
+  });
+  if (!session || !session.branchName) return;
+  if (session.branchPushed) return;
+  if (session.status !== 'in_progress') return;
+
+  const { computeDiff, pushBranch, getWorkspaceDir } = await import('./repoCheckoutService');
+  const workspaceDir = getWorkspaceDir(session.id);
+
+  if (!fs.existsSync(workspaceDir)) return;
+
+  const { diffText, changedFiles } = computeDiff(workspaceDir);
+  if (changedFiles.length === 0) return;
+
+  // Cache the diff so it survives workspace deletion
+  await db
+    .update(devSessions)
+    .set({
+      cachedDiffText: diffText,
+      cachedChangedFiles: changedFiles,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(devSessions.id, session.id));
+
+  // Push branch to remote
+  try {
+    pushBranch(workspaceDir, session.branchName);
+    await db
+      .update(devSessions)
+      .set({ branchPushed: true, updatedAt: new Date().toISOString() })
+      .where(eq(devSessions.id, session.id));
+    console.log(`[chat] eager push succeeded for dev session ${session.id}, branch ${session.branchName}`);
+  } catch (pushErr) {
+    console.warn(`[chat] eager push to remote failed (non-fatal) for session ${session.id}:`, (pushErr as Error).message);
+  }
+}
+
 export async function sendMessage(
   threadId: string,
   text: string,
@@ -1807,6 +1852,13 @@ export async function sendMessage(
       await syncOutputToDb(threadId, state.thread.workspaceDir, agentTextBuffer);
     } catch (err) {
       console.error(`[chat] post-run DB sync failed for thread ${threadId}:`, err);
+    }
+
+    // Eagerly push dev-session branches to remote so they survive workspace loss
+    try {
+      await eagerPushDevSession(threadId);
+    } catch (err) {
+      console.warn(`[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`, (err as Error).message);
     }
 
     broadcast(state, { type: 'done', runId: state.thread.activeRunId, prdReady, backlogReady });

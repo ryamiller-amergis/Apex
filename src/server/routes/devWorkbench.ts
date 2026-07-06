@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { AzureDevOpsService } from '../services/azureDevOps';
@@ -23,7 +24,7 @@ import {
 } from '../services/repoCheckoutService';
 import { db } from '../db/drizzle';
 import { devSessions, prds, designDocs, testCases } from '../db/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
@@ -384,7 +385,8 @@ router.get('/sessions', async (req: Request, res: Response) => {
         featureId: devSessions.featureId,
       })
       .from(devSessions)
-      .where(and(...conditions));
+      .where(and(...conditions))
+      .orderBy(desc(devSessions.createdAt));
 
     res.json(rows);
   } catch (err) {
@@ -486,35 +488,55 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
     const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
 
     const workspaceDir = getWorkspaceDir(sessionId);
+    const workspaceExists = fs.existsSync(workspaceDir);
 
-    // Sync with the latest base branch (commits agent edits + merges base).
-    const syncResult = syncWithBase(workspaceDir, baseBranch);
+    if (workspaceExists) {
+      // Workspace is available — do the full sync + merge + push flow
+      const syncResult = syncWithBase(workspaceDir, baseBranch);
 
-    if (syncResult.status === 'conflict') {
-      await db
-        .update(devSessions)
-        .set({ status: 'conflict', updatedAt: new Date().toISOString() })
-        .where(eq(devSessions.id, sessionId));
+      if (syncResult.status === 'conflict') {
+        await db
+          .update(devSessions)
+          .set({ status: 'conflict', updatedAt: new Date().toISOString() })
+          .where(eq(devSessions.id, sessionId));
 
-      res.json({
-        ok: false,
-        status: 'conflict',
-        conflictedFiles: syncResult.conflictedFiles,
+        res.json({
+          ok: false,
+          status: 'conflict',
+          conflictedFiles: syncResult.conflictedFiles,
+        });
+        return;
+      }
+
+      // Clean merge — push and open PR.
+      await finalisePush(
+        sessionId,
+        session.branchName,
+        baseBranch,
+        repo,
+        session.project,
+        session.workItemId,
+        provider,
+        adoService,
+      );
+    } else if (session.branchPushed) {
+      // Workspace gone but branch already pushed to remote — create PR directly
+      await finalisePushRemoteOnly(
+        sessionId,
+        session.branchName,
+        baseBranch,
+        repo,
+        session.project,
+        session.workItemId,
+        provider,
+        adoService,
+      );
+    } else {
+      res.status(409).json({
+        error: 'Workspace is no longer available and branch was not pushed to remote. The changes have been lost.',
       });
       return;
     }
-
-    // Clean merge — push and open PR.
-    await finalisePush(
-      sessionId,
-      session.branchName,
-      baseBranch,
-      repo,
-      session.project,
-      session.workItemId,
-      provider,
-      adoService,
-    );
 
     const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
     res.json({ ok: true, status: 'clean', branch: session.branchName, prUrl: updated?.prUrl ?? null });
@@ -667,13 +689,44 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
     }
 
     const workspaceDir = getWorkspaceDir(session.id);
-    const { diffText, changedFiles } = computeDiff(workspaceDir);
+    const workspaceExists = fs.existsSync(workspaceDir);
 
-    res.json({
-      diffText,
-      changedFiles,
-      branch: session.branchName ?? '',
-    });
+    if (workspaceExists) {
+      const { diffText, changedFiles } = computeDiff(workspaceDir);
+
+      // Persist diff to DB so it survives workspace loss
+      if (changedFiles.length > 0) {
+        await db
+          .update(devSessions)
+          .set({
+            cachedDiffText: diffText,
+            cachedChangedFiles: changedFiles,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(devSessions.id, session.id));
+      }
+
+      res.json({
+        diffText,
+        changedFiles,
+        branch: session.branchName ?? '',
+      });
+      return;
+    }
+
+    // Workspace gone — serve cached diff from DB
+    const cachedFiles = (session.cachedChangedFiles as string[] | null) ?? [];
+    if (cachedFiles.length > 0) {
+      res.json({
+        diffText: session.cachedDiffText ?? '',
+        changedFiles: cachedFiles,
+        branch: session.branchName ?? '',
+      });
+      return;
+    }
+
+    // No workspace and no cached diff
+    res.json({ diffText: '', changedFiles: [], branch: session.branchName ?? '' });
   } catch (err) {
     console.error('[dev-workbench] computeDiff failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to compute diff' });
@@ -753,6 +806,65 @@ async function finalisePush(
     }
   } catch (prErr) {
     console.warn('[dev-workbench] PR creation failed (non-fatal):', (prErr as Error).message);
+  }
+
+  await db
+    .update(devSessions)
+    .set({
+      status: 'in_progress',
+      prUrl,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(devSessions.id, sessionId));
+}
+
+/**
+ * Creates a PR from an already-pushed branch when the local workspace is gone.
+ * Skips the local merge step — the hosting platform handles merge conflicts.
+ */
+async function finalisePushRemoteOnly(
+  sessionId: string,
+  branchName: string,
+  baseBranch: string,
+  repo: string,
+  project: string,
+  workItemId: number | null,
+  provider: SkillProvider,
+  adoService: AzureDevOpsService | null,
+): Promise<void> {
+  let prUrl: string | null = null;
+  try {
+    const description = workItemId
+      ? `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`
+      : `Automated implementation via APEX dev workbench.`;
+    const title = `[APEX] ${branchName.replace('feature/', '')}`;
+
+    if (provider === 'github') {
+      prUrl = await githubCatalog.createPullRequest({
+        repo,
+        sourceBranch: branchName,
+        targetBranch: baseBranch,
+        title,
+        description,
+      });
+    } else if (adoService) {
+      prUrl = await adoService.createPullRequest({
+        repo,
+        project,
+        sourceBranch: branchName,
+        targetBranch: baseBranch,
+        title,
+        description,
+        workItemId: workItemId ?? undefined,
+      });
+
+      if (workItemId) {
+        await adoService.setWorkItemState(workItemId, 'In Pull Request');
+        await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
+      }
+    }
+  } catch (prErr) {
+    console.warn('[dev-workbench] PR creation (remote-only) failed:', (prErr as Error).message);
   }
 
   await db

@@ -17,7 +17,17 @@ function computeReadiness(
   sessions: ActiveDevSession[],
   allSessions: ActiveDevSession[],
 ): FeatureReadiness {
-  const featureSession = sessions.find(s => s.featureId === feature.featureId && s.prdId === feature.prdId);
+  // Find all sessions for this specific feature+prd, prefer active over closed
+  const matchingSessions = sessions.filter(
+    s => s.featureId === feature.featureId && s.prdId === feature.prdId,
+  );
+
+  // Prefer an active (non-closed) session; fall back to the most recent closed one
+  const activeSession = matchingSessions.find(
+    s => s.status !== 'closed' && s.status !== 'failed',
+  );
+  const featureSession = activeSession ?? matchingSessions[0];
+
   if (featureSession) {
     if (featureSession.prUrl) return { state: 'in_pr', sessionId: featureSession.id };
     if (featureSession.status === 'closed') return { state: 'closed', sessionId: featureSession.id };
