@@ -25,6 +25,14 @@ export function usePdfSession(sessionId: string | null) {
   });
 }
 
+export function useActivePdfSessions() {
+  return useQuery<PdfSession[]>({
+    queryKey: ['pdf-sessions-active'],
+    queryFn: () => apiFetch('/api/pdf/sessions'),
+    staleTime: 10_000,
+  });
+}
+
 export function useCreatePdfSession() {
   const queryClient = useQueryClient();
   return useMutation<CreateSessionResponse, Error & { code?: string }, { projectId?: string }>({

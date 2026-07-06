@@ -1,5 +1,5 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
-import { useCreatePdfSession, usePdfSession, useUploadPdfFiles } from '../hooks/usePdfSession';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSessions } from '../hooks/usePdfSession';
 import type { FileUploadResult } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -20,7 +20,9 @@ const ERROR_LABELS: Record<string, string> = {
 };
 
 export const PdfAssemblyView: React.FC = () => {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(
+    () => sessionStorage.getItem('pdf-active-session'),
+  );
   const [dragActive, setDragActive] = useState(false);
   const [uploadResults, setUploadResults] = useState<FileUploadResult[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -28,6 +30,16 @@ export const PdfAssemblyView: React.FC = () => {
   const createSession = useCreatePdfSession();
   const { data: session } = usePdfSession(sessionId);
   const uploadFiles = useUploadPdfFiles();
+  const { data: activeSessions } = useActivePdfSessions();
+
+  useEffect(() => {
+    if (sessionId) return;
+    if (activeSessions && activeSessions.length > 0) {
+      const mostRecent = activeSessions[0];
+      setSessionId(mostRecent.id);
+      sessionStorage.setItem('pdf-active-session', mostRecent.id);
+    }
+  }, [sessionId, activeSessions]);
 
   const errors = useMemo(
     () => uploadResults.filter((r) => r.status === 'error'),
@@ -44,6 +56,7 @@ export const PdfAssemblyView: React.FC = () => {
         const result = await createSession.mutateAsync({});
         activeSessionId = result.sessionId;
         setSessionId(activeSessionId);
+        sessionStorage.setItem('pdf-active-session', activeSessionId);
       } catch {
         return;
       }

@@ -19,6 +19,9 @@ jest.mock('../../hooks/usePdfSession', () => ({
     mutateAsync: mockUploadFiles,
     isPending: false,
   }),
+  useActivePdfSessions: () => ({
+    data: [],
+  }),
 }));
 
 function renderWithQuery(ui: React.ReactElement) {

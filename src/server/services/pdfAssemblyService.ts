@@ -82,6 +82,12 @@ export async function getSession(sessionId: string) {
   });
 }
 
+export async function getActiveSessions(userId: string) {
+  return db.query.pdfSessions.findMany({
+    where: and(eq(pdfSessions.userId, userId), eq(pdfSessions.status, 'active')),
+  });
+}
+
 export async function touchSession(sessionId: string): Promise<void> {
   const newExpiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
   await db

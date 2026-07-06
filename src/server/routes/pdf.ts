@@ -7,6 +7,7 @@ import { requirePermission } from '../middleware/rbac';
 import {
   createSession,
   getSession,
+  getActiveSessions,
   validateAndIngest,
   resolveFilePath,
   getPdfTempDir,
@@ -70,6 +71,19 @@ async function loadAndValidateSession(
   }
   return session as any;
 }
+
+// ── GET /api/pdf/sessions ─────────────────────────────────────────────────────
+
+router.get('/sessions', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const sessions = await getActiveSessions(userId);
+    res.json(sessions);
+  } catch (err) {
+    console.error('[pdf] GET /sessions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // ── POST /api/pdf/sessions ─────────────────────────────────────────────────────
 
