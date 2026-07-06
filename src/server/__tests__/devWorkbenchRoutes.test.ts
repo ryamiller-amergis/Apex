@@ -58,6 +58,13 @@ jest.mock('../services/repoCheckoutService', () => ({
   cleanupWorkspace: jest.fn(),
   slugify: jest.fn((t: string) => t.toLowerCase().replace(/\s+/g, '-')),
 }));
+jest.mock('fs', () => {
+  const actual = jest.requireActual('fs');
+  return {
+    ...actual,
+    existsSync: jest.fn().mockReturnValue(true),
+  };
+});
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
@@ -77,7 +84,7 @@ jest.mock('../db/drizzle', () => ({
       set: jest.fn(() => ({ where: mockUpdateWhere })),
     })),
     select: jest.fn(() => ({
-      from: jest.fn(() => ({ where: mockSelectWhere })),
+      from: jest.fn(() => ({ where: jest.fn().mockReturnValue({ orderBy: mockSelectWhere }) })),
     })),
     query: {
       devSessions: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
