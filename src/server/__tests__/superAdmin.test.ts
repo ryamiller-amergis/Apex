@@ -2,13 +2,91 @@ jest.mock('../services/rbacService', () => ({
   getUserPermissions: jest.fn().mockResolvedValue(new Set()),
 }));
 
-import { isSuperAdminEmail, isSuperAdminRequest } from '../utils/superAdmin';
+import {
+  getAppEnvironment,
+  getSuperAdminEmails,
+  isSuperAdminEmail,
+  isSuperAdminRequest,
+} from '../utils/superAdmin';
 import { requirePermission, requireSuperAdmin } from '../middleware/rbac';
 import type { Request, Response, NextFunction } from 'express';
+
+// ── getAppEnvironment ──────────────────────────────────────────────────────────
+
+describe('getAppEnvironment', () => {
+  const originalAppEnv = process.env.APP_ENV;
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    process.env.APP_ENV = originalAppEnv;
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it('normalizes prod values', () => {
+    process.env.APP_ENV = 'prod';
+    expect(getAppEnvironment()).toBe('prod');
+    process.env.APP_ENV = 'PRODUCTION';
+    expect(getAppEnvironment()).toBe('prod');
+  });
+
+  it('normalizes dev values', () => {
+    process.env.APP_ENV = 'dev';
+    expect(getAppEnvironment()).toBe('dev');
+    process.env.APP_ENV = 'development';
+    expect(getAppEnvironment()).toBe('dev');
+    process.env.APP_ENV = 'staging';
+    expect(getAppEnvironment()).toBe('dev');
+  });
+
+  it('resolves explicit local', () => {
+    process.env.APP_ENV = 'local';
+    process.env.NODE_ENV = 'production';
+    expect(getAppEnvironment()).toBe('local');
+  });
+
+  it('defaults to local when APP_ENV is unset and not a production process', () => {
+    delete process.env.APP_ENV;
+    process.env.NODE_ENV = 'development';
+    expect(getAppEnvironment()).toBe('local');
+  });
+
+  it('falls back to prod when APP_ENV is unset but NODE_ENV is production', () => {
+    delete process.env.APP_ENV;
+    process.env.NODE_ENV = 'production';
+    expect(getAppEnvironment()).toBe('prod');
+  });
+});
+
+// ── getSuperAdminEmails ──────────────────────────────────────────────────────────
+
+describe('getSuperAdminEmails', () => {
+  const originalAppEnv = process.env.APP_ENV;
+
+  afterEach(() => {
+    process.env.APP_ENV = originalAppEnv;
+  });
+
+  it('returns the list for the requested environment', () => {
+    expect(Array.isArray(getSuperAdminEmails('local'))).toBe(true);
+    expect(Array.isArray(getSuperAdminEmails('dev'))).toBe(true);
+    expect(Array.isArray(getSuperAdminEmails('prod'))).toBe(true);
+  });
+
+  it('defaults to the current environment when no env is passed', () => {
+    process.env.APP_ENV = 'dev';
+    expect(getSuperAdminEmails()).toBe(getSuperAdminEmails('dev'));
+  });
+});
 
 // ── isSuperAdminEmail ──────────────────────────────────────────────────────────
 
 describe('isSuperAdminEmail', () => {
+  const originalAppEnv = process.env.APP_ENV;
+
+  afterEach(() => {
+    process.env.APP_ENV = originalAppEnv;
+  });
+
   it('returns true for an exact match', () => {
     expect(isSuperAdminEmail('ryamiller@amergis.com')).toBe(true);
   });
@@ -21,6 +99,25 @@ describe('isSuperAdminEmail', () => {
   it('returns false for a non-matching email', () => {
     expect(isSuperAdminEmail('nobody@amergis.com')).toBe(false);
     expect(isSuperAdminEmail('ryamiller@example.com')).toBe(false);
+  });
+
+  it('honors an explicit environment argument', () => {
+    expect(isSuperAdminEmail('ryamiller@amergis.com', 'prod')).toBe(true);
+    expect(isSuperAdminEmail('nobody@amergis.com', 'prod')).toBe(false);
+  });
+
+  it('resolves against the current environment when none is passed', () => {
+    process.env.APP_ENV = 'prod';
+    expect(isSuperAdminEmail('ryamiller@amergis.com')).toBe(true);
+  });
+
+  it('rejects an email that is not present in the resolved environment list', () => {
+    // Cross-check the mechanism: an email absent from the dev list is rejected
+    // regardless of whether it appears in another environment's list.
+    const devList = getSuperAdminEmails('dev').map((e) => e.toLowerCase());
+    const notInDev = 'someone-not-listed@amergis.com';
+    expect(devList).not.toContain(notInDev);
+    expect(isSuperAdminEmail(notInDev, 'dev')).toBe(false);
   });
 });
 
