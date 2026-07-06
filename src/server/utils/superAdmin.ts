@@ -7,17 +7,23 @@ export type AppEnvironment = 'local' | 'dev' | 'prod';
  * Resolve the current application environment used to scope platform-admin
  * (super-admin) access.
  *
- * Reads `APP_ENV` and normalizes it. If `APP_ENV` is unset but the process is
- * running as a deployed instance (`NODE_ENV === 'production'`), we default to
- * `prod` — the most restrictive list — so a misconfigured deployment never
- * silently exposes the local list.
+ * Resolution order:
+ * 1. APP_ENV if explicitly set (local | dev | prod).
+ * 2. WEBSITE_SITE_NAME — Azure App Service sets this automatically to the app
+ *    name (e.g. "app-scrum-dev", "app-scrum-prod"). We look for "dev" or "prod"
+ *    anywhere in the name, so no manual app-settings entry is needed.
+ * 3. Fall back to "local" when neither is present (developer machines).
  */
 export function getAppEnvironment(): AppEnvironment {
-  const raw = (process.env.APP_ENV ?? '').trim().toLowerCase();
-  if (raw === 'prod' || raw === 'production') return 'prod';
-  if (raw === 'dev' || raw === 'development' || raw === 'staging') return 'dev';
-  if (raw === 'local') return 'local';
-  if (process.env.NODE_ENV === 'production') return 'prod';
+  const explicit = (process.env.APP_ENV ?? '').trim().toLowerCase();
+  if (explicit === 'prod' || explicit === 'production') return 'prod';
+  if (explicit === 'dev' || explicit === 'development' || explicit === 'staging') return 'dev';
+  if (explicit === 'local') return 'local';
+
+  const siteName = (process.env.WEBSITE_SITE_NAME ?? '').toLowerCase();
+  if (siteName.includes('prod')) return 'prod';
+  if (siteName.includes('dev')) return 'dev';
+
   return 'local';
 }
 

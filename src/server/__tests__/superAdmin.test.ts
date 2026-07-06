@@ -15,21 +15,21 @@ import type { Request, Response, NextFunction } from 'express';
 
 describe('getAppEnvironment', () => {
   const originalAppEnv = process.env.APP_ENV;
-  const originalNodeEnv = process.env.NODE_ENV;
+  const originalSiteName = process.env.WEBSITE_SITE_NAME;
 
   afterEach(() => {
-    process.env.APP_ENV = originalAppEnv;
-    process.env.NODE_ENV = originalNodeEnv;
+    if (originalAppEnv === undefined) delete process.env.APP_ENV; else process.env.APP_ENV = originalAppEnv;
+    if (originalSiteName === undefined) delete process.env.WEBSITE_SITE_NAME; else process.env.WEBSITE_SITE_NAME = originalSiteName;
   });
 
-  it('normalizes prod values', () => {
+  it('normalizes explicit prod values', () => {
     process.env.APP_ENV = 'prod';
     expect(getAppEnvironment()).toBe('prod');
     process.env.APP_ENV = 'PRODUCTION';
     expect(getAppEnvironment()).toBe('prod');
   });
 
-  it('normalizes dev values', () => {
+  it('normalizes explicit dev values', () => {
     process.env.APP_ENV = 'dev';
     expect(getAppEnvironment()).toBe('dev');
     process.env.APP_ENV = 'development';
@@ -38,22 +38,28 @@ describe('getAppEnvironment', () => {
     expect(getAppEnvironment()).toBe('dev');
   });
 
-  it('resolves explicit local', () => {
+  it('explicit APP_ENV=local overrides WEBSITE_SITE_NAME', () => {
     process.env.APP_ENV = 'local';
-    process.env.NODE_ENV = 'production';
+    process.env.WEBSITE_SITE_NAME = 'app-scrum-prod';
     expect(getAppEnvironment()).toBe('local');
   });
 
-  it('defaults to local when APP_ENV is unset and not a production process', () => {
+  it('derives prod from WEBSITE_SITE_NAME when APP_ENV is unset', () => {
     delete process.env.APP_ENV;
-    process.env.NODE_ENV = 'development';
-    expect(getAppEnvironment()).toBe('local');
-  });
-
-  it('falls back to prod when APP_ENV is unset but NODE_ENV is production', () => {
-    delete process.env.APP_ENV;
-    process.env.NODE_ENV = 'production';
+    process.env.WEBSITE_SITE_NAME = 'app-scrum-prod';
     expect(getAppEnvironment()).toBe('prod');
+  });
+
+  it('derives dev from WEBSITE_SITE_NAME when APP_ENV is unset', () => {
+    delete process.env.APP_ENV;
+    process.env.WEBSITE_SITE_NAME = 'app-scrum-dev';
+    expect(getAppEnvironment()).toBe('dev');
+  });
+
+  it('defaults to local when neither APP_ENV nor WEBSITE_SITE_NAME is set', () => {
+    delete process.env.APP_ENV;
+    delete process.env.WEBSITE_SITE_NAME;
+    expect(getAppEnvironment()).toBe('local');
   });
 });
 
