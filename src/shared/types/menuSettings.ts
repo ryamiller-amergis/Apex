@@ -6,7 +6,8 @@ export type MenuItemKey =
   | 'my-work'
   | 'standup'
   | 'ui-lab'
-  | 'feature-requests';
+  | 'feature-requests'
+  | 'pdf-tools';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -17,6 +18,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },
   { key: 'feature-requests', label: 'Feature Requests' },
+  { key: 'pdf-tools', label: 'PDF Tools' },
 ];
 
 /** Default enabled views when a project has no explicit menu config row. */
