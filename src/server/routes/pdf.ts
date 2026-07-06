@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
 import { ensureAuthenticated } from '../middleware/auth';
@@ -16,12 +17,12 @@ const router = express.Router();
 
 // ── Multer configuration ───────────────────────────────────────────────────────
 
+const pdfTempDir = getPdfTempDir();
+fs.mkdirSync(pdfTempDir, { recursive: true });
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    // Files land in the base temp dir first; validateAndIngest moves them to
-    // the session-specific subdirectory with a UUID filename.
-    const dir = getPdfTempDir();
-    cb(null, dir);
+    cb(null, pdfTempDir);
   },
   filename: (_req, file, cb) => {
     // Temporary name — replaced by UUID during ingestion
@@ -92,6 +93,23 @@ router.post('/sessions', async (req, res): Promise<void> => {
       return;
     }
     console.error('[pdf] POST /sessions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── GET /api/pdf/sessions/:sessionId ────────────────────────────────────────
+
+router.get('/sessions/:sessionId', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+
+    const session = await loadAndValidateSession(sessionId, userId, res);
+    if (!session) return;
+
+    res.json(session);
+  } catch (err) {
+    console.error('[pdf] GET session error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
