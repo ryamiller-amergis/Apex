@@ -40,11 +40,10 @@ export function useCreatePdfSession() {
   });
 }
 
-export function useUploadPdfFiles(sessionId: string | null) {
+export function useUploadPdfFiles() {
   const queryClient = useQueryClient();
-  return useMutation<UploadFilesResponse, Error, File[]>({
-    mutationFn: async (files) => {
-      if (!sessionId) throw new Error('No active session');
+  return useMutation<UploadFilesResponse, Error, { sessionId: string; files: File[] }>({
+    mutationFn: async ({ sessionId, files }) => {
       const formData = new FormData();
       for (const f of files) {
         formData.append('files', f);
@@ -54,7 +53,7 @@ export function useUploadPdfFiles(sessionId: string | null) {
         body: formData,
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, { sessionId }) => {
       queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
     },
   });

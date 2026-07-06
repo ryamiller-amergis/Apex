@@ -27,7 +27,7 @@ export const PdfAssemblyView: React.FC = () => {
 
   const createSession = useCreatePdfSession();
   const { data: session } = usePdfSession(sessionId);
-  const uploadFiles = useUploadPdfFiles(sessionId);
+  const uploadFiles = useUploadPdfFiles();
 
   const errors = useMemo(
     () => uploadResults.filter((r) => r.status === 'error'),
@@ -50,7 +50,7 @@ export const PdfAssemblyView: React.FC = () => {
     }
 
     try {
-      const result = await uploadFiles.mutateAsync(files);
+      const result = await uploadFiles.mutateAsync({ sessionId: activeSessionId, files });
       setUploadResults((prev) => [...prev, ...result.files]);
     } catch {
       // mutation error handled by TanStack Query

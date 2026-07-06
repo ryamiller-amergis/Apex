@@ -64,7 +64,7 @@ describe('PdfAssemblyView', () => {
     });
 
     await waitFor(() => {
-      expect(mockUploadFiles).toHaveBeenCalledWith([file]);
+      expect(mockUploadFiles).toHaveBeenCalledWith({ sessionId: 'sess-1', files: [file] });
     });
   });
 

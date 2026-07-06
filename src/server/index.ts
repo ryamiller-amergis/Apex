@@ -181,6 +181,7 @@ app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
+app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/admin', adminRouter);
