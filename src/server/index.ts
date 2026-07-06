@@ -52,6 +52,7 @@ type FileStoreFactory = (
   sessionMiddleware: typeof session,
 ) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
 import uiLabRoutes from './routes/uiLab';
+import pdfRoutes from './routes/pdf';
 
 const app = express();
 const PORT = process.env.PORT || 3001;

@@ -1,5 +1,6 @@
 import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { PageManifestEntry, PdfFileMetadata, PdfSessionStatus } from '../../shared/types/pdf';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
@@ -1065,3 +1066,28 @@ export const featureRequestsRelations = relations(featureRequests, ({ one }) => 
     references: [appUsers.oid],
   }),
 }));
+
+// ── PDF Sessions ──────────────────────────────────────────────────────────────
+
+export const pdfSessions = pgTable('pdf_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  projectId: text('project_id'),
+  status: text('status').$type<PdfSessionStatus>().notNull().default('active'),
+  pageManifest: jsonb('page_manifest').$type<PageManifestEntry[]>().notNull().default([]),
+  fileMetadata: jsonb('file_metadata').$type<PdfFileMetadata[]>().notNull().default([]),
+  exportFilename: text('export_filename'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull().default(sql`now() + interval '4 hours'`),
+}, (t) => ({
+  userIdIdx: index('idx_pdf_sessions_user_id').on(t.userId),
+  expiresAtIdx: index('idx_pdf_sessions_expires_at').on(t.expiresAt).where(sql`status = 'active'`),
+}));
+
+export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [pdfSessions.userId],
+    references: [appUsers.oid],
+  }),
+}));;
