@@ -350,3 +350,221 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(readyBadges).toHaveLength(1);
   });
 });
+
+describe('DevWorkbenchView — session-to-feature matching', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'Apex' });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
+    (useStartDevSession as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartMutateAsync,
+      error: null,
+    });
+    (useCloseDevSession as jest.Mock).mockReturnValue({
+      mutateAsync: mockCloseMutateAsync,
+    });
+    (useCompleteFeature as jest.Mock).mockReturnValue({
+      mutateAsync: mockCompleteMutateAsync,
+      error: null,
+    });
+    (useApexBacklogFeatures as jest.Mock).mockReturnValue({
+      data: apexBacklogGroups,
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it('prefers active session over closed session for the same feature', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-old-closed',
+          workItemId: 0,
+          status: 'closed',
+          chatThreadId: null,
+          branchName: 'feature/apex-feat-001-old',
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+        {
+          id: 'session-active',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-2',
+          branchName: 'feature/apex-feat-001-new',
+          prUrl: null,
+          createdAt: '2026-07-05T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+
+    // Should show In Progress (from the active session), NOT Completed
+    expect(screen.getByText('In Progress')).toBeInTheDocument();
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /resume session/i })).toBeInTheDocument();
+  });
+
+  it('closing feature 001 does not affect feature 002 session', async () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-feat-001',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/apex-feat-001',
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+        {
+          id: 'session-feat-002',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-2',
+          branchName: 'feature/apex-feat-002',
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-002',
+        },
+      ],
+    });
+    mockCloseMutateAsync.mockResolvedValue({ ok: true });
+
+    renderView();
+
+    // Both features should show In Progress
+    const inProgressBadges = screen.getAllByText('In Progress');
+    expect(inProgressBadges).toHaveLength(2);
+
+    // Close feature 001 by clicking its Close Session button (first one)
+    const closeButtons = screen.getAllByRole('button', { name: /close session/i });
+    fireEvent.click(closeButtons[0]);
+
+    await waitFor(() => {
+      // Must close session-feat-001, NOT session-feat-002
+      expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-feat-001');
+      expect(mockCloseMutateAsync).not.toHaveBeenCalledWith('session-feat-002');
+    });
+  });
+
+  it('does not cross-reference sessions between different features', () => {
+    // Regression: if sessions are returned in wrong order, feature 001 might
+    // pick up feature 002's session
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-feat-002',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-2',
+          branchName: 'feature/apex-feat-002',
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-002',
+        },
+        {
+          id: 'session-feat-001',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/apex-feat-001',
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+
+    // Both should show In Progress independently
+    const inProgressBadges = screen.getAllByText('In Progress');
+    expect(inProgressBadges).toHaveLength(2);
+
+    // Both should have Resume Session buttons
+    const resumeButtons = screen.getAllByRole('button', { name: /resume session/i });
+    expect(resumeButtons).toHaveLength(2);
+  });
+
+  it('shows In PR state for a feature with a pushed session', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-feat-001',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/apex-feat-001',
+          prUrl: 'https://dev.azure.com/org/project/_git/repo/pullrequest/123',
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+
+    expect(screen.getByText('In PR')).toBeInTheDocument();
+  });
+
+  it('with multiple sessions per feature, active session wins over older closed one regardless of array order', async () => {
+    // Sessions returned with closed AFTER active (reverse creation order)
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-new-active',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-new',
+          branchName: 'feature/apex-feat-001-retry',
+          prUrl: null,
+          createdAt: '2026-07-05T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+        {
+          id: 'session-old-closed',
+          workItemId: 0,
+          status: 'closed',
+          chatThreadId: null,
+          branchName: 'feature/apex-feat-001-first',
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+    mockCloseMutateAsync.mockResolvedValue({ ok: true });
+
+    renderView();
+
+    // Feature 001 should show as In Progress (the active session)
+    expect(screen.getByText('In Progress')).toBeInTheDocument();
+
+    // Closing should target the active session, not the old closed one
+    const closeButton = screen.getByRole('button', { name: /close session/i });
+    fireEvent.click(closeButton);
+
+    await waitFor(() => {
+      expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-new-active');
+    });
+  });
+});

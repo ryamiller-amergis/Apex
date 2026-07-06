@@ -90,6 +90,9 @@ export const devSessions = pgTable('dev_sessions', {
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
   prUrl: text('pr_url'),
+  cachedDiffText: text('cached_diff_text'),
+  cachedChangedFiles: jsonb('cached_changed_files').$type<string[]>().default([]),
+  branchPushed: boolean('branch_pushed').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
