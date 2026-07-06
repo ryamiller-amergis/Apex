@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, lazy, Suspense } from 'react';
+import { ApexLoader } from './ApexLoader';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -65,8 +66,7 @@ const DesignPrototypeReviewView: React.FC = () => {
   const [commentText, setCommentText] = useState('');
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [pendingRegeneration, setPendingRegeneration] = useState(false);
-  // Optional override of which state sections to regenerate. Empty = Auto
-  // (server regenerates Default + Error and reuses Empty + Loading verbatim).
+  // Optional override of which state sections to regenerate. Empty = Auto (always regenerates Default + Error).
   const [overrideStates, setOverrideStates] = useState<DesignPrototypeStateName[]>([]);
   const [viewSource, setViewSource] = useState(false);
   const [editingBoundary, setEditingBoundary] = useState(false);
@@ -222,7 +222,7 @@ const DesignPrototypeReviewView: React.FC = () => {
         (selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating');
       return (
         <div className={styles.statusOverlay}>
-          <div className={styles.spinner} />
+          <ApexLoader size={72} />
           <div className={styles.statusText}>{label}</div>
           {canReset && (
             <>
@@ -260,7 +260,7 @@ const DesignPrototypeReviewView: React.FC = () => {
       if (editingBoundary && fullPrototype?.mockHtml) {
         return (
           <div className={styles.previewArea}>
-            <Suspense fallback={<div className={styles.statusText}>Loading editor…</div>}>
+            <Suspense fallback={<div className={styles.statusOverlay}><ApexLoader size={56} /></div>}>
               <BoundaryEditor
                 html={fullPrototype.mockHtml}
                 featureName={selectedProto?.featureName ?? ''}
@@ -331,7 +331,7 @@ const DesignPrototypeReviewView: React.FC = () => {
     return (
       <div className={styles.container}>
         <div className={styles.statusOverlay}>
-          <div className={styles.spinner} />
+          <ApexLoader size={72} />
           <div className={styles.statusText}>Loading prototypes...</div>
         </div>
       </div>

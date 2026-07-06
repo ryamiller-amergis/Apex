@@ -1,14 +1,10 @@
-import React from 'react';
+import type React from 'react';
+import { ApexLoader } from './ApexLoader';
 
 interface ViewSkeletonProps {
   rows?: number;
 }
 
-export const ViewSkeleton: React.FC<ViewSkeletonProps> = ({ rows = 6 }) => (
-  <div className="view-skeleton" aria-busy="true" aria-label="Loading view…">
-    <div className="view-skeleton__header skeleton-pulse" />
-    {Array.from({ length: rows }, (_, i) => (
-      <div key={i} className="view-skeleton__row skeleton-pulse" style={{ width: `${85 - (i % 3) * 10}%` }} />
-    ))}
-  </div>
+export const ViewSkeleton: React.FC<ViewSkeletonProps> = () => (
+  <ApexLoader fullscreen />
 );

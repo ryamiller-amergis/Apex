@@ -3056,7 +3056,7 @@ function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): De
 
     const states = Array.isArray(match.states) && match.states.length > 0
       ? (match.states as unknown[]).filter((s): s is string => typeof s === 'string')
-      : ['default', 'empty', 'error', 'loading'];
+      : ['default', 'error'];
 
     return {
       featureIndex: feature.featureIndex,
@@ -3325,21 +3325,7 @@ These markers must appear inside each state section that contains new feature co
 
 1. **DEFAULT STATE** — Full page shell (sidebar nav + header) + the annotated new feature area populated with realistic sample data. All PBI requirements must be visually represented.
 
-2. **EMPTY STATE** — Skip this state entirely to optimize generation speed. Simply output an empty state block with just the comment markers:
-   \`\`\`html
-   <!-- STATE:empty:START -->
-   <!-- STATE:empty:END -->
-   \`\`\`
-   Do NOT generate any HTML, styles, or content inside this state.
-
-3. **ERROR STATE** — Render ONLY a minimal representation of the new feature area showing its error states: inline validation errors, field-level red borders, and/or an error banner. Wrap this inside the state comments.
-
-4. **LOADING STATE** — Skip this state entirely to optimize generation speed. Simply output an empty state block with just the comment markers:
-   \`\`\`html
-   <!-- STATE:loading:START -->
-   <!-- STATE:loading:END -->
-   \`\`\`
-   Do NOT generate any HTML, styles, or content inside this state.
+2. **ERROR STATE** — Render ONLY a minimal representation of the new feature area showing its error states: inline validation errors, field-level red borders, and/or an error banner. Wrap this inside the state comments.
 
 ### Per-persona behavior variants
 
@@ -3383,17 +3369,15 @@ The prototype must be fully self-contained. Follow these rules strictly:
 ### Section formatting
 
 Each section must have:
-- A sticky-positioned section header with label and a small colored indicator (NOT emoji), each using a MaxView token: "Default State" (\`success.main\` #39c164 dot), "Empty State" (\`ui.outlineBorder\` #919aa5 dot), "Error State" (\`error.main\` #e43443 dot), "Loading State" (\`info.main\` #3363f5 dot)
+- A sticky-positioned section header with label and a small colored indicator (NOT emoji), each using a MaxView token: "Default State" (\`success.main\` #39c164 dot), "Error State" (\`error.main\` #e43443 dot)
 - A subtle background tint difference to separate sections visually
 - Full MaxView design system styling throughout (sidebar, topbar, colors, typography)
 
 ### State section markers — REQUIRED (enables cheap per-state regeneration)
 
-Wrap EACH of the four state sections with HTML comment delimiters EXACTLY as shown, so a single state can later be revised in isolation without re-emitting the whole document:
+Wrap EACH of the two state sections with HTML comment delimiters EXACTLY as shown, so a single state can later be revised in isolation without re-emitting the whole document:
 - \`<!-- STATE:default:START -->\` … the entire Default State section … \`<!-- STATE:default:END -->\`
-- \`<!-- STATE:empty:START -->\` … the entire Empty State section … \`<!-- STATE:empty:END -->\`
 - \`<!-- STATE:error:START -->\` … the entire Error State section … \`<!-- STATE:error:END -->\`
-- \`<!-- STATE:loading:START -->\` … the entire Loading State section … \`<!-- STATE:loading:END -->\`
 
 The START marker must be the first thing inside each state block and the END marker the last. Use the exact lowercase keys above. These markers must never be omitted or renamed.
 
@@ -3453,15 +3437,10 @@ function spliceStateSection(html: string, state: DesignPrototypeStateName, newIn
 
 /**
  * Auto-resolve which states to regenerate when no explicit override is given.
- * Default + Error carry the content/feedback; Empty + Loading are static
- * skeletons reused verbatim unless the feedback explicitly references them.
+ * Always regenerates Default + Error.
  */
-function resolveAutoStates(feedback: string, comments: string[]): DesignPrototypeStateName[] {
-  const states: DesignPrototypeStateName[] = ['default', 'error'];
-  const text = [feedback, ...comments].join(' ').toLowerCase();
-  if (/\bempty\b|no\s+(?:data|results|items)/.test(text)) states.push('empty');
-  if (/\bloading\b|\bskeleton\b|\bspinner\b/.test(text)) states.push('loading');
-  return states;
+function resolveAutoStates(_feedback: string, _comments: string[]): DesignPrototypeStateName[] {
+  return ['default', 'error'];
 }
 
 function stripHtmlFences(raw: string): string {
@@ -3568,7 +3547,7 @@ ${commentsSection}
 
 ## Instructions
 
-Revise the HTML prototype to address the feedback and unresolved comments above. Maintain all four state sections (Default, Empty, Error, Loading). Keep the MaxView design system styling. Preserve sections that were not mentioned in the feedback. Maintain all inline JavaScript interactivity (dropdowns, tabs, modals, date pickers, checkboxes, accordion toggles). Keep each state section wrapped in its HTML comment markers (\`<!-- STATE:default:START -->\`…\`<!-- STATE:default:END -->\` and likewise for empty, error, loading) — preserve them exactly if present, or add them if missing.
+Revise the HTML prototype to address the feedback and unresolved comments above. Maintain both state sections (Default, Error). Keep the MaxView design system styling. Preserve sections that were not mentioned in the feedback. Maintain all inline JavaScript interactivity (dropdowns, tabs, modals, date pickers, checkboxes, accordion toggles). Keep each state section wrapped in its HTML comment markers (\`<!-- STATE:default:START -->\`…\`<!-- STATE:default:END -->\` and likewise for error) — preserve them exactly if present, or add them if missing.
 
 ### Color usage — STRICT (the MaxView Design Tokens are the ONLY color source)
 

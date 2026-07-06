@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { azureCostService, AzureSubscription, CostData, DashboardData } from '../services/azureCostService';
+import { ApexLoader } from './ApexLoader';
 import './CloudCost.css';
 
 interface CloudCostProps {
@@ -552,7 +553,7 @@ export const CloudCost: React.FC<CloudCostProps> = () => {
           </div>
         </div>
         {isLoading ? (
-          <div className="loading-message">Loading Azure subscriptions...</div>
+          <div className="loading-message"><ApexLoader size={40} /></div>
         ) : error ? (
           <div className="error-message">{error}</div>
         ) : !showDashboard ? (
@@ -734,7 +735,7 @@ export const CloudCost: React.FC<CloudCostProps> = () => {
           // Dashboard View
           isLoadingDashboard ? (
             <div className="loading-cost-data">
-              <div className="spinner"></div>
+              <ApexLoader size={56} />
               <p>Loading dashboard data...</p>
             </div>
           ) : dashboardData.length === 0 ? (
@@ -799,7 +800,7 @@ export const CloudCost: React.FC<CloudCostProps> = () => {
               </div>
             ) : isFetchingCostData ? (
               <div className="loading-cost-data">
-                <div className="spinner"></div>
+                <ApexLoader size={56} />
                 <p>Loading cost data...</p>
               </div>
             ) : (

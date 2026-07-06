@@ -338,6 +338,57 @@
   background: color-mix(in srgb, var(--error-color) 10%, transparent);
 }
 
+.versionSelect {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 220px;
+  flex-shrink: 0;
+}
+
+.versionSelect:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* ── History banner (shown instead of feedback bar when browsing old versions) */
+
+.historyBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.historyBannerReturnBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--accent-color);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.historyBannerReturnBtn:hover {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+}
+
 /* ── Canvas body (iframe + comment overlay) ─────────────────────────────── */
 
 .canvasBody {
@@ -413,53 +464,101 @@
 .streamingOverlay {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-primary);
-  flex-direction: column;
-  gap: 16px;
 }
 
-.streamingSpinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-color);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+/* ── Comment panel ─────────────────────────────────────────────────────── */
+
+@keyframes slideInPanel {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.streamingLabel {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.streamingPreview {
-  width: 90%;
-  max-width: 600px;
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ── Comment sidebar ─────────────────────────────────────────────────────── */
-
-.commentPanel {
+/* Wrapper — drives the width transition for collapse/expand */
+.commentPanelWrap {
   width: 280px;
-  min-width: 240px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--border-color);
+  overflow: hidden;
+  transition: width 0.22s ease;
+}
+
+.commentPanelWrapCollapsed {
+  width: 40px;
+}
+
+/* Narrow strip shown when collapsed */
+.commentPanelStrip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 12px;
+  gap: 8px;
+  width: 40px;
+  height: 100%;
+  background: var(--bg-secondary);
+}
+
+.commentPanelStripBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.commentPanelStripBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+}
+
+.commentPanelStripLabel {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.commentPanelStripBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.commentPanel {
+  width: 280px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-secondary);
   overflow: hidden;
+  animation: slideInPanel 0.22s ease;
 }
 
 .commentPanelHeader {
@@ -468,6 +567,27 @@
   justify-content: space-between;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.commentPanelCloseBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.commentPanelCloseBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .commentPanelTitle {
@@ -567,7 +687,7 @@
 /* ── Feedback bar (bottom, for regenerate) ──────────────────────────────── */
 
 .feedbackBar {
-  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
   padding: 10px 16px;
   display: flex;
   gap: 8px;
