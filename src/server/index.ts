@@ -52,6 +52,7 @@ type FileStoreFactory = (
   sessionMiddleware: typeof session,
 ) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
 import uiLabRoutes from './routes/uiLab';
+import pdfRoutes from './routes/pdf';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -180,6 +181,7 @@ app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
+app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/admin', adminRouter);

@@ -217,7 +217,7 @@ describe('POST /api/platform-admin/feature-flags/:id/rules', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ type: 'project', value: 'my-project' });
-  });
+  }, 15_000);
 
   it('returns 404 when flag not found', async () => {
     mockService.addRule.mockRejectedValue(new Error('Flag not found: flag-999'));

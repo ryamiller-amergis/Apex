@@ -254,7 +254,33 @@ When the last inner wave passes its gate:
 1. Confirm every non-deferred verification target has a passing test.
 2. List deferred e2e cases (skipped by design).
 3. Run the **Quality-gate checklist** below.
-4. **Stop.** Do **not** commit or push — the Dev Workbench session owns the branch and opens the PR via `finalisePush`. Report that the Feature is implementation-complete and ready for the workbench to capture the diff.
+4. **Verify all items are implemented.** Cross-reference every PBI and TBI in this Feature's `items[]` against the files you created or modified. If any item has no corresponding implementation, **go back and implement it before proceeding** — do not skip PBIs (frontend) in favor of TBIs (backend) or vice versa. A Feature is not complete until all its items are accounted for.
+5. **Stop.** Do **not** commit or push — the Dev Workbench session owns the branch and opens the PR via `finalisePush`.
+
+**MANDATORY — post a completion synopsis.** You MUST end your run with a visible chat message (not just tool calls). The synopsis must include:
+
+```
+## Implementation Synopsis
+
+### Completed items
+- [PBI/TBI-ID] Title — files created/modified
+- ...
+
+### Deferred (e2e)
+- [TC-ID] — reason
+
+### Items NOT implemented (if any)
+- [PBI/TBI-ID] Title — reason (should be empty if all items are done)
+
+### Files changed
+- path/to/file.ts (new | modified)
+- ...
+
+### Status
+Feature is implementation-complete and ready for diff capture.
+```
+
+**CRITICAL:** Never end a run with only tool calls and no final text. The user must always see a summary of what was implemented. If the run ends without this synopsis, the session will appear hung to the user.
 
 ---
 
@@ -270,8 +296,10 @@ Copy and track per Feature Executor run:
 [ ] Every item followed RED → GREEN → REFACTOR → tsc
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)
 [ ] Inner-wave gate passed (tsc + jest) before each subsequent wave
+[ ] ALL PBIs AND TBIs in this Feature's items[] have corresponding implementation
 [ ] No protected files modified without explicit permission
 [ ] NO `git commit` / NO `git push` performed
+[ ] Completion synopsis posted as a visible chat message (not just tool calls)
 ```
 
 ---

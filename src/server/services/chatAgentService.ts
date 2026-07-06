@@ -1779,6 +1779,16 @@ export async function sendMessage(
         state.thread.messages.push(agentMsg);
         broadcast(state, { type: 'message', message: agentMsg });
         await pgInsertMessage(threadId, agentMsg);
+      } else if (state.thread.kickoff?.mode === 'development') {
+        const fallbackMsg: ChatMessage = {
+          id: uuidv4(),
+          role: 'agent',
+          text: 'Agent run completed. Review the diff panel to see what changed — if more work is needed, send a follow-up message.',
+          ts: new Date().toISOString(),
+        };
+        state.thread.messages.push(fallbackMsg);
+        broadcast(state, { type: 'message', message: fallbackMsg });
+        await pgInsertMessage(threadId, fallbackMsg);
       }
 
       state.thread.status = 'idle';
