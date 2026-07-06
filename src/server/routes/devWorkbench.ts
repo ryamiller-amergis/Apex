@@ -5,8 +5,10 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 import { getSkillConfig } from '../services/projectSettingsService';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { createThread } from '../services/chatAgentService';
+import * as githubCatalog from '../services/skillCatalogGitHub';
 import {
   checkoutDefaultBranch,
+  checkoutNewBranch,
   createFeatureBranch,
   computeDiff,
   pushBranch,
@@ -20,10 +22,12 @@ import {
   cleanupWorkspace,
 } from '../services/repoCheckoutService';
 import { db } from '../db/drizzle';
-import { devSessions } from '../db/schema';
+import { devSessions, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
+import { injectDevContextFiles } from '../services/devContextService';
 import { getUserId } from '../utils/requestUser';
-import type { StartDevSessionRequest } from '../../shared/types/devWorkbench';
+import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
+import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 
 const router = Router();
 
@@ -55,13 +59,95 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /backlog-features?project=<project> — Apex PRD-sourced feature backlog
+router.get('/backlog-features', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+
+    const approvedPrds = await db
+      .select()
+      .from(prds)
+      .where(and(eq(prds.project, project), eq(prds.status, 'approved')));
+
+    const result: ApexBacklogGroup[] = [];
+
+    for (const prd of approvedPrds) {
+      const backlog = prd.backlogJson as any;
+      if (!backlog?.epics) continue;
+
+      const docs = await db
+        .select({ id: designDocs.id, featureIndex: designDocs.featureIndex, status: designDocs.status })
+        .from(designDocs)
+        .where(eq(designDocs.prdId, prd.id));
+
+      const docByFeatureIndex = new Map(docs.map(d => [d.featureIndex, d]));
+
+      let globalFeatureIdx = 0;
+      const epics: ApexBacklogGroup['epics'] = [];
+
+      for (const epic of backlog.epics) {
+        const features: BacklogFeatureItem[] = [];
+
+        for (const feat of epic.features ?? []) {
+          const doc = docByFeatureIndex.get(globalFeatureIdx);
+          const items = feat.items ?? [];
+          const pbiCount = items.filter((i: any) => i.type === 'PBI' || i.type === 'Product Backlog Item').length;
+          const tbiCount = items.filter((i: any) => i.type === 'TBI' || i.type === 'Technical Backlog Item').length;
+
+          features.push({
+            featureId: feat.id ?? `FEAT-${String(globalFeatureIdx + 1).padStart(3, '0')}`,
+            featureTitle: feat.title ?? 'Untitled Feature',
+            featurePriority: feat.priority ?? 'Should',
+            epicTitle: epic.title ?? 'Untitled Epic',
+            prdId: prd.id,
+            prdTitle: prd.title,
+            dependsOn: feat.dependsOn ?? [],
+            designDocId: doc?.id ?? undefined,
+            designDocStatus: doc?.status ?? undefined,
+            itemCount: items.length,
+            pbiCount,
+            tbiCount,
+          });
+
+          globalFeatureIdx++;
+        }
+
+        if (features.length > 0) {
+          epics.push({ epicTitle: epic.title ?? 'Untitled Epic', features });
+        }
+      }
+
+      if (epics.length > 0) {
+        result.push({ prdId: prd.id, prdTitle: prd.title, epics });
+      }
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[dev-workbench] getBacklogFeatures failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch backlog features' });
+  }
+});
+
 // POST /start — creates a session record immediately, then clones + sets up the thread async
 router.post('/start', async (req: Request, res: Response) => {
   try {
-    const { workItemId, project, model } = req.body as StartDevSessionRequest;
+    const { workItemId, project, model, prdId, featureId } = req.body as StartDevSessionRequest;
 
-    if (!workItemId || !project) {
-      res.status(400).json({ error: 'workItemId and project are required' });
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+
+    const hasAdoPath = !!workItemId;
+    const hasApexPath = !!prdId && !!featureId;
+
+    if (!hasAdoPath && !hasApexPath) {
+      res.status(400).json({ error: 'Either workItemId or prdId + featureId are required' });
       return;
     }
 
@@ -70,79 +156,142 @@ router.post('/start', async (req: Request, res: Response) => {
 
     await db.insert(devSessions).values({
       id: sessionId,
-      workItemId,
+      workItemId: workItemId ?? null,
       project,
       authorId: userId,
+      prdId: prdId ?? null,
+      featureId: featureId ?? null,
       status: 'setting_up',
     });
 
     res.json({ sessionId });
 
-    // Async setup — clone repo, create branch, set ADO state, create chat thread
+    // Async setup — clone repo, create branch, create chat thread
     (async () => {
       try {
         const skillConfig = await getSkillConfig(project);
         const developmentSkillPath = skillConfig?.developmentSkillPath ?? undefined;
         const developmentModel = model ?? skillConfig?.developmentModel ?? undefined;
+        const { provider, repo, baseBranch: defaultBranch } = await resolveCheckoutContext(skillConfig, project);
 
-        const adoService = new AzureDevOpsService(project);
-        const repo = skillConfig?.skillRepo ?? project;
-        const defaultBranch = await adoService.getDefaultBranch(repo, project);
-
-        // Fetch the work item to get its title for the branch slug
-        let workItemTitle = `wi-${workItemId}`;
-        try {
-          const wiResult = await adoService.queryWorkItemsByWiql({
-            wiql: `SELECT [System.Id],[System.Title] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
-            fields: ['System.Id', 'System.Title'],
-          });
-          const firstItem = wiResult.items[0];
-          if (firstItem?.fields?.['System.Title']) {
-            workItemTitle = firstItem.fields['System.Title'] as string;
+        if (hasApexPath) {
+          // Apex PRD-sourced path — skip ADO
+          const prdRow = await db.query.prds.findFirst({ where: eq(prds.id, prdId!) });
+          let featureTitle = featureId!;
+          if (prdRow?.backlogJson) {
+            const backlog = prdRow.backlogJson as any;
+            for (const epic of backlog.epics ?? []) {
+              for (const feat of epic.features ?? []) {
+                if (feat.id === featureId) {
+                  featureTitle = feat.title ?? featureId!;
+                }
+              }
+            }
           }
-        } catch {
-          // Non-fatal — fall back to numeric slug
+
+          const kebabTitle = featureTitle
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '')
+            .slice(0, 40);
+
+          const workspaceDir = await checkoutDefaultBranch({
+            project,
+            repo,
+            branch: defaultBranch,
+            sessionId,
+            provider,
+          });
+
+          const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
+          checkoutNewBranch(workspaceDir, branchName);
+
+          await injectDevContextFiles(workspaceDir, prdId!, featureId!);
+
+          const thread = await createThread(userId, {
+            project,
+            repo,
+            branch: branchName,
+            skillBranch: defaultBranch,
+            skillProvider: provider,
+            skillPath: developmentSkillPath,
+            model: developmentModel,
+            mode: 'development',
+          }, {
+            workspaceDirOverride: workspaceDir,
+          });
+
+          await db
+            .update(devSessions)
+            .set({
+              chatThreadId: thread.id,
+              branchName,
+              status: 'in_progress',
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(devSessions.id, sessionId));
+
+          console.log('[dev-workbench] apex session ready:', sessionId);
+        } else {
+          // Existing ADO path
+          const adoService = new AzureDevOpsService(project);
+
+          let workItemTitle = `wi-${workItemId}`;
+          try {
+            const wiResult = await adoService.queryWorkItemsByWiql({
+              wiql: `SELECT [System.Id],[System.Title] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+              fields: ['System.Id', 'System.Title'],
+            });
+            const firstItem = wiResult.items[0];
+            if (firstItem?.fields?.['System.Title']) {
+              workItemTitle = firstItem.fields['System.Title'] as string;
+            }
+          } catch {
+            // Non-fatal — fall back to numeric slug
+          }
+
+          const workspaceDir = await checkoutDefaultBranch({
+            project,
+            repo,
+            branch: defaultBranch,
+            sessionId,
+            provider,
+          });
+
+          const branchName = createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
+
+          try {
+            await adoService.setWorkItemState(workItemId!, 'In Progress');
+          } catch (adoErr) {
+            console.warn('[dev-workbench] setWorkItemState(In Progress) failed (non-fatal):', (adoErr as Error).message);
+          }
+
+          const thread = await createThread(userId, {
+            project,
+            repo,
+            branch: branchName,
+            skillBranch: defaultBranch,
+            skillProvider: provider,
+            skillPath: developmentSkillPath,
+            model: developmentModel,
+            mode: 'development',
+            workItemId,
+          }, {
+            workspaceDirOverride: workspaceDir,
+          });
+
+          await db
+            .update(devSessions)
+            .set({
+              chatThreadId: thread.id,
+              branchName,
+              status: 'in_progress',
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(devSessions.id, sessionId));
+
+          console.log('[dev-workbench] session ready:', sessionId);
         }
-
-        const workspaceDir = await checkoutDefaultBranch({
-          project,
-          repo,
-          branch: defaultBranch,
-          sessionId,
-        });
-
-        const branchName = createFeatureBranch(workspaceDir, workItemId, workItemTitle);
-
-        // Move ADO work item to In Progress
-        try {
-          await adoService.setWorkItemState(workItemId, 'In Progress');
-        } catch (adoErr) {
-          console.warn('[dev-workbench] setWorkItemState(In Progress) failed (non-fatal):', (adoErr as Error).message);
-        }
-
-        const thread = await createThread(userId, {
-          project,
-          repo,
-          branch: branchName,
-          skillPath: developmentSkillPath,
-          model: developmentModel,
-          mode: 'development',
-          workItemId,
-        }, {
-          workspaceDirOverride: workspaceDir,
-        });
-
-        await db
-          .update(devSessions)
-          .set({
-            chatThreadId: thread.id,
-            branchName,
-            status: 'in_progress',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(devSessions.id, sessionId));
-
-        console.log('[dev-workbench] session ready:', sessionId);
       } catch (err) {
         const message = (err as Error).message;
         console.error('[dev-workbench] async setup failed:', message);
@@ -185,6 +334,8 @@ router.get('/sessions', async (req: Request, res: Response) => {
         status: devSessions.status,
         prUrl: devSessions.prUrl,
         createdAt: devSessions.createdAt,
+        prdId: devSessions.prdId,
+        featureId: devSessions.featureId,
       })
       .from(devSessions)
       .where(and(...conditions));
@@ -220,6 +371,8 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       setupError: session.setupError,
       prUrl: session.prUrl,
       createdAt: session.createdAt,
+      prdId: session.prdId,
+      featureId: session.featureId,
     });
   } catch (err) {
     console.error('[dev-workbench] getSession failed:', (err as Error).message);
@@ -283,12 +436,8 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
     }
 
     const skillConfig = await getSkillConfig(session.project);
-    // Attribute the PR (and the ADO state/hyperlink updates) to the logged-in
-    // user — who is the work item's assignee in My Work — instead of the shared
-    // PAT identity, so ADO shows the PR as "proposed by" that user.
-    const adoService = await adoWriteForRequest(req, session.project);
-    const repo = skillConfig?.skillRepo ?? session.project;
-    const baseBranch = await adoService.getDefaultBranch(repo, session.project);
+    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
+    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
 
     const workspaceDir = getWorkspaceDir(sessionId);
 
@@ -310,7 +459,16 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
     }
 
     // Clean merge — push and open PR.
-    await finalisePush(sessionId, session.branchName, baseBranch, repo, session.project, session.workItemId, adoService);
+    await finalisePush(
+      sessionId,
+      session.branchName,
+      baseBranch,
+      repo,
+      session.project,
+      session.workItemId,
+      provider,
+      adoService,
+    );
 
     const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
     res.json({ ok: true, status: 'clean', branch: session.branchName, prUrl: updated?.prUrl ?? null });
@@ -393,12 +551,19 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     completeMerge(workspaceDir);
 
     const skillConfig = await getSkillConfig(session.project);
-    // Attribute the PR to the logged-in user (the assignee), not the shared PAT.
-    const adoService = await adoWriteForRequest(req, session.project);
-    const repo = skillConfig?.skillRepo ?? session.project;
-    const baseBranch = await adoService.getDefaultBranch(repo, session.project);
+    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
+    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
 
-    await finalisePush(sessionId, session.branchName, baseBranch, repo, session.project, session.workItemId, adoService);
+    await finalisePush(
+      sessionId,
+      session.branchName,
+      baseBranch,
+      repo,
+      session.project,
+      session.workItemId,
+      provider,
+      adoService,
+    );
 
     const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
     res.json({ ok: true, prUrl: updated?.prUrl ?? null });
@@ -469,12 +634,31 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
   }
 });
 
-// ── Internal helper ───────────────────────────────────────────────────────────
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+async function resolveCheckoutContext(
+  skillConfig: ProjectSkillConfig | null,
+  project: string,
+): Promise<{ provider: SkillProvider; repo: string; baseBranch: string }> {
+  const provider = skillConfig?.skillProvider ?? 'ado';
+  const repo = skillConfig?.skillRepo ?? project;
+
+  if (provider === 'github') {
+    const baseBranch = skillConfig?.skillBranch
+      ?? await githubCatalog.getDefaultBranch(repo);
+    return { provider, repo, baseBranch };
+  }
+
+  const adoService = new AzureDevOpsService(project);
+  const baseBranch = skillConfig?.skillBranch
+    ?? await adoService.getDefaultBranch(repo, project);
+  return { provider, repo, baseBranch };
+}
 
 /**
- * Pushes the feature branch, opens an ADO PR, transitions the work item
- * to "In Pull Request", attaches the PR hyperlink, and persists the PR URL
- * on the session record. Shared by the clean-push and conflict-complete paths.
+ * Pushes the feature branch, opens a PR, transitions the work item
+ * to "In Pull Request" (ADO only), attaches the PR hyperlink, and persists
+ * the PR URL on the session record. Shared by the clean-push and conflict-complete paths.
  */
 async function finalisePush(
   sessionId: string,
@@ -482,8 +666,9 @@ async function finalisePush(
   baseBranch: string,
   repo: string,
   project: string,
-  workItemId: number,
-  adoService: AzureDevOpsService,
+  workItemId: number | null,
+  provider: SkillProvider,
+  adoService: AzureDevOpsService | null,
 ): Promise<void> {
   const workspaceDir = getWorkspaceDir(sessionId);
 
@@ -491,18 +676,35 @@ async function finalisePush(
 
   let prUrl: string | null = null;
   try {
-    prUrl = await adoService.createPullRequest({
-      repo,
-      project,
-      sourceBranch: branchName,
-      targetBranch: baseBranch,
-      title: `[APEX] ${branchName.replace('feature/', '')}`,
-      description: `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`,
-      workItemId,
-    });
+    const description = workItemId
+      ? `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`
+      : `Automated implementation via APEX dev workbench.`;
+    const title = `[APEX] ${branchName.replace('feature/', '')}`;
 
-    await adoService.setWorkItemState(workItemId, 'In Pull Request');
-    await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
+    if (provider === 'github') {
+      prUrl = await githubCatalog.createPullRequest({
+        repo,
+        sourceBranch: branchName,
+        targetBranch: baseBranch,
+        title,
+        description,
+      });
+    } else if (adoService) {
+      prUrl = await adoService.createPullRequest({
+        repo,
+        project,
+        sourceBranch: branchName,
+        targetBranch: baseBranch,
+        title,
+        description,
+        workItemId: workItemId ?? undefined,
+      });
+
+      if (workItemId) {
+        await adoService.setWorkItemState(workItemId, 'In Pull Request');
+        await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
+      }
+    }
   } catch (prErr) {
     console.warn('[dev-workbench] PR creation failed (non-fatal):', (prErr as Error).message);
   }

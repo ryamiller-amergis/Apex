@@ -37,6 +37,8 @@ export interface ChatThreadKickoff {
   project: string;
   repo: string;
   branch?: string;
+  /** Branch to fetch skills from (defaults to `branch` if not set) */
+  skillBranch?: string;
   /** Skill provider — 'ado' (default) or 'github' */
   skillProvider?: import('./projectSettings').SkillProvider;
   /** Optional — omit for a free-chat session with no skill pre-loaded */

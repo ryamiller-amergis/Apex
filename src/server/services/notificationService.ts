@@ -9,6 +9,7 @@ import type {
   NotificationSseEvent,
 } from '../../shared/types/notification';
 import { sendTeamsNotification } from './teamsBotService';
+import { writeSseEvent } from '../utils/sseResponse';
 
 // ── SSE Connection Manager ────────────────────────────────────────────────────
 
@@ -33,10 +34,16 @@ function unsubscribe(userId: string, res: Response): void {
 function pushToUser(userId: string, event: NotificationSseEvent): void {
   const userSet = connections.get(userId);
   if (!userSet) return;
-  const payload = `data: ${JSON.stringify(event)}\n\n`;
+  const dead: Response[] = [];
   for (const res of userSet) {
-    res.write(payload);
+    if (!writeSseEvent(res, event)) {
+      dead.push(res);
+    }
   }
+  for (const res of dead) {
+    userSet.delete(res);
+  }
+  if (userSet.size === 0) connections.delete(userId);
 }
 
 // ── Row → shared type mapper ──────────────────────────────────────────────────

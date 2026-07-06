@@ -26,6 +26,8 @@ import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThrea
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
+import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
+import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag } from './hooks/useFeatureFlags';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
@@ -61,6 +63,7 @@ const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
+const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -104,7 +107,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -136,6 +139,8 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
+                    : location.pathname === '/pdf-tools'
+                    ? 'pdf-tools'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -252,6 +257,7 @@ function App() {
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
     if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
+    if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -408,6 +414,7 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigatePdfTools={() => navigate('/pdf-tools')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -663,6 +670,18 @@ function App() {
                   <UiLabView project={selectedProject} />
                 </div>
               </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'pdf-tools' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <PdfToolsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
+                <DesktopOnlyGate>
+                  <Suspense fallback={<div data-testid="pdf-tools-loading"><ViewSkeleton /></div>}>
+                    <div className="pdf-tools-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                      <PdfAssemblyView />
+                    </div>
+                  </Suspense>
+                </DesktopOnlyGate>
+              </PdfToolsRouteGuard>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>

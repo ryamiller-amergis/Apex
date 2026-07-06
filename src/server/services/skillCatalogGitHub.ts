@@ -156,6 +156,55 @@ export async function listRepos(org?: string): Promise<GitHubRepo[]> {
   return result;
 }
 
+export async function getDefaultBranch(repo: string, org?: string): Promise<string> {
+  const resolvedOrg = org || getDefaultOrg();
+  if (!resolvedOrg) throw new Error('GitHub org is required');
+
+  const repos = await listRepos(resolvedOrg);
+  const repoObj = repos.find((r) => r.name === repo);
+  return repoObj?.defaultBranch ?? 'main';
+}
+
+export async function createPullRequest(opts: {
+  repo: string;
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  description?: string;
+  org?: string;
+}): Promise<string> {
+  const resolvedOrg = opts.org || getDefaultOrg();
+  if (!resolvedOrg) throw new Error('GitHub org is required');
+
+  const token = getToken();
+  const response = await fetch(
+    `${GITHUB_API}/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(opts.repo)}/pulls`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'ai-pilot-skill-catalog',
+      },
+      body: JSON.stringify({
+        title: opts.title,
+        head: opts.sourceBranch,
+        base: opts.targetBranch,
+        body: opts.description ?? '',
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`GitHub API ${response.status} ${response.statusText}: ${body}`.trim());
+  }
+
+  const pr = await response.json() as { html_url: string };
+  return pr.html_url;
+}
+
 export async function listBranches(repo: string, org?: string): Promise<string[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');

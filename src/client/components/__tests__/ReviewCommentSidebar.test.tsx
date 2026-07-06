@@ -207,51 +207,62 @@ describe('reply input visibility', () => {
 
 describe('reply submission', () => {
   it('calls onReply with commentId and text when send button is clicked', async () => {
+    const user = userEvent.setup({ delay: null });
     const onReply = jest.fn();
     renderSidebar({ comments: [makeComment()], onReply });
 
     const input = screen.getByPlaceholderText('Reply…');
-    await userEvent.type(input, 'A new reply');
-    fireEvent.click(screen.getByRole('button', { name: /send reply/i }));
+    await user.type(input, 'A new reply');
+    await user.click(screen.getByRole('button', { name: /send reply/i }));
 
     expect(onReply).toHaveBeenCalledWith('comment-1', 'A new reply');
   });
 
   it('calls onReply when Enter (without Shift) is pressed', async () => {
+    const user = userEvent.setup({ delay: null });
     const onReply = jest.fn();
     renderSidebar({ comments: [makeComment()], onReply });
 
     const input = screen.getByPlaceholderText('Reply…');
-    await userEvent.type(input, 'Quick reply{Enter}');
+    await user.type(input, 'Quick reply');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     expect(onReply).toHaveBeenCalledWith('comment-1', 'Quick reply');
+    expect(onReply).toHaveBeenCalledTimes(1);
   });
 
   it('does not call onReply when Shift+Enter is pressed', async () => {
+    const user = userEvent.setup({ delay: null });
     const onReply = jest.fn();
     renderSidebar({ comments: [makeComment()], onReply });
 
     const input = screen.getByPlaceholderText('Reply…');
-    await userEvent.type(input, 'line one{Shift>}{Enter}{/Shift}line two');
+    await user.type(input, 'line one');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', shiftKey: true });
+    await user.type(input, 'line two');
 
     expect(onReply).not.toHaveBeenCalled();
   });
 
   it('does not call onReply for whitespace-only input', async () => {
+    const user = userEvent.setup({ delay: null });
     const onReply = jest.fn();
     renderSidebar({ comments: [makeComment()], onReply });
 
     const input = screen.getByPlaceholderText('Reply…');
-    await userEvent.type(input, '   {Enter}');
+    await user.type(input, '   ');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     expect(onReply).not.toHaveBeenCalled();
   });
 
   it('clears the input after a successful reply', async () => {
+    const user = userEvent.setup({ delay: null });
     renderSidebar({ comments: [makeComment()] });
 
     const input = screen.getByPlaceholderText('Reply…') as HTMLTextAreaElement;
-    await userEvent.type(input, 'My reply{Enter}');
+    await user.type(input, 'My reply');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     expect(input.value).toBe('');
   });
@@ -263,9 +274,10 @@ describe('reply submission', () => {
   });
 
   it('enables the send button when input has text', async () => {
+    const user = userEvent.setup({ delay: null });
     renderSidebar({ comments: [makeComment()] });
 
-    await userEvent.type(screen.getByPlaceholderText('Reply…'), 'hello');
+    await user.type(screen.getByPlaceholderText('Reply…'), 'hello');
 
     expect(screen.getByRole('button', { name: /send reply/i })).not.toBeDisabled();
   });

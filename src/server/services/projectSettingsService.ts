@@ -2,7 +2,7 @@ import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, ApproverPoolResponse, SkillProvider } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
@@ -110,6 +110,8 @@ export interface UpsertSkillConfigOptions {
   uiLabSkillPath?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  interviewSkillOptions?: InterviewSkillOption[] | null;
+  prototypeStageEnabled?: boolean;
   approvalMode?: ApprovalMode;
 }
 
@@ -166,6 +168,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     uiLabSkillPath: opts.uiLabSkillPath ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
+    interviewSkillOptions: opts.interviewSkillOptions ?? null,
+    prototypeStageEnabled: opts.prototypeStageEnabled ?? true,
     defaultModel: opts.defaultModel ?? null,
     approvalMode: approvalModeValue,
     updatedAt: now,

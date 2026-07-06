@@ -1,0 +1,282 @@
+{
+  "_comment": "Worked example — derived from notification-preferences backlog. PBI-only test cases for Apex. Use as canonical shape reference when generating test-case JSON.",
+  "slug": "notification-preferences",
+  "sourceBacklog": "notification-preferences.backlog.json",
+  "sourcePrd": "notification-preferences.prd.md",
+  "generatedAt": "2026-07-01T12:00:00Z",
+  "scope": {
+    "mode": "full",
+    "pbiId": null,
+    "featureTitle": null
+  },
+  "suites": [
+    {
+      "epicTitle": "Notification Preferences",
+      "featureTitle": "Per-Channel Notification Settings",
+      "featureFlag": "FF_NotificationPreferences",
+      "pbiId": "PBI-001",
+      "pbiTitle": "Toggle In-App Notifications by Category",
+      "testCaseCount": 6,
+      "testCases": [
+        {
+          "id": "TC-PBI-001-001",
+          "title": "Authenticated User disables standup notifications from settings",
+          "type": "e2e",
+          "tier": "happy",
+          "priority": "Must Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "on",
+          "preconditions": [
+            "FF_NotificationPreferences enabled for user",
+            "User is logged in and on Notification Preferences page",
+            "Standup notifications are currently enabled"
+          ],
+          "testData": {
+            "category": "Standup Reminders"
+          },
+          "steps": [
+            {
+              "order": 1,
+              "action": "Navigate to Settings > Notification Preferences",
+              "expected": "Notification Preferences page displays with category toggles"
+            },
+            {
+              "order": 2,
+              "action": "Locate the Standup Reminders category toggle",
+              "expected": "Toggle is in the ON position"
+            },
+            {
+              "order": 3,
+              "action": "Click the toggle to disable Standup Reminders",
+              "expected": "Toggle switches to OFF and a success toast confirms the change"
+            }
+          ],
+          "expectedResult": "Standup notification category is disabled; no standup notifications are delivered until re-enabled",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": 0,
+            "businessRules": ["BR-001"],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": true,
+            "recommendedTier": "e2e-playwright"
+          }
+        },
+        {
+          "id": "TC-PBI-001-002",
+          "title": "Preference change persists across sessions",
+          "type": "integration",
+          "tier": "happy",
+          "priority": "Must Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "on",
+          "preconditions": [
+            "User has previously disabled a notification category"
+          ],
+          "testData": {
+            "category": "PRD Review Requests"
+          },
+          "steps": [
+            {
+              "order": 1,
+              "action": "Log out and log back in",
+              "expected": "Session is re-established"
+            },
+            {
+              "order": 2,
+              "action": "Navigate to Settings > Notification Preferences",
+              "expected": "PRD Review Requests toggle remains in the OFF position"
+            }
+          ],
+          "expectedResult": "Preference is persisted in the database and survives session boundaries",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": 1,
+            "businessRules": ["BR-001"],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": true,
+            "recommendedTier": "integration"
+          }
+        },
+        {
+          "id": "TC-PBI-001-003",
+          "title": "API rejects invalid category name with 400",
+          "type": "api",
+          "tier": "error",
+          "priority": "Must Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "on",
+          "preconditions": [
+            "Authenticated session"
+          ],
+          "testData": {
+            "invalidCategory": "NonExistentCategory"
+          },
+          "steps": [
+            {
+              "order": 1,
+              "action": "Send PUT /api/notification-preferences with category 'NonExistentCategory'",
+              "expected": "Response status is 400 with validation error message"
+            }
+          ],
+          "expectedResult": "Invalid category names are rejected without modifying any preferences",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": 2,
+            "businessRules": [],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": true,
+            "recommendedTier": "integration"
+          }
+        },
+        {
+          "id": "TC-PBI-001-004",
+          "title": "Unauthenticated request to preferences API returns 401",
+          "type": "security",
+          "tier": "negative",
+          "priority": "Must Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "on",
+          "preconditions": [
+            "No authentication token provided"
+          ],
+          "testData": {},
+          "steps": [
+            {
+              "order": 1,
+              "action": "Send PUT /api/notification-preferences without Authorization header",
+              "expected": "Response status is 401"
+            }
+          ],
+          "expectedResult": "Unauthenticated users cannot modify notification preferences",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": null,
+            "businessRules": [],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": true,
+            "recommendedTier": "integration"
+          }
+        },
+        {
+          "id": "TC-PBI-001-005",
+          "title": "Preferences page accessible via keyboard navigation",
+          "type": "accessibility",
+          "tier": "nfr",
+          "priority": "Should Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "on",
+          "preconditions": [
+            "User is on Settings page"
+          ],
+          "testData": {},
+          "steps": [
+            {
+              "order": 1,
+              "action": "Tab to Notification Preferences toggles",
+              "expected": "Each toggle receives visible focus"
+            },
+            {
+              "order": 2,
+              "action": "Activate toggle via Space key",
+              "expected": "Toggle state changes same as mouse click"
+            }
+          ],
+          "expectedResult": "Notification Preferences toggles are fully keyboard-accessible",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": 0,
+            "businessRules": [],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": false,
+            "recommendedTier": "manual",
+            "rationale": "Screen reader verification requires manual testing beyond Playwright defaults"
+          }
+        },
+        {
+          "id": "TC-PBI-001-006",
+          "title": "Notification Preferences hidden when feature flag is off",
+          "type": "functional",
+          "tier": "negative",
+          "priority": "Must Have",
+          "persona": "Authenticated User",
+          "featureFlag": "FF_NotificationPreferences",
+          "featureFlagState": "off",
+          "preconditions": [
+            "FF_NotificationPreferences disabled"
+          ],
+          "testData": {},
+          "steps": [
+            {
+              "order": 1,
+              "action": "Navigate to Settings page",
+              "expected": "Notification Preferences section is not visible"
+            }
+          ],
+          "expectedResult": "Feature is hidden when flag is off",
+          "traceability": {
+            "pbiId": "PBI-001",
+            "acceptanceCriteriaIndex": null,
+            "businessRules": [],
+            "userStory": "As an Authenticated User, I want to toggle notification categories on or off so that I only receive alerts I care about"
+          },
+          "automation": {
+            "candidate": true,
+            "recommendedTier": "e2e-playwright"
+          }
+        }
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "acceptanceCriteria": [
+      {
+        "pbiId": "PBI-001",
+        "index": 0,
+        "covered": true,
+        "testCaseIds": ["TC-PBI-001-001", "TC-PBI-001-005"]
+      },
+      {
+        "pbiId": "PBI-001",
+        "index": 1,
+        "covered": true,
+        "testCaseIds": ["TC-PBI-001-002"]
+      },
+      {
+        "pbiId": "PBI-001",
+        "index": 2,
+        "covered": true,
+        "testCaseIds": ["TC-PBI-001-003"]
+      }
+    ],
+    "businessRules": [
+      {
+        "id": "BR-001",
+        "covered": true,
+        "testCaseIds": ["TC-PBI-001-001", "TC-PBI-001-002"]
+      }
+    ],
+    "gaps": [],
+    "explicitlyOutOfScope": [
+      "Email notification preferences (deferred to future epic)"
+    ]
+  },
+  "assumptions": [
+    "Notification categories are defined in the system and match the PRD category list",
+    "Default state for all categories is ON until explicitly toggled off"
+  ]
+}

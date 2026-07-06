@@ -1,0 +1,35 @@
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 300px;
+  padding: 2rem;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+  max-width: 360px;
+}
+
+.icon {
+  color: var(--color-text-subtle, #8b9ab0);
+}
+
+.heading {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text-primary, #1a2332);
+  margin: 0;
+}
+
+.message {
+  font-size: 0.9375rem;
+  color: var(--color-text-secondary, #556070);
+  line-height: 1.6;
+  margin: 0;
+}

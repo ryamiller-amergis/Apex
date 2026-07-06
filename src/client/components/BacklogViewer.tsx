@@ -73,12 +73,14 @@ interface PersonaBehavior {
 }
 
 interface Feature {
+  id?: string;
   title: string;
   priority?: string;
   description?: string;
   affectedPersonas?: string[];
   outOfScope?: string[];
   dependencies?: string[];
+  dependsOn?: string[];
   featureFlag?: { name: string };
   items?: BacklogItem[];
   designDocId?: string;
@@ -111,6 +113,7 @@ interface BacklogData {
   businessRules?: BusinessRule[];
   epics?: Epic[];
   assumptionsMade?: string[];
+  implementationPhases?: { phase: number; epics: string[]; rationale: string }[];
 }
 
 interface GeneratedTestStep {
@@ -178,62 +181,99 @@ function stepsFrom(value: unknown): GeneratedTestStep[] {
   });
 }
 
+function parseTestCaseRecord(
+  record: Record<string, unknown>,
+  fallbackPbiId: string,
+  index: number
+): GeneratedTestCase | null {
+  const traceability = asRecord(record.traceability);
+  const automation = asRecord(record.automation);
+  const id = stringFrom(record.id) ?? `${fallbackPbiId}-TC-${index + 1}`;
+  const title = stringFrom(record.title) ?? id;
+
+  return {
+    id,
+    title,
+    tier: stringFrom(record.tier),
+    type: stringFrom(record.type),
+    priority: stringFrom(record.priority),
+    persona: stringFrom(record.persona),
+    preconditions: stringArrayFrom(record.preconditions),
+    steps: stepsFrom(record.steps),
+    expectedResult:
+      stringFrom(record.expectedResult) ??
+      stringFrom(record.expected_result),
+    automationTier:
+      stringFrom(automation?.recommendedTier) ??
+      stringFrom(automation?.recommended_tier),
+    acceptanceCriteriaIndex:
+      typeof traceability?.acceptanceCriteriaIndex === 'number'
+        ? traceability.acceptanceCriteriaIndex
+        : undefined,
+    businessRules: stringArrayFrom(traceability?.businessRules),
+  };
+}
+
 function extractGeneratedTestCasesByPbi(
   testCasesJson: unknown
 ): Map<string, GeneratedTestCase[]> {
   const root = asRecord(testCasesJson);
-  const suites = Array.isArray(root?.suites) ? root.suites : [];
   const byPbi = new Map<string, GeneratedTestCase[]>();
+  if (!root) return byPbi;
 
-  for (const suite of suites) {
-    const suiteRecord = asRecord(suite);
+  const suites = Array.isArray(root.suites) ? root.suites : [];
+
+  if (suites.length > 0) {
+    for (const suite of suites) {
+      const suiteRecord = asRecord(suite);
+      const pbiId =
+        stringFrom(suiteRecord?.pbiId) ??
+        stringFrom(suiteRecord?.pbi_id) ??
+        stringFrom(suiteRecord?.id);
+      const testCases = Array.isArray(suiteRecord?.testCases)
+        ? suiteRecord.testCases
+        : Array.isArray(suiteRecord?.test_cases)
+          ? suiteRecord.test_cases
+          : [];
+
+      if (!pbiId || testCases.length === 0) continue;
+
+      const cases = testCases.flatMap((testCase, index) => {
+        const record = asRecord(testCase);
+        if (!record) return [];
+        const parsed = parseTestCaseRecord(record, pbiId, index);
+        return parsed ? [parsed] : [];
+      });
+
+      byPbi.set(pbiId, cases);
+    }
+    return byPbi;
+  }
+
+  const flatCases = Array.isArray(root.testCases)
+    ? root.testCases
+    : Array.isArray(root.test_cases)
+      ? root.test_cases
+      : [];
+
+  for (let i = 0; i < flatCases.length; i++) {
+    const record = asRecord(flatCases[i]);
+    if (!record) continue;
+
+    const traceability = asRecord(record.traceability);
     const pbiId =
-      stringFrom(suiteRecord?.pbiId) ??
-      stringFrom(suiteRecord?.pbi_id) ??
-      stringFrom(suiteRecord?.id);
-    const testCases = Array.isArray(suiteRecord?.testCases)
-      ? suiteRecord.testCases
-      : Array.isArray(suiteRecord?.test_cases)
-        ? suiteRecord.test_cases
-        : [];
+      stringFrom(record.pbiId) ??
+      stringFrom(record.pbi_id) ??
+      stringFrom(traceability?.pbiId) ??
+      stringFrom(traceability?.pbi_id);
+    if (!pbiId) continue;
 
-    if (!pbiId || testCases.length === 0) continue;
+    const parsed = parseTestCaseRecord(record, pbiId, i);
+    if (!parsed) continue;
 
-    const cases = testCases.flatMap((testCase, index) => {
-      const record = asRecord(testCase);
-      if (!record) return [];
-
-      const traceability = asRecord(record.traceability);
-      const automation = asRecord(record.automation);
-      const id = stringFrom(record.id) ?? `${pbiId}-TC-${index + 1}`;
-      const title = stringFrom(record.title) ?? id;
-
-      return [
-        {
-          id,
-          title,
-          tier: stringFrom(record.tier),
-          type: stringFrom(record.type),
-          priority: stringFrom(record.priority),
-          persona: stringFrom(record.persona),
-          preconditions: stringArrayFrom(record.preconditions),
-          steps: stepsFrom(record.steps),
-          expectedResult:
-            stringFrom(record.expectedResult) ??
-            stringFrom(record.expected_result),
-          automationTier:
-            stringFrom(automation?.recommendedTier) ??
-            stringFrom(automation?.recommended_tier),
-          acceptanceCriteriaIndex:
-            typeof traceability?.acceptanceCriteriaIndex === 'number'
-              ? traceability.acceptanceCriteriaIndex
-              : undefined,
-          businessRules: stringArrayFrom(traceability?.businessRules),
-        },
-      ];
-    });
-
-    byPbi.set(pbiId, cases);
+    const existing = byPbi.get(pbiId) ?? [];
+    existing.push(parsed);
+    byPbi.set(pbiId, existing);
   }
 
   return byPbi;
@@ -961,7 +1001,7 @@ const FeatureCard: React.FC<{
         defaultOpen={index === 0}
         header={
           <div className={styles.featureHeader}>
-            <span className={styles.featureLabel}>Feature</span>
+            <span className={styles.featureLabel}>{feature.id || 'Feature'}</span>
             {feature.adoWorkItemUrl ? (
               <a
                 href={feature.adoWorkItemUrl}
@@ -1011,6 +1051,20 @@ const FeatureCard: React.FC<{
             <div className={styles.featureMeta}>
               <span className={styles.metaLabel}>Out of Scope:</span>
               {feature.outOfScope.join(' · ')}
+            </div>
+          )}
+
+          {feature.dependsOn && feature.dependsOn.length > 0 && (
+            <div className={styles.featureMeta}>
+              <span className={styles.metaLabel}>Depends On:</span>
+              <span className={styles.featureDepIds}>{feature.dependsOn.join(', ')}</span>
+            </div>
+          )}
+
+          {(!feature.dependsOn || feature.dependsOn.length === 0) && feature.dependencies && feature.dependencies.length > 0 && feature.dependencies[0] !== 'None' && (
+            <div className={styles.featureMeta}>
+              <span className={styles.metaLabel}>Depends On:</span>
+              {feature.dependencies.join(' · ')}
             </div>
           )}
 
@@ -1560,6 +1614,40 @@ export const BacklogViewer: React.FC<BacklogViewerProps> = ({
             >
               Test-case generation did not complete for this PRD.
             </div>
+          )}
+
+          {/* Implementation Phases */}
+          {data.implementationPhases && data.implementationPhases.length > 0 && (
+            <section className={styles.section}>
+              <div className={styles.sectionHeading}>
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 4h12M2 8h8M2 12h5" />
+                </svg>
+                Implementation Phases
+              </div>
+              <div className={styles.phasesTimeline}>
+                {data.implementationPhases
+                  .slice()
+                  .sort((a: { phase: number }, b: { phase: number }) => a.phase - b.phase)
+                  .map((p: { phase: number; epics: string[]; rationale: string }) => (
+                  <div key={p.phase} className={styles.phaseCard}>
+                    <div className={styles.phaseHeader}>
+                      <span className={styles.phaseBadge}>Phase {p.phase}</span>
+                      <span className={styles.phaseEpics}>{p.epics.join(', ')}</span>
+                    </div>
+                    <div className={styles.phaseRationale}>{p.rationale}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
 
           {/* Epics */}

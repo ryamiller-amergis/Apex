@@ -20,6 +20,7 @@ import { getUserId } from '../utils/requestUser';
 import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest } from '../../shared/types/chat';
 import type { ThreadAccess } from '../services/threadAccessService';
 import { requirePermission } from '../middleware/rbac';
+import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 
 const router = Router();
 
@@ -182,8 +183,14 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering
   res.flushHeaders();
 
+  let stopHeartbeat = () => {};
+  let unsubscribe = () => {};
+
   const sendEvent = (event: object) => {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (!writeSseEvent(res, event)) {
+      stopHeartbeat();
+      unsubscribe();
+    }
   };
 
   // Hydrate the thread into memory BEFORE subscribing. subscribeToThread only
@@ -208,15 +215,11 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   // hydrated status since it reflects the normalized in-memory state.
   sendEvent({ type: 'status', status: hydrated?.status ?? thread.status });
 
-  const unsubscribe = subscribeToThread(req.params.id, sendEvent);
-
-  // Keep-alive ping every 25 seconds
-  const ping = setInterval(() => {
-    res.write(': ping\n\n');
-  }, 25000);
+  unsubscribe = subscribeToThread(req.params.id, sendEvent);
+  stopHeartbeat = startSseHeartbeat(res);
 
   req.on('close', () => {
-    clearInterval(ping);
+    stopHeartbeat();
     unsubscribe();
   });
 });

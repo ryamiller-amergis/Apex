@@ -286,7 +286,7 @@ export interface DesignDoc extends DesignDocSummary {
   fixCommentId?: string | null;
 }
 
-export type CreateDesignDocResponse = { designDocId: string; threadId: string };
+export type CreateDesignDocResponse = { designDocIds: string[]; count: number };
 
 export interface ReviewDesignDocRequest {
   action: 'approve';

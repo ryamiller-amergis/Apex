@@ -30,6 +30,13 @@ jest.mock('../../hooks/useDesignPrototypes', () => ({
   useDeletePrototype: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
+jest.mock('../../hooks/useProjectSkillConfig', () => ({
+  useProjectSkillConfig: jest.fn(() => ({
+    data: { prototypeStageEnabled: true },
+    isLoading: false,
+  })),
+}));
+
 jest.mock('../ConfirmDeleteModal', () => ({
   ConfirmDeleteModal: () => null,
 }));

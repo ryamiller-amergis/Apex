@@ -85,6 +85,23 @@ describe('repoCheckoutService', () => {
       ).rejects.toThrow('ADO_ORG and ADO_PAT must be set for repo checkout');
     });
 
+    it('throws when GitHub credentials are not configured', async () => {
+      delete process.env.GITHUB_ORG;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_PAT;
+      delete process.env.GH_SKILL_TOKEN;
+
+      await expect(
+        checkoutDefaultBranch({
+          project: 'Apex',
+          repo: 'AI-Pilot',
+          branch: 'main',
+          sessionId: 'session-123',
+          provider: 'github',
+        }),
+      ).rejects.toThrow('GITHUB_ORG must be set for GitHub repo checkout');
+    });
+
     it('clones the repo into the workspace when credentials are set', async () => {
       process.env.ADO_ORG = 'https://dev.azure.com/amergis';
       process.env.ADO_PAT = 'secret-pat';
@@ -104,6 +121,26 @@ describe('repoCheckoutService', () => {
       expect(mockExecSync).toHaveBeenCalledWith(
         expect.stringContaining('git clone'),
         expect.objectContaining({ cwd: workspacePath('session-abc') }),
+      );
+    });
+
+    it('clones a GitHub repo when provider is github', async () => {
+      process.env.GITHUB_ORG = 'amergis';
+      process.env.GITHUB_TOKEN = 'gh-secret';
+      mockFs.mkdirSync.mockImplementation(() => undefined);
+
+      const workspaceDir = await checkoutDefaultBranch({
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+        sessionId: 'session-gh',
+        provider: 'github',
+      });
+
+      expect(workspaceDir).toBe(workspacePath('session-gh'));
+      expect(mockExecSync).toHaveBeenCalledWith(
+        expect.stringContaining('github.com/amergis/AI-Pilot.git'),
+        expect.objectContaining({ cwd: workspacePath('session-gh') }),
       );
     });
   });

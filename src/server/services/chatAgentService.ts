@@ -201,17 +201,26 @@ function sanitizeAttachmentName(name: string, index: number): string {
   return sanitized || fallback;
 }
 
-function writeMessageAttachments(
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
+}
+
+async function writeMessageAttachments(
   workspaceDir: string,
   turnId: string,
   attachments: ChatAttachment[],
-): ChatAttachmentMeta[] {
+): Promise<ChatAttachmentMeta[]> {
   if (attachments.length === 0) return [];
 
   const attachmentsDir = path.join(workspaceDir, '.ai-pilot', 'attachments', turnId);
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
-  return attachments.map((attachment, index) => {
+  const results: ChatAttachmentMeta[] = [];
+  for (let index = 0; index < attachments.length; index++) {
+    const attachment = attachments[index];
     const fileName = `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentName(attachment.name, index)}`;
     const absolutePath = path.join(attachmentsDir, fileName);
     if (attachment.encoding === 'base64') {
@@ -220,14 +229,37 @@ function writeMessageAttachments(
       fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
     }
 
-    return {
+    const isDocx = attachment.name.toLowerCase().endsWith('.docx')
+      || attachment.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    if (isDocx && attachment.encoding === 'base64') {
+      try {
+        const docxBuffer = Buffer.from(attachment.content, 'base64');
+        const extractedText = await extractDocxText(docxBuffer);
+        const txtFileName = fileName.replace(/\.docx$/i, '.txt');
+        fs.writeFileSync(path.join(attachmentsDir, txtFileName), extractedText, 'utf-8');
+        results.push({
+          id: attachment.id,
+          name: attachment.name.replace(/\.docx$/i, '.txt'),
+          type: 'text/plain',
+          size: Buffer.byteLength(extractedText, 'utf-8'),
+          path: path.posix.join('.ai-pilot', 'attachments', turnId, txtFileName),
+        });
+        continue;
+      } catch (err) {
+        console.warn(`[chat] Failed to extract text from ${attachment.name}, falling back to raw file:`, err);
+      }
+    }
+
+    results.push({
       id: attachment.id,
       name: attachment.name,
       type: attachment.type,
       size: attachment.size,
       path: path.posix.join('.ai-pilot', 'attachments', turnId, fileName),
-    };
-  });
+    });
+  }
+  return results;
 }
 
 function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMeta[]): string {
@@ -322,7 +354,7 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
 }
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
-  const branch = kickoff.branch ?? 'main';
+  const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
   const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
   const parts: string[] = [
@@ -616,7 +648,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     return buildFreeChatPrompt(kickoff);
   }
 
-  const branch = kickoff.branch ?? 'main';
+  const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
   const parts: string[] = [
     `# Sandbox`,
@@ -666,11 +698,14 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
     `File writes via shell/Python may silently fail in this environment.`,
     ``,
-    `# UI rendering note`,
-    `When the skill asks the user questions with multiple-choice options, format each option`,
-    `as \`a. text\`, \`b. text\`, etc. on its own line — the chat UI renders these as clickable`,
-    `buttons. This is a rendering hint only; it does not change when, whether, or how many`,
-    `questions the skill asks.`,
+    `# UI rendering — interactive questions`,
+    `This chat has an interactive question UI. When you ask the user a multiple-choice question:`,
+    ``,
+    `1. Format each option as \`a. text\`, \`b. text\`, etc. on its own line — the UI renders these as clickable buttons the user can select.`,
+    `2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.`,
+    `3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.`,
+    `4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.`,
+    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`,
   );
 
   if (kickoff.transcript) {
@@ -704,7 +739,9 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 }
 
 function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
-  const branch = kickoff.branch ?? 'main';
+  const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
+  const isGitHub = kickoff.skillProvider === 'github';
+  const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
   const parts: string[] = [
     `# Development workspace`,
     `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo on branch \`${branch}\`.`,
@@ -714,39 +751,84 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     `  project: "${kickoff.project}"`,
     `  repo:    "${kickoff.repo}"`,
     `  branch:  "${branch}"`,
+    `  provider: "${kickoff.skillProvider ?? 'ado'}"`,
     `  work item: ${kickoff.workItemId ?? '(none)'}`,
     ``,
-    `# Available MCP tools (via \`ado-skills\` server)`,
-    `- \`get_skill\`        — load a SKILL.md from the repo`,
-    `- \`list_repo_dir\`    — browse repo directory structure`,
-    `- \`get_skill_file\`   — read any file from the repo`,
-    `- \`search_repo_code\` — search code in the repo`,
+  ];
+
+  if (isGitHub) {
+    parts.push(
+      `# Repo access`,
+      `Skills from this project's ${repoLabel} are pre-loaded into the conversation by the system when applicable.`,
+      ``,
+    );
+  } else {
+    parts.push(
+      `# Available MCP tools (via \`ado-skills\` server)`,
+      `- \`get_skill\`        — load a SKILL.md from the repo`,
+      `- \`list_repo_dir\`    — browse repo directory structure`,
+      `- \`get_skill_file\`   — read any file from the repo`,
+      `- \`search_repo_code\` — search code in the repo`,
+      ``,
+    );
+  }
+
+  parts.push(
     ...buildScopePolicyLines(kickoff),
     ``,
+    `# Pre-loaded design context`,
+    `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
+    `- **PRD markdown** — \`{slug}.prd.md\``,
+    `- **Backlog JSON** — \`{slug}.backlog.json\` (epics, features, PBIs, TBIs, dependsOn, parallelGroup)`,
+    `- **Test cases** — \`{slug}.test-cases.json\` (verification targets per PBI)`,
+    `- **Design spec** — \`{slug}-design-spec/{feature-slug}-design.md\``,
+    `- **Tech spec** — \`{slug}-design-spec/{feature-slug}-tech-spec.md\``,
+    `- **Assumptions** — \`{slug}-design-spec/{feature-slug}-assumptions.md\``,
+    ``,
+    `Read these files first — they define WHAT to build, architectural decisions, API contracts,`,
+    `data models, component structures, and test expectations. The tech spec is your primary`,
+    `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
+    `\`parallelGroup\` fields) to determine execution order.`,
+    ``,
+    `# Execution mode — MULTITASK by default`,
+    `When the design spec or backlog defines items that can run in parallel (same \`parallelGroup\`,`,
+    `or no inter-dependencies), you MUST dispatch them as parallel subagents (via the Task tool`,
+    `with \`run_in_background: true\`). Only serialize items that have explicit \`dependsOn\` edges`,
+    `to earlier items. This maximizes throughput and matches the design spec's intended phases.`,
+    ``,
     `# Your task`,
-    `You are implementing work item #${kickoff.workItemId}. Your job:`,
-    `1. If a development skill path is configured, call \`get_skill\` to load it and follow its instructions.`,
-    `2. Otherwise, read the work item context and implement the required changes directly in this checkout.`,
+    `You are implementing the feature identified by this session. Your job:`,
+    `1. If a development skill path is configured, load it and follow its instructions.`,
+    `2. Otherwise, read the design artifacts above and implement the required changes directly.`,
     `3. Edit files directly using the built-in file tools (Write/Edit). The cwd is the repo root.`,
     `4. Do NOT push changes, create branches, commit, or run git commands. All your edits will be captured as a diff by APEX.`,
-    `5. Focus on clean, working code that addresses the work item requirements.`,
-    `6. When your implementation and tests are complete, the development skill should dispatch the built-in code-reviewer subagent (via the Task tool) to review the changes before handing back to the user.`,
+    `5. Focus on clean, working code that addresses the feature requirements from the design spec.`,
+    `6. When your implementation and tests are complete, dispatch the built-in code-reviewer subagent (via the Task tool) to review the changes before handing back to the user.`,
     ``,
     `# Important constraints`,
     `- This IS a real repo checkout — you can read any project file directly from disk.`,
     `- Do NOT run \`git push\`, \`git commit\`, or create pull requests.`,
     `- Write clean, production-quality code.`,
     `- Follow existing project conventions you observe in the codebase.`,
-  ];
+    `- Use parallel subagents (multitask) for independent work items — do NOT serialize unnecessarily.`,
+  );
 
   if (kickoff.skillPath) {
     parts.push(
       ``,
       `# Development skill`,
       `A development skill has been configured. Load it first:`,
-      `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
-      `Follow the skill's instructions for implementing this work item.`,
     );
+    if (isGitHub) {
+      parts.push(
+        `The skill content will be pre-loaded below by the system.`,
+      );
+    } else {
+      parts.push(
+        `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
+      );
+    }
+    parts.push(`Follow the skill's instructions for implementing this feature.`);
   }
 
   return parts.join('\n');
@@ -1434,7 +1516,7 @@ export async function sendMessage(
   const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
 
   const turnId = uuidv4();
-  const attachmentMeta = writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
 
   // Record the user message
@@ -1468,11 +1550,12 @@ export async function sendMessage(
     if (state.thread.kickoff.skillProvider === 'github' && state.thread.kickoff.skillPath) {
       try {
         const { getSkillFile } = await import('./skillCatalogFacade');
+        const resolvedSkillBranch = state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch;
         const skillContent = await getSkillFile(
           state.thread.kickoff.project,
           state.thread.kickoff.repo,
           state.thread.kickoff.skillPath,
-          state.thread.kickoff.branch,
+          resolvedSkillBranch,
           'github',
         );
         initialPrompt += `\n\n# Pre-loaded skill content (${state.thread.kickoff.skillPath})\n\n${skillContent}`;

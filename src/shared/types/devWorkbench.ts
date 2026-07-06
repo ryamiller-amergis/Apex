@@ -10,10 +10,36 @@ export interface AssignedWorkItem {
   url?: string;
 }
 
+export interface BacklogFeatureItem {
+  featureId: string;
+  featureTitle: string;
+  featurePriority: string;
+  epicTitle: string;
+  prdId: string;
+  prdTitle: string;
+  dependsOn: string[];
+  designDocId?: string;
+  designDocStatus?: string;
+  itemCount: number;
+  pbiCount: number;
+  tbiCount: number;
+}
+
+export interface ApexBacklogGroup {
+  prdId: string;
+  prdTitle: string;
+  epics: {
+    epicTitle: string;
+    features: BacklogFeatureItem[];
+  }[];
+}
+
 export interface StartDevSessionRequest {
-  workItemId: number;
+  workItemId?: number;
   project: string;
   model?: string;
+  prdId?: string;
+  featureId?: string;
 }
 
 export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed';
@@ -31,6 +57,8 @@ export interface DevSessionDetail {
   setupError: string | null;
   prUrl: string | null;
   createdAt: string;
+  prdId?: string | null;
+  featureId?: string | null;
 }
 
 export interface ConflictedFile {
@@ -61,4 +89,6 @@ export interface ActiveDevSession {
   status: DevSessionStatus;
   prUrl: string | null;
   createdAt: string;
+  prdId?: string | null;
+  featureId?: string | null;
 }

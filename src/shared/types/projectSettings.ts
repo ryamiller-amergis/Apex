@@ -61,6 +61,11 @@ export interface QuickSkillPill {
   bypassScopePolicy?: boolean | null;
 }
 
+export interface InterviewSkillOption {
+  path: string;
+  friendlyName: string;
+}
+
 export interface ProjectSkillConfig {
   id: string;
   project: string;
@@ -105,6 +110,8 @@ export interface ProjectSkillConfig {
   standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  interviewSkillOptions?: InterviewSkillOption[] | null;
+  prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -164,6 +171,8 @@ export interface UpsertProjectSkillConfigRequest {
   standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  interviewSkillOptions?: InterviewSkillOption[] | null;
+  prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -237,6 +246,8 @@ export interface ProjectSkillConfigResponse {
   developmentModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  interviewSkillOptions?: InterviewSkillOption[] | null;
+  prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
