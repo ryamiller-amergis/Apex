@@ -60,15 +60,15 @@ describe('PageThumbnail', () => {
     expect(label).toHaveTextContent('report.pdf p.3');
   });
 
-  it('calls onSelect with pageId when clicked', () => {
-    const onSelect = jest.fn();
-    renderThumbnail({ onSelect });
+  it('calls onPreview with pageId when clicked', () => {
+    const onPreview = jest.fn();
+    renderThumbnail({ onPreview });
     const card = screen.getByTestId('pdf-thumbnail-1');
 
     fireEvent.click(card);
 
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect).toHaveBeenCalledWith('page-1', false);
+    expect(onPreview).toHaveBeenCalledTimes(1);
+    expect(onPreview).toHaveBeenCalledWith('page-1');
   });
 
   it('calls onSelect with shiftKey=true on shift+click', () => {
@@ -116,7 +116,7 @@ describe('PageThumbnail', () => {
     const card = screen.getByTestId('pdf-thumbnail-1');
     expect(card).toHaveAttribute(
       'aria-label',
-      '1 — report.pdf page 3',
+      '1 — report.pdf page 3. Click or press Enter to preview.',
     );
   });
 
