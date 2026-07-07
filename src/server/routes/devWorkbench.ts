@@ -135,7 +135,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
 });
 
 // POST /features/complete — mark a feature as complete by inserting a synthetic
-// closed session, which unblocks any downstream features that depend on it.
+// completed session, which unblocks any downstream features that depend on it.
 router.post('/features/complete', async (req: Request, res: Response) => {
   try {
     const { prdId, featureId, project } = req.body as { prdId: string; featureId: string; project: string };
@@ -150,7 +150,7 @@ router.post('/features/complete', async (req: Request, res: Response) => {
       where: and(
         eq(devSessions.prdId, prdId),
         eq(devSessions.featureId, featureId),
-        eq(devSessions.status, 'closed'),
+        eq(devSessions.status, 'completed'),
       ),
     });
 
@@ -168,7 +168,7 @@ router.post('/features/complete', async (req: Request, res: Response) => {
       authorId: userId,
       prdId,
       featureId,
-      status: 'closed',
+      status: 'completed',
       createdAt: now,
       updatedAt: now,
     });
@@ -368,7 +368,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
 
     const conditions = [
       eq(devSessions.authorId, userId),
-      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict', 'closed']),
+      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict', 'closed', 'completed']),
     ];
     if (project) conditions.push(eq(devSessions.project, project));
 

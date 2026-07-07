@@ -17,26 +17,32 @@ function computeReadiness(
   sessions: ActiveDevSession[],
   allSessions: ActiveDevSession[],
 ): FeatureReadiness {
-  // Find all sessions for this specific feature+prd, prefer active over closed
   const matchingSessions = sessions.filter(
     s => s.featureId === feature.featureId && s.prdId === feature.prdId,
   );
 
-  // Prefer an active (non-closed) session; fall back to the most recent closed one
+  // A feature is "done" only if explicitly completed (not merely closed)
+  const completedSession = matchingSessions.find(s => s.status === 'completed');
+  if (completedSession) return { state: 'closed', sessionId: completedSession.id };
+
+  // Prefer an active (non-terminal) session
   const activeSession = matchingSessions.find(
-    s => s.status !== 'closed' && s.status !== 'failed',
+    s => s.status !== 'closed' && s.status !== 'completed' && s.status !== 'failed',
   );
   const featureSession = activeSession ?? matchingSessions[0];
 
   if (featureSession) {
-    if (featureSession.status === 'closed') return { state: 'closed', sessionId: featureSession.id };
+    if (featureSession.status === 'closed' || featureSession.status === 'failed') {
+      // Session was dismissed — feature is still ready to start fresh
+      return { state: 'ready' };
+    }
     if (featureSession.prUrl) return { state: 'in_pr', sessionId: featureSession.id };
     return { state: 'in_progress', sessionId: featureSession.id };
   }
 
   if (feature.dependsOn.length > 0) {
     for (const dep of feature.dependsOn) {
-      const depSession = allSessions.find(s => s.featureId === dep && s.status === 'closed');
+      const depSession = allSessions.find(s => s.featureId === dep && s.status === 'completed');
       if (!depSession) {
         return { state: 'blocked', blockedBy: dep };
       }

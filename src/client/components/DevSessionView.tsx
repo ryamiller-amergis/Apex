@@ -220,6 +220,21 @@ function describeToolCall(toolName?: string, toolInput?: Record<string, unknown>
   }
 }
 
+function useElapsed(ts: number | null, active: boolean): string {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    if (!active || !ts) return;
+    const id = window.setInterval(() => forceUpdate((n) => n + 1), 5_000);
+    return () => window.clearInterval(id);
+  }, [active, ts]);
+  if (!ts) return '';
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 10) return 'just now';
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  return `${mins}m ${secs % 60}s ago`;
+}
+
 const AgentTurnBlock: React.FC<{
   turn: AgentTurn;
   isLive?: boolean;
@@ -233,6 +248,14 @@ const AgentTurnBlock: React.FC<{
 
   const stepCount = turn.reasoning.length + turn.tools.length;
   const hasActivity = stepCount > 0 || (isLive && streamingText);
+
+  const lastActivityTs = useMemo(() => {
+    const allMsgs = [...turn.reasoning, ...turn.tools];
+    if (allMsgs.length === 0) return null;
+    return Math.max(...allMsgs.map((m) => new Date(m.ts).getTime()));
+  }, [turn]);
+
+  const elapsed = useElapsed(lastActivityTs, !!isLive);
 
   useEffect(() => {
     if (isLive) setExpanded(true);
@@ -254,6 +277,7 @@ const AgentTurnBlock: React.FC<{
             <span className={styles['turn-toggle-arrow']}>{expanded ? '▼' : '▶'}</span>
             {isLive && <span className={styles['thinking-spinner']} />}
             <span>{isLive ? `Agent is working… (${stepCount} steps)` : `Agent activity — ${stepCount} steps`}</span>
+            {isLive && elapsed && <span className={styles['elapsed-hint']}>· last activity {elapsed}</span>}
           </button>
 
           {expanded && (
@@ -261,11 +285,12 @@ const AgentTurnBlock: React.FC<{
               {turn.reasoning.map((msg, i) => {
                 const nextMsg = i < turn.reasoning.length - 1 ? turn.reasoning[i + 1] : turn.tools[0];
                 const isLatestReasoning = isLive && !nextMsg;
+                const isThinking = msg.toolName === '_thinking';
                 return (
                   <div key={msg.id} className={`${styles['log-entry']} ${isLatestReasoning ? styles['log-entry-active'] : ''}`}>
-                    <span className={styles['log-icon']}>💭</span>
+                    <span className={styles['log-icon']}>{isThinking ? '🧠' : '💭'}</span>
                     <div className={styles['log-content']}>
-                      <div className={styles['log-label']}>Reasoning</div>
+                      <div className={styles['log-label']}>{isThinking ? 'Thinking' : 'Reasoning'}</div>
                       <div className={styles['log-text']}>{msg.text}</div>
                     </div>
                     <span className={styles['log-time']}>{new Date(msg.ts).toLocaleTimeString()}</span>
@@ -915,6 +940,21 @@ export const DevSessionView: React.FC = () => {
                   streamingText={streamingText}
                 />,
               );
+            }
+
+            {/* Show remaining turns that had no final output (e.g. agent was stopped) */}
+            if (!isRunning && turnIdx < turns.length) {
+              for (let t = turnIdx; t < turns.length; t++) {
+                const orphanedTurn = turns[t];
+                if (orphanedTurn.reasoning.length > 0 || orphanedTurn.tools.length > 0) {
+                  elements.push(
+                    <AgentTurnBlock
+                      key={`orphan-turn-${t}`}
+                      turn={orphanedTurn}
+                    />,
+                  );
+                }
+              }
             }
 
             if (!isRunning && !isSettingUp && elements.length === 0 && messages.length > 0) {

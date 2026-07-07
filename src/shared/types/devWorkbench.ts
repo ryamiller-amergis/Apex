@@ -42,7 +42,7 @@ export interface StartDevSessionRequest {
   featureId?: string;
 }
 
-export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed';
+export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed' | 'completed';
 
 export interface StartDevSessionResponse {
   sessionId: string;
