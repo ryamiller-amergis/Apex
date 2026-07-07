@@ -265,6 +265,15 @@
   margin: 0;
 }
 
+/* ── Thumbnail Area ──────────────────────────────────── */
+
+.thumbnailArea {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── New Session Button ──────────────────────────────── */
 
 .newSessionBtn {
