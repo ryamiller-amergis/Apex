@@ -122,6 +122,7 @@ export function useChatStream(
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
+          setStatus((prev) => prev === 'idle' ? 'running' : prev);
           break;
         }
         case 'message': {
@@ -140,11 +141,13 @@ export function useChatStream(
         }
         case 'tool_call': {
           setThinkingText('');
+          setStatus((prev) => prev === 'idle' ? 'running' : prev);
           break;
         }
         case 'thinking': {
           const thinkingEvent = event as SseThinkingEvent;
           setThinkingText(thinkingEvent.text);
+          setStatus((prev) => prev === 'idle' ? 'running' : prev);
           break;
         }
         case 'tool_status': {
@@ -276,8 +279,12 @@ export function useChatStream(
         });
         if (!res.ok) return;
         const data = (await res.json()) as { status: string; lastError?: string };
-        if (data.status === 'idle' || data.status === 'error' || data.status === 'closed') {
-          setStatus(data.status as ChatThreadStatus);
+        const isTerminal = ['idle', 'error', 'closed', 'completed', 'failed', 'cancelled'].includes(data.status);
+        if (isTerminal) {
+          const mappedStatus: ChatThreadStatus = (data.status === 'completed' || data.status === 'cancelled') ? 'idle'
+            : data.status === 'failed' ? 'error'
+            : data.status as ChatThreadStatus;
+          setStatus(mappedStatus);
           clearPollTimer();
           streamBufferRef.current = '';
           setStreamingText('');
@@ -285,7 +292,7 @@ export function useChatStream(
           setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
-          if (data.status === 'error' && data.lastError) {
+          if ((data.status === 'error' || data.status === 'failed') && data.lastError) {
             const errMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',

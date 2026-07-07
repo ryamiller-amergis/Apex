@@ -39,7 +39,8 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
-import { startReaper } from './services/agentRunReaperService';
+import { startReaper, stopReaper } from './services/agentRunReaperService';
+import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
@@ -290,6 +291,7 @@ const server = app.listen(PORT, () => {
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
   startReaper();
+  initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.
   registerGracefulShutdown(server);
