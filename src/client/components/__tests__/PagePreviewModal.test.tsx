@@ -151,4 +151,31 @@ describe('PagePreviewModal', () => {
     const closeBtn = screen.getByTestId('pdf-preview-modal-close');
     expect(closeBtn).toHaveAttribute('aria-label', 'Close preview');
   });
+
+  it('focuses close button when modal opens', () => {
+    renderModal();
+
+    const closeBtn = screen.getByTestId('pdf-preview-modal-close');
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it('traps focus within the modal on Tab', () => {
+    renderModal();
+
+    const closeBtn = screen.getByTestId('pdf-preview-modal-close');
+    expect(closeBtn).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it('traps focus within the modal on Shift+Tab', () => {
+    renderModal();
+
+    const closeBtn = screen.getByTestId('pdf-preview-modal-close');
+    expect(closeBtn).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(closeBtn).toHaveFocus();
+  });
 });

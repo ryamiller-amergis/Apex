@@ -100,12 +100,20 @@ export const PdfAssemblyView: React.FC = () => {
     inputRef.current?.click();
   }, []);
 
+  const triggerRef = useRef<HTMLElement | null>(null);
+
   const handlePreview = useCallback((pageId: string) => {
+    const el = window.document.querySelector<HTMLElement>(`[data-page-id="${pageId}"]`);
+    triggerRef.current = el;
     setPreviewPageId(pageId);
   }, []);
 
   const handleClosePreview = useCallback(() => {
+    const el = triggerRef.current;
     setPreviewPageId(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+    });
   }, []);
 
   const isUploading = uploadFiles.isPending || createSession.isPending;
@@ -209,12 +217,18 @@ export const PdfAssemblyView: React.FC = () => {
 
       {/* Uploaded files list */}
       {fileMetadata.length > 0 ? (
-        <div className={styles.fileList} data-testid="pdf-file-list">
+        <section className={styles.fileList} data-testid="pdf-file-list" aria-label="Uploaded files">
           <p className={styles.fileListLabel}>
             Uploaded files ({fileMetadata.length})
           </p>
           {fileMetadata.map((f) => (
-            <div key={f.fileId} className={styles.fileCard}>
+            <div
+              key={f.fileId}
+              className={styles.fileCard}
+              tabIndex={0}
+              role="listitem"
+              aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}, valid`}
+            >
               <span className={styles.fileIcon}>📑</span>
               <div className={styles.fileInfo}>
                 <p className={styles.fileName}>{f.originalName}</p>
@@ -228,7 +242,7 @@ export const PdfAssemblyView: React.FC = () => {
               </span>
             </div>
           ))}
-        </div>
+        </section>
       ) : !isUploading && (
         <div className={styles.emptyState}>
           <span className={styles.emptyIcon}>📂</span>
@@ -239,12 +253,17 @@ export const PdfAssemblyView: React.FC = () => {
       )}
 
       {sessionId && session?.pageManifest && session.pageManifest.length > 0 && (
-        <PageThumbnailGrid
-          sessionId={sessionId}
-          pageManifest={session.pageManifest}
-          fileMetadata={fileMetadata}
-          onPreview={handlePreview}
-        />
+        <section aria-label="Page thumbnails" data-testid="pdf-thumbnails-section">
+          <h2 className={styles.sectionHeading} tabIndex={-1}>
+            Pages ({session.pageManifest.filter((p: PageManifestEntry) => !p.deleted).length})
+          </h2>
+          <PageThumbnailGrid
+            sessionId={sessionId}
+            pageManifest={session.pageManifest}
+            fileMetadata={fileMetadata}
+            onPreview={handlePreview}
+          />
+        </section>
       )}
 
       {previewPage && sessionId && (

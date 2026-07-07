@@ -299,3 +299,12 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── Section Heading ──────────────────────────────────── */
+
+.sectionHeading {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.75rem 0;
+}

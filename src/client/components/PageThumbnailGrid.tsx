@@ -54,7 +54,16 @@ function ThumbnailCell({
   const fileUrl = `/api/pdf/sessions/${sessionId}/files/${page.fileId}`;
 
   return (
-    <div style={style} className={styles.gridCell}>
+    <div
+      style={style}
+      className={styles.gridCell}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onPreview(page.pageId);
+        }
+      }}
+    >
       <PageThumbnail
         pageId={page.pageId}
         fileUrl={fileUrl}
@@ -141,6 +150,8 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
       ref={containerRef}
       className={styles.gridContainer}
       data-testid="pdf-thumbnail-grid"
+      role="region"
+      aria-label={`Page thumbnail grid, ${visiblePages.length} pages`}
     >
       <div className={styles.gridInner}>
         <Grid<ThumbnailCellProps>

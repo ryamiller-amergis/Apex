@@ -32,6 +32,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   onPreview,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
   const { status, imageBitmap } = useThumbnailRenderer(
@@ -56,9 +57,13 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      onSelect(pageId, e.shiftKey);
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        onSelect(pageId, e.shiftKey);
+      } else {
+        onPreview(pageId);
+      }
     },
-    [onSelect, pageId],
+    [onSelect, onPreview, pageId],
   );
 
   const handleKeyDown = useCallback(
@@ -82,14 +87,16 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
 
   return (
     <div
+      ref={cardRef}
       className={cardClassName}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="gridcell"
-      aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}`}
+      aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}. Click or press Enter to preview.`}
       aria-selected={isSelected}
       data-testid={`pdf-thumbnail-${assemblyPosition}`}
+      data-page-id={pageId}
     >
       <div className={styles.canvasWrapper}>
         {isLoading && <div className={styles.skeleton} data-testid="thumbnail-skeleton" />}
@@ -100,6 +107,9 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
           </div>
         )}
         <canvas ref={canvasRef} className={styles.canvas} />
+        <div className={styles.previewOverlay}>
+          <span className={styles.previewIcon}>🔍</span>
+        </div>
       </div>
 
       <span

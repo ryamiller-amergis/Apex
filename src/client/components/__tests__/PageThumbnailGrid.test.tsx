@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { PageThumbnailGrid } from '../PageThumbnailGrid';
 import type { PageManifestEntry, PdfFileMetadata } from '../../../shared/types/pdf';
 
@@ -178,5 +178,91 @@ describe('PageThumbnailGrid', () => {
 
     const thumb3 = screen.getByTestId('pdf-thumbnail-source-3');
     expect(thumb3).toHaveTextContent('invoice.pdf');
+  });
+
+  it('calls onPreview when a thumbnail is clicked', () => {
+    const manifest = makeManifest();
+
+    render(
+      <PageThumbnailGrid
+        sessionId="sess-1"
+        pageManifest={manifest}
+        fileMetadata={mockFileMetadata}
+        onPreview={onPreview}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('pdf-thumbnail-1'));
+
+    expect(onPreview).toHaveBeenCalledWith('p1');
+  });
+
+  it('calls onPreview when Enter is pressed on a focused thumbnail', () => {
+    const manifest = makeManifest();
+
+    render(
+      <PageThumbnailGrid
+        sessionId="sess-1"
+        pageManifest={manifest}
+        fileMetadata={mockFileMetadata}
+        onPreview={onPreview}
+      />,
+    );
+
+    const thumb = screen.getByTestId('pdf-thumbnail-2');
+    fireEvent.keyDown(thumb, { key: 'Enter' });
+
+    expect(onPreview).toHaveBeenCalledWith('p2');
+  });
+
+  it('calls onPreview when Space is pressed on a focused thumbnail', () => {
+    const manifest = makeManifest();
+
+    render(
+      <PageThumbnailGrid
+        sessionId="sess-1"
+        pageManifest={manifest}
+        fileMetadata={mockFileMetadata}
+        onPreview={onPreview}
+      />,
+    );
+
+    const thumb = screen.getByTestId('pdf-thumbnail-3');
+    fireEvent.keyDown(thumb, { key: ' ' });
+
+    expect(onPreview).toHaveBeenCalledWith('p3');
+  });
+
+  it('does not call onPreview on shift+click (selection mode)', () => {
+    const manifest = makeManifest();
+
+    render(
+      <PageThumbnailGrid
+        sessionId="sess-1"
+        pageManifest={manifest}
+        fileMetadata={mockFileMetadata}
+        onPreview={onPreview}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('pdf-thumbnail-1'), { shiftKey: true });
+
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
+  it('thumbnails are focusable via tabIndex', () => {
+    const manifest = makeManifest();
+
+    render(
+      <PageThumbnailGrid
+        sessionId="sess-1"
+        pageManifest={manifest}
+        fileMetadata={mockFileMetadata}
+        onPreview={onPreview}
+      />,
+    );
+
+    const thumb = screen.getByTestId('pdf-thumbnail-1');
+    expect(thumb).toHaveAttribute('tabindex', '0');
   });
 });
