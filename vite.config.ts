@@ -4,11 +4,18 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   root: 'src/client',
-  publicDir: '../../public',  // Point to the public folder at project root
-  envDir: '../../',  // Look for .env files in project root
+  publicDir: '../../public',
+  envDir: '../../',
   build: {
     outDir: '../../dist/client',
     emptyOutDir: true,
+  },
+  optimizeDeps: {
+    include: ['pdfjs-dist'],
+    exclude: ['pdfjs-dist/build/pdf.worker.mjs'],
+  },
+  worker: {
+    format: 'es',
   },
   server: {
     port: 3000,

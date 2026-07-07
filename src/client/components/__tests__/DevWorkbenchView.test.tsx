@@ -303,13 +303,13 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     });
   });
 
-  it('shows Completed badge and Done label when a feature has a closed session', () => {
+  it('shows Completed badge and Done label when a feature has a completed session', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
-          id: 'session-closed-1',
+          id: 'session-completed-1',
           workItemId: 0,
-          status: 'closed',
+          status: 'completed',
           chatThreadId: null,
           branchName: null,
           prUrl: null,
@@ -326,13 +326,13 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(screen.getByText('Done')).toBeInTheDocument();
   });
 
-  it('unblocks dependent features when all dependencies are closed', () => {
+  it('unblocks dependent features when all dependencies are completed', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
-          id: 'session-closed-1',
+          id: 'session-completed-1',
           workItemId: 0,
-          status: 'closed',
+          status: 'completed',
           chatThreadId: null,
           branchName: null,
           prUrl: null,

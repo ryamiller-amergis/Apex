@@ -429,7 +429,7 @@ describe('POST /api/dev-workbench/features/complete', () => {
     jest.clearAllMocks();
   });
 
-  it('creates a synthetic closed session for the feature', async () => {
+  it('creates a synthetic completed session for the feature', async () => {
     mockFindFirst.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
@@ -445,7 +445,7 @@ describe('POST /api/dev-workbench/features/complete', () => {
         authorId: 'user-1',
         prdId: 'prd-1',
         featureId: 'FEAT-001',
-        status: 'closed',
+        status: 'completed',
       }),
     );
   });
