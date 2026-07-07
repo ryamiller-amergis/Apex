@@ -13,6 +13,7 @@ import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
 import { AppSidebar } from './components/AppSidebar';
 import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
+import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
 import { ChatAgentPanel } from './components/ChatAgentPanel';
@@ -297,7 +298,7 @@ function App() {
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId]);
 
-  if (isAuthenticated === null) return <div>Loading...</div>;
+  if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
 
   if (currentView === 'project-selector') {
@@ -334,7 +335,7 @@ function App() {
       return (
         <div className="loading-overlay">
           <div className="loading-spinner-container">
-            <div className="spinner" />
+            <ApexLoader size={72} />
             <p>Opening project…</p>
           </div>
         </div>
@@ -421,7 +422,7 @@ function App() {
           {isLoading && currentView === 'calendar' && (
             <div className="loading-overlay">
               <div className="loading-spinner-container">
-                <div className="spinner"></div>
+                <ApexLoader size={72} />
                 <p>Loading work items...</p>
               </div>
             </div>

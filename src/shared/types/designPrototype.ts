@@ -76,14 +76,12 @@ export interface ReviewDesignPrototypeRequest {
   comment?: string;
 }
 
-/** The four UI state sections rendered in every prototype document. */
-export type DesignPrototypeStateName = 'default' | 'empty' | 'error' | 'loading';
+/** The two UI state sections rendered in every prototype document. */
+export type DesignPrototypeStateName = 'default' | 'error';
 
 export const DESIGN_PROTOTYPE_STATE_NAMES: DesignPrototypeStateName[] = [
   'default',
-  'empty',
   'error',
-  'loading',
 ];
 
 export interface RegeneratePrototypeRequest {

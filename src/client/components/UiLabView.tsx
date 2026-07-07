@@ -12,6 +12,7 @@ import {
 } from '../hooks/useUiLab';
 import type { UiLabDesignSummary, RegenerateUiLabDesignRequest } from '../../shared/types/uiLab';
 import styles from './UiLabView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -117,9 +118,10 @@ interface CommentPanelProps {
   version: number;
   pinMode: boolean;
   pendingPin: { x: number; y: number } | null;
+  onCollapse: () => void;
 }
 
-const CommentPanel: React.FC<CommentPanelProps> = ({ designId, version, pinMode, pendingPin }) => {
+const CommentPanel: React.FC<CommentPanelProps> = ({ designId, version, pinMode, pendingPin, onCollapse }) => {
   const { data: comments = [] } = useUiLabComments(designId);
   const addComment = useAddUiLabComment(designId);
   const resolveComment = useResolveUiLabComment(designId);
@@ -146,7 +148,10 @@ const CommentPanel: React.FC<CommentPanelProps> = ({ designId, version, pinMode,
         <span className={styles.commentPanelTitle}>
           Comments {open.length > 0 ? `(${open.length})` : ''}
         </span>
-        {pinMode && <span style={{ fontSize: 11, color: 'var(--accent-color)' }}>Click canvas to pin</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {pinMode && <span style={{ fontSize: 11, color: 'var(--accent-color)' }}>Click canvas to pin</span>}
+          <button className={styles.commentPanelCloseBtn} onClick={onCollapse} title="Collapse comments">›</button>
+        </div>
       </div>
 
       <div className={styles.commentList}>
@@ -220,6 +225,7 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
   const [feedback, setFeedback] = useState('');
   const [scopedSelector, setScopedSelector] = useState<string | null>(null);
   const [scopedHtml, setScopedHtml] = useState<string | null>(null);
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -234,6 +240,11 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
       stream.startStream(designId, 'generate');
     }
   }, [design?.status, designId, stream]);
+
+  // Return to current version whenever a regeneration completes
+  useEffect(() => {
+    setViewingVersion(null);
+  }, [design?.version]);
 
   const handlePinClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!pinMode || !overlayRef.current) return;
@@ -264,12 +275,17 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
   };
 
   const isActive = design?.status === 'generating' || design?.status === 'streaming' || stream.phase === 'streaming';
-  const html = stream.phase === 'streaming' && stream.streamedHtml ? stream.streamedHtml : design?.html;
+  const html = design?.html;
+  const isViewingHistory = viewingVersion !== null;
+  const historyEntry = isViewingHistory
+    ? (design?.history ?? []).find(h => h.version === viewingVersion) ?? null
+    : null;
+  const viewHtml = isViewingHistory ? (historyEntry?.html ?? null) : html;
 
   if (isLoading) {
     return (
       <div className={styles.main} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div className={styles.streamingSpinner} />
+        <ApexLoader size={72} />
       </div>
     );
   }
@@ -284,6 +300,33 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
         <span className={`${styles.canvasStatusBadge} ${styles[design.status]}`}>
           {design.status === 'ready' ? `v${design.version}` : design.status}
         </span>
+
+        {/* Version history dropdown — only when previous versions exist */}
+        {design.history.length > 0 && (
+          <select
+            className={styles.versionSelect}
+            value={viewingVersion ?? design.version}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setViewingVersion(v === design.version ? null : v);
+            }}
+            title="Browse version history"
+          >
+            <option value={design.version}>v{design.version} (current)</option>
+            {[...design.history]
+              .filter(h => h.version !== design.version)
+              .sort((a, b) => b.version - a.version)
+              .map(h => (
+                <option key={h.version} value={h.version}>
+                  v{h.version}
+                  {h.feedback
+                    ? ` — ${h.feedback.slice(0, 38)}${h.feedback.length > 38 ? '…' : ''}`
+                    : ` — ${formatRelative(h.createdAt)}`}
+                </option>
+              ))}
+          </select>
+        )}
+
         <div className={styles.headerActions}>
           <button
             className={`${styles.headerBtn} ${pinMode ? styles.active : ''}`}
@@ -311,76 +354,25 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
         </div>
       </div>
 
-      {/* Body */}
-      <div className={styles.canvasBody}>
-        <div className={styles.canvasPreview}>
-          {(isActive && !html) && (
-            <div className={styles.streamingOverlay}>
-              <div className={styles.streamingSpinner} />
-              <span className={styles.streamingLabel}>Generating your design…</span>
-              {stream.streamedHtml && (
-                <span className={styles.streamingPreview}>{stream.streamedHtml.slice(-120)}</span>
-              )}
-            </div>
-          )}
-
-          {design.status === 'generation_failed' && (
-            <div className={styles.errorPanel}>
-              <span className={styles.errorIcon}>⚠️</span>
-              <p className={styles.errorMessage}>{design.generationError ?? 'Generation failed.'}</p>
-              <button
-                className={styles.retryBtn}
-                onClick={() => stream.startStream(designId, 'generate')}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {html && (
-            <div className={styles.iframeWrap}>
-              <iframe
-                ref={iframeRef}
-                className={styles.mockIframe}
-                srcDoc={html}
-                sandbox="allow-scripts"
-                title={design.title}
-              />
-              {/* Pin overlay */}
-              <div
-                ref={overlayRef}
-                className={`${styles.pinOverlay} ${pinMode ? styles.pinModeActive : ''}`}
-                onClick={handlePinClick}
-              >
-                {comments.filter((c) => c.pinX != null && c.pinY != null).map((c, i) => (
-                  <div
-                    key={c.id}
-                    className={`${styles.pinMarker} ${c.resolved ? styles.resolved : ''}`}
-                    style={{ left: `${c.pinX}%`, top: `${c.pinY}%` }}
-                    title={c.text}
-                  >
-                    <div className={styles.pinCircle}>{i + 1}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      {/* Feedback / regenerate bar — sits above the canvas */}
+      {isViewingHistory ? (
+        <div className={styles.historyBanner}>
+          <span>
+            Viewing <strong>v{viewingVersion}</strong>
+            {historyEntry?.feedback && (
+              <> — <em>{historyEntry.feedback}</em></>
+            )}
+          </span>
+          <button
+            className={styles.historyBannerReturnBtn}
+            onClick={() => setViewingVersion(null)}
+          >
+            ← Return to current (v{design.version})
+          </button>
         </div>
-
-        {/* Comment panel */}
-        {showComments && html && (
-          <CommentPanel
-            designId={designId}
-            version={design.version}
-            pinMode={pinMode}
-            pendingPin={pendingPin}
-          />
-        )}
-      </div>
-
-      {/* Feedback / regenerate bar */}
-      {html && design.status !== 'generation_failed' && (
-        <div className={styles.feedbackBar}>
+      ) : (
+        html && design.status !== 'generation_failed' && (
+          <div className={styles.feedbackBar}>
           {scopedSelector && (
             <>
               <span className={styles.scopedEditBadge} title={scopedSelector}>
@@ -407,7 +399,91 @@ const Canvas: React.FC<CanvasProps> = ({ designId, project, onDeleted }) => {
             {isActive ? '…' : '↑ Apply'}
           </button>
         </div>
+      )
       )}
+
+      {/* Body */}
+      <div className={styles.canvasBody}>
+        <div className={styles.canvasPreview}>
+          {isActive && !isViewingHistory && (
+            <div className={styles.streamingOverlay}>
+              <ApexLoader size={88} />
+            </div>
+          )}
+
+          {design.status === 'generation_failed' && (
+            <div className={styles.errorPanel}>
+              <span className={styles.errorIcon}>⚠️</span>
+              <p className={styles.errorMessage}>{design.generationError ?? 'Generation failed.'}</p>
+              <button
+                className={styles.retryBtn}
+                onClick={() => stream.startStream(designId, 'generate')}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {viewHtml && (
+            <div className={styles.iframeWrap}>
+              <iframe
+                ref={iframeRef}
+                className={styles.mockIframe}
+                srcDoc={viewHtml}
+                sandbox="allow-scripts"
+                title={design.title}
+              />
+              {/* Pin overlay */}
+              <div
+                ref={overlayRef}
+                className={`${styles.pinOverlay} ${pinMode ? styles.pinModeActive : ''}`}
+                onClick={handlePinClick}
+              >
+                {comments.filter((c) => c.pinX != null && c.pinY != null).map((c, i) => (
+                  <div
+                    key={c.id}
+                    className={`${styles.pinMarker} ${c.resolved ? styles.resolved : ''}`}
+                    style={{ left: `${c.pinX}%`, top: `${c.pinY}%` }}
+                    title={c.text}
+                  >
+                    <div className={styles.pinCircle}>{i + 1}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Comment panel — collapsible strip on the right */}
+        <div className={`${styles.commentPanelWrap}${!showComments ? ` ${styles.commentPanelWrapCollapsed}` : ''}`}>
+          {showComments ? (
+            <CommentPanel
+              designId={designId}
+              version={design.version}
+              pinMode={pinMode}
+              pendingPin={pendingPin}
+              onCollapse={() => setShowComments(false)}
+            />
+          ) : (
+            <div className={styles.commentPanelStrip}>
+              <button
+                className={styles.commentPanelStripBtn}
+                onClick={() => setShowComments(true)}
+                title="Show comments"
+              >
+                ‹
+              </button>
+              <span className={styles.commentPanelStripLabel}>Comments</span>
+              {comments.filter((c) => !c.resolved).length > 0 && (
+                <span className={styles.commentPanelStripBadge}>
+                  {comments.filter((c) => !c.resolved).length}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 };
