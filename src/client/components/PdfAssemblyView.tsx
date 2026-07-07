@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSessions } from '../hooks/usePdfSession';
-import type { FileUploadResult } from '../../shared/types/pdf';
+import { PageThumbnailGrid } from './PageThumbnailGrid';
+import { PagePreviewModal } from './PagePreviewModal';
+import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
 function formatBytes(bytes: number): string {
@@ -25,6 +27,7 @@ export const PdfAssemblyView: React.FC = () => {
   );
   const [dragActive, setDragActive] = useState(false);
   const [uploadResults, setUploadResults] = useState<FileUploadResult[]>([]);
+  const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const createSession = useCreatePdfSession();
@@ -97,8 +100,27 @@ export const PdfAssemblyView: React.FC = () => {
     inputRef.current?.click();
   }, []);
 
+  const handlePreview = useCallback((pageId: string) => {
+    setPreviewPageId(pageId);
+  }, []);
+
+  const handleClosePreview = useCallback(() => {
+    setPreviewPageId(null);
+  }, []);
+
   const isUploading = uploadFiles.isPending || createSession.isPending;
   const fileMetadata = session?.fileMetadata ?? [];
+
+  const previewPage = useMemo(() => {
+    if (!previewPageId || !session?.pageManifest) return null;
+    return session.pageManifest.find((p: PageManifestEntry) => p.pageId === previewPageId) ?? null;
+  }, [previewPageId, session?.pageManifest]);
+
+  const previewFileName = useMemo(() => {
+    if (!previewPage) return '';
+    const file = fileMetadata.find((f) => f.fileId === previewPage.fileId);
+    return file?.originalName ?? 'Unknown';
+  }, [previewPage, fileMetadata]);
 
   return (
     <div className={styles.container} data-testid="pdf-assembly-view">
@@ -214,6 +236,28 @@ export const PdfAssemblyView: React.FC = () => {
             No files uploaded yet. Drop PDFs above to get started.
           </p>
         </div>
+      )}
+
+      {sessionId && session?.pageManifest && session.pageManifest.length > 0 && (
+        <PageThumbnailGrid
+          sessionId={sessionId}
+          pageManifest={session.pageManifest}
+          fileMetadata={fileMetadata}
+          onPreview={handlePreview}
+        />
+      )}
+
+      {previewPage && sessionId && (
+        <PagePreviewModal
+          isOpen={!!previewPageId}
+          pageId={previewPageId}
+          fileUrl={`/api/pdf/sessions/${sessionId}/files/${previewPage.fileId}`}
+          sourcePageIndex={previewPage.sourcePageIndex}
+          rotation={previewPage.rotation}
+          sourceFileName={previewFileName}
+          originalPageNumber={previewPage.sourcePageIndex + 1}
+          onClose={handleClosePreview}
+        />
       )}
     </div>
   );
