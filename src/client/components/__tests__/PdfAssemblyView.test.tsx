@@ -3,6 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
 
+jest.mock('../PageThumbnailGrid', () => ({
+  PageThumbnailGrid: () => <div data-testid="mock-thumbnail-grid" />,
+}));
+
+jest.mock('../PagePreviewModal', () => ({
+  PagePreviewModal: () => <div data-testid="mock-preview-modal" />,
+}));
+
 const mockCreateSession = jest.fn();
 const mockUploadFiles = jest.fn();
 

@@ -77,3 +77,11 @@ export const PDF_ERROR_CODES = {
 } as const;
 
 export type PdfErrorCode = typeof PDF_ERROR_CODES[keyof typeof PDF_ERROR_CODES];
+
+// ── Thumbnail Rendering ─────────────────────────────────────────────────────
+
+export interface ThumbnailRenderState {
+  status: 'idle' | 'loading' | 'loaded' | 'error';
+  imageBitmap: ImageBitmap | null;
+  error: string | null;
+}
