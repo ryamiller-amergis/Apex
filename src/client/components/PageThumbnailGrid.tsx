@@ -1,7 +1,6 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { Grid } from 'react-window';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
-import { usePageSelection } from '../hooks/usePageSelection';
 import { PageThumbnail } from './PageThumbnail';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
 import styles from './PageThumbnailGrid.module.css';
@@ -15,6 +14,9 @@ export interface PageThumbnailGridProps {
   pageManifest: PageManifestEntry[];
   fileMetadata: PdfFileMetadata[];
   onPreview: (pageId: string) => void;
+  isSelected: (pageId: string) => boolean;
+  onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
+  onDrop?: (fromIndex: number, toIndex: number) => void;
 }
 
 interface ThumbnailCellProps {
@@ -23,8 +25,9 @@ interface ThumbnailCellProps {
   fileNameMap: Map<string, string>;
   sessionId: string;
   isSelected: (pageId: string) => boolean;
-  handleSelect: (pageId: string, shiftKey: boolean) => void;
+  handleSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onPreview: (pageId: string) => void;
+  onDrop?: (fromIndex: number, toIndex: number) => void;
 }
 
 function ThumbnailCell({
@@ -38,6 +41,7 @@ function ThumbnailCell({
   isSelected,
   handleSelect,
   onPreview,
+  onDrop,
 }: ThumbnailCellProps & {
   ariaAttributes: { 'aria-colindex': number; role: 'gridcell' };
   columnIndex: number;
@@ -75,21 +79,24 @@ function ThumbnailCell({
         isSelected={isSelected(page.pageId)}
         onSelect={handleSelect}
         onPreview={onPreview}
+        onDrop={onDrop}
+        visibleIndex={index}
       />
     </div>
   );
-};
+}
 
 const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   sessionId,
   pageManifest,
   fileMetadata,
   onPreview,
+  isSelected,
+  onSelect,
+  onDrop,
 }) => {
   const [containerWidth, setContainerWidth] = useState(800);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const { toggleSelection, rangeSelect, isSelected } = usePageSelection();
 
   const visiblePages = useMemo(
     () => pageManifest.filter((p) => !p.deleted),
@@ -103,11 +110,6 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
     }
     return map;
   }, [fileMetadata]);
-
-  const allPageIds = useMemo(
-    () => visiblePages.map((p) => p.pageId),
-    [visiblePages],
-  );
 
   const columnCount = useMemo(
     () => Math.max(MIN_COLUMNS, Math.floor(containerWidth / THUMBNAIL_WIDTH)),
@@ -133,14 +135,10 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   }, []);
 
   const handleSelect = useCallback(
-    (pageId: string, shiftKey: boolean) => {
-      if (shiftKey) {
-        rangeSelect(pageId, allPageIds);
-      } else {
-        toggleSelection(pageId);
-      }
+    (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {
+      onSelect(pageId, shiftKey, ctrlKey);
     },
-    [toggleSelection, rangeSelect, allPageIds],
+    [onSelect],
   );
 
   const containerHeight = containerRef.current?.clientHeight ?? 600;
@@ -164,6 +162,7 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
             isSelected,
             handleSelect,
             onPreview,
+            onDrop,
           }}
           columnCount={columnCount}
           columnWidth={THUMBNAIL_WIDTH}

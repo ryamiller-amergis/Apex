@@ -1,7 +1,11 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSessions } from '../hooks/usePdfSession';
+import { usePageSelection } from '../hooks/usePageSelection';
+import { usePageManipulation } from '../hooks/usePageManipulation';
 import { PageThumbnailGrid } from './PageThumbnailGrid';
 import { PagePreviewModal } from './PagePreviewModal';
+import { ManipulationToolbar } from './ManipulationToolbar';
+import { UndoSnackbar } from './UndoSnackbar';
 import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -34,6 +38,30 @@ export const PdfAssemblyView: React.FC = () => {
   const { data: session } = usePdfSession(sessionId);
   const uploadFiles = useUploadPdfFiles();
   const { data: activeSessions } = useActivePdfSessions();
+
+  const serverManifest = session?.pageManifest ?? [];
+
+  const {
+    visiblePages,
+    reorder,
+    rotate,
+    deletePages,
+    undoDelete,
+    dismissUndo,
+    undoState,
+    syncError,
+    dismissSyncError,
+  } = usePageManipulation({ sessionId, serverManifest });
+
+  const {
+    selectedPageIds,
+    toggleSelection,
+    ctrlToggle,
+    rangeSelect,
+    clearSelection,
+    isSelected,
+    selectedCount,
+  } = usePageSelection();
 
   useEffect(() => {
     if (sessionId) return;
@@ -115,6 +143,78 @@ export const PdfAssemblyView: React.FC = () => {
       el?.focus();
     });
   }, []);
+
+  const allVisiblePageIds = useMemo(
+    () => visiblePages.map((p) => p.pageId),
+    [visiblePages],
+  );
+
+  const handleSelect = useCallback(
+    (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {
+      if (shiftKey) {
+        rangeSelect(pageId, allVisiblePageIds);
+      } else if (ctrlKey) {
+        ctrlToggle(pageId);
+      } else {
+        toggleSelection(pageId);
+      }
+    },
+    [toggleSelection, ctrlToggle, rangeSelect, allVisiblePageIds],
+  );
+
+  const selectedVisibleIndex = useMemo(() => {
+    if (selectedCount !== 1) return -1;
+    const id = Array.from(selectedPageIds)[0];
+    return visiblePages.findIndex((p) => p.pageId === id);
+  }, [selectedCount, selectedPageIds, visiblePages]);
+
+  const canMoveUp = selectedVisibleIndex > 0;
+  const canMoveDown = selectedVisibleIndex >= 0 && selectedVisibleIndex < visiblePages.length - 1;
+
+  const handleRotate = useCallback(() => {
+    rotate(selectedPageIds);
+  }, [rotate, selectedPageIds]);
+
+  const handleDelete = useCallback(() => {
+    const result = deletePages(selectedPageIds);
+    if (!result.blocked) {
+      clearSelection();
+    }
+  }, [deletePages, selectedPageIds, clearSelection]);
+
+  const handleMoveUp = useCallback(() => {
+    if (selectedVisibleIndex > 0) {
+      reorder(selectedVisibleIndex, selectedVisibleIndex - 1);
+    }
+  }, [reorder, selectedVisibleIndex]);
+
+  const handleMoveDown = useCallback(() => {
+    if (selectedVisibleIndex >= 0 && selectedVisibleIndex < visiblePages.length - 1) {
+      reorder(selectedVisibleIndex, selectedVisibleIndex + 1);
+    }
+  }, [reorder, selectedVisibleIndex, visiblePages.length]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.key === 'r' || e.key === 'R') {
+        if (selectedCount > 0) {
+          e.preventDefault();
+          handleRotate();
+        }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedCount > 0) {
+          e.preventDefault();
+          handleDelete();
+        }
+      } else if (e.key === 'Escape') {
+        clearSelection();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedCount, handleRotate, handleDelete, clearSelection]);
 
   const isUploading = uploadFiles.isPending || createSession.isPending;
   const fileMetadata = session?.fileMetadata ?? [];
@@ -255,15 +355,46 @@ export const PdfAssemblyView: React.FC = () => {
       {sessionId && session?.pageManifest && session.pageManifest.length > 0 && (
         <section aria-label="Page thumbnails" data-testid="pdf-thumbnails-section">
           <h2 className={styles.sectionHeading} tabIndex={-1}>
-            Pages ({session.pageManifest.filter((p: PageManifestEntry) => !p.deleted).length})
+            Pages ({visiblePages.length})
           </h2>
+
+          <ManipulationToolbar
+            selectedCount={selectedCount}
+            onRotate={handleRotate}
+            onDelete={handleDelete}
+            onMoveUp={handleMoveUp}
+            onMoveDown={handleMoveDown}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            totalPages={visiblePages.length}
+          />
+
           <PageThumbnailGrid
             sessionId={sessionId}
             pageManifest={session.pageManifest}
             fileMetadata={fileMetadata}
             onPreview={handlePreview}
+            isSelected={isSelected}
+            onSelect={handleSelect}
+            onDrop={reorder}
           />
         </section>
+      )}
+
+      {undoState && (
+        <UndoSnackbar
+          message={`${undoState.deletedCount} page${undoState.deletedCount !== 1 ? 's' : ''} deleted`}
+          onUndo={undoDelete}
+          onDismiss={dismissUndo}
+        />
+      )}
+
+      {syncError && (
+        <div className={styles.errorCard} role="alert" data-testid="sync-error">
+          <span className={styles.errorIcon}>⚠️</span>
+          <p className={styles.errorText}>{syncError}</p>
+          <button onClick={dismissSyncError} aria-label="Dismiss sync error">✕</button>
+        </div>
       )}
 
       {previewPage && sessionId && (

@@ -3,6 +3,7 @@ import type {
   PdfSession,
   CreateSessionResponse,
   UploadFilesResponse,
+  PageManifestEntry,
 } from '../../shared/types/pdf';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -61,6 +62,25 @@ export function useUploadPdfFiles() {
         body: formData,
       });
     },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+    },
+  });
+}
+
+export function useUpdateManifest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { sessionId: string; updatedAt: string; pageCount: number },
+    Error,
+    { sessionId: string; manifest: PageManifestEntry[] }
+  >({
+    mutationFn: ({ sessionId, manifest }) =>
+      apiFetch(`/api/pdf/sessions/${sessionId}/manifest`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manifest }),
+      }),
     onSuccess: (_data, { sessionId }) => {
       queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
     },

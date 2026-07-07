@@ -1,10 +1,19 @@
 import React, { useRef, useCallback, useEffect } from 'react';
+import { useDrag, useDrop } from 'react-dnd';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
 import styles from './PageThumbnail.module.css';
 
 const THUMBNAIL_WIDTH = 180;
 const THUMBNAIL_HEIGHT = Math.round(THUMBNAIL_WIDTH * (22 / 17));
+
+const DND_TYPE = 'PAGE_THUMBNAIL';
+
+interface DragItem {
+  type: string;
+  visibleIndex: number;
+  pageId: string;
+}
 
 export interface PageThumbnailProps {
   pageId: string;
@@ -15,8 +24,10 @@ export interface PageThumbnailProps {
   sourceFileName: string;
   originalPageNumber: number;
   isSelected: boolean;
-  onSelect: (pageId: string, shiftKey: boolean) => void;
+  onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onPreview: (pageId: string) => void;
+  onDrop?: (fromIndex: number, toIndex: number) => void;
+  visibleIndex?: number;
 }
 
 export const PageThumbnail: React.FC<PageThumbnailProps> = ({
@@ -30,6 +41,8 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   isSelected,
   onSelect,
   onPreview,
+  onDrop,
+  visibleIndex,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -42,6 +55,27 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     1,
     fileUrl,
   );
+
+  const [{ isDragging }, dragRef] = useDrag<DragItem, void, { isDragging: boolean }>({
+    type: DND_TYPE,
+    item: { type: DND_TYPE, visibleIndex: visibleIndex ?? 0, pageId },
+    canDrag: () => visibleIndex !== undefined && !!onDrop,
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  });
+
+  const [{ isOver }, dropRef] = useDrop<DragItem, void, { isOver: boolean }>({
+    accept: DND_TYPE,
+    drop: (item) => {
+      if (onDrop && visibleIndex !== undefined && item.visibleIndex !== visibleIndex) {
+        onDrop(item.visibleIndex, visibleIndex);
+      }
+    },
+    collect: (monitor) => ({
+      isOver: monitor.isOver(),
+    }),
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -57,14 +91,20 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) {
-        onSelect(pageId, e.shiftKey);
+      if (e.shiftKey) {
+        onSelect(pageId, true, false);
+      } else if (e.ctrlKey || e.metaKey) {
+        onSelect(pageId, false, true);
       } else {
-        onPreview(pageId);
+        onSelect(pageId, false, false);
       }
     },
-    [onSelect, onPreview, pageId],
+    [onSelect, pageId],
   );
+
+  const handleDoubleClick = useCallback(() => {
+    onPreview(pageId);
+  }, [onPreview, pageId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -81,19 +121,31 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const cardClassName = [
     styles.thumbnailCard,
     isSelected ? styles.thumbnailCardSelected : '',
+    isDragging ? styles.thumbnailCardDragging : '',
+    isOver ? styles.thumbnailCardDropTarget : '',
   ]
     .filter(Boolean)
     .join(' ');
 
+  const combinedRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+      dragRef(node);
+      dropRef(node);
+    },
+    [dragRef, dropRef],
+  );
+
   return (
     <div
-      ref={cardRef}
+      ref={combinedRef}
       className={cardClassName}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="gridcell"
-      aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}. Click or press Enter to preview.`}
+      aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}. Click to select, double-click to preview.`}
       aria-selected={isSelected}
       data-testid={`pdf-thumbnail-${assemblyPosition}`}
       data-page-id={pageId}

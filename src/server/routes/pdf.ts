@@ -11,6 +11,7 @@ import {
   validateAndIngest,
   resolveFilePath,
   getPdfTempDir,
+  updateManifest,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -174,6 +175,52 @@ router.post(
     }
   },
 );
+
+// ── PUT /api/pdf/sessions/:sessionId/manifest ─────────────────────────────────
+
+router.put('/sessions/:sessionId/manifest', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+    const { manifest } = req.body;
+
+    if (!Array.isArray(manifest)) {
+      res.status(400).json({ error: { code: 'INVALID_BODY', message: 'manifest must be an array' } });
+      return;
+    }
+
+    const result = await updateManifest(sessionId, userId, manifest);
+
+    res.json({
+      sessionId,
+      updatedAt: result.updatedAt,
+      pageCount: result.pageCount,
+    });
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+      res.status(404).json({ error: { code, message: 'Session not found' } });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+      res.status(403).json({ error: { code, message: 'Forbidden' } });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+      res.status(410).json({ error: { code, message: 'Session has expired' } });
+      return;
+    }
+    if (
+      code === PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID ||
+      code === PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION
+    ) {
+      res.status(400).json({ error: { code, message: (err as Error).message } });
+      return;
+    }
+    console.error('[pdf] PUT /manifest error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // ── GET /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────────
 

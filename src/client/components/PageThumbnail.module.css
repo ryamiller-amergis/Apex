@@ -34,6 +34,15 @@
   background: rgba(39, 71, 217, 0.04);
 }
 
+.thumbnailCardDragging {
+  opacity: 0.4;
+}
+
+.thumbnailCardDropTarget {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px rgba(39, 71, 217, 0.3);
+}
+
 /* ── Canvas Area ─────────────────────────────────────── */
 
 .canvasWrapper {
