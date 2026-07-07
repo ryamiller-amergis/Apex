@@ -29,8 +29,8 @@ function computeReadiness(
   const featureSession = activeSession ?? matchingSessions[0];
 
   if (featureSession) {
-    if (featureSession.prUrl) return { state: 'in_pr', sessionId: featureSession.id };
     if (featureSession.status === 'closed') return { state: 'closed', sessionId: featureSession.id };
+    if (featureSession.prUrl) return { state: 'in_pr', sessionId: featureSession.id };
     return { state: 'in_progress', sessionId: featureSession.id };
   }
 
