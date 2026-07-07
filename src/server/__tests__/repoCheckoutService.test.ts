@@ -4,11 +4,17 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+
+const mockGit = jest.fn().mockResolvedValue('');
 
 jest.mock('fs');
-jest.mock('child_process', () => ({
-  execSync: jest.fn(),
+jest.mock('../utils/asyncGit', () => ({
+  git: (...args: any[]) => mockGit(...args),
+  safeArgs: (dir: string, args: string[]) => ['-c', `safe.directory=${dir}`, ...args],
+  LONG_TIMEOUT_MS: 120_000,
+}));
+jest.mock('../utils/asyncMutex', () => ({
+  workspaceMutex: { acquire: jest.fn().mockResolvedValue(() => {}) },
 }));
 jest.mock('../utils/dataDir', () => ({
   resolveDataRoot: jest.fn(() => '/data'),
@@ -22,7 +28,6 @@ import {
   checkoutNewBranch,
 } from '../services/repoCheckoutService';
 
-const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 const mockFs = fs as jest.Mocked<typeof fs>;
 
 function workspacePath(sessionId: string): string {
@@ -32,6 +37,7 @@ function workspacePath(sessionId: string): string {
 describe('repoCheckoutService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGit.mockResolvedValue('');
   });
 
   describe('getWorkspaceDir', () => {
@@ -119,8 +125,8 @@ describe('repoCheckoutService', () => {
       expect(mockFs.mkdirSync).toHaveBeenCalledWith(workspacePath('session-abc'), {
         recursive: true,
       });
-      expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('git clone'),
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['clone']),
         expect.objectContaining({ cwd: workspacePath('session-abc') }),
       );
     });
@@ -139,31 +145,31 @@ describe('repoCheckoutService', () => {
       });
 
       expect(workspaceDir).toBe(workspacePath('session-gh'));
-      expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('github.com/amergis/AI-Pilot.git'),
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['clone']),
         expect.objectContaining({ cwd: workspacePath('session-gh') }),
       );
     });
   });
 
   describe('createFeatureBranch', () => {
-    it('creates a feature branch with workItemId and slugified title', () => {
-      const branchName = createFeatureBranch('/tmp/workspace', 50743, 'Shift Scheduler Widget');
+    it('creates a feature branch with workItemId and slugified title', async () => {
+      const branchName = await createFeatureBranch('/tmp/workspace', 50743, 'Shift Scheduler Widget');
 
       expect(branchName).toBe('feature/apex-50743-shift-scheduler-widget');
-      expect(mockExecSync).toHaveBeenCalledWith(
-        'git -c safe.directory="/tmp/workspace" checkout -b "feature/apex-50743-shift-scheduler-widget"',
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'checkout', '-b', 'feature/apex-50743-shift-scheduler-widget'],
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });
   });
 
   describe('checkoutNewBranch', () => {
-    it('uses safe.directory to avoid dubious ownership errors', () => {
-      checkoutNewBranch('/tmp/workspace', 'feature/apex-feat-009-platform-integration');
+    it('uses safe.directory to avoid dubious ownership errors', async () => {
+      await checkoutNewBranch('/tmp/workspace', 'feature/apex-feat-009-platform-integration');
 
-      expect(mockExecSync).toHaveBeenCalledWith(
-        'git -c safe.directory="/tmp/workspace" checkout -b "feature/apex-feat-009-platform-integration"',
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'checkout', '-b', 'feature/apex-feat-009-platform-integration'],
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });

@@ -53,11 +53,19 @@ export function useChatStream(
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
   const retryTimeoutRef = useRef<number | null>(null);
+  const pollTimerRef = useRef<number | null>(null);
 
   const clearRetryTimeout = useCallback(() => {
     if (retryTimeoutRef.current !== null) {
       window.clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearPollTimer = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
     }
   }, []);
 
@@ -74,7 +82,8 @@ export function useChatStream(
     setRetryReason(null);
     streamBufferRef.current = '';
     clearRetryTimeout();
-  }, [options.initialMessages, options.initialStatus, options.initialPrdReady, clearRetryTimeout]);
+    clearPollTimer();
+  }, [options.initialMessages, options.initialStatus, options.initialPrdReady, clearRetryTimeout, clearPollTimer]);
 
   useEffect(() => {
     // Always reset derived state (streaming buffer, prdReady, backlogReady) when
@@ -225,6 +234,17 @@ export function useChatStream(
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
+          clearPollTimer();
+          setStatus('idle');
+          if ((event as any).error) {
+            const errMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'system',
+              text: `Error: ${(event as any).error}`,
+              ts: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errMsg]);
+          }
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);
           break;
@@ -237,8 +257,53 @@ export function useChatStream(
       esRef.current = null;
       setIsConnected(false);
       clearRetryTimeout();
+      clearPollTimer();
     };
   }, [threadId, reset]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Polling fallback: when status is 'running' and SSE is disconnected, poll
+  // the server every 5 seconds to detect terminal status from Postgres.
+  useEffect(() => {
+    if (!threadId || status !== 'running' || isConnected) {
+      clearPollTimer();
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/chat/threads/${threadId}/run-status`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { status: string; lastError?: string };
+        if (data.status === 'idle' || data.status === 'error' || data.status === 'closed') {
+          setStatus(data.status as ChatThreadStatus);
+          clearPollTimer();
+          streamBufferRef.current = '';
+          setStreamingText('');
+          setThinkingText('');
+          setToolProgress([]);
+          setIsRetrying(false);
+          setRetryReason(null);
+          if (data.status === 'error' && data.lastError) {
+            const errMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'system',
+              text: `Error: ${data.lastError}`,
+              ts: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errMsg]);
+          }
+        }
+      } catch {
+        // Network error during poll — retry next interval
+      }
+    };
+
+    poll();
+    pollTimerRef.current = window.setInterval(poll, 5_000);
+    return () => clearPollTimer();
+  }, [threadId, status, isConnected, clearPollTimer]);
 
   return { messages, streamingText, thinkingText, toolProgress, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };
 }

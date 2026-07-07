@@ -12,8 +12,8 @@ import {
   getThread,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
-import { eq } from 'drizzle-orm';
-import { prds } from '../db/schema';
+import { eq, desc } from 'drizzle-orm';
+import { agentRuns, chatThreads, prds } from '../db/schema';
 import { toggleFlag } from '../services/chatThreadRepository';
 import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
@@ -21,6 +21,7 @@ import type { ChatAttachment, ChatThread, StartChatRequest, SendMessageRequest }
 import type { ThreadAccess } from '../services/threadAccessService';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
+import { subscribeRunEvents } from '../services/pgNotifyService';
 
 const router = Router();
 
@@ -216,11 +217,31 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   sendEvent({ type: 'status', status: hydrated?.status ?? thread.status });
 
   unsubscribe = subscribeToThread(req.params.id, sendEvent);
+
+  // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
+  // another worker's run are forwarded to this SSE connection.
+  const unsubNotify = subscribeRunEvents(req.params.id, (event) => {
+    if (event.type === 'token' && typeof event.data === 'string') {
+      sendEvent({ type: 'token', text: event.data });
+    } else if (event.type === 'message' && event.data) {
+      sendEvent({ type: 'message', message: event.data });
+    } else if (event.type === 'done') {
+      sendEvent({ type: 'done', ...event.data });
+      sendEvent({ type: 'status', status: 'idle' });
+    } else if (event.type === 'tool_call' && event.data) {
+      sendEvent({ type: 'tool_call', toolName: event.data.toolName });
+    } else if (event.type === 'cancel') {
+      sendEvent({ type: 'status', status: 'idle' });
+      sendEvent({ type: 'done' });
+    }
+  });
+
   stopHeartbeat = startSseHeartbeat(res);
 
   req.on('close', () => {
     stopHeartbeat();
     unsubscribe();
+    unsubNotify();
   });
 });
 
@@ -321,6 +342,30 @@ router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: 
   } catch (err: any) {
     console.error('[chat] toggleFlag error:', err.message);
     res.status(500).json({ error: err.message ?? 'Failed to toggle flag' });
+  }
+});
+
+/**
+ * GET /api/chat/threads/:id/run-status
+ * Lightweight polling endpoint — returns only { status, lastError } from Postgres.
+ * Used by the client as a fallback when SSE is disconnected while status==='running'.
+ */
+router.get('/threads/:id/run-status', requireThreadRead, async (req: Request, res: Response) => {
+  try {
+    const [row] = await db
+      .select({ status: agentRuns.status, lastError: agentRuns.lastError })
+      .from(agentRuns)
+      .where(eq(agentRuns.threadId, req.params.id))
+      .orderBy(desc(agentRuns.createdAt))
+      .limit(1);
+
+    if (!row) {
+      return res.json({ status: 'idle', lastError: null });
+    }
+    res.json({ status: row.status, lastError: row.lastError });
+  } catch (err: any) {
+    console.error('[chat] run-status error:', err.message);
+    res.status(500).json({ error: err.message ?? 'Failed to fetch run status' });
   }
 });
 

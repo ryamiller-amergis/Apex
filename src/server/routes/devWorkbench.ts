@@ -251,7 +251,7 @@ router.post('/start', async (req: Request, res: Response) => {
           });
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
-          checkoutNewBranch(workspaceDir, branchName);
+          await checkoutNewBranch(workspaceDir, branchName);
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
@@ -305,7 +305,7 @@ router.post('/start', async (req: Request, res: Response) => {
             provider,
           });
 
-          const branchName = createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
+          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
 
           try {
             await adoService.setWorkItemState(workItemId!, 'In Progress');
@@ -492,7 +492,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
 
     if (workspaceExists) {
       // Workspace is available — do the full sync + merge + push flow
-      const syncResult = syncWithBase(workspaceDir, baseBranch);
+      const syncResult = await syncWithBase(workspaceDir, baseBranch);
 
       if (syncResult.status === 'conflict') {
         await db
@@ -565,7 +565,7 @@ router.get('/sessions/:id/conflicts', async (req: Request, res: Response) => {
     if (session.status !== 'conflict') { res.status(400).json({ error: 'Session is not in conflict status' }); return; }
 
     const workspaceDir = getWorkspaceDir(sessionId);
-    const files = listConflicts(workspaceDir);
+    const files = await listConflicts(workspaceDir);
     res.json({ files });
   } catch (err) {
     console.error('[dev-workbench] listConflicts failed:', (err as Error).message);
@@ -593,7 +593,7 @@ router.put('/sessions/:id/conflicts', async (req: Request, res: Response) => {
     if (session.status !== 'conflict') { res.status(400).json({ error: 'Session is not in conflict status' }); return; }
 
     const workspaceDir = getWorkspaceDir(sessionId);
-    writeResolvedFile(workspaceDir, filePath, content);
+    await writeResolvedFile(workspaceDir, filePath, content);
     res.json({ ok: true });
   } catch (err) {
     console.error('[dev-workbench] writeResolvedFile failed:', (err as Error).message);
@@ -616,7 +616,7 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     if (!session.branchName) { res.status(400).json({ error: 'Session has no branch' }); return; }
 
     const workspaceDir = getWorkspaceDir(sessionId);
-    completeMerge(workspaceDir);
+    await completeMerge(workspaceDir);
 
     const skillConfig = await getSkillConfig(session.project);
     const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
@@ -660,7 +660,7 @@ router.post('/sessions/:id/conflicts/abort', async (req: Request, res: Response)
     if (session.status !== 'conflict') { res.status(400).json({ error: 'Session is not in conflict status' }); return; }
 
     const workspaceDir = getWorkspaceDir(sessionId);
-    abortMerge(workspaceDir);
+    await abortMerge(workspaceDir);
 
     await db
       .update(devSessions)
@@ -692,19 +692,18 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
     const workspaceExists = fs.existsSync(workspaceDir);
 
     if (workspaceExists) {
-      const { diffText, changedFiles } = computeDiff(workspaceDir);
+      const { diffText, changedFiles } = await computeDiff(workspaceDir);
 
-      // Persist diff to DB so it survives workspace loss
-      if (changedFiles.length > 0) {
-        await db
-          .update(devSessions)
-          .set({
-            cachedDiffText: diffText,
-            cachedChangedFiles: changedFiles,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(devSessions.id, session.id));
-      }
+      // Always persist diff to DB (even when empty) so the UI panel
+      // doesn't show stale "No changes" from a previous run.
+      await db
+        .update(devSessions)
+        .set({
+          cachedDiffText: diffText,
+          cachedChangedFiles: changedFiles,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(devSessions.id, session.id));
 
       res.json({
         diffText,
@@ -766,7 +765,7 @@ async function finalisePush(
 ): Promise<void> {
   const workspaceDir = getWorkspaceDir(sessionId);
 
-  pushMergedBranch(workspaceDir, branchName);
+  await pushMergedBranch(workspaceDir, branchName);
 
   let prUrl: string | null = null;
   try {

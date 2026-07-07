@@ -39,6 +39,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
+import { startReaper } from './services/agentRunReaperService';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
@@ -288,6 +289,7 @@ const server = app.listen(PORT, () => {
   // Recover in-flight PRD/design-doc/validation watchers lost to a restart,
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
+  startReaper();
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.
   registerGracefulShutdown(server);

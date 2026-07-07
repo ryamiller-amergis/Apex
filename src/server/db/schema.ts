@@ -1093,4 +1093,21 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
     fields: [pdfSessions.userId],
     references: [appUsers.oid],
   }),
-}));;
+}));
+
+// ── Agent Runs (source of truth for multi-worker run status) ──────────────────
+
+export const agentRuns = pgTable('agent_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: text('thread_id').notNull(),
+  status: text('status').notNull().default('queued'),
+  ownerInstance: text('owner_instance'),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+}));

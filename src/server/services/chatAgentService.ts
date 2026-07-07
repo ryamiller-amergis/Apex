@@ -24,7 +24,7 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs, testCases, devSessions } from '../db/schema';
+import { interviews, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -33,6 +33,7 @@ import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
+import { notifyRunEvent } from './pgNotifyService';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -1505,10 +1506,9 @@ async function eagerPushDevSession(threadId: string): Promise<void> {
 
   if (!fs.existsSync(workspaceDir)) return;
 
-  const { diffText, changedFiles } = computeDiff(workspaceDir);
-  if (changedFiles.length === 0) return;
+  const { diffText, changedFiles } = await computeDiff(workspaceDir);
 
-  // Cache the diff so it survives workspace deletion
+  // Always cache the diff (even when empty) so UI doesn't show stale data
   await db
     .update(devSessions)
     .set({
@@ -1518,9 +1518,11 @@ async function eagerPushDevSession(threadId: string): Promise<void> {
     })
     .where(eq(devSessions.id, session.id));
 
+  if (changedFiles.length === 0) return;
+
   // Push branch to remote
   try {
-    pushBranch(workspaceDir, session.branchName);
+    await pushBranch(workspaceDir, session.branchName);
     await db
       .update(devSessions)
       .set({ branchPushed: true, updatedAt: new Date().toISOString() })
@@ -1615,6 +1617,8 @@ export async function sendMessage(
     prompt = promptText;
   }
 
+  let agentRunId: string | undefined;
+
   try {
     // Create or resume the agent (retry up to 3x on transient errors)
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
@@ -1661,9 +1665,42 @@ export async function sendMessage(
     state.thread.activeRunId = (run as any).id;
     persistThread(state.thread);
 
+    // ── Insert agent_runs record as 'queued', then atomically claim it ──────
+    const runTimeoutAt = new Date(Date.now() + IDLE_TIMEOUT_MS).toISOString();
+    agentRunId = state.thread.activeRunId ?? threadId;
+    await db.insert(agentRuns).values({
+      id: agentRunId,
+      threadId,
+      status: 'queued',
+      timeoutAt: runTimeoutAt,
+    }).onConflictDoNothing();
+
+    // Atomic lease claim: only one worker transitions queued → running
+    const [claimed] = await db.update(agentRuns)
+      .set({
+        status: 'running',
+        ownerInstance: os.hostname(),
+        heartbeatAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'queued')))
+      .returning({ id: agentRuns.id });
+
+    if (!claimed) {
+      // Another worker already claimed this run — do not double-execute.
+      // The SSE route will pick up tokens via LISTEN/NOTIFY from the owner.
+      console.log(`[chat] Run ${agentRunId} already claimed by another worker, skipping execution`);
+      state.thread.status = 'running';
+      state.thread.activeRunId = agentRunId;
+      persistThread(state.thread);
+      return;
+    }
+
     const MAX_RUN_RETRIES = 2;
     let currentRun = run;
     let agentTextBuffer = '';
+    let lastHeartbeatMs = Date.now();
+    const HEARTBEAT_INTERVAL_MS = 10_000;
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
@@ -1677,6 +1714,26 @@ export async function sendMessage(
                 if (block.type === 'text') {
                   agentTextBuffer += block.text;
                   broadcast(state, { type: 'token', text: block.text });
+                  notifyRunEvent(threadId, { type: 'token', data: block.text }).catch(() => {});
+                  // Periodic heartbeat + cancel check
+                  if (Date.now() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+                    lastHeartbeatMs = Date.now();
+                    const [runRow] = await db.update(agentRuns)
+                      .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+                      .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'running')))
+                      .returning({ status: agentRuns.status });
+                    if (!runRow) {
+                      // Run was cancelled or failed by another worker/reaper
+                      const cancelledRow = await db.query.agentRuns.findFirst({
+                        where: eq(agentRuns.id, agentRunId),
+                        columns: { status: true },
+                      });
+                      if (cancelledRow?.status === 'cancelled') {
+                        console.log(`[chat] Run ${agentRunId} cancelled by another worker, aborting stream`);
+                        throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
+                      }
+                    }
+                  }
                 }
                 if (block.type === 'tool_use') {
                   // Snapshot reasoning text accumulated before this tool call
@@ -1706,6 +1763,7 @@ export async function sendMessage(
                   broadcast(state, { type: 'tool_call', toolName: block.name, input: block.input });
                   broadcast(state, { type: 'message', message: toolMsg });
                   pgInsertMessage(threadId, toolMsg).catch(() => {});
+                  notifyRunEvent(threadId, { type: 'tool_call', data: { toolName: block.name } }).catch(() => {});
                 }
               }
             } else if (event.type === 'thinking') {
@@ -1799,6 +1857,12 @@ export async function sendMessage(
         console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
         trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
         state.thread.lastError = reason;
+        // Mark agent run as failed in Postgres
+        await db.update(agentRuns)
+          .set({ status: 'failed', lastError: reason?.slice(0, 2000), updatedAt: new Date().toISOString() })
+          .where(eq(agentRuns.id, agentRunId))
+          .execute()
+          .catch((e) => console.error('[chat] Failed to mark agent run failed (in-loop):', e));
         broadcast(state, { type: 'error', error: reason });
         if (state.agent) {
           await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -1861,9 +1925,31 @@ export async function sendMessage(
       console.warn(`[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`, (err as Error).message);
     }
 
+    // Mark agent run as completed in Postgres BEFORE broadcasting done
+    await db.update(agentRuns)
+      .set({ status: 'completed', updatedAt: new Date().toISOString() })
+      .where(eq(agentRuns.id, agentRunId))
+      .execute()
+      .catch((e) => console.error('[chat] Failed to mark agent run completed:', e));
+
     broadcast(state, { type: 'done', runId: state.thread.activeRunId, prdReady, backlogReady });
+    notifyRunEvent(threadId, { type: 'done', data: { status: 'completed', prdReady, backlogReady } }).catch(() => {});
     state.thread.activeRunId = undefined;
   } catch (err: any) {
+    // Handle cross-worker cancellation without treating it as an error
+    if (err?._cancelled) {
+      if (state.agent) {
+        await state.agent[Symbol.asyncDispose]().catch(() => {});
+        state.agent = null;
+      }
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      broadcast(state, { type: 'done' });
+      persistThread(state.thread);
+      return;
+    }
+
     logAgentError(threadId, err);
 
     const tier = classifyError(err);
@@ -1910,8 +1996,19 @@ export async function sendMessage(
 
     const errorCode = mapErrorCode(tier, err);
     trackEvent('agent.run.errored', { threadId, errorTier: tier, errorCode, model: resolvedModel });
+
+    // Mark agent run as failed in Postgres BEFORE broadcasting error
+    if (agentRunId) {
+      await db.update(agentRuns)
+        .set({ status: 'failed', lastError: rawMsg?.slice(0, 2000), updatedAt: new Date().toISOString() })
+        .where(eq(agentRuns.id, agentRunId))
+        .execute()
+        .catch((e) => console.error('[chat] Failed to mark agent run failed:', e));
+    }
+
     broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
     broadcast(state, { type: 'done' });
+    notifyRunEvent(threadId, { type: 'done', data: { status: 'failed', error: state.thread.lastError } }).catch(() => {});
 
     try {
       await failGeneratingDocuments(threadId);
@@ -1927,16 +2024,29 @@ export async function sendMessage(
 
 export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
-  if (!state || !state.agent) return;
+  if (!state) return;
 
   const activeRunId = state.thread.activeRunId;
   if (!activeRunId) return;
 
-  try {
-    const run = await (Agent as any).getRun(activeRunId, { runtime: 'local', cwd: state.thread.workspaceDir });
-    if (run.supports('cancel')) await run.cancel();
-  } catch {
-    // Best-effort cancel
+  // Mark cancelled in Postgres — works from any worker
+  await db.update(agentRuns)
+    .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+    .where(eq(agentRuns.id, activeRunId))
+    .execute()
+    .catch((e) => console.error('[chat] Failed to mark agent run cancelled:', e));
+
+  // NOTIFY all workers (the owner will check for cancel and abort its loop)
+  notifyRunEvent(threadId, { type: 'cancel' }).catch(() => {});
+
+  // If this IS the owner worker, cancel the SDK run directly
+  if (state.agent) {
+    try {
+      const run = await (Agent as any).getRun(activeRunId, { runtime: 'local', cwd: state.thread.workspaceDir });
+      if (run.supports('cancel')) await run.cancel();
+    } catch {
+      // Best-effort cancel
+    }
   }
 
   state.thread.status = 'idle';
@@ -1963,10 +2073,28 @@ export async function closeThread(threadId: string): Promise<void> {
 
   threads.delete(threadId);
 
-  // Clean up workspace directory
-  try {
-    fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
-  } catch { /* non-fatal */ }
+  // Workspace deletion protection: skip if this thread backs an active dev
+  // session that has unpushed changes (the workspace is still needed).
+  let shouldDeleteWorkspace = true;
+  if (state.thread.kickoff?.mode === 'development') {
+    const session = await db.query.devSessions.findFirst({
+      where: eq(devSessions.chatThreadId, threadId),
+      columns: { status: true, branchPushed: true },
+    });
+    if (session) {
+      const isActive = session.status === 'in_progress' || session.status === 'setting_up' || session.status === 'conflict';
+      const hasUnpushed = !session.branchPushed;
+      if (isActive || hasUnpushed) {
+        shouldDeleteWorkspace = false;
+      }
+    }
+  }
+
+  if (shouldDeleteWorkspace) {
+    try {
+      fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
+    } catch { /* non-fatal */ }
+  }
 }
 
 /**
