@@ -79,6 +79,7 @@ export interface DevDiff {
   diffText: string;
   changedFiles: string[];
   branch: string;
+  branchPushed?: boolean;
 }
 
 export interface ActiveDevSession {

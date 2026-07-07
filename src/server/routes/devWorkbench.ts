@@ -716,17 +716,12 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
 
     // Workspace gone — serve cached diff from DB
     const cachedFiles = (session.cachedChangedFiles as string[] | null) ?? [];
-    if (cachedFiles.length > 0) {
-      res.json({
-        diffText: session.cachedDiffText ?? '',
-        changedFiles: cachedFiles,
-        branch: session.branchName ?? '',
-      });
-      return;
-    }
-
-    // No workspace and no cached diff
-    res.json({ diffText: '', changedFiles: [], branch: session.branchName ?? '' });
+    res.json({
+      diffText: session.cachedDiffText ?? '',
+      changedFiles: cachedFiles,
+      branch: session.branchName ?? '',
+      branchPushed: session.branchPushed ?? false,
+    });
   } catch (err) {
     console.error('[dev-workbench] computeDiff failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to compute diff' });

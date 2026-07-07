@@ -992,7 +992,7 @@ export const DevSessionView: React.FC = () => {
             <MergeResolver sessionId={sessionId} />
           )}
 
-          {!isRunning && !isConflict && sessionId && session?.branchName && diff && diff.changedFiles.length > 0 && (
+          {!isRunning && !isConflict && sessionId && session?.branchName && diff && (diff.changedFiles.length > 0 || diff.branchPushed) && (
             <ReadyToTest
               branchName={session.branchName}
               sessionId={sessionId}
@@ -1004,6 +1004,8 @@ export const DevSessionView: React.FC = () => {
             <div className={styles['diff-container']}>
               <DiffViewer diffText={diff.diffText} />
             </div>
+          ) : diff?.branchPushed ? (
+            <div className={styles['no-changes']}>Changes were pushed to the remote branch. Diff preview is unavailable but you can still create a PR.</div>
           ) : (
             <div className={styles['no-changes']}>No changes yet. The agent will modify files as it works.</div>
           )}
