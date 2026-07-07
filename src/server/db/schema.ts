@@ -1098,7 +1098,7 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
 // ── Agent Runs (source of truth for multi-worker run status) ──────────────────
 
 export const agentRuns = pgTable('agent_runs', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
   threadId: text('thread_id').notNull(),
   status: text('status').notNull().default('queued'),
   ownerInstance: text('owner_instance'),
