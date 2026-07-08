@@ -1,12 +1,12 @@
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
+import { resolveDataRoot } from '../utils/dataDir';
 import type {
   FileUploadResult,
   PageManifestEntry,
@@ -16,7 +16,7 @@ import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-sessions');
+const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(resolveDataRoot(), 'pdf-sessions');
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
