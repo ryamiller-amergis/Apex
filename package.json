@@ -34,7 +34,7 @@
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=25.0.0"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1064.0",
