@@ -26,6 +26,7 @@ import {
   checkoutDefaultBranch,
   createFeatureBranch,
   checkoutNewBranch,
+  excludeAiPilotFromGit,
 } from '../services/repoCheckoutService';
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -131,6 +132,27 @@ describe('repoCheckoutService', () => {
       );
     });
 
+    it('excludes .ai-pilot from git tracking after cloning', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+      mockFs.mkdirSync.mockImplementation(() => undefined);
+      mockFs.existsSync.mockReturnValue(false);
+
+      await checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'main',
+        sessionId: 'session-excl',
+      });
+
+      const excludePath = path.join(workspacePath('session-excl'), '.git', 'info', 'exclude');
+      expect(mockFs.appendFileSync).toHaveBeenCalledWith(
+        excludePath,
+        expect.stringContaining('.ai-pilot/'),
+        'utf-8',
+      );
+    });
+
     it('clones a GitHub repo when provider is github', async () => {
       process.env.GITHUB_ORG = 'amergis';
       process.env.GITHUB_TOKEN = 'gh-secret';
@@ -149,6 +171,42 @@ describe('repoCheckoutService', () => {
         expect.arrayContaining(['clone']),
         expect.objectContaining({ cwd: workspacePath('session-gh') }),
       );
+    });
+  });
+
+  describe('excludeAiPilotFromGit', () => {
+    it('appends .ai-pilot/ to .git/info/exclude when not already present', () => {
+      mockFs.existsSync.mockReturnValue(false);
+
+      excludeAiPilotFromGit('/tmp/workspace');
+
+      const excludePath = path.join('/tmp/workspace', '.git', 'info', 'exclude');
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith(path.join('/tmp/workspace', '.git', 'info'), {
+        recursive: true,
+      });
+      expect(mockFs.appendFileSync).toHaveBeenCalledWith(
+        excludePath,
+        expect.stringContaining('.ai-pilot/'),
+        'utf-8',
+      );
+    });
+
+    it('is idempotent when .ai-pilot/ is already excluded', () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('# git\n.ai-pilot/\n' as never);
+
+      excludeAiPilotFromGit('/tmp/workspace');
+
+      expect(mockFs.appendFileSync).not.toHaveBeenCalled();
+    });
+
+    it('does not throw if writing the exclude file fails', () => {
+      mockFs.existsSync.mockReturnValue(false);
+      mockFs.appendFileSync.mockImplementation(() => {
+        throw new Error('disk full');
+      });
+
+      expect(() => excludeAiPilotFromGit('/tmp/workspace')).not.toThrow();
     });
   });
 

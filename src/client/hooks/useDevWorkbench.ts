@@ -7,6 +7,7 @@ import type {
   DevSessionDetail,
   ConflictedFile,
   PushSessionResponse,
+  CreatePrResponse,
 } from '../../shared/types/devWorkbench';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -110,9 +111,20 @@ export function useResolveConflict(sessionId: string) {
 
 export function useCompleteMerge(sessionId: string) {
   const queryClient = useQueryClient();
-  return useMutation<{ ok: boolean; prUrl: string | null }, Error, void>({
+  return useMutation<{ ok: boolean; branchPushed: boolean }, Error, void>({
     mutationFn: () =>
       apiFetch(`/api/dev-workbench/sessions/${sessionId}/conflicts/complete`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'session', sessionId] });
+    },
+  });
+}
+
+export function useCreatePr(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<CreatePrResponse, Error, void>({
+    mutationFn: () =>
+      apiFetch(`/api/dev-workbench/sessions/${sessionId}/pr`, { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dev-workbench', 'session', sessionId] });
     },

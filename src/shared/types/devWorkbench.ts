@@ -56,6 +56,7 @@ export interface DevSessionDetail {
   status: DevSessionStatus;
   setupError: string | null;
   prUrl: string | null;
+  branchPushed: boolean;
   createdAt: string;
   prdId?: string | null;
   featureId?: string | null;
@@ -71,8 +72,12 @@ export interface PushSessionResponse {
   /** Set when the merge produced conflicts — push and PR are blocked until resolved. */
   status: 'clean' | 'conflict';
   branch?: string;
-  prUrl?: string;
+  branchPushed?: boolean;
   conflictedFiles?: ConflictedFile[];
+}
+
+export interface CreatePrResponse {
+  prUrl: string | null;
 }
 
 export interface DevDiff {

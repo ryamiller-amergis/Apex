@@ -9,6 +9,7 @@ import {
   useDevSession,
   useDevDiff,
   usePushBranch,
+  useCreatePr,
 } from '../useDevWorkbench';
 
 function createWrapper() {
@@ -184,8 +185,8 @@ describe('useCloseDevSession', () => {
 describe('usePushBranch', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('POSTs to push the session branch', async () => {
-    mockFetchOk({ ok: true, branch: 'feature/42' });
+  it('POSTs to push the session branch and returns branchPushed', async () => {
+    mockFetchOk({ ok: true, status: 'clean', branch: 'feature/42', branchPushed: true });
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => usePushBranch(), { wrapper });
@@ -193,12 +194,50 @@ describe('usePushBranch', () => {
     await act(async () => {
       const response = await result.current.mutateAsync('session-1');
       expect(response.branch).toBe('feature/42');
+      expect(response.branchPushed).toBe(true);
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/dev-workbench/sessions/session-1/push',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+});
+
+describe('useCreatePr', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POSTs to create a PR and returns prUrl', async () => {
+    const PR_URL = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/1';
+    mockFetchOk({ prUrl: PR_URL });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useCreatePr('session-1'), { wrapper });
+
+    await act(async () => {
+      const response = await result.current.mutateAsync();
+      expect(response.prUrl).toBe(PR_URL);
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dev-workbench/sessions/session-1/pr',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['dev-workbench', 'session', 'session-1'],
+    });
+  });
+
+  it('surfaces API errors', async () => {
+    mockFetchError(400, { error: 'Branch has not been pushed yet' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCreatePr('session-1'), { wrapper });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync()).rejects.toThrow('Branch has not been pushed yet');
+    });
   });
 });
 
