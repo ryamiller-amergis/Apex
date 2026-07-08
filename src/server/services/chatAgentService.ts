@@ -34,6 +34,8 @@ import type { ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import { notifyRunEvent } from './pgNotifyService';
+import { isMaxviewConfigured } from './maxviewAuthService';
+import { isFeatureEnabled } from './featureFlagService';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -298,9 +300,15 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
 /**
  * Build the mcpServers map for the Cursor SDK agent.
  * Always includes ado-skills; conditionally adds any MCP pill selected for this thread.
+ * When `maxviewEnabled` is set, the always-on MaxView timecard-debug MCP proxy is
+ * added (gated by the `maxview-mcp` feature flag + server config in the caller).
  * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
  */
-function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Record<string, McpServerConfig> {
+function buildMcpServers(
+  kickoff: ChatThreadKickoff,
+  adoSkillsUrl: string,
+  options?: { maxviewEnabled?: boolean },
+): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
@@ -325,7 +333,41 @@ function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Reco
     }
   }
 
+  if (options?.maxviewEnabled) {
+    servers['maxview'] = {
+      url: `http://localhost:${process.env.PORT ?? 3001}/mcp/maxview`,
+    };
+  }
+
   return servers;
+}
+
+/**
+ * Whether the always-on MaxView timecard-debug MCP should be wired into this
+ * thread's agent. Requires both server-side config (env) and the `maxview-mcp`
+ * feature flag being enabled for the user/project. Fails closed on any error.
+ */
+async function isMaxviewMcpEnabled(userId: string, project: string): Promise<boolean> {
+  if (!isMaxviewConfigured()) return false;
+  try {
+    return await isFeatureEnabled('maxview-mcp', { userId, project });
+  } catch (err) {
+    console.error('[chat] maxview-mcp flag check failed:', (err as Error).message);
+    return false;
+  }
+}
+
+/** System-prompt guidance describing the MaxView timecard-debug MCP tools. */
+function buildMaxviewPromptHint(): string {
+  return [
+    `# MaxView timecard debugging (via \`maxview\` MCP server)`,
+    `You have access to the read-only \`maxview\` MCP server for debugging MaxView timecards. Use it whenever the user asks about a specific timecard, its RecruitCare integration, or its status history. All results are PHI/PII-masked and scoped to the service account's data visibility. Available tools:`,
+    `- \`get_timecard_detail(timecardId)\` — a single timecard's masked detail (entries, status, hours, presence flags); returns null when not found`,
+    `- \`search_timecards(employeeId?, worksiteId?, statusId?, startDate?, endDate?, page?, pageSize?)\` — search timecards (dates default to the last 3 months; pageSize capped at 100)`,
+    `- \`get_timecard_integration(timecardId)\` — MaxView↔RecruitCare integration diagnostics (status, blocking reasons, scrubbed errors, field-level match/mismatch flags)`,
+    `- \`get_timecard_history(timecardId)\` — status-change history (acting user masked; status, timestamp, comment-presence preserved)`,
+    `Always call these tools instead of guessing timecard data. If a lookup returns null, tell the user the timecard was not found.`,
+  ].join('\n');
 }
 
 function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
@@ -1560,7 +1602,12 @@ export async function sendMessage(
   }
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
+  const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled });
+  console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
+    maxviewEnabled,
+    maxviewConfigured: isMaxviewConfigured(),
+  });
 
   const turnId = uuidv4();
   const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
@@ -1610,6 +1657,10 @@ export async function sendMessage(
         console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
         initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub: ${(err as Error).message}. Inform the user.`;
       }
+    }
+
+    if (maxviewEnabled) {
+      initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
     }
 
     prompt = `${initialPrompt}\n\n---\n\n${promptText}`;
@@ -1812,7 +1863,7 @@ export async function sendMessage(
                   apiKey,
                   model: { id: resolvedModel },
                   local: { cwd: state.thread.workspaceDir },
-                  mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                  mcpServers,
                 }),
                 sdkRetryOpts,
               );
@@ -1844,7 +1895,7 @@ export async function sendMessage(
                 apiKey,
                 model: { id: resolvedModel },
                 local: { cwd: state.thread.workspaceDir },
-                mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                mcpServers,
               }),
               sdkRetryOpts,
             );
