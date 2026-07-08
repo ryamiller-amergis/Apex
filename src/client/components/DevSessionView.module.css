@@ -1258,3 +1258,38 @@
   padding: 8px 16px 0;
   background: var(--bg-primary);
 }
+
+/* ── Markdown tables inside agent bubbles ── */
+
+.agent-bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin: 10px 0;
+  overflow-x: auto;
+  display: block;
+}
+
+.agent-bubble th,
+.agent-bubble td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
+.agent-bubble th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.agent-bubble td {
+  color: var(--text-secondary);
+}
+
+.agent-bubble tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
+}

@@ -1638,6 +1638,7 @@ export async function sendMessage(
   }
 
   let agentRunId: string | undefined;
+  let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
 
   try {
     // Create or resume the agent (retry up to 3x on transient errors)
@@ -1762,6 +1763,13 @@ export async function sendMessage(
         }
       }
     };
+
+    // Background heartbeat — bumps every 30s unconditionally so long thinking
+    // phases that emit no stream events don't trigger the reaper's expiry threshold.
+    backgroundHeartbeatId = setInterval(() => {
+      lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
+      bumpHeartbeat().catch(() => {});
+    }, 30_000);
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
@@ -2061,6 +2069,10 @@ export async function sendMessage(
       console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
     }
   } finally {
+    if (backgroundHeartbeatId !== null) {
+      clearInterval(backgroundHeartbeatId);
+      backgroundHeartbeatId = null;
+    }
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);

@@ -934,6 +934,12 @@ export const DevSessionView: React.FC = () => {
     [visibleMessages],
   );
 
+  /** Number of Task tool calls in the thread — indicates parallel execution lanes are active. */
+  const parallelAgentCount = useMemo(
+    () => visibleMessages.filter((m) => m.role === 'tool' && /^task$/i.test(m.toolName ?? '')).length,
+    [visibleMessages],
+  );
+
   useEffect(() => {
     if (prevStatusRef.current === 'running' && status !== 'running') {
       refetchDiff();
@@ -1125,7 +1131,9 @@ export const DevSessionView: React.FC = () => {
           <div className={styles['changes-header']}>
             <h3 className={styles['changes-title']}>Changes</h3>
             <div className={styles['changes-header-actions']}>
-              {diff?.branch && <span className={styles['branch-badge']}>{diff.branch}</span>}
+              {(session?.branchName ?? diff?.branch) && (
+                <span className={styles['branch-badge']}>{session?.branchName ?? diff?.branch}</span>
+              )}
               <button
                 type="button"
                 className={styles['collapse-btn']}
@@ -1156,6 +1164,12 @@ export const DevSessionView: React.FC = () => {
             </div>
           ) : diff?.branchPushed ? (
             <div className={styles['no-changes']}>Changes were pushed to the remote branch. Diff preview is unavailable but you can still create a PR.</div>
+          ) : isRunning ? (
+            <div className={styles['no-changes']}>
+              {parallelAgentCount > 0
+                ? `${parallelAgentCount} parallel agent${parallelAgentCount !== 1 ? 's' : ''} working in isolated workspaces — changes appear here as each execution lane completes.`
+                : 'Implementation lanes may be running in parallel. Changes appear in this panel as each execution lane completes.'}
+            </div>
           ) : (
             <div className={styles['no-changes']}>No changes yet. The agent will modify files as it works.</div>
           )}
