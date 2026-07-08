@@ -11,6 +11,10 @@ jest.mock('../PagePreviewModal', () => ({
   PagePreviewModal: () => <div data-testid="mock-preview-modal" />,
 }));
 
+jest.mock('../PdfInlinePreview', () => ({
+  PdfInlinePreview: () => <div data-testid="mock-inline-preview" />,
+}));
+
 const mockCreateSession = jest.fn();
 const mockUploadFiles = jest.fn();
 

@@ -335,6 +335,62 @@ export async function validateAndIngest(
   };
 }
 
+// ── File removal ───────────────────────────────────────────────────────────────
+
+export async function removeFile(
+  sessionId: string,
+  userId: string,
+  fileId: string,
+): Promise<void> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const fileMeta = existingMetadata.find((f) => f.fileId === fileId);
+  if (!fileMeta) {
+    const err = new Error('File not found') as Error & { code: string };
+    err.code = 'FILE_NOT_FOUND';
+    throw err;
+  }
+
+  const updatedMetadata = existingMetadata.filter((f) => f.fileId !== fileId);
+  const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const updatedManifest = existingManifest.filter((p) => p.fileId !== fileId);
+
+  await db
+    .update(pdfSessions)
+    .set({
+      fileMetadata: updatedMetadata,
+      pageManifest: updatedManifest,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  const filePath = resolveFilePath(sessionId, fileId);
+  if (filePath) {
+    await safeDeleteFile(filePath);
+  }
+}
+
 // ── Manifest update ────────────────────────────────────────────────────────────
 
 const VALID_ROTATIONS = new Set([0, 90, 180, 270]);

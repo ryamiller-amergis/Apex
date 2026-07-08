@@ -68,6 +68,27 @@ export function useUploadPdfFiles() {
   });
 }
 
+export function useRemovePdfFile() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error & { code?: string }, { sessionId: string; fileId: string }>({
+    mutationFn: async ({ sessionId, fileId }) => {
+      const res = await fetch(`/api/pdf/sessions/${sessionId}/files/${fileId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as Error & { code?: string };
+        err.code = body.error?.code;
+        throw err;
+      }
+    },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+    },
+  });
+}
+
 export function useUpdateManifest() {
   const queryClient = useQueryClient();
   return useMutation<

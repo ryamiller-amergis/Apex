@@ -12,6 +12,7 @@ import {
   resolveFilePath,
   getPdfTempDir,
   updateManifest,
+  removeFile,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -199,6 +200,29 @@ router.put('/sessions/:sessionId/manifest', async (req, res): Promise<void> => {
       return;
     }
     console.error('[pdf] PUT manifest error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── DELETE /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────
+
+router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId, fileId } = req.params;
+
+    const session = await loadAndValidateSession(sessionId, userId, res);
+    if (!session) return;
+
+    await removeFile(sessionId, userId, fileId);
+    res.status(204).end();
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    if (code === 'FILE_NOT_FOUND') {
+      res.status(404).json({ error: { code, message: 'File not found' } });
+      return;
+    }
+    console.error('[pdf] DELETE file error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
