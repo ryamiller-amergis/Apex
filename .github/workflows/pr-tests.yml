@@ -229,7 +229,7 @@ jobs:
           az webapp config set \
             --name $APP_NAME \
             --resource-group $RG_NAME \
-            --linux-fx-version "NODE|25-lts" \
+            --linux-fx-version "NODE|24-lts" \
             --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
