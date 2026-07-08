@@ -8,6 +8,7 @@ import {
   useDevSession,
   useDevDiff,
   usePushBranch,
+  useCreatePr,
   useSessionConflicts,
   useResolveConflict,
   useCompleteMerge,
@@ -16,6 +17,9 @@ import {
 import type { ChatMessage } from '../../shared/types/chat';
 import type { ConflictedFile } from '../../shared/types/devWorkbench';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import { parseAgentTodos } from '../utils/parseAgentTodos';
+import { AgentChecklist } from './AgentChecklist';
+import { ThinkingIcon, ReasoningIcon } from './icons/AgentIcons';
 import styles from './DevSessionView.module.css';
 
 /** An "agent turn" groups all activity between a user message and the final agent response */
@@ -235,6 +239,21 @@ function useElapsed(ts: number | null, active: boolean): string {
   return `${mins}m ${secs % 60}s ago`;
 }
 
+const WORKING_WORDS = [
+  'Working', 'Shimmering', 'Thinking', 'Crunching',
+  'Compacting', 'Wrangling', 'Conjuring', 'Noodling',
+];
+
+function useRotatingWord(active: boolean): string {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => setI((n) => (n + 1) % WORKING_WORDS.length), 3_000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return WORKING_WORDS[i];
+}
+
 const AgentTurnBlock: React.FC<{
   turn: AgentTurn;
   isLive?: boolean;
@@ -245,6 +264,7 @@ const AgentTurnBlock: React.FC<{
 }> = ({ turn, isLive, streamingText, onSend, isRunning, interactive }) => {
   const [expanded, setExpanded] = useState(isLive ? true : false);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const word = useRotatingWord(!!isLive);
 
   const stepCount = turn.reasoning.length + turn.tools.length;
   const hasActivity = stepCount > 0 || (isLive && streamingText);
@@ -265,57 +285,103 @@ const AgentTurnBlock: React.FC<{
     if (isLive && expanded) logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [turn, streamingText, isLive, expanded]);
 
+  const totalLiveEntries = turn.reasoning.length + turn.tools.length + (isLive && streamingText ? 1 : 0);
+
   return (
     <div className={styles['turn-block']}>
       {hasActivity && (
-        <div className={styles['turn-activity']}>
+        <div className={`${styles['turn-activity']} ${isLive ? styles['turn-activity-live'] : ''}`}>
           <button
             type="button"
             className={styles['turn-activity-toggle']}
             onClick={() => setExpanded((p) => !p)}
           >
             <span className={styles['turn-toggle-arrow']}>{expanded ? '▼' : '▶'}</span>
-            {isLive && <span className={styles['thinking-spinner']} />}
-            <span>{isLive ? `Agent is working… (${stepCount} steps)` : `Agent activity — ${stepCount} steps`}</span>
-            {isLive && elapsed && <span className={styles['elapsed-hint']}>· last activity {elapsed}</span>}
+            {isLive ? (
+              <>
+                <span className={styles.shimmer}>{word}…</span>
+                <span className={styles['elapsed-hint']}>
+                  · {stepCount} step{stepCount !== 1 ? 's' : ''}{elapsed ? ` · ${elapsed}` : ''}
+                </span>
+              </>
+            ) : (
+              <span>{`Agent activity — ${stepCount} step${stepCount !== 1 ? 's' : ''}`}</span>
+            )}
           </button>
 
           {expanded && (
             <div className={styles['activity-log']}>
               {turn.reasoning.map((msg, i) => {
-                const nextMsg = i < turn.reasoning.length - 1 ? turn.reasoning[i + 1] : turn.tools[0];
-                const isLatestReasoning = isLive && !nextMsg;
+                const entryIdx = i;
+                const isActiveEntry = isLive && entryIdx === totalLiveEntries - 1;
+                const isPastEntry = isLive && entryIdx < totalLiveEntries - 1;
                 const isThinking = msg.toolName === '_thinking';
                 return (
-                  <div key={msg.id} className={`${styles['log-entry']} ${isLatestReasoning ? styles['log-entry-active'] : ''}`}>
-                    <span className={styles['log-icon']}>{isThinking ? '🧠' : '💭'}</span>
+                  <div
+                    key={msg.id}
+                    className={[
+                      styles['log-entry'],
+                      isActiveEntry ? styles['log-entry-active'] : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    <span className={styles['log-icon']} role="img" aria-label={isThinking ? 'Thinking' : 'Reasoning'}>
+                      {isThinking ? <ThinkingIcon /> : <ReasoningIcon />}
+                    </span>
                     <div className={styles['log-content']}>
                       <div className={styles['log-label']}>{isThinking ? 'Thinking' : 'Reasoning'}</div>
                       <div className={styles['log-text']}>{msg.text}</div>
                     </div>
+                    {isLive && (
+                      <span className={[
+                        styles['log-status'],
+                        isPastEntry ? styles['log-status-completed'] : isActiveEntry ? styles['log-status-running'] : '',
+                      ].filter(Boolean).join(' ')}>
+                        {isPastEntry ? '✓' : isActiveEntry ? '●' : ''}
+                      </span>
+                    )}
                     <span className={styles['log-time']}>{new Date(msg.ts).toLocaleTimeString()}</span>
                   </div>
                 );
               })}
-              {turn.tools.map((msg) => {
+              {turn.tools.map((msg, i) => {
                 const { icon, label } = describeToolCall(msg.toolName, msg.toolInput);
+                const entryIdx = turn.reasoning.length + i;
+                const isActiveEntry = isLive && entryIdx === totalLiveEntries - 1 && !streamingText;
+                const isPastEntry = isLive && (entryIdx < totalLiveEntries - 1 || !!streamingText);
                 return (
-                  <div key={msg.id} className={styles['log-entry']}>
+                  <div
+                    key={msg.id}
+                    className={[
+                      styles['log-entry'],
+                      isActiveEntry ? styles['log-entry-active'] : '',
+                    ].filter(Boolean).join(' ')}
+                  >
                     <span className={styles['log-icon']}>{icon}</span>
                     <div className={styles['log-content']}>
                       <span className={styles['log-label']}>{label}</span>
                     </div>
+                    {isLive && (
+                      <span className={[
+                        styles['log-status'],
+                        isPastEntry ? styles['log-status-completed'] : isActiveEntry ? styles['log-status-running'] : '',
+                      ].filter(Boolean).join(' ')}>
+                        {isPastEntry ? '✓' : isActiveEntry ? '●' : ''}
+                      </span>
+                    )}
                     <span className={styles['log-time']}>{new Date(msg.ts).toLocaleTimeString()}</span>
                   </div>
                 );
               })}
               {isLive && streamingText && (
                 <div className={`${styles['log-entry']} ${styles['log-entry-active']}`}>
-                  <span className={styles['log-icon']}>💭</span>
+                  <span className={styles['log-icon']} role="img" aria-label="Reasoning">
+                    <ReasoningIcon />
+                  </span>
                   <div className={styles['log-content']}>
                     <div className={styles['log-label']}>Reasoning</div>
                     <div className={styles['log-text']}>{streamingText}</div>
                   </div>
+                  <span className={`${styles['log-status']} ${styles['log-status-running']}`}>●</span>
                 </div>
               )}
               <div ref={logEndRef} />
@@ -535,14 +601,17 @@ const SetupProgress: React.FC<{ status: string; error: string | null }> = ({ sta
   </div>
 );
 
-const ReadyToTest: React.FC<{
+interface ReadyToTestProps {
   branchName: string;
   sessionId: string;
+  branchPushed: boolean;
   existingPrUrl?: string | null;
-}> = ({ branchName, sessionId, existingPrUrl }) => {
+}
+
+const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branchPushed, existingPrUrl }) => {
   const pushBranch = usePushBranch();
+  const createPr = useCreatePr(sessionId);
   const [copied, setCopied] = useState(false);
-  const [prUrl, setPrUrl] = useState<string | null>(existingPrUrl ?? null);
 
   const copyBranch = useCallback(() => {
     navigator.clipboard.writeText(branchName);
@@ -552,14 +621,22 @@ const ReadyToTest: React.FC<{
 
   const handlePush = useCallback(async () => {
     try {
-      const result = await pushBranch.mutateAsync(sessionId);
-      if (result.prUrl) setPrUrl(result.prUrl);
+      await pushBranch.mutateAsync(sessionId);
     } catch {
       // error surfaced via pushBranch.error
     }
   }, [pushBranch, sessionId]);
 
-  if (prUrl) {
+  const handleCreatePr = useCallback(async () => {
+    try {
+      await createPr.mutateAsync();
+    } catch {
+      // error surfaced via createPr.error
+    }
+  }, [createPr]);
+
+  // State 3: PR exists
+  if (existingPrUrl) {
     return (
       <div className={styles['ready-to-test']}>
         <div className={styles['ready-to-test-header']}>
@@ -568,7 +645,7 @@ const ReadyToTest: React.FC<{
         </div>
         <div className={styles['ready-to-test-body']}>
           <a
-            href={prUrl}
+            href={existingPrUrl}
             target="_blank"
             rel="noopener noreferrer"
             className={styles['pr-link']}
@@ -587,6 +664,42 @@ const ReadyToTest: React.FC<{
     );
   }
 
+  // State 2: Branch pushed, no PR yet
+  if (branchPushed) {
+    return (
+      <div className={styles['ready-to-test']}>
+        <div className={styles['ready-to-test-header']}>
+          <span className={styles['ready-to-test-icon']}>&#10003;</span>
+          <span className={styles['ready-to-test-title']}>Branch Pushed</span>
+        </div>
+        <div className={styles['ready-to-test-body']}>
+          <p className={styles['ready-to-test-desc']}>
+            Branch pushed successfully. Open a pull request when you are ready for review.
+          </p>
+          <button
+            type="button"
+            className={styles['create-pr-btn']}
+            onClick={handleCreatePr}
+            disabled={createPr.isPending}
+          >
+            {createPr.isPending ? 'Creating PR…' : 'Create Pull Request'}
+          </button>
+          {createPr.error && (
+            <p className={styles['push-error']}>{createPr.error.message}</p>
+          )}
+          <div className={styles['branch-copy-row']}>
+            <span className={styles['branch-label']}>Branch:</span>
+            <code className={styles['branch-name-code']}>{branchName}</code>
+            <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // State 1: Not yet pushed
   return (
     <div className={styles['ready-to-test']}>
       <div className={styles['ready-to-test-header']}>
@@ -595,7 +708,7 @@ const ReadyToTest: React.FC<{
       </div>
       <div className={styles['ready-to-test-body']}>
         <p className={styles['ready-to-test-desc']}>
-          Push the branch, merge the latest base, and open a pull request automatically.
+          Push the branch and merge the latest base branch. Then create a pull request when ready.
         </p>
         <button
           type="button"
@@ -603,7 +716,7 @@ const ReadyToTest: React.FC<{
           onClick={handlePush}
           disabled={pushBranch.isPending}
         >
-          {pushBranch.isPending ? 'Pushing…' : `Push & Open PR`}
+          {pushBranch.isPending ? 'Pushing…' : 'Push Branch'}
         </button>
         {pushBranch.error && (
           <p className={styles['push-error']}>{pushBranch.error.message}</p>
@@ -634,7 +747,6 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const abortMerge = useAbortMerge(sessionId);
 
   const [editors, setEditors] = useState<Record<string, FileEditorState>>({});
-  const [prUrl, setPrUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!conflictsData) return;
@@ -666,26 +778,12 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 
   const handleComplete = useCallback(async () => {
     try {
-      const result = await completeMerge.mutateAsync();
-      if (result.prUrl) setPrUrl(result.prUrl);
+      await completeMerge.mutateAsync();
+      // Session query is invalidated by useCompleteMerge — ReadyToTest detects branchPushed and shows "Create PR".
     } catch {
       // surfaced via completeMerge.error
     }
   }, [completeMerge]);
-
-  if (prUrl) {
-    return (
-      <div className={styles['merge-resolver']}>
-        <div className={styles['merge-resolver-header']}>
-          <span className={styles['ready-to-test-icon']}>&#10003;</span>
-          <span>Merge complete — Pull Request Opened</span>
-        </div>
-        <a href={prUrl} target="_blank" rel="noopener noreferrer" className={styles['pr-link']}>
-          View Pull Request →
-        </a>
-      </div>
-    );
-  }
 
   if (isLoading) {
     return <div className={styles['merge-resolver']}>Loading conflicts…</div>;
@@ -700,7 +798,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
         <span className={styles['merge-resolver-title']}>Merge Conflicts</span>
       </div>
       <p className={styles['merge-resolver-desc']}>
-        The base branch has diverged. Resolve each conflict below, then complete the merge to push and open a PR.
+        The base branch has diverged. Resolve each conflict below, then complete the merge to push.
       </p>
 
       {files.map((f) => {
@@ -750,7 +848,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
           onClick={() => void handleComplete()}
           disabled={!allResolved || completeMerge.isPending}
         >
-          {completeMerge.isPending ? 'Completing merge…' : 'Complete merge & open PR'}
+          {completeMerge.isPending ? 'Completing merge…' : 'Complete merge & push'}
         </button>
         <button
           type="button"
@@ -831,6 +929,11 @@ export const DevSessionView: React.FC = () => {
 
   const turns = useMemo(() => buildTurns(visibleMessages), [visibleMessages]);
 
+  const checklist = useMemo(
+    () => parseAgentTodos(visibleMessages),
+    [visibleMessages],
+  );
+
   useEffect(() => {
     if (prevStatusRef.current === 'running' && status !== 'running') {
       refetchDiff();
@@ -884,6 +987,12 @@ export const DevSessionView: React.FC = () => {
         >
           ← Back to My Work
         </button>
+
+        {!isSettingUp && !isFailed && (
+          <div className={styles['checklist-sticky']}>
+            <AgentChecklist checklist={checklist} isRunning={isRunning} />
+          </div>
+        )}
 
         <div className={styles.messages}>
           {(() => {
@@ -1032,10 +1141,11 @@ export const DevSessionView: React.FC = () => {
             <MergeResolver sessionId={sessionId} />
           )}
 
-          {!isRunning && !isConflict && sessionId && session?.branchName && diff && (diff.changedFiles.length > 0 || diff.branchPushed) && (
+          {!isRunning && !isSettingUp && !isFailed && !isConflict && sessionId && session?.branchName && diff && (diff.changedFiles.length > 0 || diff.branchPushed || session?.branchPushed) && (
             <ReadyToTest
               branchName={session.branchName}
               sessionId={sessionId}
+              branchPushed={session.branchPushed ?? false}
               existingPrUrl={session.prUrl}
             />
           )}

@@ -742,11 +742,10 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
+  const hasApexPath = !!(kickoff as any).prdId; // Apex PRD-sourced session
   const parts: string[] = [
     `# Development workspace`,
-    `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo on branch \`${branch}\`.`,
-    `You can read, edit, and create files directly. All changes are local — do NOT push, create PRs, or run git push.`,
+    `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo. The feature branch has already been created and checked out — you are on it now.`,
     ``,
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -760,7 +759,7 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   if (isGitHub) {
     parts.push(
       `# Repo access`,
-      `Skills from this project's ${repoLabel} are pre-loaded into the conversation by the system when applicable.`,
+      `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
       ``,
     );
   } else {
@@ -770,66 +769,87 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `- \`list_repo_dir\`    — browse repo directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
       `- \`search_repo_code\` — search code in the repo`,
+      `- \`query_work_items\` — query ADO work items`,
       ``,
     );
   }
 
-  parts.push(
-    ...buildScopePolicyLines(kickoff),
-    ``,
-    `# Pre-loaded design context`,
-    `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
-    `- **PRD markdown** — \`{slug}.prd.md\``,
-    `- **Backlog JSON** — \`{slug}.backlog.json\` (epics, features, PBIs, TBIs, dependsOn, parallelGroup)`,
-    `- **Test cases** — \`{slug}.test-cases.json\` (verification targets per PBI)`,
-    `- **Design spec** — \`{slug}-design-spec/{feature-slug}-design.md\``,
-    `- **Tech spec** — \`{slug}-design-spec/{feature-slug}-tech-spec.md\``,
-    `- **Assumptions** — \`{slug}-design-spec/{feature-slug}-assumptions.md\``,
-    ``,
-    `Read these files first — they define WHAT to build, architectural decisions, API contracts,`,
-    `data models, component structures, and test expectations. The tech spec is your primary`,
-    `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
-    `\`parallelGroup\` fields) to determine execution order.`,
-    ``,
-    `# Execution mode — MULTITASK by default`,
-    `When the design spec or backlog defines items that can run in parallel (same \`parallelGroup\`,`,
-    `or no inter-dependencies), you MUST dispatch them as parallel subagents (via the Task tool`,
-    `with \`run_in_background: true\`). Only serialize items that have explicit \`dependsOn\` edges`,
-    `to earlier items. This maximizes throughput and matches the design spec's intended phases.`,
-    ``,
-    `# Your task`,
-    `You are implementing the feature identified by this session. Your job:`,
-    `1. If a development skill path is configured, load it and follow its instructions.`,
-    `2. Otherwise, read the design artifacts above and implement the required changes directly.`,
-    `3. Edit files directly using the built-in file tools (Write/Edit). The cwd is the repo root.`,
-    `4. Do NOT push changes, create branches, commit, or run git commands. All your edits will be captured as a diff by APEX.`,
-    `5. Focus on clean, working code that addresses the feature requirements from the design spec.`,
-    `6. When your implementation and tests are complete, dispatch the built-in code-reviewer subagent (via the Task tool) to review the changes before handing back to the user.`,
-    ``,
-    `# Important constraints`,
-    `- This IS a real repo checkout — you can read any project file directly from disk.`,
-    `- Do NOT run \`git push\`, \`git commit\`, or create pull requests.`,
-    `- Write clean, production-quality code.`,
-    `- Follow existing project conventions you observe in the codebase.`,
-    `- Use parallel subagents (multitask) for independent work items — do NOT serialize unnecessarily.`,
-  );
+  parts.push(...buildScopePolicyLines(kickoff), ``);
+
+  if (hasApexPath) {
+    // Apex PRD-sourced path: full design context injected by injectDevContextFiles
+    parts.push(
+      `# Pre-loaded design context`,
+      `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
+      `- **PRD markdown** — \`{slug}.prd.md\``,
+      `- **Backlog JSON** — \`{slug}.backlog.json\` (epics, features, PBIs, TBIs, dependsOn, parallelGroup)`,
+      `- **Test cases** — \`{slug}.test-cases.json\` (verification targets per PBI)`,
+      `- **Design spec** — \`{slug}-design-spec/{feature-slug}-design.md\``,
+      `- **Tech spec** — \`{slug}-design-spec/{feature-slug}-tech-spec.md\``,
+      `- **Assumptions** — \`{slug}-design-spec/{feature-slug}-assumptions.md\``,
+      ``,
+      `Read these files first — they define WHAT to build, architectural decisions, API contracts,`,
+      `data models, component structures, and test expectations. The tech spec is your primary`,
+      `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
+      `\`parallelGroup\` fields) to determine execution order.`,
+      ``,
+    );
+  } else {
+    // ADO path: design-doc attachments injected by injectAdoAttachments at session setup
+    parts.push(
+      `# Design context`,
+      `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
+      `- **Design spec** — \`{slug}-design-spec/design.md\``,
+      `- **Tech spec** — \`{slug}-design-spec/tech-spec.md\``,
+      `- **Assumptions** — \`{slug}-design-spec/assumptions.md\``,
+      `- **Prototype** — \`{slug}-design-spec/prototype.html\` (if present)`,
+      `- **PRD placeholder** — \`{slug}.prd.md\``,
+      `Read these first — they define the feature's scope, architecture, API contracts, and test targets.`,
+      ``,
+    );
+  }
 
   if (kickoff.skillPath) {
+    // Skill configured: hand off governance entirely to the project dev skill.
     parts.push(
+      `# APEX → Project → APEX governance`,
+      `APEX has already handled all git setup:`,
+      `- Cloned the repo at \`${branch}\``,
+      `- Created and checked out the feature branch (this is where you are now)`,
+      `- Injected the design artifacts above`,
+      ``,
+      `Your role is to follow the project development skill exactly. Load it now, then follow ALL of its phases —`,
+      `including scope confirmation (Phase 0.5), plan (Phase 1 — STOP for human approval), implement (Phase 2),`,
+      `and code review (Step 5).`,
+      ``,
+      `CRITICAL: Do NOT write any source code until the human explicitly approves the Phase 1 plan.`,
+      ``,
+      `APEX owns all git operations after you finish: committing, pushing, opening PRs, ADO state transitions.`,
+      `You must NOT run git commit, git push, git branch, or open pull requests.`,
       ``,
       `# Development skill`,
-      `A development skill has been configured. Load it first:`,
+      `Load it now:`,
     );
     if (isGitHub) {
-      parts.push(
-        `The skill content will be pre-loaded below by the system.`,
-      );
+      parts.push(`The skill content will be pre-loaded below by the system.`);
     } else {
       parts.push(
         `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
       );
     }
-    parts.push(`Follow the skill's instructions for implementing this feature.`);
+    parts.push(`Follow the skill's instructions exactly, starting from Phase 0.`);
+  } else {
+    // No skill configured: minimal direct-implement fallback.
+    parts.push(
+      `# Your task`,
+      `No development skill is configured for this project. Implement the feature using the design artifacts above.`,
+      `Read the design spec and tech spec in \`.ai-pilot/output/\` first, then implement the required changes.`,
+      ``,
+      `# Important constraints`,
+      `- This IS a real repo checkout — you can read any project file directly from disk.`,
+      `- Do NOT run \`git push\`, \`git commit\`, create branches, or open pull requests — APEX owns those steps.`,
+      `- Write clean, production-quality code. Follow existing project conventions in the codebase.`,
+    );
   }
 
   return parts.join('\n');
@@ -1623,14 +1643,31 @@ export async function sendMessage(
     // Create or resume the agent (retry up to 3x on transient errors)
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
 
+    const codeReviewerAgent = {
+      description:
+        'Rigorous MaxView code reviewer. Reviews changed files against MaxView layer boundaries, coding standards, existing-code protection rules, and the approved design spec. Every finding must cite a specific rule file, design-doc section, or repo path.',
+      prompt:
+        `You are a senior engineer reviewing a MaxView feature implementation. Your job:\n` +
+        `1. Read the MaxView repo rules from .cursor/rules/ (especially backend-layer-boundaries.mdc, coding-standards.mdc, existing-code-protection.mdc, testing-standards.mdc, typescript-typecheck.mdc, ui-design-standards.mdc).\n` +
+        `2. Read AGENTS.md and CONTEXT.md for project context.\n` +
+        `3. Review the diff provided against those rules and the design docs in .ai-pilot/output/.\n` +
+        `4. For every finding: cite the specific rule file / design-doc section / repo path. Do NOT produce generic advice.\n` +
+        `5. Group findings by severity: Must-fix, Should-fix, Nice-to-have.\n` +
+        `6. Format: [Severity] Title — File:lines — Snippet — Suggested change (as diff) — Reason.\n` +
+        `Be thorough but only flag real violations. If no issues, say so explicitly.`,
+      model: { id: 'claude-opus-4-6' },
+    };
+
     if (!state.agent) {
       if (state.thread.cursorAgentId) {
+        // Agent.resume accepts Partial<AgentOptions>, which includes agents.
         state.agent = await retryWithBackoff(
           () => Agent.resume(state.thread.cursorAgentId!, {
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
             mcpServers,
+            agents: { 'code-reviewer': codeReviewerAgent },
           }),
           sdkRetryOpts,
         );
@@ -1641,6 +1678,7 @@ export async function sendMessage(
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
             mcpServers,
+            agents: { 'code-reviewer': codeReviewerAgent },
           }),
           sdkRetryOpts,
         );
@@ -1702,6 +1740,29 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
 
+    // Shared heartbeat helper — call from any event handler that can run > 90s
+    // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
+    // agentRunId is always assigned before this function is ever called.
+    const bumpHeartbeat = async (): Promise<void> => {
+      if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
+      lastHeartbeatMs = Date.now();
+      const runId = agentRunId!;
+      const [runRow] = await db.update(agentRuns)
+        .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+        .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
+        .returning({ status: agentRuns.status });
+      if (!runRow) {
+        const cancelledRow = await db.query.agentRuns.findFirst({
+          where: eq(agentRuns.id, runId),
+          columns: { status: true },
+        });
+        if (cancelledRow?.status === 'cancelled') {
+          console.log(`[chat] Run ${runId} cancelled by another worker, aborting stream`);
+          throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
+        }
+      }
+    };
+
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
 
@@ -1715,25 +1776,7 @@ export async function sendMessage(
                   agentTextBuffer += block.text;
                   broadcast(state, { type: 'token', text: block.text });
                   notifyRunEvent(threadId, { type: 'token', data: block.text }).catch(() => {});
-                  // Periodic heartbeat + cancel check
-                  if (Date.now() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
-                    lastHeartbeatMs = Date.now();
-                    const [runRow] = await db.update(agentRuns)
-                      .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
-                      .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'running')))
-                      .returning({ status: agentRuns.status });
-                    if (!runRow) {
-                      // Run was cancelled or failed by another worker/reaper
-                      const cancelledRow = await db.query.agentRuns.findFirst({
-                        where: eq(agentRuns.id, agentRunId),
-                        columns: { status: true },
-                      });
-                      if (cancelledRow?.status === 'cancelled') {
-                        console.log(`[chat] Run ${agentRunId} cancelled by another worker, aborting stream`);
-                        throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
-                      }
-                    }
-                  }
+                  await bumpHeartbeat();
                 }
                 if (block.type === 'tool_use') {
                   // Snapshot reasoning text accumulated before this tool call
@@ -1764,6 +1807,7 @@ export async function sendMessage(
                   broadcast(state, { type: 'message', message: toolMsg });
                   pgInsertMessage(threadId, toolMsg).catch(() => {});
                   notifyRunEvent(threadId, { type: 'tool_call', data: { toolName: block.name } }).catch(() => {});
+                  await bumpHeartbeat();
                 }
               }
             } else if (event.type === 'thinking') {
@@ -1785,6 +1829,7 @@ export async function sendMessage(
                 text: thinkingText,
                 durationMs: (event as any).thinking_duration_ms,
               });
+              await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
               const tc = event as any;
               broadcast(state, {

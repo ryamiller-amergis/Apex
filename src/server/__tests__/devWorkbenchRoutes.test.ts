@@ -63,6 +63,8 @@ jest.mock('fs', () => {
   return {
     ...actual,
     existsSync: jest.fn().mockReturnValue(true),
+    mkdirSync: jest.fn(),
+    writeFileSync: jest.fn(),
   };
 });
 jest.mock('../utils/requestUser', () => ({
@@ -352,14 +354,11 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
     project: 'MaxView',
     workItemId: 42,
     authorId: 'user-1',
+    branchPushed: false,
   };
-  const PR_URL = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/1';
 
   let mockAdoPush: {
     getDefaultBranch: jest.Mock;
-    createPullRequest: jest.Mock;
-    setWorkItemState: jest.Mock;
-    addWorkItemHyperlink: jest.Mock;
   };
 
   beforeEach(() => {
@@ -371,32 +370,24 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
     pushMergedBranch.mockImplementation(() => {});
     mockAdoPush = {
       getDefaultBranch: jest.fn().mockResolvedValue('main'),
-      createPullRequest: jest.fn().mockResolvedValue(PR_URL),
-      setWorkItemState: jest.fn().mockResolvedValue(undefined),
-      addWorkItemHyperlink: jest.fn().mockResolvedValue(undefined),
     };
     MockAzureDevOpsService.mockImplementation(() => mockAdoPush as unknown as AzureDevOpsService);
-    // First call fetches the session; second call (after finalisePush) returns updated row
-    mockFindFirst
-      .mockResolvedValueOnce(SESSION)
-      .mockResolvedValue({ ...SESSION, prUrl: PR_URL });
+    mockFindFirst.mockResolvedValue(SESSION);
   });
 
-  it('syncs base, pushes, and returns prUrl on clean merge', async () => {
+  it('syncs base, pushes branch only, and returns branchPushed on clean merge', async () => {
     const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/push');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.status).toBe('clean');
-    expect(res.body.prUrl).toBe(PR_URL);
+    expect(res.body.branchPushed).toBe(true);
+    expect(res.body.prUrl).toBeUndefined();
     expect(syncWithBase).toHaveBeenCalledWith('/tmp/workspace', 'main');
     expect(pushMergedBranch).toHaveBeenCalledWith('/tmp/workspace', SESSION.branchName);
   });
 
   it('returns conflict status when base merge has conflicts', async () => {
-    mockFindFirst.mockReset();
-    mockFindFirst.mockResolvedValue(SESSION);
-    MockAzureDevOpsService.mockImplementation(() => mockAdoPush as unknown as AzureDevOpsService);
     syncWithBase.mockReturnValue({
       status: 'conflict',
       conflictedFiles: [{ path: 'src/foo.ts', content: '<<<<<<< HEAD\n...' }],
@@ -412,13 +403,267 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
   });
 
   it('returns 400 when the session has no branch', async () => {
-    mockFindFirst.mockReset();
     mockFindFirst.mockResolvedValue({ ...SESSION, branchName: null });
 
     const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/push');
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/no branch/i);
+  });
+});
+
+describe('POST /api/dev-workbench/sessions/:id/pr', () => {
+  const SESSION = {
+    id: 'session-1',
+    branchName: 'feature/apex-42-shift-scheduler',
+    project: 'MaxView',
+    workItemId: 42,
+    authorId: 'user-1',
+    branchPushed: true,
+    prUrl: null,
+  };
+  const PR_URL = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/1';
+
+  let mockAdoPr: {
+    getDefaultBranch: jest.Mock;
+    createPullRequest: jest.Mock;
+    setWorkItemState: jest.Mock;
+    addWorkItemHyperlink: jest.Mock;
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+    mockAdoPr = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      createPullRequest: jest.fn().mockResolvedValue(PR_URL),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+      addWorkItemHyperlink: jest.fn().mockResolvedValue(undefined),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdoPr as unknown as AzureDevOpsService);
+  });
+
+  it('creates a PR for a pushed branch and returns prUrl', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValue({ ...SESSION, prUrl: PR_URL });
+
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/pr');
+
+    expect(res.status).toBe(200);
+    expect(res.body.prUrl).toBe(PR_URL);
+    expect(mockAdoPr.createPullRequest).toHaveBeenCalled();
+  });
+
+  it('returns the existing prUrl idempotently', async () => {
+    mockFindFirst.mockResolvedValue({ ...SESSION, prUrl: PR_URL });
+
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/pr');
+
+    expect(res.status).toBe(200);
+    expect(res.body.prUrl).toBe(PR_URL);
+    expect(mockAdoPr.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when session not found', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/missing/pr');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when branch has not been pushed', async () => {
+    mockFindFirst.mockResolvedValue({ ...SESSION, branchPushed: false });
+
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/pr');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not been pushed/i);
+  });
+
+  it('returns 400 when session has no branch', async () => {
+    mockFindFirst.mockResolvedValue({ ...SESSION, branchName: null });
+
+    const res = await request(buildApp()).post('/api/dev-workbench/sessions/session-1/pr');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no branch/i);
+  });
+});
+
+describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
+  const { checkoutDefaultBranch, createFeatureBranch } = jest.requireMock('../services/repoCheckoutService') as {
+    checkoutDefaultBranch: jest.Mock;
+    createFeatureBranch: jest.Mock;
+  };
+  const fsModule = jest.requireMock('fs') as { existsSync: jest.Mock; mkdirSync: jest.Mock; writeFileSync: jest.Mock };
+
+  let mockAdoAttach: {
+    queryWorkItemsByWiql: jest.Mock;
+    getAttachmentText: jest.Mock;
+    setWorkItemState: jest.Mock;
+    getDefaultBranch: jest.Mock;
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+    checkoutDefaultBranch.mockResolvedValue('/tmp/workspace');
+    createFeatureBranch.mockReturnValue('feature/apex-42-implement-login');
+    mockAdoAttach = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        totalMatched: 1,
+        returned: 1,
+        ids: [42],
+        items: [
+          {
+            id: 42,
+            fields: {
+              'System.Id': 42,
+              'System.Title': 'Implement login',
+              'System.WorkItemType': 'Feature',
+            },
+            relations: [
+              {
+                rel: 'AttachedFile',
+                url: 'https://dev.azure.com/org/_apis/wit/attachments/design-id',
+                attributes: { name: 'design.md' },
+              },
+              {
+                rel: 'AttachedFile',
+                url: 'https://dev.azure.com/org/_apis/wit/attachments/tech-id',
+                attributes: { name: 'tech-spec.md' },
+              },
+            ],
+          },
+        ],
+      }),
+      getAttachmentText: jest.fn().mockResolvedValue('# design content'),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdoAttach as unknown as AzureDevOpsService);
+  });
+
+  it('calls getAttachmentText for each AttachedFile attachment during ADO session setup', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sessionId).toBe('session-abc');
+
+    // Allow async setup to run
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockAdoAttach.queryWorkItemsByWiql).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wiql: expect.stringContaining('42'),
+        includeRelations: true,
+      }),
+    );
+    expect(mockAdoAttach.getAttachmentText).toHaveBeenCalledTimes(2);
+  });
+
+  it('matches variant attachment names and writes them under canonical file names', async () => {
+    mockAdoAttach.queryWorkItemsByWiql.mockResolvedValue({
+      totalMatched: 1,
+      returned: 1,
+      ids: [42],
+      items: [
+        {
+          id: 42,
+          fields: {
+            'System.Id': 42,
+            'System.Title': 'Blackout Date Rule Administration',
+            'System.WorkItemType': 'Feature',
+          },
+          relations: [
+            // singular / typo variant
+            {
+              rel: 'AttachedFile',
+              url: 'https://dev.azure.com/org/_apis/wit/attachments/assumption-id',
+              attributes: { name: 'assumption.md' },
+            },
+            // slug-prefixed variant
+            {
+              rel: 'AttachedFile',
+              url: 'https://dev.azure.com/org/_apis/wit/attachments/design-id',
+              attributes: { name: 'blackout-design.md' },
+            },
+            // uppercase variant
+            {
+              rel: 'AttachedFile',
+              url: 'https://dev.azure.com/org/_apis/wit/attachments/proto-id',
+              attributes: { name: 'PROTOTYPE.HTML' },
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockAdoAttach.getAttachmentText).toHaveBeenCalledTimes(3);
+    const writtenNames = fsModule.writeFileSync.mock.calls.map((c) => String(c[0]).split(/[\\/]/).pop());
+    expect(writtenNames).toEqual(
+      expect.arrayContaining(['assumptions.md', 'design.md', 'prototype.html']),
+    );
+  });
+
+  it('ignores attachments that are not design docs', async () => {
+    mockAdoAttach.queryWorkItemsByWiql.mockResolvedValue({
+      totalMatched: 1,
+      returned: 1,
+      ids: [42],
+      items: [
+        {
+          id: 42,
+          fields: {
+            'System.Id': 42,
+            'System.Title': 'Implement login',
+            'System.WorkItemType': 'Feature',
+          },
+          relations: [
+            {
+              rel: 'AttachedFile',
+              url: 'https://dev.azure.com/org/_apis/wit/attachments/readme-id',
+              attributes: { name: 'readme.txt' },
+            },
+            {
+              rel: 'System.LinkTypes.Hierarchy-Reverse',
+              url: 'https://dev.azure.com/org/_apis/wit/workItems/1',
+              attributes: { name: 'Parent' },
+            },
+            {
+              rel: 'AttachedFile',
+              url: 'https://dev.azure.com/org/_apis/wit/attachments/design-id',
+              attributes: { name: 'design.md' },
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockAdoAttach.getAttachmentText).toHaveBeenCalledTimes(1);
+    const writtenNames = fsModule.writeFileSync.mock.calls.map((c) => String(c[0]).split(/[\\/]/).pop());
+    expect(writtenNames).toContain('design.md');
+    expect(writtenNames).not.toContain('readme.txt');
   });
 });
 

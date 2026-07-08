@@ -58,11 +58,17 @@ export class AzureDevOpsService {
   ): Promise<any[]> {
     const workItems: any[] = [];
 
+    // The ADO REST API rejects combining `fields` with `$expand`
+    // (ConflictingParametersException / "The expand parameter can not be used
+    // with the fields parameter."). When an expand is requested, omit the field
+    // projection — expanded responses return all fields anyway.
+    const effectiveFields = expand !== undefined ? undefined : fields;
+
     for (let i = 0; i < ids.length; i += this.WORK_ITEM_BATCH_SIZE) {
       const batch = ids.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
       const batchItems = await witApi.getWorkItems(
         batch,
-        fields,
+        effectiveFields,
         undefined,
         expand,
         undefined,
@@ -5439,6 +5445,32 @@ export class AzureDevOpsService {
     );
     if (!result?.url) throw new Error(`Failed to upload attachment "${fileName}"`);
     return { url: result.url };
+  }
+
+  /**
+   * Download the text content of an ADO attachment by its REST URL.
+   * Returns an empty string on non-2xx status rather than throwing, so callers
+   * can treat a missing attachment as a graceful no-op.
+   */
+  async getAttachmentText(attachmentUrl: string): Promise<string> {
+    const pat = process.env.ADO_PAT || '';
+    const token = Buffer.from(`:${pat}`).toString('base64');
+    const url = attachmentUrl.includes('api-version')
+      ? attachmentUrl
+      : `${attachmentUrl}?api-version=7.1`;
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Basic ${token}` },
+      });
+      if (!res.ok) {
+        console.warn(`[AzureDevOpsService] getAttachmentText: non-2xx ${res.status} for ${url}`);
+        return '';
+      }
+      return await res.text();
+    } catch (err) {
+      console.warn(`[AzureDevOpsService] getAttachmentText: fetch error for ${url}:`, (err as Error).message);
+      return '';
+    }
   }
 
   /**
