@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { Grid } from 'react-window';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { PageThumbnail } from './PageThumbnail';
@@ -16,7 +16,6 @@ export interface PageThumbnailGridProps {
   onPreview: (pageId: string) => void;
   isSelected: (pageId: string) => boolean;
   onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
-  onDrop?: (fromIndex: number, toIndex: number) => void;
 }
 
 interface ThumbnailCellProps {
@@ -27,7 +26,6 @@ interface ThumbnailCellProps {
   isSelected: (pageId: string) => boolean;
   handleSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onPreview: (pageId: string) => void;
-  onDrop?: (fromIndex: number, toIndex: number) => void;
 }
 
 function ThumbnailCell({
@@ -41,7 +39,6 @@ function ThumbnailCell({
   isSelected,
   handleSelect,
   onPreview,
-  onDrop,
 }: ThumbnailCellProps & {
   ariaAttributes: { 'aria-colindex': number; role: 'gridcell' };
   columnIndex: number;
@@ -79,12 +76,10 @@ function ThumbnailCell({
         isSelected={isSelected(page.pageId)}
         onSelect={handleSelect}
         onPreview={onPreview}
-        onDrop={onDrop}
-        visibleIndex={index}
       />
     </div>
   );
-}
+};
 
 const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   sessionId,
@@ -93,7 +88,6 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   onPreview,
   isSelected,
   onSelect,
-  onDrop,
 }) => {
   const [containerWidth, setContainerWidth] = useState(800);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -134,13 +128,6 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  const handleSelect = useCallback(
-    (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {
-      onSelect(pageId, shiftKey, ctrlKey);
-    },
-    [onSelect],
-  );
-
   const containerHeight = containerRef.current?.clientHeight ?? 600;
 
   return (
@@ -160,9 +147,8 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
             fileNameMap,
             sessionId,
             isSelected,
-            handleSelect,
+            handleSelect: onSelect,
             onPreview,
-            onDrop,
           }}
           columnCount={columnCount}
           columnWidth={THUMBNAIL_WIDTH}

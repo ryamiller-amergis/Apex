@@ -175,7 +175,7 @@ describe('usePageManipulation', () => {
     expect(ids).toEqual(['A', 'B', 'C']);
   });
 
-  it('schedules sync after reorder', () => {
+  it('does not auto-sync after reorder', () => {
     const manifest = ['A', 'B'].map((id) => makeEntry(id));
 
     const { result } = renderHook(() =>
@@ -187,9 +187,67 @@ describe('usePageManipulation', () => {
     });
 
     act(() => {
-      jest.advanceTimersByTime(600);
+      jest.advanceTimersByTime(1000);
+    });
+
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('saveNow triggers mutate immediately', () => {
+    const manifest = ['A', 'B'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.reorder(0, 1);
+    });
+
+    act(() => {
+      result.current.saveNow();
     });
 
     expect(mockMutate).toHaveBeenCalledTimes(1);
+    expect(mockMutate).toHaveBeenCalledWith({
+      sessionId,
+      manifest: expect.any(Array),
+    });
+  });
+
+  it('hasUnsavedChanges is true after local modification', () => {
+    const manifest = ['A', 'B'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    expect(result.current.hasUnsavedChanges).toBe(false);
+
+    act(() => {
+      result.current.rotate(new Set(['A']));
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(true);
+  });
+
+  it('hasUnsavedChanges is false after saveNow', () => {
+    const manifest = ['A', 'B'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.rotate(new Set(['A']));
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(true);
+
+    act(() => {
+      result.current.saveNow();
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(false);
   });
 });

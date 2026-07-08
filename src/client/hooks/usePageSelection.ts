@@ -34,7 +34,7 @@ export function usePageSelection() {
     [lastClickedId],
   );
 
-  const ctrlToggle = useCallback((pageId: string) => {
+  const multiToggle = useCallback((pageId: string) => {
     setSelectedPageIds((prev) => {
       const next = new Set(prev);
       if (next.has(pageId)) {
@@ -60,7 +60,7 @@ export function usePageSelection() {
   return {
     selectedPageIds,
     toggleSelection,
-    ctrlToggle,
+    multiToggle,
     rangeSelect,
     clearSelection,
     isSelected,

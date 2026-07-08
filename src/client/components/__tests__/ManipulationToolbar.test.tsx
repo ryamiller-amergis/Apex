@@ -10,6 +10,8 @@ const defaultProps = {
   canMoveUp: false,
   canMoveDown: false,
   totalPages: 5,
+  onSave: jest.fn(),
+  hasUnsavedChanges: false,
 };
 
 function renderToolbar(overrides: Partial<typeof defaultProps> = {}) {
@@ -110,5 +112,38 @@ describe('ManipulationToolbar', () => {
 
     const toolbar = screen.getByRole('toolbar');
     expect(toolbar).toHaveAttribute('aria-label', 'Page manipulation tools');
+  });
+
+  it('renders save button when onSave is provided', () => {
+    renderToolbar({ onSave: jest.fn() });
+
+    expect(screen.getByTestId('toolbar-save')).toBeInTheDocument();
+  });
+
+  it('disables save button when hasUnsavedChanges is false', () => {
+    renderToolbar({ onSave: jest.fn(), hasUnsavedChanges: false });
+
+    expect(screen.getByTestId('toolbar-save')).toBeDisabled();
+  });
+
+  it('enables save button when hasUnsavedChanges is true', () => {
+    renderToolbar({ onSave: jest.fn(), hasUnsavedChanges: true });
+
+    expect(screen.getByTestId('toolbar-save')).not.toBeDisabled();
+  });
+
+  it('calls onSave when save button clicked', () => {
+    const onSave = jest.fn();
+    renderToolbar({ onSave, hasUnsavedChanges: true });
+
+    fireEvent.click(screen.getByTestId('toolbar-save'));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render save button when onSave is not provided', () => {
+    renderToolbar({ onSave: undefined });
+
+    expect(screen.queryByTestId('toolbar-save')).not.toBeInTheDocument();
   });
 });

@@ -8,11 +8,12 @@ This directory contains Terraform configuration for provisioning Azure resources
 - [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) installed and authenticated
 - Azure subscription with appropriate permissions
 
+
 ## Resources Created
 
 - **Resource Group**: Container for all Azure resources
 - **App Service Plan**: Linux-based plan with Node.js support (B1 tier)
-- **App Service**: Linux web app running Node.js 20 LTS
+- **App Service**: Linux web app running Node.js 24 LTS
 - **Application Insights**: Monitoring and telemetry
 
 ## Setup

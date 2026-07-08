@@ -335,15 +335,15 @@ export async function validateAndIngest(
   };
 }
 
-// ── Manifest update ─────────────────────────────────────────────────────────────
+// ── Manifest update ────────────────────────────────────────────────────────────
 
-const VALID_ROTATIONS = [0, 90, 180, 270] as const;
+const VALID_ROTATIONS = new Set([0, 90, 180, 270]);
 
 export async function updateManifest(
   sessionId: string,
   userId: string,
   manifest: PageManifestEntry[],
-): Promise<{ updatedAt: string; pageCount: number }> {
+): Promise<{ pageCount: number; updatedAt: string }> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
@@ -361,7 +361,7 @@ export async function updateManifest(
   }
 
   if (session.status === 'expired') {
-    const err = new Error('Session has expired') as Error & { code: string };
+    const err = new Error('Session expired') as Error & { code: string };
     err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
     throw err;
   }
@@ -372,37 +372,27 @@ export async function updateManifest(
 
   for (const entry of manifest) {
     if (!knownFileIds.has(entry.fileId)) {
-      const err = new Error(
-        `Unknown fileId: ${entry.fileId}`,
-      ) as Error & { code: string };
+      const err = new Error('Invalid file ID in manifest') as Error & { code: string };
       err.code = PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID;
       throw err;
     }
-
-    if (!VALID_ROTATIONS.includes(entry.rotation as any)) {
-      const err = new Error(
-        `Invalid rotation: ${entry.rotation}. Must be 0, 90, 180, or 270.`,
-      ) as Error & { code: string };
+    if (!VALID_ROTATIONS.has(entry.rotation)) {
+      const err = new Error('Invalid rotation value') as Error & { code: string };
       err.code = PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION;
       throw err;
     }
   }
 
   const updatedAt = new Date().toISOString();
-  const newExpiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
 
   await db
     .update(pdfSessions)
-    .set({
-      pageManifest: manifest,
-      updatedAt,
-      expiresAt: newExpiresAt,
-    })
+    .set({ pageManifest: manifest, updatedAt })
     .where(eq(pdfSessions.id, sessionId));
 
-  const pageCount = manifest.filter((e) => !e.deleted).length;
+  const pageCount = manifest.filter((p) => !p.deleted).length;
 
-  return { updatedAt, pageCount };
+  return { pageCount, updatedAt };
 }
 
 // ── File serving ───────────────────────────────────────────────────────────────

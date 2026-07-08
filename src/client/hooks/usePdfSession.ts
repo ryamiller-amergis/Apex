@@ -71,8 +71,8 @@ export function useUploadPdfFiles() {
 export function useUpdateManifest() {
   const queryClient = useQueryClient();
   return useMutation<
-    { sessionId: string; updatedAt: string; pageCount: number },
-    Error,
+    { pageCount: number; updatedAt: string },
+    Error & { code?: string },
     { sessionId: string; manifest: PageManifestEntry[] }
   >({
     mutationFn: ({ sessionId, manifest }) =>

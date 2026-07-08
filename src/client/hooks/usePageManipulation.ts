@@ -1,182 +1,126 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useUpdateManifest } from './usePdfSession';
 import type { PageManifestEntry } from '../../shared/types/pdf';
 
-const DEBOUNCE_MS = 500;
-const UNDO_TIMEOUT_MS = 8000;
-
-interface UsePageManipulationOptions {
-  sessionId: string | null;
+interface UsePageManipulationArgs {
+  sessionId: string;
   serverManifest: PageManifestEntry[];
 }
 
-interface DeleteUndoState {
-  previousManifest: PageManifestEntry[];
+interface UndoState {
+  manifest: PageManifestEntry[];
   deletedCount: number;
-  timerId: number | null;
 }
 
-export function usePageManipulation({ sessionId, serverManifest }: UsePageManipulationOptions) {
+function manifestsEqual(a: PageManifestEntry[], b: PageManifestEntry[]): boolean {
+  if (a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].pageId !== b[i].pageId ||
+      a[i].rotation !== b[i].rotation ||
+      a[i].deleted !== b[i].deleted
+    ) return true;
+  }
+  return false;
+}
+
+export function usePageManipulation({ sessionId, serverManifest }: UsePageManipulationArgs) {
   const [localManifest, setLocalManifest] = useState<PageManifestEntry[]>(serverManifest);
-  const [undoState, setUndoState] = useState<DeleteUndoState | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-
-  const updateManifest = useUpdateManifest();
-  const queryClient = useQueryClient();
-  const debounceRef = useRef<number | null>(null);
-  const latestManifestRef = useRef<PageManifestEntry[]>(localManifest);
+  const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [lastSynced, setLastSynced] = useState<PageManifestEntry[]>(serverManifest);
+  const { mutate } = useUpdateManifest();
 
   useEffect(() => {
-    latestManifestRef.current = localManifest;
-  }, [localManifest]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!undoState) {
-      setLocalManifest(serverManifest);
-    }
+    setLocalManifest(serverManifest);
+    setLastSynced(serverManifest);
   }, [serverManifest]);
 
-  const scheduleSync = useCallback((manifest: PageManifestEntry[]) => {
-    if (!sessionId) return;
-    if (debounceRef.current !== null) {
-      window.clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = window.setTimeout(() => {
-      debounceRef.current = null;
-      updateManifest.mutate(
-        { sessionId, manifest },
-        {
-          onError: (err) => {
-            setSyncError(err.message || 'Failed to sync changes');
-            queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
-          },
-          onSuccess: () => {
-            setSyncError(null);
-          },
-        },
+  const hasUnsavedChanges = useMemo(
+    () => manifestsEqual(localManifest, lastSynced),
+    [localManifest, lastSynced],
+  );
+
+  const saveNow = useCallback(() => {
+    mutate({ sessionId, manifest: localManifest });
+    setLastSynced(localManifest);
+  }, [sessionId, mutate, localManifest]);
+
+  const visiblePages = useMemo(
+    () => localManifest.filter((p) => !p.deleted),
+    [localManifest],
+  );
+
+  const reorder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex) return;
+
+      setLocalManifest((prev) => {
+        const visible = prev.filter((p) => !p.deleted);
+        const deleted = prev.filter((p) => p.deleted);
+
+        const [moved] = visible.splice(fromIndex, 1);
+        visible.splice(toIndex, 0, moved);
+
+        return [...visible, ...deleted];
+      });
+    },
+    [],
+  );
+
+  const rotate = useCallback(
+    (selectedPageIds: Set<string>) => {
+      setLocalManifest((prev) =>
+        prev.map((p) => {
+          if (!selectedPageIds.has(p.pageId)) return p;
+          const newRotation = ((p.rotation + 90) % 360) as 0 | 90 | 180 | 270;
+          return { ...p, rotation: newRotation };
+        }),
       );
-    }, DEBOUNCE_MS);
-  }, [sessionId, updateManifest, queryClient]);
+    },
+    [],
+  );
 
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (debounceRef.current !== null && sessionId) {
-        window.clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-        const body = JSON.stringify({ manifest: latestManifestRef.current });
-        navigator.sendBeacon(
-          `/api/pdf/sessions/${sessionId}/manifest`,
-          new Blob([body], { type: 'application/json' }),
-        );
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (debounceRef.current !== null) {
-        window.clearTimeout(debounceRef.current);
-      }
-    };
-  }, [sessionId]);
+  const deletePages = useCallback(
+    (selectedPageIds: Set<string>): { blocked: boolean; message?: string } => {
+      const currentVisible = localManifest.filter((p) => !p.deleted);
+      const remainingAfter = currentVisible.filter((p) => !selectedPageIds.has(p.pageId));
 
-  const reorder = useCallback((fromIndex: number, toIndex: number) => {
-    setLocalManifest((prev) => {
-      const visibleIndices: number[] = [];
-      prev.forEach((entry, i) => {
-        if (!entry.deleted) visibleIndices.push(i);
+      if (remainingAfter.length === 0) {
+        return {
+          blocked: true,
+          message: 'At least one page must remain in the document.',
+        };
+      }
+
+      const snapshot = localManifest;
+      const deletedCount = currentVisible.length - remainingAfter.length;
+
+      setUndoState({ manifest: snapshot, deletedCount });
+
+      const next = localManifest.map((p) => {
+        if (selectedPageIds.has(p.pageId)) return { ...p, deleted: true };
+        return p;
       });
+      setLocalManifest(next);
 
-      if (fromIndex < 0 || fromIndex >= visibleIndices.length) return prev;
-      if (toIndex < 0 || toIndex >= visibleIndices.length) return prev;
-      if (fromIndex === toIndex) return prev;
-
-      const next = [...prev];
-      const actualFrom = visibleIndices[fromIndex];
-      const actualTo = visibleIndices[toIndex];
-      const [moved] = next.splice(actualFrom, 1);
-      const adjustedTo = actualTo > actualFrom ? actualTo - 1 : actualTo;
-      next.splice(adjustedTo, 0, moved);
-
-      scheduleSync(next);
-      return next;
-    });
-  }, [scheduleSync]);
-
-  const rotate = useCallback((pageIds: Set<string>) => {
-    if (pageIds.size === 0) return;
-    setLocalManifest((prev) => {
-      const next = prev.map((entry) => {
-        if (pageIds.has(entry.pageId)) {
-          return {
-            ...entry,
-            rotation: ((entry.rotation + 90) % 360) as 0 | 90 | 180 | 270,
-          };
-        }
-        return entry;
-      });
-      scheduleSync(next);
-      return next;
-    });
-  }, [scheduleSync]);
-
-  const deletePages = useCallback((pageIds: Set<string>): { blocked: boolean; message?: string } => {
-    const currentNonDeleted = localManifest.filter((p) => !p.deleted);
-    const remainingAfterDelete = currentNonDeleted.filter((p) => !pageIds.has(p.pageId));
-
-    if (remainingAfterDelete.length === 0) {
-      return { blocked: true, message: 'At least one page must remain for export.' };
-    }
-
-    const snapshot = [...localManifest];
-
-    const next = localManifest.map((entry) => {
-      if (pageIds.has(entry.pageId)) {
-        return { ...entry, deleted: true };
-      }
-      return entry;
-    });
-
-    setLocalManifest(next);
-
-    if (undoState?.timerId !== null && undoState?.timerId !== undefined) {
-      window.clearTimeout(undoState.timerId);
-    }
-
-    const timerId = window.setTimeout(() => {
-      setUndoState(null);
-      scheduleSync(next);
-    }, UNDO_TIMEOUT_MS);
-
-    setUndoState({
-      previousManifest: snapshot,
-      deletedCount: pageIds.size,
-      timerId,
-    });
-
-    return { blocked: false };
-  }, [localManifest, undoState, scheduleSync]);
+      return { blocked: false };
+    },
+    [localManifest],
+  );
 
   const undoDelete = useCallback(() => {
     if (!undoState) return;
-    if (undoState.timerId !== null) {
-      window.clearTimeout(undoState.timerId);
-    }
-    setLocalManifest(undoState.previousManifest);
+    setLocalManifest(undoState.manifest);
     setUndoState(null);
   }, [undoState]);
 
-  const dismissUndo = useCallback(() => {
-    if (!undoState) return;
-    if (undoState.timerId !== null) {
-      window.clearTimeout(undoState.timerId);
-    }
-    setUndoState(null);
-    scheduleSync(localManifest);
-  }, [undoState, localManifest, scheduleSync]);
-
-  const visiblePages = localManifest.filter((p) => !p.deleted);
+  const syncDelete = useCallback(
+    (manifest: PageManifestEntry[]) => {
+      mutate({ sessionId, manifest });
+      setLastSynced(manifest);
+    },
+    [sessionId, mutate],
+  );
 
   return {
     localManifest,
@@ -185,9 +129,9 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     rotate,
     deletePages,
     undoDelete,
-    dismissUndo,
     undoState,
-    syncError,
-    dismissSyncError: () => setSyncError(null),
+    hasUnsavedChanges,
+    saveNow,
+    syncDelete,
   };
 }

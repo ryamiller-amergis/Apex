@@ -30,6 +30,10 @@ jest.mock('../../hooks/usePdfSession', () => ({
   useActivePdfSessions: () => ({
     data: [],
   }),
+  useUpdateManifest: () => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
+  }),
 }));
 
 function renderWithQuery(ui: React.ReactElement) {
