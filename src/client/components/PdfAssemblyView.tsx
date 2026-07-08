@@ -34,6 +34,7 @@ export const PdfAssemblyView: React.FC = () => {
   const [uploadResults, setUploadResults] = useState<FileUploadResult[]>([]);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteBlockedMessage, setDeleteBlockedMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const createSession = useCreatePdfSession();
@@ -134,6 +135,9 @@ export const PdfAssemblyView: React.FC = () => {
     localManifest,
     visiblePages: manipulationVisiblePages,
     reorder,
+    reorderAndSync,
+    reorderSyncError,
+    dismissReorderSyncError,
     rotate,
     deletePages,
     undoDelete,
@@ -180,9 +184,15 @@ export const PdfAssemblyView: React.FC = () => {
   }, []);
 
   const handleDeleteConfirm = useCallback(() => {
-    deletePages(selectedPageIds);
+    const result = deletePages(selectedPageIds);
+    if (result.blocked) {
+      setShowDeleteConfirm(false);
+      setDeleteBlockedMessage(result.message ?? 'Cannot delete all pages.');
+      return;
+    }
     clearSelection();
     setShowDeleteConfirm(false);
+    setDeleteBlockedMessage(null);
   }, [deletePages, selectedPageIds, clearSelection]);
 
   const handleMoveUp = useCallback(() => {
@@ -387,6 +397,7 @@ export const PdfAssemblyView: React.FC = () => {
             onPreview={handlePreview}
             isSelected={isSelected}
             onSelect={handlePageSelect}
+            onReorder={reorderAndSync}
           />
         </section>
       )}
@@ -420,6 +431,34 @@ export const PdfAssemblyView: React.FC = () => {
           onConfirm={handleDeleteConfirm}
           onCancel={() => setShowDeleteConfirm(false)}
         />
+      )}
+
+      {deleteBlockedMessage && (
+        <div className={styles.errorToast} role="alert" data-testid="delete-blocked-error">
+          <span className={styles.errorToastIcon}>⚠️</span>
+          <span className={styles.errorToastText}>{deleteBlockedMessage}</span>
+          <button
+            className={styles.errorToastDismiss}
+            onClick={() => setDeleteBlockedMessage(null)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {reorderSyncError && (
+        <div className={styles.errorToast} role="alert" data-testid="reorder-sync-error">
+          <span className={styles.errorToastIcon}>⚠️</span>
+          <span className={styles.errorToastText}>{reorderSyncError}</span>
+          <button
+            className={styles.errorToastDismiss}
+            onClick={dismissReorderSyncError}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );

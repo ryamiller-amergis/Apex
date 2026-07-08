@@ -1,5 +1,4 @@
-import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React from 'react';
 import { useMyPermissions } from '../hooks/useRbac';
 import { useProjectMenuConfig } from '../hooks/useProjectMenuConfig';
 
@@ -14,23 +13,17 @@ export const PdfToolsRouteGuard: React.FC<PdfToolsRouteGuardProps> = ({
   selectedProject,
   isSuperAdmin = false,
 }) => {
-  const navigate = useNavigate();
   const { can, isLoading: permLoading } = useMyPermissions();
   const { enabledViews, isLoading: menuLoading } = useProjectMenuConfig(selectedProject);
 
   const isLoading = permLoading || menuLoading;
+
+  if (isLoading) return null;
+
   const hasPermission = isSuperAdmin || can('pdf-assembly:use');
   const isMenuVisible = isSuperAdmin || enabledViews.includes('pdf-tools');
   const isAuthorized = hasPermission && isMenuVisible;
 
-  useEffect(() => {
-    if (isLoading) return;
-    if (!isAuthorized) {
-      navigate('/home', { replace: true });
-    }
-  }, [isLoading, isAuthorized, navigate]);
-
-  if (isLoading) return null;
   if (!isAuthorized) return null;
 
   return <div data-testid="pdf-tools-route-guard">{children}</div>;

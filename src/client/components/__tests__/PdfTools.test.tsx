@@ -244,7 +244,7 @@ describe('PdfToolsRouteGuard', () => {
     expect(screen.queryByTestId('protected-content')).not.toBeInTheDocument();
   });
 
-  it('calls navigate to /home when user lacks permission', () => {
+  it('renders nothing when user lacks permission', () => {
     mockPermissions(() => false);
     mockMenuConfig(['pdf-tools']);
 
@@ -254,10 +254,10 @@ describe('PdfToolsRouteGuard', () => {
       </PdfToolsRouteGuard>,
     );
 
-    expect(mockNavigate).toHaveBeenCalledWith('/home', { replace: true });
+    expect(screen.queryByTestId('protected-content')).not.toBeInTheDocument();
   });
 
-  it('calls navigate to /home when menu visibility is disabled', () => {
+  it('renders nothing when menu visibility is disabled', () => {
     mockPermissions((key) => key === 'pdf-assembly:use');
     mockMenuConfig([]);
 
@@ -267,7 +267,7 @@ describe('PdfToolsRouteGuard', () => {
       </PdfToolsRouteGuard>,
     );
 
-    expect(mockNavigate).toHaveBeenCalledWith('/home', { replace: true });
+    expect(screen.queryByTestId('protected-content')).not.toBeInTheDocument();
   });
 
   it('renders children for super admin regardless of permission and menu visibility', () => {

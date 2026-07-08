@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { Grid } from 'react-window';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { PageThumbnail } from './PageThumbnail';
@@ -16,6 +16,7 @@ export interface PageThumbnailGridProps {
   onPreview: (pageId: string) => void;
   isSelected: (pageId: string) => boolean;
   onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
+  onReorder?: (fromIndex: number, toIndex: number) => void;
 }
 
 interface ThumbnailCellProps {
@@ -26,6 +27,12 @@ interface ThumbnailCellProps {
   isSelected: (pageId: string) => boolean;
   handleSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onPreview: (pageId: string) => void;
+  dragPageId: string | null;
+  dropTargetId: string | null;
+  onDragStart: (pageId: string) => void;
+  onDragOver: (pageId: string) => void;
+  onDragEnd: () => void;
+  onDrop: (pageId: string) => void;
 }
 
 function ThumbnailCell({
@@ -39,6 +46,12 @@ function ThumbnailCell({
   isSelected,
   handleSelect,
   onPreview,
+  dragPageId,
+  dropTargetId,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop,
 }: ThumbnailCellProps & {
   ariaAttributes: { 'aria-colindex': number; role: 'gridcell' };
   columnIndex: number;
@@ -76,6 +89,12 @@ function ThumbnailCell({
         isSelected={isSelected(page.pageId)}
         onSelect={handleSelect}
         onPreview={onPreview}
+        isDragging={dragPageId === page.pageId}
+        isDropTarget={dropTargetId === page.pageId}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDragEnd={onDragEnd}
+        onDrop={onDrop}
       />
     </div>
   );
@@ -88,9 +107,12 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   onPreview,
   isSelected,
   onSelect,
+  onReorder,
 }) => {
   const [containerWidth, setContainerWidth] = useState(800);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [dragPageId, setDragPageId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   const visiblePages = useMemo(
     () => pageManifest.filter((p) => !p.deleted),
@@ -128,6 +150,37 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  const handleDragStart = useCallback((pageId: string) => {
+    setDragPageId(pageId);
+  }, []);
+
+  const handleDragOver = useCallback((pageId: string) => {
+    setDropTargetId(pageId);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDragPageId(null);
+    setDropTargetId(null);
+  }, []);
+
+  const handleDrop = useCallback(
+    (targetPageId: string) => {
+      if (!dragPageId || dragPageId === targetPageId || !onReorder) {
+        setDragPageId(null);
+        setDropTargetId(null);
+        return;
+      }
+      const fromIndex = visiblePages.findIndex((p) => p.pageId === dragPageId);
+      const toIndex = visiblePages.findIndex((p) => p.pageId === targetPageId);
+      if (fromIndex >= 0 && toIndex >= 0) {
+        onReorder(fromIndex, toIndex);
+      }
+      setDragPageId(null);
+      setDropTargetId(null);
+    },
+    [dragPageId, visiblePages, onReorder],
+  );
+
   const containerHeight = containerRef.current?.clientHeight ?? 600;
 
   return (
@@ -149,6 +202,12 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
             isSelected,
             handleSelect: onSelect,
             onPreview,
+            dragPageId,
+            dropTargetId,
+            onDragStart: handleDragStart,
+            onDragOver: handleDragOver,
+            onDragEnd: handleDragEnd,
+            onDrop: handleDrop,
           }}
           columnCount={columnCount}
           columnWidth={THUMBNAIL_WIDTH}

@@ -17,6 +17,12 @@ export interface PageThumbnailProps {
   isSelected: boolean;
   onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onPreview: (pageId: string) => void;
+  isDragging?: boolean;
+  isDropTarget?: boolean;
+  onDragStart?: (pageId: string) => void;
+  onDragOver?: (pageId: string) => void;
+  onDragEnd?: () => void;
+  onDrop?: (pageId: string) => void;
 }
 
 export const PageThumbnail: React.FC<PageThumbnailProps> = ({
@@ -30,6 +36,12 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   isSelected,
   onSelect,
   onPreview,
+  isDragging = false,
+  isDropTarget = false,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -75,12 +87,44 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     [onPreview, pageId],
   );
 
+  const handleDragStart = useCallback(
+    (e: React.DragEvent) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', pageId);
+      onDragStart?.(pageId);
+    },
+    [pageId, onDragStart],
+  );
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      onDragOver?.(pageId);
+    },
+    [pageId, onDragOver],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      onDrop?.(pageId);
+    },
+    [pageId, onDrop],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    onDragEnd?.();
+  }, [onDragEnd]);
+
   const isLoading = isDocLoading || status === 'loading' || status === 'idle';
   const isError = status === 'error';
 
   const cardClassName = [
     styles.thumbnailCard,
     isSelected ? styles.thumbnailCardSelected : '',
+    isDragging ? styles.thumbnailCardDragging : '',
+    isDropTarget ? styles.thumbnailCardDropTarget : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -92,6 +136,11 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
+      draggable
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      onDragEnd={handleDragEnd}
       tabIndex={0}
       role="gridcell"
       aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}. Click to select, double-click to preview.`}
@@ -110,7 +159,6 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
         <canvas
           ref={canvasRef}
           className={styles.canvas}
-          style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
         />
         <div className={styles.previewOverlay}>
           <span className={styles.previewIcon}>🔍</span>

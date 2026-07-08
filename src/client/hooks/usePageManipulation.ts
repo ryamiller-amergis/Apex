@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useUpdateManifest } from './usePdfSession';
 import type { PageManifestEntry } from '../../shared/types/pdf';
 
@@ -28,11 +28,14 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
   const [localManifest, setLocalManifest] = useState<PageManifestEntry[]>(serverManifest);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
   const [lastSynced, setLastSynced] = useState<PageManifestEntry[]>(serverManifest);
+  const [reorderSyncError, setReorderSyncError] = useState<string | null>(null);
+  const lastSyncedRef = useRef<PageManifestEntry[]>(serverManifest);
   const { mutate } = useUpdateManifest();
 
   useEffect(() => {
     setLocalManifest(serverManifest);
     setLastSynced(serverManifest);
+    lastSyncedRef.current = serverManifest;
   }, [serverManifest]);
 
   const hasUnsavedChanges = useMemo(
@@ -66,6 +69,42 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     },
     [],
   );
+
+  const reorderAndSync = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex) return;
+
+      setReorderSyncError(null);
+
+      const prev = localManifest;
+      const visible = prev.filter((p) => !p.deleted);
+      const deleted = prev.filter((p) => p.deleted);
+      const [moved] = visible.splice(fromIndex, 1);
+      visible.splice(toIndex, 0, moved);
+      const newManifest = [...visible, ...deleted];
+
+      setLocalManifest(newManifest);
+
+      mutate(
+        { sessionId, manifest: newManifest },
+        {
+          onSuccess: () => {
+            setLastSynced(newManifest);
+            lastSyncedRef.current = newManifest;
+          },
+          onError: () => {
+            setLocalManifest(lastSyncedRef.current);
+            setReorderSyncError('Failed to save page order. Reverted to last saved state.');
+          },
+        },
+      );
+    },
+    [localManifest, sessionId, mutate],
+  );
+
+  const dismissReorderSyncError = useCallback(() => {
+    setReorderSyncError(null);
+  }, []);
 
   const rotate = useCallback(
     (selectedPageIds: Set<string>) => {
@@ -126,6 +165,9 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     localManifest,
     visiblePages,
     reorder,
+    reorderAndSync,
+    dismissReorderSyncError,
+    reorderSyncError,
     rotate,
     deletePages,
     undoDelete,

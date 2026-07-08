@@ -207,7 +207,7 @@ function App() {
   const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
     : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
 
-  const { enabledViews } = useProjectMenuConfig(selectedProject);
+  const { enabledViews, isLoading: menuConfigLoading } = useProjectMenuConfig(selectedProject);
 
   // On the project picker, only fetch repo configs once a project is clicked (pending).
   // Elsewhere (header repo switcher), load configs for the active project.
@@ -245,7 +245,7 @@ function App() {
   // Guard all gated routes: redirect if the user lacks the required permission.
   // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
   useEffect(() => {
-    if (!permissionsLoaded) return;
+    if (!permissionsLoaded || menuConfigLoading) return;
     if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
     if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
     if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
@@ -267,7 +267,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, can, isInAnyGroup, isSuperAdmin, enabledViews, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigLoading, can, isInAnyGroup, isSuperAdmin, enabledViews, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
