@@ -11,6 +11,7 @@ import { UndoSnackbar } from './UndoSnackbar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { PdfDocumentSidebar } from './PdfDocumentSidebar';
 import { PdfInlinePreview } from './PdfInlinePreview';
+import { ExportPanel } from './ExportPanel';
 import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -438,6 +439,10 @@ export const PdfAssemblyView: React.FC = () => {
             />
           </div>
         </div>
+        <ExportPanel
+          sessionId={sessionId!}
+          nonDeletedPageCount={manipulationVisiblePages.length}
+        />
         </PdfWorkerProvider>
       )}
 

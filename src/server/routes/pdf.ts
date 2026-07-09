@@ -13,6 +13,7 @@ import {
   getPdfTempDir,
   updateManifest,
   removeFile,
+  assembleAndExport,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -224,6 +225,54 @@ router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<vo
     }
     console.error('[pdf] DELETE file error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── POST /api/pdf/sessions/:sessionId/export ──────────────────────────────────
+
+router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+    const { filename } = req.body as { filename?: string };
+
+    const result = await assembleAndExport(sessionId, userId, filename);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Length', result.pdfBytes.length);
+    res.end(Buffer.from(result.pdfBytes));
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    const message = (err as Error)?.message ?? 'Internal server error';
+
+    if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+      res.status(404).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+      res.status(403).json({ error: code, message: 'You do not have access to this session' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+      res.status(410).json({ error: code, message: 'This session has expired' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.INVALID_FILENAME) {
+      res.status(400).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.NO_PAGES) {
+      res.status(422).json({ error: code, message: 'Session has no pages to export' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.EXPORT_FAILED) {
+      res.status(500).json({ error: code, message: 'PDF assembly failed. Please retry.' });
+      return;
+    }
+
+    console.error('[pdf] POST export error:', err);
+    res.status(500).json({ error: 'EXPORT_FAILED', message: 'PDF assembly failed. Please retry.' });
   }
 });
 
