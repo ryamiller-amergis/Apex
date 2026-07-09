@@ -26,6 +26,7 @@ import {
   checkoutDefaultBranch,
   createFeatureBranch,
   checkoutNewBranch,
+  checkoutFeatureBranch,
   excludeAiPilotFromGit,
 } from '../services/repoCheckoutService';
 
@@ -212,7 +213,7 @@ describe('repoCheckoutService', () => {
 
   describe('createFeatureBranch', () => {
     it('creates a feature branch with workItemId and slugified title', async () => {
-      const branchName = await createFeatureBranch('/tmp/workspace', 50743, 'Shift Scheduler Widget');
+      const branchName = await createFeatureBranch('/tmp/workspace', 50743, 'Shift Scheduler Widget', 'development');
 
       expect(branchName).toBe('feature/apex-50743-shift-scheduler-widget');
       expect(mockGit).toHaveBeenCalledWith(
@@ -228,6 +229,72 @@ describe('repoCheckoutService', () => {
 
       expect(mockGit).toHaveBeenCalledWith(
         ['-c', 'safe.directory=/tmp/workspace', 'checkout', '-b', 'feature/apex-feat-009-platform-integration'],
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+    });
+  });
+
+  describe('checkoutFeatureBranch', () => {
+    it('creates a fresh branch off the base when the remote branch does not exist', async () => {
+      // ls-remote returns empty → no existing remote branch.
+      mockGit.mockResolvedValue('');
+
+      await checkoutFeatureBranch('/tmp/workspace', 'feature/apex-50739-blackout', 'development');
+
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['ls-remote', '--heads', 'origin', 'feature/apex-50739-blackout']),
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'checkout', '-b', 'feature/apex-50739-blackout'],
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+      // No fetch of the feature branch and no base merge on the fresh path.
+      expect(mockGit).not.toHaveBeenCalledWith(
+        expect.arrayContaining(['checkout', '-b', 'feature/apex-50739-blackout', 'origin/feature/apex-50739-blackout']),
+        expect.anything(),
+      );
+    });
+
+    it('reuses the existing remote branch and merges the base branch in', async () => {
+      mockGit.mockImplementation((args: string[]) => {
+        if (args.includes('ls-remote')) {
+          return Promise.resolve('abc123\trefs/heads/feature/apex-50739-blackout\n');
+        }
+        return Promise.resolve('');
+      });
+
+      await checkoutFeatureBranch('/tmp/workspace', 'feature/apex-50739-blackout', 'development');
+
+      // Branches from the remote tip (preserving prior committed work).
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'checkout', '-b', 'feature/apex-50739-blackout', 'origin/feature/apex-50739-blackout'],
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+      // Merges the base branch in before the agent starts.
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['merge', '--no-ff', 'origin/development']),
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+    });
+
+    it('aborts and continues when the base merge conflicts', async () => {
+      mockGit.mockImplementation((args: string[]) => {
+        if (args.includes('ls-remote')) {
+          return Promise.resolve('abc123\trefs/heads/feature/apex-50739-blackout\n');
+        }
+        if (args.includes('merge') && !args.includes('--abort')) {
+          return Promise.reject(new Error('merge conflict'));
+        }
+        return Promise.resolve('');
+      });
+
+      await expect(
+        checkoutFeatureBranch('/tmp/workspace', 'feature/apex-50739-blackout', 'development'),
+      ).resolves.toBeUndefined();
+
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['merge', '--abort']),
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
     });

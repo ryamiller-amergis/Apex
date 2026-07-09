@@ -10,7 +10,7 @@ import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
 import {
   checkoutDefaultBranch,
-  checkoutNewBranch,
+  checkoutFeatureBranch,
   createFeatureBranch,
   computeDiff,
   pushBranch,
@@ -252,7 +252,7 @@ router.post('/start', async (req: Request, res: Response) => {
           });
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
-          await checkoutNewBranch(workspaceDir, branchName);
+          await checkoutFeatureBranch(workspaceDir, branchName, defaultBranch);
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
@@ -306,7 +306,7 @@ router.post('/start', async (req: Request, res: Response) => {
             provider,
           });
 
-          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
+          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle, defaultBranch);
 
           // Inject design-doc attachments from the Feature work item (Gap 4 fix).
           try {
