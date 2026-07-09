@@ -533,6 +533,7 @@ export async function assembleAndExport(
   sessionId: string,
   userId: string,
   rawFilename?: string,
+  pages?: number[],
 ): Promise<AssembleAndExportResult> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -565,6 +566,19 @@ export async function assembleAndExport(
     throw err;
   }
 
+  // When pages filter is provided, validate indices and select subset
+  let pagesToExport = nonDeletedPages;
+  if (pages && pages.length > 0) {
+    const maxIndex = nonDeletedPages.length - 1;
+    const invalidIndices = pages.filter((i) => i < 0 || i > maxIndex || !Number.isInteger(i));
+    if (invalidIndices.length > 0) {
+      const err = new Error(`Page indices out of bounds. Valid range: 0-${maxIndex}`) as Error & { code: string };
+      err.code = PDF_ERROR_CODES.INVALID_PAGE_INDICES;
+      throw err;
+    }
+    pagesToExport = pages.map((i) => nonDeletedPages[i]);
+  }
+
   const filename = sanitizeExportFilename(rawFilename);
 
   const fileMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
@@ -576,7 +590,7 @@ export async function assembleAndExport(
     }
   }
 
-  const missingFiles = nonDeletedPages.filter((p) => !filePaths[p.fileId]);
+  const missingFiles = pagesToExport.filter((p) => !filePaths[p.fileId]);
   if (missingFiles.length > 0) {
     const err = new Error('Source files missing on disk') as Error & { code: string };
     err.code = PDF_ERROR_CODES.EXPORT_FAILED;
@@ -584,7 +598,7 @@ export async function assembleAndExport(
   }
 
   const workerInput: ExportWorkerInput = {
-    manifest: nonDeletedPages,
+    manifest: pagesToExport,
     filePaths,
   };
 

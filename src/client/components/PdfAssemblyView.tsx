@@ -12,6 +12,9 @@ import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { PdfDocumentSidebar } from './PdfDocumentSidebar';
 import { PdfInlinePreview } from './PdfInlinePreview';
 import { ExportPanel } from './ExportPanel';
+import { ExportSelectedButton } from './ExportSelectedButton';
+import { RangeInput } from './RangeInput';
+import { DeduplicationToast } from './DeduplicationToast';
 import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -156,7 +159,28 @@ export const PdfAssemblyView: React.FC = () => {
     clearSelection,
     isSelected,
     selectedCount,
+    selectAll,
   } = usePageSelection();
+
+  const [showDedupToast, setShowDedupToast] = useState(false);
+  const [rangeExternalUpdate, setRangeExternalUpdate] = useState(0);
+
+  const handleRangeSelectionChange = useCallback(
+    (indices: number[], hasDuplicates: boolean) => {
+      if (hasDuplicates) {
+        setShowDedupToast(true);
+      }
+      const pageIds = indices
+        .map((i) => manipulationVisiblePages[i]?.pageId)
+        .filter(Boolean) as string[];
+      if (pageIds.length > 0) {
+        selectAll(pageIds);
+      } else {
+        clearSelection();
+      }
+    },
+    [manipulationVisiblePages, clearSelection, selectAll],
+  );
 
   const documentColors = useDocumentColors(fileMetadata);
 
@@ -185,6 +209,15 @@ export const PdfAssemblyView: React.FC = () => {
   const allVisiblePageIds = useMemo(
     () => manipulationVisiblePages.map((p) => p.pageId),
     [manipulationVisiblePages],
+  );
+
+  const selectedIndicesForRange = useMemo(
+    () =>
+      [...selectedPageIds]
+        .map((id) => manipulationVisiblePages.findIndex((p) => p.pageId === id))
+        .filter((i) => i >= 0)
+        .sort((a, b) => a - b),
+    [selectedPageIds, manipulationVisiblePages],
   );
 
   const activePreviewPage = useMemo(() => {
@@ -285,6 +318,7 @@ export const PdfAssemblyView: React.FC = () => {
         toggleSelection(pageId);
         setActivePageId(pageId);
       }
+      setRangeExternalUpdate((c) => c + 1);
     },
     [toggleSelection, multiToggle, rangeSelect, allVisiblePageIds],
   );
@@ -443,6 +477,18 @@ export const PdfAssemblyView: React.FC = () => {
           sessionId={sessionId!}
           nonDeletedPageCount={manipulationVisiblePages.length}
         />
+        <ExportSelectedButton
+          sessionId={sessionId!}
+          selectedCount={selectedCount}
+          selectedPageIndices={selectedIndicesForRange}
+          onExportComplete={clearSelection}
+        />
+        <RangeInput
+          maxPage={manipulationVisiblePages.length}
+          selectedIndices={selectedIndicesForRange}
+          onSelectionChange={handleRangeSelectionChange}
+          externalUpdate={rangeExternalUpdate}
+        />
         </PdfWorkerProvider>
       )}
 
@@ -523,6 +569,11 @@ export const PdfAssemblyView: React.FC = () => {
           </button>
         </div>
       )}
+
+      <DeduplicationToast
+        visible={showDedupToast}
+        onDismiss={() => setShowDedupToast(false)}
+      />
     </div>
   );
 };
