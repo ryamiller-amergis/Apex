@@ -230,6 +230,81 @@ describe('usePageManipulation', () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
+  it('reorder marks hasUnsavedChanges as true', () => {
+    const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    expect(result.current.hasUnsavedChanges).toBe(false);
+
+    act(() => {
+      result.current.reorder(0, 2);
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(true);
+  });
+
+  it('reorder sets undoReorderState for undo support', () => {
+    const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    expect(result.current.undoReorderState).toBeNull();
+
+    act(() => {
+      result.current.reorder(2, 0);
+    });
+
+    expect(result.current.undoReorderState).not.toBeNull();
+    expect(result.current.undoReorderState!.movedPageId).toBe('C');
+    expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A', 'B']);
+  });
+
+  it('undoReorder reverts the manifest to before the reorder', () => {
+    const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.reorder(2, 0);
+    });
+
+    expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A', 'B']);
+
+    act(() => {
+      result.current.undoReorder();
+    });
+
+    expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A', 'B', 'C']);
+    expect(result.current.undoReorderState).toBeNull();
+  });
+
+  it('saveNow clears undoReorderState', () => {
+    const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.reorder(0, 2);
+    });
+
+    expect(result.current.undoReorderState).not.toBeNull();
+
+    act(() => {
+      result.current.saveNow();
+    });
+
+    expect(result.current.undoReorderState).toBeNull();
+  });
+
   it('saveNow triggers mutate immediately', () => {
     const manifest = ['A', 'B'].map((id) => makeEntry(id));
 

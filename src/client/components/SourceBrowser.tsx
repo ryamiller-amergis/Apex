@@ -3,7 +3,6 @@ import type { PdfFileMetadata, PageManifestEntry, FileUploadResult } from '../..
 import type { DocumentColor } from '../hooks/useDocumentColors';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
-import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import styles from './SourceBrowser.module.css';
 
 function formatBytes(bytes: number): string {
@@ -48,7 +47,7 @@ const MiniPageThumbnail: React.FC<MiniPageThumbnailProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
+  const { document, isLoading: isDocLoading, error: docError } = usePdfDocument(fileUrl);
   const { status, imageBitmap } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
@@ -70,7 +69,7 @@ const MiniPageThumbnail: React.FC<MiniPageThumbnailProps> = ({
     }
   }, [imageBitmap]);
 
-  const isLoading = isDocLoading || status === 'loading' || status === 'idle';
+  const isLoading = isDocLoading || status === 'loading' || (status === 'idle' && !docError);
 
   const handleClick = useCallback(() => {
     onToggle(pageId);
@@ -339,20 +338,18 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                       className={styles['page-strip']}
                       style={{ borderLeftColor: color?.border ?? 'var(--accent-color)' }}
                     >
-                      <PdfWorkerProvider>
-                        {filePages.map((entry) => (
-                          <MiniPageThumbnail
-                            key={entry.pageId}
-                            pageId={entry.pageId}
-                            fileUrl={fileUrl}
-                            sourcePageIndex={entry.sourcePageIndex}
-                            rotation={entry.rotation}
-                            pageNumber={entry.sourcePageIndex + 1}
-                            isInAssembly={isPageInAssembly(entry.pageId)}
-                            onToggle={onTogglePageInAssembly}
-                          />
-                        ))}
-                      </PdfWorkerProvider>
+                      {filePages.map((entry) => (
+                        <MiniPageThumbnail
+                          key={entry.pageId}
+                          pageId={entry.pageId}
+                          fileUrl={fileUrl}
+                          sourcePageIndex={entry.sourcePageIndex}
+                          rotation={entry.rotation}
+                          pageNumber={entry.sourcePageIndex + 1}
+                          isInAssembly={isPageInAssembly(entry.pageId)}
+                          onToggle={onTogglePageInAssembly}
+                        />
+                      ))}
                     </div>
                   )}
                 </React.Fragment>

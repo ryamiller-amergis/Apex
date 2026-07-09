@@ -54,6 +54,7 @@ scripts/output/
 .ai-pilot/
 data/chat-threads/
 data/dev-workspaces/
+data/pdf-sessions/
 data/sessions/
 wiki-*.json
 wiki-page.json

@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import styles from './PdfInlinePreview.module.css';
 
@@ -45,10 +44,11 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
     const observer = new ResizeObserver(updateSize);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [updateSize]);
+  }, [updateSize, fileId]);
 
   useEffect(() => {
     if (!document || !fileId) return;
+    if (containerSize.width === 0 || containerSize.height === 0) return;
 
     let cancelled = false;
     setIsRendering(true);
@@ -128,13 +128,5 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
 };
 
 export const PdfInlinePreview: React.FC<PdfInlinePreviewProps> = (props) => {
-  if (!props.fileId) {
-    return <PdfInlinePreviewInner {...props} />;
-  }
-
-  return (
-    <PdfWorkerProvider>
-      <PdfInlinePreviewInner {...props} />
-    </PdfWorkerProvider>
-  );
+  return <PdfInlinePreviewInner {...props} />;
 };

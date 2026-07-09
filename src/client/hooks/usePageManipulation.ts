@@ -12,6 +12,11 @@ interface UndoState {
   deletedCount: number;
 }
 
+interface UndoReorderState {
+  manifest: PageManifestEntry[];
+  movedPageId: string;
+}
+
 function manifestsEqual(a: PageManifestEntry[], b: PageManifestEntry[]): boolean {
   if (a.length !== b.length) return true;
   for (let i = 0; i < a.length; i++) {
@@ -27,6 +32,7 @@ function manifestsEqual(a: PageManifestEntry[], b: PageManifestEntry[]): boolean
 export function usePageManipulation({ sessionId, serverManifest }: UsePageManipulationArgs) {
   const [localManifest, setLocalManifest] = useState<PageManifestEntry[]>(serverManifest);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [undoReorderState, setUndoReorderState] = useState<UndoReorderState | null>(null);
   const [lastSynced, setLastSynced] = useState<PageManifestEntry[]>(serverManifest);
   const [reorderSyncError, setReorderSyncError] = useState<string | null>(null);
   const lastSyncedRef = useRef<PageManifestEntry[]>(serverManifest);
@@ -46,6 +52,7 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
   const saveNow = useCallback(() => {
     mutate({ sessionId, manifest: localManifest });
     setLastSynced(localManifest);
+    setUndoReorderState(null);
   }, [sessionId, mutate, localManifest]);
 
   const visiblePages = useMemo(
@@ -57,17 +64,22 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     (fromIndex: number, toIndex: number) => {
       if (fromIndex === toIndex) return;
 
+      const snapshot = localManifest;
+
       setLocalManifest((prev) => {
         const visible = prev.filter((p) => !p.deleted);
         const deleted = prev.filter((p) => p.deleted);
 
+        const movedPage = visible[fromIndex];
         const [moved] = visible.splice(fromIndex, 1);
         visible.splice(toIndex, 0, moved);
+
+        setUndoReorderState({ manifest: snapshot, movedPageId: movedPage?.pageId ?? '' });
 
         return [...visible, ...deleted];
       });
     },
-    [],
+    [localManifest],
   );
 
   const reorderAndSync = useCallback(
@@ -153,6 +165,16 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     setUndoState(null);
   }, [undoState]);
 
+  const undoReorder = useCallback(() => {
+    if (!undoReorderState) return;
+    setLocalManifest(undoReorderState.manifest);
+    setUndoReorderState(null);
+  }, [undoReorderState]);
+
+  const dismissReorderUndo = useCallback(() => {
+    setUndoReorderState(null);
+  }, []);
+
   const syncDelete = useCallback(
     (manifest: PageManifestEntry[]) => {
       mutate({ sessionId, manifest });
@@ -203,6 +225,9 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     deletePages,
     undoDelete,
     undoState,
+    undoReorder,
+    undoReorderState,
+    dismissReorderUndo,
     hasUnsavedChanges,
     saveNow,
     syncDelete,

@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 
 // ── Mock pdfjs-dist ────────────────────────────────────────────────────────────
 
@@ -56,16 +56,28 @@ describe('usePdfDocument', () => {
   });
 
   it('sets error on failure', async () => {
+    jest.useFakeTimers();
     mockContextGetDocument.mockRejectedValue(new Error('Network error'));
 
     const { result } = renderHook(() => usePdfDocument('/api/pdf/files/bad'));
 
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
+    // Hook retries twice (MAX_RETRIES=2) with 1s delay before surfacing the error
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(1000);
+    });
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(1000);
     });
 
+    expect(result.current.isLoading).toBe(false);
     expect(result.current.document).toBeNull();
     expect(result.current.error).toBe('Network error');
+    expect(mockContextGetDocument).toHaveBeenCalledTimes(3);
+
+    jest.useRealTimers();
   });
 
   it('reloads when fileUrl changes', async () => {

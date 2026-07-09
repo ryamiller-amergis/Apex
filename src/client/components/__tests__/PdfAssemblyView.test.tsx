@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
 
+jest.mock('../../contexts/PdfWorkerContext', () => ({
+  usePdfWorker: () => ({ getDocument: jest.fn() }),
+  PdfWorkerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 jest.mock('../SourceBrowser', () => ({
   SourceBrowser: () => <div data-testid="mock-source-browser" />,
 }));
