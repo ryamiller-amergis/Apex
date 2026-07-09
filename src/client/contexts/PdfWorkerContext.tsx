@@ -32,7 +32,11 @@ export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }
     const inflight = loadingCache.current.get(url);
     if (inflight) return inflight;
 
-    const loading = pdfjsLib.getDocument({ url }).promise.then(
+    const loading = pdfjsLib.getDocument({
+      url,
+      disableAutoFetch: true,
+      disableRange: true,
+    }).promise.then(
       (doc) => {
         documentCache.current.set(url, doc);
         loadingCache.current.delete(url);

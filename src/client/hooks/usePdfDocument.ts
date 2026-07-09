@@ -25,6 +25,7 @@ export function usePdfDocument(fileUrl: string | null) {
     }
 
     let cancelled = false;
+    setDocument(null);
     setIsLoading(true);
     setError(null);
 
@@ -33,7 +34,6 @@ export function usePdfDocument(fileUrl: string | null) {
         if (!cancelled) {
           setDocument(doc);
           setIsLoading(false);
-          retryCountRef.current = 0;
         }
       })
       .catch((err: unknown) => {

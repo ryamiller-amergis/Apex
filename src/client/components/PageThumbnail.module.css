@@ -184,3 +184,20 @@
   font-size: 0.625rem;
   opacity: 0.8;
 }
+
+.retryButton {
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.retryButton:hover {
+  opacity: 1;
+}

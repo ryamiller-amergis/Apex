@@ -55,7 +55,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const { document, isLoading: isDocLoading, error: docError } = usePdfDocument(fileUrl);
+  const { document, isLoading: isDocLoading, error: docError, retry: retryDoc } = usePdfDocument(fileUrl);
   const { status, imageBitmap } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
@@ -173,6 +173,15 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
           <div className={styles.errorState} data-testid="thumbnail-error">
             <span className={styles.errorIcon}>⚠</span>
             <span className={styles.errorText}>Failed</span>
+            {docError && (
+              <button
+                className={styles.retryButton}
+                onClick={(e) => { e.stopPropagation(); retryDoc(); }}
+                title="Retry loading"
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
         <canvas
