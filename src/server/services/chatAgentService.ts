@@ -57,6 +57,8 @@ interface ThreadState {
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Cached flag — true when the thread backs an interview row (gets longer idle timeout) */
   isInterviewThread: boolean;
+  /** True when the thread backs a dev-session (gets extended run timeout for sequential implementation) */
+  isDevSession: boolean;
 }
 
 const threads = new Map<string, ThreadState>();
@@ -875,7 +877,12 @@ function broadcast(state: ThreadState, event: SseEvent) {
 
 function resetIdleTimer(state: ThreadState) {
   if (state.idleTimer) clearTimeout(state.idleTimer);
-  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  // Don't start the idle timer while a run is active — the timer will be reset
+  // in the run's finally block. Starting it now could fire closeThread mid-run.
+  if (state.thread.status === 'running') return;
+  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS
+    : state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS  // dev sessions get 2-hour window
+    : IDLE_TIMEOUT_MS;
   state.idleTimer = setTimeout(() => closeThread(state.thread.id), timeout);
 }
 
@@ -957,6 +964,7 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     agent: null,
     idleTimer: null,
     isInterviewThread: isInterview,
+    isDevSession: thread.kickoff?.mode === 'development',
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
@@ -1055,6 +1063,7 @@ export async function createThread(
     agent: null,
     idleTimer: null,
     isInterviewThread: false,
+    isDevSession: thread.kickoff?.mode === 'development',
   };
 
   threads.set(threadId, state);
@@ -1713,7 +1722,8 @@ export async function sendMessage(
     persistThread(state.thread);
 
     // ── Insert agent_runs record as 'queued', then atomically claim it ──────
-    const runTimeoutAt = new Date(Date.now() + IDLE_TIMEOUT_MS).toISOString();
+    const runTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+    const runTimeoutAt = new Date(Date.now() + runTimeoutMs).toISOString();
     agentRunId = state.thread.activeRunId ?? threadId;
     await db.insert(agentRuns).values({
       id: agentRunId,
@@ -2132,15 +2142,10 @@ export async function closeThread(threadId: string): Promise<void> {
     state.agent = null;
   }
 
-  // Persist status=closed so history survives idle eviction and server restarts.
-  state.thread.status = 'closed';
-  await pgUpsertThread(state.thread);
-
-  threads.delete(threadId);
-
-  // Workspace deletion protection: skip if this thread backs an active dev
-  // session that has unpushed changes (the workspace is still needed).
-  let shouldDeleteWorkspace = true;
+  // For dev sessions with unpushed changes: evict from memory (free resources)
+  // but leave the thread status as-is (idle) and preserve the workspace.
+  // This lets users log out, navigate away, or hit the idle timeout and then
+  // return to find their session intact and the textarea still enabled.
   if (state.thread.kickoff?.mode === 'development') {
     const session = await db.query.devSessions.findFirst({
       where: eq(devSessions.chatThreadId, threadId),
@@ -2150,16 +2155,22 @@ export async function closeThread(threadId: string): Promise<void> {
       const isActive = session.status === 'in_progress' || session.status === 'setting_up' || session.status === 'conflict';
       const hasUnpushed = !session.branchPushed;
       if (isActive || hasUnpushed) {
-        shouldDeleteWorkspace = false;
+        console.log(`[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`);
+        threads.delete(threadId);
+        return;
       }
     }
   }
 
-  if (shouldDeleteWorkspace) {
-    try {
-      fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
-    } catch { /* non-fatal */ }
-  }
+  // Persist status=closed so history survives idle eviction and server restarts.
+  state.thread.status = 'closed';
+  await pgUpsertThread(state.thread);
+
+  threads.delete(threadId);
+
+  try {
+    fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
+  } catch { /* non-fatal */ }
 }
 
 /**

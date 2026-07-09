@@ -1092,7 +1092,13 @@ export const DevSessionView: React.FC = () => {
           <textarea
             ref={textareaRef}
             className={styles.textarea}
-            placeholder={isSettingUp ? 'Setting up workspace…' : isConflict ? 'Resolve merge conflicts first…' : isRunning ? 'Agent is working…' : 'Ask the agent to implement changes…'}
+            placeholder={
+              isSettingUp ? 'Setting up workspace…'
+              : isConflict ? 'Resolve merge conflicts first…'
+              : isRunning ? 'Agent is working…'
+              : status === 'closed' ? 'This session was closed. Start a new session from My Work to continue.'
+              : 'Ask the agent to implement changes…'
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
