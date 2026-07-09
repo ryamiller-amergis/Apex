@@ -26,6 +26,7 @@ import designPlanRoutes from './routes/designPlans';
 import pageScreenshotRoutes from './routes/pageScreenshots';
 import { mountAdoMcp } from './mcp/ado/express';
 import { mountGitHubMcp } from './mcp/github/express';
+import { mountMaxviewMcp } from './mcp/maxview/express';
 import { ensureAuthenticated } from './middleware/auth';
 import { handleIncoming } from './services/teamsBotService';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
@@ -189,6 +190,7 @@ app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
+mountMaxviewMcp(app);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
