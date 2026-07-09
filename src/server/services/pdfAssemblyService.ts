@@ -7,10 +7,13 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
 import { resolveDataRoot } from '../utils/dataDir';
+import { Worker } from 'worker_threads';
 import type {
   FileUploadResult,
   PageManifestEntry,
   PdfFileMetadata,
+  ExportWorkerInput,
+  ExportWorkerOutput,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -493,6 +496,127 @@ export async function expireOldSessions(): Promise<{ expired: number; errors: nu
   }
 
   return { expired, errors };
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────────
+
+const FILENAME_DISALLOWED = /[/\\:*?"<>|]/g;
+const MAX_FILENAME_LENGTH = 255;
+
+export function sanitizeExportFilename(raw?: string): string {
+  if (!raw || raw.trim().length === 0) {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
+    return `merged-document-${stamp}.pdf`;
+  }
+
+  let name = raw.trim().replace(FILENAME_DISALLOWED, '');
+  if (name.length === 0) {
+    return sanitizeExportFilename(); // all chars were disallowed — fall back to default
+  }
+  if (name.length > MAX_FILENAME_LENGTH) {
+    name = name.slice(0, MAX_FILENAME_LENGTH);
+  }
+  if (!name.toLowerCase().endsWith('.pdf')) {
+    name += '.pdf';
+  }
+  return name;
+}
+
+export interface AssembleAndExportResult {
+  pdfBytes: Uint8Array;
+  filename: string;
+}
+
+export async function assembleAndExport(
+  sessionId: string,
+  userId: string,
+  rawFilename?: string,
+): Promise<AssembleAndExportResult> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('You do not have access to this session') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('This session has expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const manifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const nonDeletedPages = manifest.filter((p) => !p.deleted);
+
+  if (nonDeletedPages.length === 0) {
+    const err = new Error('Session has no pages to export') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.NO_PAGES;
+    throw err;
+  }
+
+  const filename = sanitizeExportFilename(rawFilename);
+
+  const fileMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const filePaths: Record<string, string> = {};
+  for (const fm of fileMetadata) {
+    const resolved = resolveFilePath(sessionId, fm.fileId);
+    if (resolved) {
+      filePaths[fm.fileId] = resolved;
+    }
+  }
+
+  const missingFiles = nonDeletedPages.filter((p) => !filePaths[p.fileId]);
+  if (missingFiles.length > 0) {
+    const err = new Error('Source files missing on disk') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.EXPORT_FAILED;
+    throw err;
+  }
+
+  const workerInput: ExportWorkerInput = {
+    manifest: nonDeletedPages,
+    filePaths,
+  };
+
+  const workerPath = path.join(__dirname, '../workers/pdfExportWorker.js');
+  const result = await new Promise<ExportWorkerOutput>((resolve, reject) => {
+    const worker = new Worker(workerPath, { workerData: workerInput });
+    worker.on('message', (msg: ExportWorkerOutput) => resolve(msg));
+    worker.on('error', (err) => reject(err));
+    worker.on('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Worker exited with code ${code}`));
+      }
+    });
+  });
+
+  if (!result.success || !result.pdfBytes) {
+    const err = new Error(result.error ?? 'PDF assembly failed. Please retry.') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.EXPORT_FAILED;
+    throw err;
+  }
+
+  await db
+    .update(pdfSessions)
+    .set({
+      status: 'exported' as const,
+      exportFilename: filename,
+      updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  return { pdfBytes: result.pdfBytes, filename };
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

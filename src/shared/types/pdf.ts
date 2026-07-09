@@ -63,6 +63,23 @@ export interface UploadFilesResponse {
   files: FileUploadResult[];
 }
 
+// ── Export Types ───────────────────────────────────────────────────────────────
+
+export interface ExportRequest {
+  filename?: string;
+}
+
+export interface ExportWorkerInput {
+  manifest: PageManifestEntry[];
+  filePaths: Record<string, string>;
+}
+
+export interface ExportWorkerOutput {
+  success: boolean;
+  pdfBytes?: Uint8Array;
+  error?: string;
+}
+
 // ── Error Codes ────────────────────────────────────────────────────────────────
 
 export const PDF_ERROR_CODES = {
@@ -79,6 +96,9 @@ export const PDF_ERROR_CODES = {
   SESSION_FORBIDDEN: 'SESSION_FORBIDDEN',
   SESSION_EXPIRED: 'SESSION_EXPIRED',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  INVALID_FILENAME: 'INVALID_FILENAME',
+  NO_PAGES: 'NO_PAGES',
+  EXPORT_FAILED: 'EXPORT_FAILED',
 } as const;
 
 export type PdfErrorCode = typeof PDF_ERROR_CODES[keyof typeof PDF_ERROR_CODES];
