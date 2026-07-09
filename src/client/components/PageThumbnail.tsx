@@ -55,7 +55,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
+  const { document, isLoading: isDocLoading, error: docError } = usePdfDocument(fileUrl);
   const { status, imageBitmap } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
@@ -133,8 +133,8 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     onDragEnd?.();
   }, [onDragEnd]);
 
-  const isLoading = isDocLoading || status === 'loading' || status === 'idle';
-  const isError = status === 'error';
+  const isLoading = isDocLoading || status === 'loading' || (status === 'idle' && !docError);
+  const isError = status === 'error' || !!docError;
 
   const cardClassName = [
     styles.thumbnailCard,

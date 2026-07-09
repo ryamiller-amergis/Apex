@@ -47,7 +47,7 @@ const MiniPageThumbnail: React.FC<MiniPageThumbnailProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
+  const { document, isLoading: isDocLoading, error: docError } = usePdfDocument(fileUrl);
   const { status, imageBitmap } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
@@ -69,7 +69,7 @@ const MiniPageThumbnail: React.FC<MiniPageThumbnailProps> = ({
     }
   }, [imageBitmap]);
 
-  const isLoading = isDocLoading || status === 'loading' || status === 'idle';
+  const isLoading = isDocLoading || status === 'loading' || (status === 'idle' && !docError);
 
   const handleClick = useCallback(() => {
     onToggle(pageId);

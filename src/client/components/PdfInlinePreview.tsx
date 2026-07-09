@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import styles from './PdfInlinePreview.module.css';
 
@@ -128,13 +127,5 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
 };
 
 export const PdfInlinePreview: React.FC<PdfInlinePreviewProps> = (props) => {
-  if (!props.fileId) {
-    return <PdfInlinePreviewInner {...props} />;
-  }
-
-  return (
-    <PdfWorkerProvider>
-      <PdfInlinePreviewInner {...props} />
-    </PdfWorkerProvider>
-  );
+  return <PdfInlinePreviewInner {...props} />;
 };

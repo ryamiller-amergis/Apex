@@ -1,6 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.mjs',
+  import.meta.url,
+).toString();
 
 interface PdfWorkerContextValue {
   getDocument: (url: string) => Promise<PDFDocumentProxy>;
@@ -19,21 +24,6 @@ interface PdfWorkerProviderProps {
 export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }) => {
   const documentCache = useRef<Map<string, PDFDocumentProxy>>(new Map());
   const loadingCache = useRef<Map<string, Promise<PDFDocumentProxy>>>(new Map());
-
-  useEffect(() => {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.mjs',
-      import.meta.url,
-    ).toString();
-
-    return () => {
-      for (const doc of documentCache.current.values()) {
-        doc.cleanup();
-      }
-      documentCache.current.clear();
-      loadingCache.current.clear();
-    };
-  }, []);
 
   const getDocument = useCallback(async (url: string): Promise<PDFDocumentProxy> => {
     const cached = documentCache.current.get(url);

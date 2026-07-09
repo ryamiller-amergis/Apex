@@ -1,11 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { usePdfWorker } from '../contexts/PdfWorkerContext';
+
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
 
 export function usePdfDocument(fileUrl: string | null) {
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
+  const [retryTrigger, setRetryTrigger] = useState(0);
 
   const { getDocument } = usePdfWorker();
 
@@ -14,11 +20,11 @@ export function usePdfDocument(fileUrl: string | null) {
       setDocument(null);
       setIsLoading(false);
       setError(null);
+      retryCountRef.current = 0;
       return;
     }
 
     let cancelled = false;
-    setDocument(null);
     setIsLoading(true);
     setError(null);
 
@@ -27,20 +33,39 @@ export function usePdfDocument(fileUrl: string | null) {
         if (!cancelled) {
           setDocument(doc);
           setIsLoading(false);
+          retryCountRef.current = 0;
         }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-          setDocument(null);
-          setIsLoading(false);
+          if (retryCountRef.current < MAX_RETRIES) {
+            retryCountRef.current += 1;
+            retryTimerRef.current = window.setTimeout(() => {
+              if (!cancelled) {
+                setRetryTrigger((n) => n + 1);
+              }
+            }, RETRY_DELAY_MS);
+          } else {
+            setError(err instanceof Error ? err.message : String(err));
+            setDocument(null);
+            setIsLoading(false);
+          }
         }
       });
 
     return () => {
       cancelled = true;
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
     };
-  }, [fileUrl, getDocument]);
+  }, [fileUrl, getDocument, retryTrigger]);
 
-  return { document, isLoading, error };
+  const retry = useCallback(() => {
+    retryCountRef.current = 0;
+    setRetryTrigger((n) => n + 1);
+  }, []);
+
+  return { document, isLoading, error, retry };
 }
