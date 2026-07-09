@@ -114,4 +114,51 @@ describe('usePageSelection', () => {
 
     expect(result.current.selectedPageIds).toEqual(new Set(['p2', 'p3', 'p4']));
   });
+
+  it('selectAll sets all provided page IDs as selected', () => {
+    const { result } = renderHook(() => usePageSelection());
+
+    act(() => {
+      result.current.selectAll(allPageIds);
+    });
+
+    expect(result.current.selectedCount).toBe(5);
+    expect(result.current.isSelected('p1')).toBe(true);
+    expect(result.current.isSelected('p2')).toBe(true);
+    expect(result.current.isSelected('p3')).toBe(true);
+    expect(result.current.isSelected('p4')).toBe(true);
+    expect(result.current.isSelected('p5')).toBe(true);
+  });
+
+  it('deselectAll clears all selections', () => {
+    const { result } = renderHook(() => usePageSelection());
+
+    act(() => {
+      result.current.selectAll(allPageIds);
+    });
+
+    expect(result.current.selectedCount).toBe(5);
+
+    act(() => {
+      result.current.deselectAll();
+    });
+
+    expect(result.current.selectedCount).toBe(0);
+    expect(result.current.isSelected('p1')).toBe(false);
+  });
+
+  it('selectedCount reflects selectAll correctly', () => {
+    const { result } = renderHook(() => usePageSelection());
+
+    expect(result.current.selectedCount).toBe(0);
+
+    act(() => {
+      result.current.selectAll(['p1', 'p3']);
+    });
+
+    expect(result.current.selectedCount).toBe(2);
+    expect(result.current.isSelected('p1')).toBe(true);
+    expect(result.current.isSelected('p2')).toBe(false);
+    expect(result.current.isSelected('p3')).toBe(true);
+  });
 });

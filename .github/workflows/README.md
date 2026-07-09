@@ -87,7 +87,7 @@ The workflow runs on:
 ## Deployment Process
 
 1. **Checkout code**: Gets the latest code from the repository
-2. **Set up Node.js**: Installs Node.js 20.x
+2. **Set up Node.js**: Installs Node.js 24.x
 3. **Install dependencies**: Runs `npm ci` for clean install
 4. **Build application**: Compiles TypeScript and builds client with Vite
 5. **Create deployment package**: Prepares production-ready files
@@ -115,4 +115,4 @@ The workflow runs on:
 
 ### Build fails
 - Run `npm run build` locally to test
-- Check Node.js version matches (20.x)
+- Check Node.js version matches (24.x)

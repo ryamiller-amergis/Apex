@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '24.x'
 
 jobs:
   detect-changes:
@@ -229,6 +229,7 @@ jobs:
           az webapp config set \
             --name $APP_NAME \
             --resource-group $RG_NAME \
+            --linux-fx-version "NODE|24-lts" \
             --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \

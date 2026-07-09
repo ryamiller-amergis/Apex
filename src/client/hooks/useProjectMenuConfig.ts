@@ -22,12 +22,11 @@ export function useProjectMenuConfig(project: string | null) {
     },
     enabled: !!project,
     staleTime: 5 * 60 * 1000,
-    placeholderData: { enabledViews: [] },
   });
 
   return {
     enabledViews: query.data?.enabledViews ?? [],
-    isLoading: query.isLoading,
+    isLoading: query.isLoading || query.isFetching,
   };
 }
 

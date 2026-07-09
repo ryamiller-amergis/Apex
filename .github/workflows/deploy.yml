@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '24.x'
   APP_SERVICE_NAME: 'app-apex-prd'
   RESOURCE_GROUP_NAME: 'rg-apex-prd-app'
   SLOT_NAME: 'staging'
@@ -175,7 +175,8 @@ jobs:
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
-            --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
+            --linux-fx-version "NODE|24-lts" \
+            --startup-file 'bash -c "(apt-get update && apt-get install -y git || true) && node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
             --name ${{ env.APP_SERVICE_NAME }} \

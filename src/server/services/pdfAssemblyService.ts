@@ -1,12 +1,12 @@
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
+import { resolveDataRoot } from '../utils/dataDir';
 import type {
   FileUploadResult,
   PageManifestEntry,
@@ -16,7 +16,7 @@ import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-sessions');
+const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(resolveDataRoot(), 'pdf-sessions');
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
@@ -333,6 +333,122 @@ export async function validateAndIngest(
     pageCount,
     sizeBytes: stat.size,
   };
+}
+
+// ── File removal ───────────────────────────────────────────────────────────────
+
+export async function removeFile(
+  sessionId: string,
+  userId: string,
+  fileId: string,
+): Promise<void> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const fileMeta = existingMetadata.find((f) => f.fileId === fileId);
+  if (!fileMeta) {
+    const err = new Error('File not found') as Error & { code: string };
+    err.code = 'FILE_NOT_FOUND';
+    throw err;
+  }
+
+  const updatedMetadata = existingMetadata.filter((f) => f.fileId !== fileId);
+  const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const updatedManifest = existingManifest.filter((p) => p.fileId !== fileId);
+
+  await db
+    .update(pdfSessions)
+    .set({
+      fileMetadata: updatedMetadata,
+      pageManifest: updatedManifest,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  const filePath = resolveFilePath(sessionId, fileId);
+  if (filePath) {
+    await safeDeleteFile(filePath);
+  }
+}
+
+// ── Manifest update ────────────────────────────────────────────────────────────
+
+const VALID_ROTATIONS = new Set([0, 90, 180, 270]);
+
+export async function updateManifest(
+  sessionId: string,
+  userId: string,
+  manifest: PageManifestEntry[],
+): Promise<{ pageCount: number; updatedAt: string }> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const knownFileIds = new Set(
+    ((session.fileMetadata ?? []) as PdfFileMetadata[]).map((f) => f.fileId),
+  );
+
+  for (const entry of manifest) {
+    if (!knownFileIds.has(entry.fileId)) {
+      const err = new Error('Invalid file ID in manifest') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID;
+      throw err;
+    }
+    if (!VALID_ROTATIONS.has(entry.rotation)) {
+      const err = new Error('Invalid rotation value') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION;
+      throw err;
+    }
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await db
+    .update(pdfSessions)
+    .set({ pageManifest: manifest, updatedAt })
+    .where(eq(pdfSessions.id, sessionId));
+
+  const pageCount = manifest.filter((p) => !p.deleted).length;
+
+  return { pageCount, updatedAt };
 }
 
 // ── File serving ───────────────────────────────────────────────────────────────

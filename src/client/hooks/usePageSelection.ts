@@ -34,9 +34,30 @@ export function usePageSelection() {
     [lastClickedId],
   );
 
+  const multiToggle = useCallback((pageId: string) => {
+    setSelectedPageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pageId)) {
+        next.delete(pageId);
+      } else {
+        next.add(pageId);
+      }
+      return next;
+    });
+    setLastClickedId(pageId);
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelectedPageIds(new Set());
     setLastClickedId(null);
+  }, []);
+
+  const selectAll = useCallback((pageIds: string[]) => {
+    setSelectedPageIds(new Set(pageIds));
+  }, []);
+
+  const deselectAll = useCallback(() => {
+    setSelectedPageIds(new Set());
   }, []);
 
   const isSelected = useCallback(
@@ -47,9 +68,12 @@ export function usePageSelection() {
   return {
     selectedPageIds,
     toggleSelection,
+    multiToggle,
     rangeSelect,
     clearSelection,
     isSelected,
     selectedCount: selectedPageIds.size,
+    selectAll,
+    deselectAll,
   };
 }
