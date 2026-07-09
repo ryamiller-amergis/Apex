@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, SseThinkingEvent, SseToolStatusEvent, ChatThreadStatus } from '../../shared/types/chat';
+import type { ChatMessage, SseEvent, SseErrorEvent, SseMessageEvent, SseRetryingEvent, SseThinkingEvent, SseToolStatusEvent, ChatThreadStatus } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface ToolProgress {
@@ -126,6 +126,7 @@ export function useChatStream(
           break;
         }
         case 'message': {
+          const messageEvent = event as SseMessageEvent;
           streamBufferRef.current = '';
           setStreamingText('');
           setThinkingText('');
@@ -134,8 +135,8 @@ export function useChatStream(
           setRetryReason(null);
           clearRetryTimeout();
           setMessages((prev) => {
-            const exists = prev.some((m) => m.id === event.message.id);
-            return exists ? prev : [...prev, event.message];
+            const exists = prev.some((m) => m.id === messageEvent.message.id);
+            return exists ? prev : [...prev, messageEvent.message];
           });
           break;
         }
