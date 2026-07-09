@@ -127,7 +127,6 @@ export const PdfAssemblyView: React.FC = () => {
     localManifest,
     visiblePages: manipulationVisiblePages,
     reorder,
-    reorderAndSync,
     reorderSyncError,
     dismissReorderSyncError,
     rotate,
@@ -268,8 +267,8 @@ export const PdfAssemblyView: React.FC = () => {
   const canMoveDown = singleSelectedGlobalIndex >= 0 && singleSelectedGlobalIndex < manipulationVisiblePages.length - 1;
 
   const handleReorder = useCallback((fromIdx: number, toIdx: number) => {
-    reorderAndSync(fromIdx, toIdx);
-  }, [reorderAndSync]);
+    reorder(fromIdx, toIdx);
+  }, [reorder]);
 
   const handlePageSelect = useCallback(
     (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {

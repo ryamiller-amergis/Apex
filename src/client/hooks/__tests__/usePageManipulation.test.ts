@@ -230,6 +230,22 @@ describe('usePageManipulation', () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
+  it('reorder marks hasUnsavedChanges as true', () => {
+    const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    expect(result.current.hasUnsavedChanges).toBe(false);
+
+    act(() => {
+      result.current.reorder(0, 2);
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(true);
+  });
+
   it('saveNow triggers mutate immediately', () => {
     const manifest = ['A', 'B'].map((id) => makeEntry(id));
 
