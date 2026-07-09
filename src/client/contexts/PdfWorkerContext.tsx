@@ -58,8 +58,10 @@ export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }
     return loading;
   }, []);
 
+  const contextValue = React.useMemo(() => ({ getDocument }), [getDocument]);
+
   return (
-    <PdfWorkerContext.Provider value={{ getDocument }}>
+    <PdfWorkerContext.Provider value={contextValue}>
       {children}
     </PdfWorkerContext.Provider>
   );

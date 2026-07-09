@@ -1,6 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { Grid, type GridImperativeAPI } from 'react-window';
-import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { PageThumbnail } from './PageThumbnail';
 import { ManipulationToolbar } from './ManipulationToolbar';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
@@ -492,9 +491,5 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
 };
 
 export const AssemblyLane: React.FC<AssemblyLaneProps> = (props) => {
-  return (
-    <PdfWorkerProvider>
-      <AssemblyLaneInner {...props} />
-    </PdfWorkerProvider>
-  );
+  return <AssemblyLaneInner {...props} />;
 };

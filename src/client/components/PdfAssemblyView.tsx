@@ -3,6 +3,7 @@ import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSess
 import { usePageManipulation } from '../hooks/usePageManipulation';
 import { usePageSelection } from '../hooks/usePageSelection';
 import { useDocumentColors } from '../hooks/useDocumentColors';
+import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { SourceBrowser } from './SourceBrowser';
 import { AssemblyLane } from './AssemblyLane';
 import { PagePreviewModal } from './PagePreviewModal';
@@ -133,6 +134,9 @@ export const PdfAssemblyView: React.FC = () => {
     deletePages,
     undoDelete,
     undoState,
+    undoReorder,
+    undoReorderState,
+    dismissReorderUndo,
     hasUnsavedChanges,
     saveNow,
     syncDelete,
@@ -375,6 +379,7 @@ export const PdfAssemblyView: React.FC = () => {
         </div>
       ) : (
         /* Three-panel body: SourceBrowser (left) | AssemblyLane (center) | Preview (right) */
+        <PdfWorkerProvider>
         <div className={styles.body}>
           <SourceBrowser
             fileMetadata={fileMetadata}
@@ -433,6 +438,7 @@ export const PdfAssemblyView: React.FC = () => {
             />
           </div>
         </div>
+        </PdfWorkerProvider>
       )}
 
       {/* Overlays */}
@@ -441,6 +447,14 @@ export const PdfAssemblyView: React.FC = () => {
           message={`${undoState.deletedCount} ${undoState.deletedCount === 1 ? 'page' : 'pages'} deleted`}
           onUndo={undoDelete}
           onDismiss={handleDismissUndo}
+        />
+      )}
+
+      {undoReorderState && !undoState && (
+        <UndoSnackbar
+          message="Page order changed"
+          onUndo={undoReorder}
+          onDismiss={dismissReorderUndo}
         />
       )}
 
