@@ -6,7 +6,7 @@
   gap: 12px;
   border-right: 1px solid var(--border-color-light);
   padding-right: 16px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── Hero mode (no files uploaded — centred, full-width) */
@@ -267,6 +267,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .fileCard {
@@ -288,6 +291,38 @@
 .fileCardSelected {
   border-color: var(--accent-color);
   background: rgba(39, 71, 217, 0.06);
+}
+
+.chevronBtn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.2s ease, color 0.2s ease;
+  transform: rotate(0deg);
+}
+
+.chevronBtn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chevronBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.chevronExpanded {
+  transform: rotate(90deg);
+  color: var(--accent-color);
 }
 
 .fileIcon {
@@ -325,7 +360,7 @@
   padding-left: 12px;
   border-left: 2px solid var(--accent-color);
   min-height: 120px;
-  max-height: 280px;
+  flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;

@@ -2,9 +2,10 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSessions, useRemovePdfFile } from '../hooks/usePdfSession';
 import { usePageManipulation } from '../hooks/usePageManipulation';
 import { usePageSelection } from '../hooks/usePageSelection';
-import { PageThumbnailGrid } from './PageThumbnailGrid';
+import { useDocumentColors } from '../hooks/useDocumentColors';
+import { SourceBrowser } from './SourceBrowser';
+import { AssemblyLane } from './AssemblyLane';
 import { PagePreviewModal } from './PagePreviewModal';
-import { ManipulationToolbar } from './ManipulationToolbar';
 import { UndoSnackbar } from './UndoSnackbar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { PdfDocumentSidebar } from './PdfDocumentSidebar';
@@ -21,9 +22,10 @@ export const PdfAssemblyView: React.FC = () => {
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteBlockedMessage, setDeleteBlockedMessage] = useState<string | null>(null);
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [fileIdToDelete, setFileIdToDelete] = useState<string | null>(null);
+  const [justMovedPageId, setJustMovedPageId] = useState<string | null>(null);
+  const justMovedTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const createSession = useCreatePdfSession();
@@ -135,6 +137,8 @@ export const PdfAssemblyView: React.FC = () => {
     hasUnsavedChanges,
     saveNow,
     syncDelete,
+    togglePageInAssembly,
+    addToAssemblyAt,
   } = usePageManipulation({
     sessionId: sessionId ?? '',
     serverManifest,
@@ -150,40 +154,35 @@ export const PdfAssemblyView: React.FC = () => {
     selectedCount,
   } = usePageSelection();
 
-  // Auto-select first file (A-Z sorted) when file list changes
-  const sortedFiles = useMemo(
-    () => [...fileMetadata].sort((a, b) => a.originalName.localeCompare(b.originalName)),
-    [fileMetadata],
+  const documentColors = useDocumentColors(fileMetadata);
+
+  const isPageInAssembly = useCallback(
+    (pageId: string) => {
+      const page = localManifest.find((p) => p.pageId === pageId);
+      return page ? !page.deleted : false;
+    },
+    [localManifest],
   );
 
-  useEffect(() => {
-    if (sortedFiles.length > 0 && (!selectedFileId || !sortedFiles.find((f) => f.fileId === selectedFileId))) {
-      setSelectedFileId(sortedFiles[0].fileId);
-    }
-  }, [sortedFiles, selectedFileId]);
-
-  // Pages filtered to the selected document
-  const docVisiblePages = useMemo(
-    () => localManifest.filter((p) => !p.deleted && p.fileId === selectedFileId),
-    [localManifest, selectedFileId],
+  const handleTogglePageInAssembly = useCallback(
+    (pageId: string) => {
+      togglePageInAssembly(pageId);
+    },
+    [togglePageInAssembly],
   );
 
-  const docFilteredManifest = useMemo(
-    () => localManifest.filter((p) => p.fileId === selectedFileId),
-    [localManifest, selectedFileId],
+  const handleAddFromSource = useCallback(
+    (pageId: string, insertIndex: number) => {
+      addToAssemblyAt(pageId, insertIndex);
+    },
+    [addToAssemblyAt],
   );
 
-  const selectedFileMetadata = useMemo(
-    () => fileMetadata.filter((f) => f.fileId === selectedFileId),
-    [fileMetadata, selectedFileId],
+  const allVisiblePageIds = useMemo(
+    () => manipulationVisiblePages.map((p) => p.pageId),
+    [manipulationVisiblePages],
   );
 
-  const allDocPageIds = useMemo(
-    () => docVisiblePages.map((p) => p.pageId),
-    [docVisiblePages],
-  );
-
-  // Active page for inline preview
   const activePreviewPage = useMemo(() => {
     if (!activePageId) return null;
     return localManifest.find((p: PageManifestEntry) => p.pageId === activePageId && !p.deleted) ?? null;
@@ -230,52 +229,52 @@ export const PdfAssemblyView: React.FC = () => {
     setDeleteBlockedMessage(null);
   }, [deletePages, selectedPageIds, clearSelection]);
 
-  // Move up/down within the document-filtered view, translated to global indices
+  const flashMoved = useCallback((pageId: string) => {
+    if (justMovedTimerRef.current !== null) clearTimeout(justMovedTimerRef.current);
+    setJustMovedPageId(pageId);
+    justMovedTimerRef.current = window.setTimeout(() => {
+      setJustMovedPageId(null);
+      justMovedTimerRef.current = null;
+    }, 700);
+  }, []);
+
   const handleMoveUp = useCallback(() => {
     if (selectedPageIds.size !== 1) return;
     const pageId = [...selectedPageIds][0];
-    const idx = docVisiblePages.findIndex((p) => p.pageId === pageId);
+    const idx = manipulationVisiblePages.findIndex((p) => p.pageId === pageId);
     if (idx > 0) {
-      const globalFrom = manipulationVisiblePages.findIndex((p) => p.pageId === docVisiblePages[idx].pageId);
-      const globalTo = manipulationVisiblePages.findIndex((p) => p.pageId === docVisiblePages[idx - 1].pageId);
-      if (globalFrom >= 0 && globalTo >= 0) reorder(globalFrom, globalTo);
+      reorder(idx, idx - 1);
+      flashMoved(pageId);
     }
-  }, [selectedPageIds, docVisiblePages, manipulationVisiblePages, reorder]);
+  }, [selectedPageIds, manipulationVisiblePages, reorder, flashMoved]);
 
   const handleMoveDown = useCallback(() => {
     if (selectedPageIds.size !== 1) return;
     const pageId = [...selectedPageIds][0];
-    const idx = docVisiblePages.findIndex((p) => p.pageId === pageId);
-    if (idx < docVisiblePages.length - 1) {
-      const globalFrom = manipulationVisiblePages.findIndex((p) => p.pageId === docVisiblePages[idx].pageId);
-      const globalTo = manipulationVisiblePages.findIndex((p) => p.pageId === docVisiblePages[idx + 1].pageId);
-      if (globalFrom >= 0 && globalTo >= 0) reorder(globalFrom, globalTo);
+    const idx = manipulationVisiblePages.findIndex((p) => p.pageId === pageId);
+    if (idx < manipulationVisiblePages.length - 1) {
+      reorder(idx, idx + 1);
+      flashMoved(pageId);
     }
-  }, [selectedPageIds, docVisiblePages, manipulationVisiblePages, reorder]);
+  }, [selectedPageIds, manipulationVisiblePages, reorder, flashMoved]);
 
-  // Can move up/down within the doc-scoped view
-  const singleSelectedDocIndex = useMemo(() => {
+  const singleSelectedGlobalIndex = useMemo(() => {
     if (selectedPageIds.size !== 1) return -1;
     const pageId = [...selectedPageIds][0];
-    return docVisiblePages.findIndex((p) => p.pageId === pageId);
-  }, [selectedPageIds, docVisiblePages]);
+    return manipulationVisiblePages.findIndex((p) => p.pageId === pageId);
+  }, [selectedPageIds, manipulationVisiblePages]);
 
-  const canMoveUp = singleSelectedDocIndex > 0;
-  const canMoveDown = singleSelectedDocIndex >= 0 && singleSelectedDocIndex < docVisiblePages.length - 1;
+  const canMoveUp = singleSelectedGlobalIndex > 0;
+  const canMoveDown = singleSelectedGlobalIndex >= 0 && singleSelectedGlobalIndex < manipulationVisiblePages.length - 1;
 
-  // Reorder within doc view, translated to global indices
-  const handleDocReorder = useCallback((fromIdx: number, toIdx: number) => {
-    const fromPage = docVisiblePages[fromIdx];
-    const toPage = docVisiblePages[toIdx];
-    const globalFrom = manipulationVisiblePages.findIndex((p) => p.pageId === fromPage.pageId);
-    const globalTo = manipulationVisiblePages.findIndex((p) => p.pageId === toPage.pageId);
-    if (globalFrom >= 0 && globalTo >= 0) reorderAndSync(globalFrom, globalTo);
-  }, [docVisiblePages, manipulationVisiblePages, reorderAndSync]);
+  const handleReorder = useCallback((fromIdx: number, toIdx: number) => {
+    reorderAndSync(fromIdx, toIdx);
+  }, [reorderAndSync]);
 
   const handlePageSelect = useCallback(
     (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {
       if (shiftKey) {
-        rangeSelect(pageId, allDocPageIds);
+        rangeSelect(pageId, allVisiblePageIds);
       } else if (ctrlKey) {
         multiToggle(pageId);
       } else {
@@ -283,7 +282,7 @@ export const PdfAssemblyView: React.FC = () => {
         setActivePageId(pageId);
       }
     },
-    [toggleSelection, multiToggle, rangeSelect, allDocPageIds],
+    [toggleSelection, multiToggle, rangeSelect, allVisiblePageIds],
   );
 
   const handleDismissUndo = useCallback(() => {
@@ -298,9 +297,6 @@ export const PdfAssemblyView: React.FC = () => {
     if (!fileIdToDelete || !sessionId) return;
     try {
       await removePdfFile.mutateAsync({ sessionId, fileId: fileIdToDelete });
-      if (selectedFileId === fileIdToDelete) {
-        setSelectedFileId(null);
-      }
       setActivePageId(null);
       clearSelection();
     } catch {
@@ -308,7 +304,7 @@ export const PdfAssemblyView: React.FC = () => {
     } finally {
       setFileIdToDelete(null);
     }
-  }, [fileIdToDelete, sessionId, removePdfFile, selectedFileId, clearSelection]);
+  }, [fileIdToDelete, sessionId, removePdfFile, clearSelection]);
 
   const fileToDelete = useMemo(
     () => fileMetadata.find((f) => f.fileId === fileIdToDelete) ?? null,
@@ -361,8 +357,8 @@ export const PdfAssemblyView: React.FC = () => {
         <div className={styles.heroWrapper}>
           <PdfDocumentSidebar
             fileMetadata={fileMetadata}
-            selectedFileId={selectedFileId}
-            onSelectFile={setSelectedFileId}
+            selectedFileId={null}
+            onSelectFile={() => {}}
             onRemoveFile={handleRemoveFileClick}
             hero
             dragActive={dragActive}
@@ -379,13 +375,15 @@ export const PdfAssemblyView: React.FC = () => {
           />
         </div>
       ) : (
-        /* Two-column body: sidebar (docs + page thumbnails) | main (toolbar + preview) */
+        /* Three-panel body: SourceBrowser (left) | AssemblyLane (center) | Preview (right) */
         <div className={styles.body}>
-          <PdfDocumentSidebar
+          <SourceBrowser
             fileMetadata={fileMetadata}
-            selectedFileId={selectedFileId}
-            onSelectFile={setSelectedFileId}
-            onRemoveFile={handleRemoveFileClick}
+            localManifest={localManifest}
+            sessionId={sessionId!}
+            documentColors={documentColors}
+            isPageInAssembly={isPageInAssembly}
+            onTogglePageInAssembly={handleTogglePageInAssembly}
             dragActive={dragActive}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
@@ -397,45 +395,43 @@ export const PdfAssemblyView: React.FC = () => {
             createSessionPending={createSession.isPending}
             errors={errors}
             sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
-          >
-            {sessionId && docVisiblePages.length > 0 && (
-              <PageThumbnailGrid
-                sessionId={sessionId}
-                pageManifest={docFilteredManifest}
-                fileMetadata={selectedFileMetadata}
-                onPreview={handlePreview}
-                isSelected={isSelected}
-                onSelect={handlePageSelect}
-                onReorder={handleDocReorder}
-              />
-            )}
-          </PdfDocumentSidebar>
+            onRemoveFile={handleRemoveFileClick}
+          />
 
-          <div className={styles.mainColumn} data-testid="pdf-thumbnails-section">
-            {sessionId && docVisiblePages.length > 0 && (
-              <section className={styles.previewSection} aria-label="Page preview">
-                <ManipulationToolbar
-                  selectedCount={selectedCount}
-                  onRotate={handleRotate}
-                  onDelete={handleDeleteClick}
-                  onMoveUp={handleMoveUp}
-                  onMoveDown={handleMoveDown}
-                  canMoveUp={canMoveUp}
-                  canMoveDown={canMoveDown}
-                  totalPages={docVisiblePages.length}
-                  onSave={saveNow}
-                  hasUnsavedChanges={hasUnsavedChanges}
-                />
-                <PdfInlinePreview
-                  sessionId={sessionId}
-                  fileId={activePreviewPage?.fileId ?? null}
-                  sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
-                  rotation={activePreviewPage?.rotation ?? 0}
-                  sourceFileName={activePreviewFileName}
-                  originalPageNumber={(activePreviewPage?.sourcePageIndex ?? 0) + 1}
-                />
-              </section>
-            )}
+          <AssemblyLane
+            sessionId={sessionId!}
+            localManifest={localManifest}
+            visiblePages={manipulationVisiblePages}
+            fileMetadata={fileMetadata}
+            documentColors={documentColors}
+            isSelected={isSelected}
+            selectedCount={selectedCount}
+            onSelect={handlePageSelect}
+            onReorder={handleReorder}
+            onRotate={handleRotate}
+            onDelete={handleDeleteClick}
+            onMoveUp={handleMoveUp}
+            onMoveDown={handleMoveDown}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            onSave={saveNow}
+            hasUnsavedChanges={hasUnsavedChanges}
+            activePageId={activePageId}
+            onActivePage={setActivePageId}
+            onPreview={handlePreview}
+            justMovedPageId={justMovedPageId}
+            onAddFromSource={handleAddFromSource}
+          />
+
+          <div className={styles.previewPanel} role="complementary" aria-label="Page preview">
+            <PdfInlinePreview
+              sessionId={sessionId!}
+              fileId={activePreviewPage?.fileId ?? null}
+              sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
+              rotation={activePreviewPage?.rotation ?? 0}
+              sourceFileName={activePreviewFileName}
+              originalPageNumber={(activePreviewPage?.sourcePageIndex ?? 0) + 1}
+            />
           </div>
         </div>
       )}

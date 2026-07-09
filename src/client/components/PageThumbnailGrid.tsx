@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { Grid } from 'react-window';
+import { Grid, type GridImperativeAPI } from 'react-window';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { PageThumbnail } from './PageThumbnail';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
@@ -17,7 +17,10 @@ export interface PageThumbnailGridProps {
   isSelected: (pageId: string) => boolean;
   onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onReorder?: (fromIndex: number, toIndex: number) => void;
+  justMovedPageId?: string | null;
 }
+
+type DropEdge = 'before' | 'after' | null;
 
 interface ThumbnailCellProps {
   visiblePages: PageManifestEntry[];
@@ -29,8 +32,10 @@ interface ThumbnailCellProps {
   onPreview: (pageId: string) => void;
   dragPageId: string | null;
   dropTargetId: string | null;
+  dropEdge: DropEdge;
+  justMovedPageId: string | null;
   onDragStart: (pageId: string) => void;
-  onDragOver: (pageId: string) => void;
+  onDragOver: (pageId: string, edge: DropEdge) => void;
   onDragEnd: () => void;
   onDrop: (pageId: string) => void;
 }
@@ -48,6 +53,8 @@ function ThumbnailCell({
   onPreview,
   dragPageId,
   dropTargetId,
+  dropEdge,
+  justMovedPageId,
   onDragStart,
   onDragOver,
   onDragEnd,
@@ -66,6 +73,7 @@ function ThumbnailCell({
   const sourceFileName = fileNameMap.get(page.fileId) ?? 'Unknown';
   const originalPageNumber = page.sourcePageIndex + 1;
   const fileUrl = `/api/pdf/sessions/${sessionId}/files/${page.fileId}`;
+  const isThisDropTarget = dropTargetId === page.pageId;
 
   return (
     <div
@@ -90,7 +98,9 @@ function ThumbnailCell({
         onSelect={handleSelect}
         onPreview={onPreview}
         isDragging={dragPageId === page.pageId}
-        isDropTarget={dropTargetId === page.pageId}
+        isDropTarget={isThisDropTarget}
+        dropEdge={isThisDropTarget ? dropEdge : null}
+        isJustMoved={justMovedPageId === page.pageId}
         onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDragEnd={onDragEnd}
@@ -100,6 +110,9 @@ function ThumbnailCell({
   );
 };
 
+const AUTO_SCROLL_ZONE = 60;
+const AUTO_SCROLL_MAX_SPEED = 12;
+
 const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   sessionId,
   pageManifest,
@@ -108,11 +121,17 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
   isSelected,
   onSelect,
   onReorder,
+  justMovedPageId = null,
 }) => {
   const [containerWidth, setContainerWidth] = useState(800);
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<GridImperativeAPI>(null);
   const [dragPageId, setDragPageId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropEdge, setDropEdge] = useState<DropEdge>(null);
+
+  const autoScrollRafRef = useRef<number | null>(null);
+  const autoScrollSpeedRef = useRef(0);
 
   const visiblePages = useMemo(
     () => pageManifest.filter((p) => !p.deleted),
@@ -150,24 +169,84 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (!justMovedPageId) return;
+    const idx = visiblePages.findIndex((p) => p.pageId === justMovedPageId);
+    if (idx < 0) return;
+    const row = Math.floor(idx / columnCount);
+    try {
+      gridRef.current?.scrollToRow({ index: row, align: 'smart', behavior: 'smooth' });
+    } catch { /* ignore out-of-range */ }
+  }, [justMovedPageId, visiblePages, columnCount]);
+
+  const stopAutoScroll = useCallback(() => {
+    autoScrollSpeedRef.current = 0;
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+  }, []);
+
+  const runAutoScroll = useCallback(() => {
+    const scrollEl = gridRef.current?.element;
+    if (!scrollEl || autoScrollSpeedRef.current === 0) {
+      autoScrollRafRef.current = null;
+      return;
+    }
+    scrollEl.scrollTop += autoScrollSpeedRef.current;
+    autoScrollRafRef.current = requestAnimationFrame(runAutoScroll);
+  }, []);
+
+  const handleContainerDragOver = useCallback(
+    (e: React.DragEvent) => {
+      const el = containerRef.current;
+      if (!el || !dragPageId) return;
+
+      const rect = el.getBoundingClientRect();
+      const y = e.clientY;
+      const distFromTop = y - rect.top;
+      const distFromBottom = rect.bottom - y;
+
+      let speed = 0;
+      if (distFromTop < AUTO_SCROLL_ZONE) {
+        speed = -AUTO_SCROLL_MAX_SPEED * (1 - distFromTop / AUTO_SCROLL_ZONE);
+      } else if (distFromBottom < AUTO_SCROLL_ZONE) {
+        speed = AUTO_SCROLL_MAX_SPEED * (1 - distFromBottom / AUTO_SCROLL_ZONE);
+      }
+
+      autoScrollSpeedRef.current = speed;
+      if (speed !== 0 && autoScrollRafRef.current === null) {
+        autoScrollRafRef.current = requestAnimationFrame(runAutoScroll);
+      } else if (speed === 0) {
+        stopAutoScroll();
+      }
+    },
+    [dragPageId, runAutoScroll, stopAutoScroll],
+  );
+
   const handleDragStart = useCallback((pageId: string) => {
     setDragPageId(pageId);
   }, []);
 
-  const handleDragOver = useCallback((pageId: string) => {
+  const handleDragOver = useCallback((pageId: string, edge: DropEdge) => {
     setDropTargetId(pageId);
+    setDropEdge(edge);
   }, []);
 
   const handleDragEnd = useCallback(() => {
     setDragPageId(null);
     setDropTargetId(null);
-  }, []);
+    setDropEdge(null);
+    stopAutoScroll();
+  }, [stopAutoScroll]);
 
   const handleDrop = useCallback(
     (targetPageId: string) => {
       if (!dragPageId || dragPageId === targetPageId || !onReorder) {
         setDragPageId(null);
         setDropTargetId(null);
+        setDropEdge(null);
+        stopAutoScroll();
         return;
       }
       const fromIndex = visiblePages.findIndex((p) => p.pageId === dragPageId);
@@ -177,9 +256,15 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
       }
       setDragPageId(null);
       setDropTargetId(null);
+      setDropEdge(null);
+      stopAutoScroll();
     },
-    [dragPageId, visiblePages, onReorder],
+    [dragPageId, visiblePages, onReorder, stopAutoScroll],
   );
+
+  useEffect(() => {
+    return () => stopAutoScroll();
+  }, [stopAutoScroll]);
 
   const containerHeight = containerRef.current?.clientHeight ?? 600;
 
@@ -190,6 +275,8 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
       data-testid="pdf-thumbnail-grid"
       role="region"
       aria-label={`Page thumbnail grid, ${visiblePages.length} pages`}
+      onDragOver={handleContainerDragOver}
+      onDragLeave={stopAutoScroll}
     >
       <div className={styles.gridInner}>
         <Grid<ThumbnailCellProps>
@@ -204,11 +291,14 @@ const PageThumbnailGridInner: React.FC<PageThumbnailGridProps> = ({
             onPreview,
             dragPageId,
             dropTargetId,
+            dropEdge,
+            justMovedPageId,
             onDragStart: handleDragStart,
             onDragOver: handleDragOver,
             onDragEnd: handleDragEnd,
             onDrop: handleDrop,
           }}
+          gridRef={gridRef}
           columnCount={columnCount}
           columnWidth={THUMBNAIL_WIDTH}
           rowCount={rowCount}

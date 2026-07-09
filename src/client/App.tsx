@@ -677,7 +677,7 @@ function App() {
               <PdfToolsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
                 <DesktopOnlyGate>
                   <Suspense fallback={<div data-testid="pdf-tools-loading"><ViewSkeleton /></div>}>
-                    <div className="pdf-tools-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                       <PdfAssemblyView />
                     </div>
                   </Suspense>

@@ -161,6 +161,37 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     [sessionId, mutate],
   );
 
+  const addToAssemblyAt = useCallback(
+    (pageId: string, insertIndex: number) => {
+      setLocalManifest((prev) => {
+        const page = prev.find((p) => p.pageId === pageId);
+        if (!page || !page.deleted) return prev;
+
+        const without = prev.filter((p) => p.pageId !== pageId);
+        const visible = without.filter((p) => !p.deleted);
+        const deleted = without.filter((p) => p.deleted);
+
+        const restored = { ...page, deleted: false };
+        const clampedIndex = Math.min(insertIndex, visible.length);
+        visible.splice(clampedIndex, 0, restored);
+
+        return [...visible, ...deleted];
+      });
+    },
+    [],
+  );
+
+  const togglePageInAssembly = useCallback(
+    (pageId: string) => {
+      setLocalManifest((prev) =>
+        prev.map((p) =>
+          p.pageId === pageId ? { ...p, deleted: !p.deleted } : p,
+        ),
+      );
+    },
+    [],
+  );
+
   return {
     localManifest,
     visiblePages,
@@ -175,5 +206,7 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     hasUnsavedChanges,
     saveNow,
     syncDelete,
+    togglePageInAssembly,
+    addToAssemblyAt,
   };
 }

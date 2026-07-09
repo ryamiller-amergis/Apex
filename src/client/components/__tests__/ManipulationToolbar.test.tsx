@@ -12,6 +12,8 @@ const defaultProps = {
   totalPages: 5,
   onSave: jest.fn(),
   hasUnsavedChanges: false,
+  onSelectAll: jest.fn(),
+  onDeselectAll: jest.fn(),
 };
 
 function renderToolbar(overrides: Partial<typeof defaultProps> = {}) {
@@ -145,5 +147,49 @@ describe('ManipulationToolbar', () => {
     renderToolbar({ onSave: undefined });
 
     expect(screen.queryByTestId('toolbar-save')).not.toBeInTheDocument();
+  });
+
+  it('renders Select All button when not all pages are selected', () => {
+    renderToolbar({ selectedCount: 2, totalPages: 5 });
+
+    expect(screen.getByTestId('toolbar-select-all')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-select-all')).toHaveTextContent('Select All');
+  });
+
+  it('renders Deselect All button when all pages are selected', () => {
+    renderToolbar({ selectedCount: 5, totalPages: 5 });
+
+    expect(screen.getByTestId('toolbar-select-all')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-select-all')).toHaveTextContent('Deselect All');
+  });
+
+  it('calls onSelectAll when Select All is clicked', () => {
+    const onSelectAll = jest.fn();
+    renderToolbar({ selectedCount: 0, totalPages: 5, onSelectAll });
+
+    fireEvent.click(screen.getByTestId('toolbar-select-all'));
+
+    expect(onSelectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onDeselectAll when Deselect All is clicked', () => {
+    const onDeselectAll = jest.fn();
+    renderToolbar({ selectedCount: 5, totalPages: 5, onDeselectAll });
+
+    fireEvent.click(screen.getByTestId('toolbar-select-all'));
+
+    expect(onDeselectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows page count text', () => {
+    renderToolbar({ totalPages: 12 });
+
+    expect(screen.getByText('12 pages in assembly')).toBeInTheDocument();
+  });
+
+  it('shows singular page count text for 1 page', () => {
+    renderToolbar({ totalPages: 1 });
+
+    expect(screen.getByText('1 page in assembly')).toBeInTheDocument();
   });
 });

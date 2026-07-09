@@ -1,32 +1,35 @@
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  gap: 12px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
 .button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  gap: 4px;
+  padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .button:hover:not(:disabled) {
@@ -51,9 +54,9 @@
 
 .separator {
   width: 1px;
-  height: 24px;
+  height: 20px;
   background: var(--border-color);
-  margin: 0 4px;
+  margin: 0 2px;
 }
 
 .saveActive {
@@ -67,8 +70,24 @@
   border-color: var(--accent-hover);
 }
 
+.spacer {
+  flex: 1;
+}
+
+.infoSection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .selectionInfo {
   font-size: 13px;
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pageCount {
+  font-size: 0.75rem;
+  color: var(--text-muted);
   white-space: nowrap;
 }

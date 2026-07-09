@@ -52,6 +52,14 @@ export function usePageSelection() {
     setLastClickedId(null);
   }, []);
 
+  const selectAll = useCallback((pageIds: string[]) => {
+    setSelectedPageIds(new Set(pageIds));
+  }, []);
+
+  const deselectAll = useCallback(() => {
+    setSelectedPageIds(new Set());
+  }, []);
+
   const isSelected = useCallback(
     (pageId: string) => selectedPageIds.has(pageId),
     [selectedPageIds],
@@ -65,5 +73,7 @@ export function usePageSelection() {
     clearSelection,
     isSelected,
     selectedCount: selectedPageIds.size,
+    selectAll,
+    deselectAll,
   };
 }

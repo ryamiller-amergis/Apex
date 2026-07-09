@@ -92,13 +92,13 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
 
   if (!fileId) {
     return (
-      <div className={styles.emptyBanner} data-testid="pdf-inline-preview">
-        <svg className={styles.emptyBannerIcon} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M10 10m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />
-          <path d="M18 10c-3.6 4-10.4 4-14 0" />
-          <path d="M4 10c3.6-4 10.4-4 14 0" />
+      <div className={styles.emptyState} data-testid="pdf-inline-preview" role="complementary" aria-label="Page preview">
+        <svg className={styles.emptyStateIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
         </svg>
-        <p className={styles.emptyBannerText}>Click a thumbnail to preview the page</p>
+        <p className={styles.emptyStateText}>Select a page to preview</p>
+        <p className={styles.emptyStateSubtext}>Click any thumbnail in the assembly</p>
       </div>
     );
   }

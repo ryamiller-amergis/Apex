@@ -26,5 +26,5 @@ export const PdfToolsRouteGuard: React.FC<PdfToolsRouteGuardProps> = ({
 
   if (!isAuthorized) return null;
 
-  return <div data-testid="pdf-tools-route-guard">{children}</div>;
+  return <div data-testid="pdf-tools-route-guard" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>{children}</div>;
 };

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import type { PdfFileMetadata, FileUploadResult } from '../../shared/types/pdf';
 import styles from './PdfDocumentSidebar.module.css';
 
@@ -61,6 +61,20 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
     () => [...fileMetadata].sort((a, b) => a.originalName.localeCompare(b.originalName)),
     [fileMetadata],
   );
+
+  const [collapsedFileIds, setCollapsedFileIds] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = useCallback((fileId: string) => {
+    setCollapsedFileIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+  }, []);
 
   if (hero) {
     return (
@@ -240,58 +254,77 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
             Documents ({sortedFiles.length})
           </p>
           <div className={styles.fileList} role="list" aria-label="Uploaded files">
-            {sortedFiles.map((f) => (
-              <React.Fragment key={f.fileId}>
-                <div
-                  className={`${styles.fileCard} ${f.fileId === selectedFileId ? styles.fileCardSelected : ''}`}
-                  onClick={() => onSelectFile(f.fileId)}
-                  tabIndex={0}
-                  role="listitem"
-                  aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
-                  aria-selected={f.fileId === selectedFileId}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onSelectFile(f.fileId);
-                    }
-                  }}
-                >
-                  <span className={styles.fileIcon}>📑</span>
-                  <div className={styles.fileInfo}>
-                    <p className={styles.fileName}>{f.originalName}</p>
-                    <p className={styles.fileMeta}>
-                      <span>{formatBytes(f.sizeBytes)}</span>
-                      <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
-                    </p>
-                  </div>
-                  {onRemoveFile && (
+            {sortedFiles.map((f) => {
+              const isExpanded = f.fileId === selectedFileId && !collapsedFileIds.has(f.fileId);
+              return (
+                <React.Fragment key={f.fileId}>
+                  <div
+                    className={`${styles.fileCard} ${f.fileId === selectedFileId ? styles.fileCardSelected : ''}`}
+                    onClick={() => onSelectFile(f.fileId)}
+                    tabIndex={0}
+                    role="listitem"
+                    aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
+                    aria-selected={f.fileId === selectedFileId}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectFile(f.fileId);
+                      }
+                    }}
+                  >
                     <button
                       type="button"
-                      className={styles.deleteBtn}
-                      aria-label={`Remove ${f.originalName}`}
-                      title="Remove document"
+                      className={`${styles.chevronBtn} ${isExpanded ? styles.chevronExpanded : ''}`}
+                      aria-label={isExpanded ? 'Collapse pages' : 'Expand pages'}
+                      title={isExpanded ? 'Collapse pages' : 'Expand pages'}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onRemoveFile(f.fileId);
+                        if (f.fileId !== selectedFileId) {
+                          onSelectFile(f.fileId);
+                        }
+                        toggleCollapse(f.fileId);
                       }}
                     >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                        <path d="M10 11v6" />
-                        <path d="M14 11v6" />
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 6 15 12 9 18" />
                       </svg>
                     </button>
-                  )}
-                </div>
-                {f.fileId === selectedFileId && children && (
-                  <div className={styles.pageStrip}>
-                    {children}
+                    <div className={styles.fileInfo}>
+                      <p className={styles.fileName}>{f.originalName}</p>
+                      <p className={styles.fileMeta}>
+                        <span>{formatBytes(f.sizeBytes)}</span>
+                        <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
+                      </p>
+                    </div>
+                    {onRemoveFile && (
+                      <button
+                        type="button"
+                        className={styles.deleteBtn}
+                        aria-label={`Remove ${f.originalName}`}
+                        title="Remove document"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveFile(f.fileId);
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
-                )}
-              </React.Fragment>
-            ))}
+                  {isExpanded && children && (
+                    <div className={styles.pageStrip}>
+                      {children}
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </div>
         </>
       ) : !isUploading && (

@@ -423,4 +423,91 @@ describe('usePageManipulation', () => {
       expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A', 'B']);
     });
   });
+
+  describe('addToAssemblyAt (cross-panel cherry-pick)', () => {
+    it('inserts a deleted page at the specified visible index and marks it not-deleted', () => {
+      const manifest = [
+        makeEntry('A'),
+        makeEntry('B'),
+        makeEntry('C', { deleted: true }),
+        makeEntry('D'),
+      ];
+
+      const { result } = renderHook(() =>
+        usePageManipulation({ sessionId, serverManifest: manifest }),
+      );
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A', 'B', 'D']);
+
+      act(() => {
+        result.current.addToAssemblyAt('C', 1);
+      });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A', 'C', 'B', 'D']);
+      const restoredPage = result.current.localManifest.find((p) => p.pageId === 'C');
+      expect(restoredPage?.deleted).toBe(false);
+    });
+
+    it('inserts at index 0 (beginning)', () => {
+      const manifest = [
+        makeEntry('A'),
+        makeEntry('B', { deleted: true }),
+      ];
+
+      const { result } = renderHook(() =>
+        usePageManipulation({ sessionId, serverManifest: manifest }),
+      );
+
+      act(() => {
+        result.current.addToAssemblyAt('B', 0);
+      });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['B', 'A']);
+    });
+
+    it('clamps insert index when beyond visible length', () => {
+      const manifest = [
+        makeEntry('A'),
+        makeEntry('B', { deleted: true }),
+      ];
+
+      const { result } = renderHook(() =>
+        usePageManipulation({ sessionId, serverManifest: manifest }),
+      );
+
+      act(() => {
+        result.current.addToAssemblyAt('B', 999);
+      });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A', 'B']);
+    });
+
+    it('is a no-op when page is not deleted', () => {
+      const manifest = [makeEntry('A'), makeEntry('B')];
+
+      const { result } = renderHook(() =>
+        usePageManipulation({ sessionId, serverManifest: manifest }),
+      );
+
+      act(() => {
+        result.current.addToAssemblyAt('A', 1);
+      });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A', 'B']);
+    });
+
+    it('is a no-op when pageId does not exist', () => {
+      const manifest = [makeEntry('A')];
+
+      const { result } = renderHook(() =>
+        usePageManipulation({ sessionId, serverManifest: manifest }),
+      );
+
+      act(() => {
+        result.current.addToAssemblyAt('nonexistent', 0);
+      });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['A']);
+    });
+  });
 });

@@ -6,6 +6,8 @@ import styles from './PageThumbnail.module.css';
 const THUMBNAIL_WIDTH = 180;
 const THUMBNAIL_HEIGHT = Math.round(THUMBNAIL_WIDTH * (22 / 17));
 
+type DropEdge = 'before' | 'after' | null;
+
 export interface PageThumbnailProps {
   pageId: string;
   fileUrl: string;
@@ -19,8 +21,12 @@ export interface PageThumbnailProps {
   onPreview: (pageId: string) => void;
   isDragging?: boolean;
   isDropTarget?: boolean;
+  dropEdge?: DropEdge;
+  isJustMoved?: boolean;
+  /** Optional document color for left border stripe */
+  colorIndicator?: string;
   onDragStart?: (pageId: string) => void;
-  onDragOver?: (pageId: string) => void;
+  onDragOver?: (pageId: string, edge: DropEdge) => void;
   onDragEnd?: () => void;
   onDrop?: (pageId: string) => void;
 }
@@ -38,6 +44,9 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   onPreview,
   isDragging = false,
   isDropTarget = false,
+  dropEdge = null,
+  isJustMoved = false,
+  colorIndicator,
   onDragStart,
   onDragOver,
   onDragEnd,
@@ -100,7 +109,14 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     (e: React.DragEvent) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      onDragOver?.(pageId);
+      const rect = cardRef.current?.getBoundingClientRect();
+      if (rect) {
+        const midX = rect.left + rect.width / 2;
+        const edge: DropEdge = e.clientX < midX ? 'before' : 'after';
+        onDragOver?.(pageId, edge);
+      } else {
+        onDragOver?.(pageId, 'after');
+      }
     },
     [pageId, onDragOver],
   );
@@ -124,7 +140,9 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     styles.thumbnailCard,
     isSelected ? styles.thumbnailCardSelected : '',
     isDragging ? styles.thumbnailCardDragging : '',
-    isDropTarget ? styles.thumbnailCardDropTarget : '',
+    isDropTarget && dropEdge === 'before' ? styles.thumbnailCardDropBefore : '',
+    isDropTarget && dropEdge === 'after' ? styles.thumbnailCardDropAfter : '',
+    isJustMoved ? styles.thumbnailCardJustMoved : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -133,6 +151,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     <div
       ref={cardRef}
       className={cardClassName}
+      style={colorIndicator ? { borderLeftWidth: '3px', borderLeftColor: colorIndicator } : undefined}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}

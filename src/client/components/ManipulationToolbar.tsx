@@ -12,6 +12,8 @@ interface ManipulationToolbarProps {
   totalPages: number;
   onSave?: () => void;
   hasUnsavedChanges?: boolean;
+  onSelectAll?: () => void;
+  onDeselectAll?: () => void;
 }
 
 export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
@@ -24,13 +26,36 @@ export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
   canMoveDown,
   onSave,
   hasUnsavedChanges = false,
+  totalPages,
+  onSelectAll,
+  onDeselectAll,
 }) => {
   const hasSelection = selectedCount > 0;
   const isSingleSelection = selectedCount === 1;
+  const allSelected = totalPages > 0 && selectedCount === totalPages;
 
   return (
     <div className={styles.toolbar} role="toolbar" aria-label="Page manipulation tools">
       <div className={styles.actions}>
+        <button
+          className={styles.button}
+          data-testid="toolbar-select-all"
+          onClick={allSelected ? onDeselectAll : onSelectAll}
+          title={allSelected ? 'Deselect All' : 'Select All'}
+        >
+          <svg className={styles.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {allSelected ? (
+              <>
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M9 12l2 2 4-4" />
+              </>
+            ) : (
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+            )}
+          </svg>
+          <span className={styles.label}>{allSelected ? 'Deselect All' : 'Select All'}</span>
+        </button>
+
         <button
           className={styles.button}
           data-testid="toolbar-rotate"
@@ -111,11 +136,18 @@ export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
         )}
       </div>
 
-      {hasSelection && (
-        <span className={styles.selectionInfo}>
-          {selectedCount} {selectedCount === 1 ? 'page' : 'pages'} selected
+      <div className={styles.spacer} />
+
+      <div className={styles.infoSection}>
+        {hasSelection && (
+          <span className={styles.selectionInfo}>
+            {selectedCount} {selectedCount === 1 ? 'page' : 'pages'} selected
+          </span>
+        )}
+        <span className={styles.pageCount}>
+          {totalPages} {totalPages === 1 ? 'page' : 'pages'} in assembly
         </span>
-      )}
+      </div>
     </div>
   );
 };

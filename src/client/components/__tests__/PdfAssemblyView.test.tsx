@@ -3,8 +3,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
 
-jest.mock('../PageThumbnailGrid', () => ({
-  PageThumbnailGrid: () => <div data-testid="mock-thumbnail-grid" />,
+jest.mock('../SourceBrowser', () => ({
+  SourceBrowser: () => <div data-testid="mock-source-browser" />,
+}));
+
+jest.mock('../AssemblyLane', () => ({
+  AssemblyLane: () => <div data-testid="mock-assembly-lane" />,
 }));
 
 jest.mock('../PagePreviewModal', () => ({
@@ -13,6 +17,10 @@ jest.mock('../PagePreviewModal', () => ({
 
 jest.mock('../PdfInlinePreview', () => ({
   PdfInlinePreview: () => <div data-testid="mock-inline-preview" />,
+}));
+
+jest.mock('../../hooks/useDocumentColors', () => ({
+  useDocumentColors: () => new Map(),
 }));
 
 const mockCreateSession = jest.fn();
@@ -35,6 +43,11 @@ jest.mock('../../hooks/usePdfSession', () => ({
     data: [],
   }),
   useUpdateManifest: () => ({
+    mutate: jest.fn(),
+    mutateAsync: jest.fn(),
+    isPending: false,
+  }),
+  useRemovePdfFile: () => ({
     mutateAsync: jest.fn(),
     isPending: false,
   }),
@@ -59,9 +72,9 @@ describe('PdfAssemblyView', () => {
     expect(screen.getByTestId('pdf-dropzone')).toBeInTheDocument();
   });
 
-  it('renders empty state when no files uploaded', () => {
+  it('renders hero state when no files uploaded', () => {
     renderWithQuery(<PdfAssemblyView />);
-    expect(screen.getByText(/No files uploaded yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Click to upload/)).toBeInTheDocument();
   });
 
   it('shows file input when dropzone is clicked', () => {
