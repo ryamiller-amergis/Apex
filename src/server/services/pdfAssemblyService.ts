@@ -588,17 +588,7 @@ export async function assembleAndExport(
     filePaths,
   };
 
-  const workerPath = path.join(__dirname, '../workers/pdfExportWorker.js');
-  const result = await new Promise<ExportWorkerOutput>((resolve, reject) => {
-    const worker = new Worker(workerPath, { workerData: workerInput });
-    worker.on('message', (msg: ExportWorkerOutput) => resolve(msg));
-    worker.on('error', (err) => reject(err));
-    worker.on('exit', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Worker exited with code ${code}`));
-      }
-    });
-  });
+  const result = await runPdfExport(workerInput);
 
   if (!result.success || !result.pdfBytes) {
     const err = new Error(result.error ?? 'PDF assembly failed. Please retry.') as Error & { code: string };
@@ -620,6 +610,31 @@ export async function assembleAndExport(
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/**
+ * Run PDF assembly in a worker thread when the compiled .js exists (production).
+ * Under local ts-node/nodemon only the .ts source is present — worker threads do
+ * not inherit the main process's -P tsconfig.server.json, so fall back to
+ * in-process assemblePdf (already exported for unit tests).
+ */
+async function runPdfExport(input: ExportWorkerInput): Promise<ExportWorkerOutput> {
+  const jsPath = path.join(__dirname, '../workers/pdfExportWorker.js');
+  if (fs.existsSync(jsPath)) {
+    return new Promise<ExportWorkerOutput>((resolve, reject) => {
+      const worker = new Worker(jsPath, { workerData: input });
+      worker.on('message', (msg: ExportWorkerOutput) => resolve(msg));
+      worker.on('error', (err) => reject(err));
+      worker.on('exit', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Worker exited with code ${code}`));
+        }
+      });
+    });
+  }
+
+  const { assemblePdf } = await import('../workers/pdfExportWorker');
+  return assemblePdf(input);
+}
 
 function sanitizeFilename(name: string): string {
   return path.basename(name).replace(/[^a-zA-Z0-9._\-]/g, '_');

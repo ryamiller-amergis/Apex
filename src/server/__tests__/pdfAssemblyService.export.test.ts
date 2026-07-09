@@ -61,6 +61,8 @@ jest.mock('fs', () => {
     ...actual,
     existsSync: jest.fn((p: string) => {
       if (typeof p === 'string' && p.includes('.pdf')) return true;
+      // Simulate production: compiled worker .js is present so export uses Worker
+      if (typeof p === 'string' && p.includes('pdfExportWorker.js')) return true;
       return actual.existsSync(p);
     }),
     mkdirSync: jest.fn(),
