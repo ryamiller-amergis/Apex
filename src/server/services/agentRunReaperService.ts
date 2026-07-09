@@ -3,7 +3,7 @@
  *
  * Marks orphaned agent runs as failed when their heartbeat expires.
  * Handles two cases:
- *   1. Heartbeat expiry: status='running' AND heartbeat_at < now() - 90s
+ *   1. Heartbeat expiry: status='running' AND heartbeat_at < now() - 5 minutes
  *   2. Hard timeout: status='running' AND now() > timeout_at
  *
  * ## Wiring into server startup
@@ -36,7 +36,7 @@ async function reapOrphanedRuns(): Promise<void> {
       .where(
         and(
           eq(agentRuns.status, 'running'),
-          lt(agentRuns.heartbeatAt, sql`now() - interval '90 seconds'`),
+          lt(agentRuns.heartbeatAt, sql`now() - interval '5 minutes'`),
         ),
       )
       .returning({ id: agentRuns.id, threadId: agentRuns.threadId });

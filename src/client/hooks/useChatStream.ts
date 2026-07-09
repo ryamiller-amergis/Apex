@@ -307,9 +307,17 @@ export function useChatStream(
       }
     };
 
-    poll();
-    pollTimerRef.current = window.setInterval(poll, 5_000);
-    return () => clearPollTimer();
+    // Delay first poll by 4 seconds to give SSE time to reconnect after a
+    // page refresh — avoids surfacing a stale "Worker lost" reaper row before
+    // the SSE stream re-establishes and clears the polling condition.
+    const initialPollDelay = window.setTimeout(() => {
+      poll();
+      pollTimerRef.current = window.setInterval(poll, 5_000);
+    }, 4_000);
+    return () => {
+      window.clearTimeout(initialPollDelay);
+      clearPollTimer();
+    };
   }, [threadId, status, isConnected, clearPollTimer]);
 
   return { messages, streamingText, thinkingText, toolProgress, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };
