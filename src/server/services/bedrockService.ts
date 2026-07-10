@@ -9,6 +9,17 @@ import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
+import { recordAiUsage, computeCost } from './aiUsageService';
+import type { AiFeature } from '../../shared/types/aiCostAnalytics';
+
+/** Attribution context passed down from callers to the invokeModel wrapper. */
+export interface BedrockUsageContext {
+  feature: AiFeature;
+  project: string;
+  entityType?: string;
+  entityId?: string;
+  userId?: string;
+}
 
 const client = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
@@ -361,7 +372,8 @@ function extractJson(text: string, label: string): string {
 /* ── Main generation function ─────────────────────────────── */
 
 export async function generatePBIFromBedrock(
-  input: GeneratePBIInput
+  input: GeneratePBIInput,
+  usageCtx?: BedrockUsageContext,
 ): Promise<GeneratedPBIData> {
   const skillContent = await loadSkillContent();
   const prompt = buildPrompt(input, skillContent);
@@ -382,7 +394,16 @@ export async function generatePBIFromBedrock(
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
+
+  if (usageCtx) {
+    const inputTokens = body.usage?.input_tokens ?? 0;
+    const outputTokens = body.usage?.output_tokens ?? 0;
+    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
+      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
+      .catch(() => {});
+  }
 
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'PBI')) as GeneratedPBIData;
@@ -402,7 +423,8 @@ export async function generatePBIFromBedrock(
 /* ── Feature generation ───────────────────────────────────── */
 
 export async function generateFeatureFromBedrock(
-  input: GenerateFeatureInput
+  input: GenerateFeatureInput,
+  usageCtx?: BedrockUsageContext,
 ): Promise<GeneratedFeatureWithPBIs> {
   const skillContent = await loadSkillContent();
   const prompt = buildFeaturePrompt(input, skillContent);
@@ -423,7 +445,16 @@ export async function generateFeatureFromBedrock(
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
+
+  if (usageCtx) {
+    const inputTokens = body.usage?.input_tokens ?? 0;
+    const outputTokens = body.usage?.output_tokens ?? 0;
+    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
+      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
+      .catch(() => {});
+  }
 
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'Feature')) as GeneratedFeatureWithPBIs;
@@ -632,7 +663,8 @@ export interface ResolveClarificationResult {
 }
 
 export async function resolveClarificationWithBedrock(
-  input: ResolveClarificationInput
+  input: ResolveClarificationInput,
+  usageCtx?: BedrockUsageContext,
 ): Promise<ResolveClarificationResult> {
   const skillContent = await loadSkillContent();
   const prompt = buildClarificationPrompt(input, skillContent);
@@ -653,7 +685,16 @@ export async function resolveClarificationWithBedrock(
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
+
+  if (usageCtx) {
+    const inputTokens = body.usage?.input_tokens ?? 0;
+    const outputTokens = body.usage?.output_tokens ?? 0;
+    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
+      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
+      .catch(() => {});
+  }
 
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'clarification resolution')) as ResolveClarificationResult;
@@ -2017,6 +2058,7 @@ async function invokeModel(
   modelId: string = MODEL_ID,
   maxTokens: number = 4096,
   timeoutMs?: number,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const textBlock = { type: 'text', text: prompt };
 
@@ -2077,9 +2119,44 @@ async function invokeModel(
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
     stop_reason?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
 
   const text = body.content[0]?.text ?? '';
+
+  // Record exact usage (fire-and-forget)
+  if (usageCtx) {
+    const inputTokens = body.usage?.input_tokens ?? 0;
+    const outputTokens = body.usage?.output_tokens ?? 0;
+    const cacheReadTokens = body.usage?.cache_read_input_tokens ?? 0;
+    const cacheWriteTokens = body.usage?.cache_creation_input_tokens ?? 0;
+    computeCost({ provider: 'bedrock', modelId, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens })
+      .then((costUsd) => {
+        recordAiUsage({
+          provider: 'bedrock',
+          modelId,
+          feature: usageCtx.feature,
+          project: usageCtx.project,
+          entityType: usageCtx.entityType,
+          entityId: usageCtx.entityId,
+          userId: usageCtx.userId,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          tokenSource: 'exact',
+          costUsd,
+          costSource: 'computed',
+          status: 'success',
+        });
+      })
+      .catch(() => {});
+  }
 
   // Bedrock signals truncation via stop_reason. Surface this as a dedicated
   // error so callers / API routes can return an actionable message.
@@ -2539,6 +2616,7 @@ export async function fixPrdContentWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -2563,7 +2641,7 @@ ${commentLines}
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
 
   const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
   return fenced ? fenced[1].trim() : text.trim();
@@ -2578,6 +2656,7 @@ export async function fixPrdBacklogWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
 ): Promise<unknown> {
   const commentLines = formatCommentsForPrompt(comments);
   const backlogStr = JSON.stringify(backlogJson, null, 2);
@@ -2604,7 +2683,7 @@ ${commentLines}
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
 
   // Strip any accidental code fences
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
@@ -2889,6 +2968,7 @@ export async function fixDesignDocSectionWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -3085,6 +3165,7 @@ export async function generateDesignPlanForPrd(
   input: GenerateDesignPlanInput,
   modelId?: string,
   maxTokens?: number,
+  usageCtx?: BedrockUsageContext,
 ): Promise<DesignPlanFeature[]> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3101,7 +3182,7 @@ export async function generateDesignPlanForPrd(
   const prompt = buildDesignPlanPrompt(input, catalogSection, screensContextSection);
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : DESIGN_PLAN_MAX_TOKENS;
-  const text = await invokeModel(prompt, undefined, effectiveModel, effectiveMaxTokens);
+  const text = await invokeModel(prompt, undefined, effectiveModel, effectiveMaxTokens, undefined, usageCtx ?? { feature: 'design-plan', project: 'unknown' });
   return parseDesignPlanResult(text, input);
 }
 
@@ -3149,6 +3230,7 @@ export async function generateDesignPrototypeHtml(
   modelId?: string,
   maxTokens?: number,
   timeoutMs?: number,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3397,7 +3479,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
     });
   }
 
-  const text = await invokeModel(prompt, images.length > 0 ? images : undefined, effectiveModel, effectiveMaxTokens, timeoutMs);
+  const text = await invokeModel(prompt, images.length > 0 ? images : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
 
   let html = text.trim();
   if (html.startsWith('```')) {
@@ -3462,6 +3544,7 @@ export async function regenerateDesignPrototypeHtml(
   targetStates?: DesignPrototypeStateName[],
   timeoutMs?: number,
   pageScreenshot?: { base64: string; mediaType: string },
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
@@ -3606,7 +3689,7 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
   const scoped = markersPresent && requested.length > 0 && requested.length < allStates.length;
 
   if (!scoped) {
-    const text = await invokeModel(prompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs);
+    const text = await invokeModel(prompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
     return stripHtmlFences(text);
   }
 
@@ -3650,7 +3733,7 @@ ${scopingSection}
 
 Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
 
-  const text = stripHtmlFences(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs));
+  const text = stripHtmlFences(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
 
   // Graceful fallback: if the model ignored the contract and returned a full
   // document, just use it directly.

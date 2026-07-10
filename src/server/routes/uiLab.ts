@@ -167,7 +167,7 @@ router.get('/:id/stream', requirePermission('ui-lab:view'), requireUiUxGroup, ui
   try {
     await runGeneration(id, (chunk) => {
       send('token', { text: chunk });
-    });
+    }, (req.user as any)?.profile?.oid as string | undefined);
     send('complete', {});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -200,7 +200,7 @@ router.post('/:id/regenerate', requirePermission('ui-lab:manage'), requireUiUxGr
   try {
     await runRegeneration(id, body, (chunk) => {
       send('token', { text: chunk });
-    });
+    }, (req.user as any)?.profile?.oid as string | undefined);
     send('complete', {});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

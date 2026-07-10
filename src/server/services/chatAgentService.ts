@@ -15,6 +15,7 @@ import type {
   SseErrorCode,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
+import { recordAiUsage, estimateTokens, resolveFeatureFromKickoff } from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
   insertMessage as pgInsertMessage,
@@ -1624,8 +1625,26 @@ export async function sendMessage(
   console.log('[chat] sendMessage', { threadId, status: state.thread.status });
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
-  const apiKey = process.env.CURSOR_API_KEY;
-  if (!apiKey) throw new Error('CURSOR_API_KEY is not set');
+  const baseApiKey = process.env.CURSOR_API_KEY;
+  if (!baseApiKey) throw new Error('CURSOR_API_KEY is not set');
+
+  // Resolve per-project service-account key if configured (shared fallback otherwise)
+  let apiKey = baseApiKey;
+  try {
+    const { resolveSkillConfig } = await import('./projectSettingsService');
+    const project = state.thread.kickoff?.project;
+    if (project) {
+      const cfg = await resolveSkillConfig({ project });
+      const envRef = (cfg as any)?.cursorApiKeyEnvRef as string | null | undefined;
+      if (envRef) {
+        const match = envRef.match(/^\$\{([^}]+)\}$/);
+        const resolved = match ? (process.env[match[1]] ?? '') : envRef;
+        if (resolved) apiKey = resolved;
+      }
+    }
+  } catch {
+    // Non-fatal — fall back to shared key
+  }
 
   // If the caller wants a different model, dispose the current agent so it
   // will be recreated (or resumed) with the new model on this turn.
@@ -2025,6 +2044,31 @@ export async function sendMessage(
       state.thread.status = 'idle';
       broadcast(state, { type: 'status', status: 'idle' });
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
+
+      // Record usage event (fire-and-forget, never blocks)
+      {
+        const kickoff = state.thread.kickoff ?? {};
+        const inputEst = estimateTokens(text ?? '');
+        const outputEst = estimateTokens(agentTextBuffer ?? '');
+        recordAiUsage({
+          provider: 'cursor',
+          modelId: resolvedModel,
+          feature: resolveFeatureFromKickoff(kickoff),
+          project: kickoff.project ?? 'unknown',
+          skillPath: kickoff.skillPath ?? undefined,
+          threadId,
+          runId: agentRunId ?? undefined,
+          workItemId: kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
+          userId: state.thread.userId ?? undefined,
+          inputTokens: inputEst,
+          outputTokens: outputEst,
+          tokenSource: 'estimated',
+          costUsd: 0,
+          costSource: 'estimated',
+          status: 'success',
+        });
+      }
+
       break;
     }
 
@@ -2118,6 +2162,27 @@ export async function sendMessage(
 
     const errorCode = mapErrorCode(tier, err);
     trackEvent('agent.run.errored', { threadId, errorTier: tier, errorCode, model: resolvedModel });
+
+    // Record error usage event (fire-and-forget)
+    {
+      const kickoff = state.thread?.kickoff ?? {};
+      recordAiUsage({
+        provider: 'cursor',
+        modelId: resolvedModel,
+        feature: resolveFeatureFromKickoff(kickoff),
+        project: kickoff.project ?? 'unknown',
+        skillPath: kickoff.skillPath ?? undefined,
+        threadId,
+        runId: agentRunId ?? undefined,
+        userId: state.thread?.userId ?? undefined,
+        inputTokens: 0,
+        outputTokens: 0,
+        tokenSource: 'estimated',
+        costUsd: 0,
+        costSource: 'estimated',
+        status: 'error',
+      });
+    }
 
     // Mark agent run as failed in Postgres BEFORE broadcasting error
     if (agentRunId) {

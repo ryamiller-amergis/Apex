@@ -500,6 +500,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
+  cursorApiKeyEnvRef: text('cursor_api_key_env_ref'),
+  cursorServiceAccountId: text('cursor_service_account_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -1110,4 +1112,123 @@ export const agentRuns = pgTable('agent_runs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+// ── AI Cost Analytics ─────────────────────────────────────────────────────────
+
+export const aiPricing = pgTable('ai_pricing', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: text('provider').notNull(),
+  modelId: text('model_id').notNull(),
+  inputPricePerMtok: text('input_price_per_mtok').notNull().default('0'),
+  outputPricePerMtok: text('output_price_per_mtok').notNull().default('0'),
+  cacheReadPricePerMtok: text('cache_read_price_per_mtok').notNull().default('0'),
+  cacheWritePricePerMtok: text('cache_write_price_per_mtok').notNull().default('0'),
+  currency: text('currency').notNull().default('USD'),
+  effectiveFrom: timestamp('effective_from', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  effectiveTo: timestamp('effective_to', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export type AiTokenSource = 'exact' | 'estimated';
+export type AiCostSource = 'computed' | 'estimated' | 'allocated';
+export type AiUsageStatus = 'success' | 'error' | 'cancelled';
+
+export const aiUsageEvents = pgTable('ai_usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: text('provider').notNull(),
+  modelId: text('model_id').notNull(),
+  feature: text('feature').notNull(),
+  project: text('project').notNull(),
+  skillPath: text('skill_path'),
+  threadId: text('thread_id'),
+  runId: text('run_id'),
+  entityType: text('entity_type'),
+  entityId: text('entity_id'),
+  workItemId: text('work_item_id'),
+  userId: text('user_id'),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+  cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+  tokenSource: text('token_source').$type<AiTokenSource>().notNull().default('estimated'),
+  costUsd: text('cost_usd').notNull().default('0'),
+  costSource: text('cost_source').$type<AiCostSource>().notNull().default('estimated'),
+  durationMs: integer('duration_ms'),
+  status: text('status').$type<AiUsageStatus>().notNull().default('success'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  createdAtIdx: index('idx_ai_usage_events_created_at').on(t.createdAt),
+  providerIdx: index('idx_ai_usage_events_provider').on(t.provider),
+  projectIdx: index('idx_ai_usage_events_project').on(t.project),
+  featureIdx: index('idx_ai_usage_events_feature').on(t.feature),
+  modelIdx: index('idx_ai_usage_events_model').on(t.modelId),
+  projectCreatedIdx: index('idx_ai_usage_events_project_created').on(t.project, t.createdAt),
+}));
+
+export const cursorUsageEvents = pgTable('cursor_usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ts: timestamp('ts', { withTimezone: true, mode: 'string' }).notNull(),
+  serviceAccountId: text('service_account_id'),
+  project: text('project'),
+  model: text('model').notNull(),
+  kind: text('kind'),
+  maxMode: boolean('max_mode').notNull().default(false),
+  isHeadless: boolean('is_headless').notNull().default(false),
+  isTokenBasedCall: boolean('is_token_based_call').notNull().default(false),
+  isChargeable: boolean('is_chargeable').notNull().default(false),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheWriteTokens: integer('cache_write_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  totalModelCents: text('total_model_cents'),
+  chargedCents: text('charged_cents').notNull().default('0'),
+  cursorTokenFeeCents: text('cursor_token_fee_cents'),
+  requestsCosts: text('requests_costs'),
+  userEmail: text('user_email'),
+  dedupeKey: text('dedupe_key').unique(),
+  ingestedAt: timestamp('ingested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  tsIdx: index('idx_cursor_usage_events_ts').on(t.ts),
+  saIdx: index('idx_cursor_usage_events_sa').on(t.serviceAccountId),
+  projectIdx: index('idx_cursor_usage_events_project').on(t.project),
+  modelIdx: index('idx_cursor_usage_events_model').on(t.model),
+}));
+
+export const aiCostInsights = pgTable('ai_cost_insights', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  periodFrom: text('period_from').notNull(),
+  periodTo: text('period_to').notNull(),
+  modelUsed: text('model_used').notNull(),
+  headline: text('headline'),
+  insights: jsonb('insights').$type<string[]>().notNull().default([]),
+  recommendations: jsonb('recommendations').$type<string[]>().notNull().default([]),
+  riskFlags: jsonb('risk_flags').$type<string[]>().notNull().default([]),
+  generatedAt: timestamp('generated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectPeriodIdx: unique('ai_cost_insights_project_period').on(t.project, t.periodFrom, t.periodTo),
+}));
+
+export const aiCostDailyBrief = pgTable('ai_cost_daily_brief', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  briefDate: text('brief_date').notNull(),
+  briefType: text('brief_type').notNull().default('morning'),
+  modelUsed: text('model_used').notNull(),
+  totalCostUsd: text('total_cost_usd').notNull().default('0'),
+  cursorCostUsd: text('cursor_cost_usd').notNull().default('0'),
+  bedrockCostUsd: text('bedrock_cost_usd').notNull().default('0'),
+  totalInteractions: integer('total_interactions').notNull().default(0),
+  mtdCostUsd: text('mtd_cost_usd').notNull().default('0'),
+  projectedEomUsd: text('projected_eom_usd').notNull().default('0'),
+  trendDirection: text('trend_direction').notNull().default('flat'),
+  trendPct: text('trend_pct').notNull().default('0'),
+  headline: text('headline'),
+  keyBullets: jsonb('key_bullets').$type<string[]>().notNull().default([]),
+  alerts: jsonb('alerts').$type<string[]>().notNull().default([]),
+  topFeatures: jsonb('top_features').$type<Array<{ feature: string; costUsd: number }>>().notNull().default([]),
+  generatedAt: timestamp('generated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectDateTypeIdx: unique('ai_cost_daily_brief_project_date_type').on(t.project, t.briefDate, t.briefType),
 }));

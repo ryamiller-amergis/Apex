@@ -44,6 +44,7 @@ const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ d
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
+const AiCostAnalytics = lazy(() => import('./components/AiCostAnalytics').then(m => ({ default: m.AiCostAnalytics })));
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
@@ -108,7 +109,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -142,6 +143,8 @@ function App() {
                     ? 'ui-lab'
                     : location.pathname === '/pdf-tools'
                     ? 'pdf-tools'
+                    : location.pathname === '/ai-cost'
+                    ? 'ai-cost'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -250,6 +253,7 @@ function App() {
     if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
     if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
+    if (currentView === 'ai-cost'       && !isSuperAdmin && (!enabledViews.includes('ai-cost')    || !can('analytics:ai-cost:view'))) navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
@@ -416,6 +420,7 @@ function App() {
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigatePdfTools={() => navigate('/pdf-tools')}
+            onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -460,6 +465,7 @@ function App() {
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
+            onNavigateAiCost={() => navigate('/ai-cost')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -539,6 +545,12 @@ function App() {
                 <div className="cloudcost-view">
                   <CloudCost project={selectedProject} areaPath={selectedAreaPath} />
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'ai-cost' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <AiCostAnalytics project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'backlog' ? (

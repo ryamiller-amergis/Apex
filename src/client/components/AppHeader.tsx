@@ -18,7 +18,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -43,6 +43,7 @@ interface AppHeaderProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
+  onNavigateAiCost?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -73,6 +74,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
+  onNavigateAiCost,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -104,6 +106,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Calendar', view: 'calendar', permission: 'calendar:view', onNavigate: onNavigateCalendar },
     { label: 'Planning', view: 'planning', permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
+    { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },

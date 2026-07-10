@@ -29,6 +29,7 @@ interface AppSidebarProps {
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigatePdfTools?: () => void;
+  onNavigateAiCost?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -145,6 +146,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigatePdfTools,
+  onNavigateAiCost,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -155,6 +157,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'Calendar', view: 'calendar', icon: <IconCalendar />, permission: 'calendar:view', onNavigate: onNavigateCalendar },
     { label: 'Planning', view: 'planning', icon: <IconPlanning />, permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', icon: <IconCloud />, permission: 'cost:view', onNavigate: onNavigateCloudCost },
+    { label: 'AI Cost', view: 'ai-cost', icon: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="10" cy="10" r="7" />
+          <path d="M10 6v1.5M10 12.5V14M8.25 8.5A1.75 1.75 0 0110 7h.5a1.5 1.5 0 010 3h-1a1.5 1.5 0 000 3h.5A1.75 1.75 0 0011.75 11.5" />
+        </svg>
+      ), permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },

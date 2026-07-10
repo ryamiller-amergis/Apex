@@ -49,6 +49,7 @@ import featureFlagRoutes from './routes/featureFlags';
 import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
+import { aiCostScheduler } from './services/aiCostScheduler';
 import { resolveDataRoot } from './utils/dataDir';
 
 type FileStoreFactory = (
@@ -56,6 +57,7 @@ type FileStoreFactory = (
 ) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
+import aiCostRoutes from './routes/aiCost';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -168,6 +170,7 @@ app.use('/api', (req, res, next) => {
   ensureAuthenticated(req, res, next);
 }, apiRoutes);
 app.use('/api/azure', ensureAuthenticated, azureCostRoutes);
+app.use('/api/ai-cost', ensureAuthenticated, aiCostRoutes);
 app.use('/api/skills', ensureAuthenticated, skillsRoutes);
 app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
@@ -286,6 +289,9 @@ const server = app.listen(PORT, () => {
 
   standupScheduler.start();
   console.log('Standup scheduler started');
+
+  aiCostScheduler.start();
+  console.log('AI cost scheduler started');
 
   bootstrapAdmin();
 

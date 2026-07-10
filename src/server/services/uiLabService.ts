@@ -109,6 +109,7 @@ export async function saveHtml(id: string, html: string): Promise<void> {
 export async function runGeneration(
   designId: string,
   onToken: (chunk: string) => void,
+  userId?: string,
 ): Promise<void> {
   const design = await getDesign(designId);
   if (!design) throw new Error(`UI Lab design ${designId} not found`);
@@ -139,6 +140,8 @@ export async function runGeneration(
       timeoutMs: timeoutMs ?? undefined,
       temperature: temperature ?? undefined,
       onToken,
+      project: design.project,
+      userId,
     });
 
     const html = sanitizeMockHtml(extractHtml(rawHtml));
@@ -180,6 +183,7 @@ export async function runRegeneration(
   designId: string,
   req: RegenerateUiLabDesignRequest,
   onToken: (chunk: string) => void,
+  userId?: string,
 ): Promise<void> {
   const design = await getDesign(designId);
   if (!design) throw new Error(`UI Lab design ${designId} not found`);
@@ -215,6 +219,8 @@ export async function runRegeneration(
       timeoutMs: timeoutMs ?? undefined,
       temperature: temperature ?? undefined,
       onToken,
+      project: design.project,
+      userId,
     });
 
     const html = sanitizeMockHtml(extractHtml(rawHtml));

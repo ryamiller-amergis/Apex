@@ -7,6 +7,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { retryWithBackoff } from '../utils/retry';
 import { listSkillConfigs } from './projectSettingsService';
+import { recordAiUsage, estimateTokens } from './aiUsageService';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MODEL_ID = 'composer-2.5';
@@ -341,6 +342,22 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
     session.status = 'idle';
     broadcast(session, { type: 'status', status: 'idle' });
     broadcast(session, { type: 'done' });
+
+    // Record usage (fire-and-forget)
+    recordAiUsage({
+      provider: 'cursor',
+      modelId: MODEL_ID,
+      feature: 'home-chat',
+      project: 'Apex',
+      threadId: sessionId,
+      userId,
+      inputTokens: estimateTokens(text),
+      outputTokens: estimateTokens(agentTextBuffer),
+      tokenSource: 'estimated',
+      costUsd: 0,
+      costSource: 'estimated',
+      status: 'success',
+    });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[ask-apex] sendMessage error for session ${sessionId}:`, errorMessage);
