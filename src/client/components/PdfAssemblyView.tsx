@@ -12,6 +12,10 @@ import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { PdfDocumentSidebar } from './PdfDocumentSidebar';
 import { PdfInlinePreview } from './PdfInlinePreview';
 import { ExportPanel } from './ExportPanel';
+import { ExportSelectedButton } from './ExportSelectedButton';
+import { RangeInput } from './RangeInput';
+import { DeduplicationToast } from './DeduplicationToast';
+import { generateDefaultFilename } from '../hooks/useExportSession';
 import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -140,6 +144,7 @@ export const PdfAssemblyView: React.FC = () => {
     dismissReorderUndo,
     hasUnsavedChanges,
     saveNow,
+    saveNowAsync,
     syncDelete,
     togglePageInAssembly,
     addToAssemblyAt,
@@ -156,7 +161,35 @@ export const PdfAssemblyView: React.FC = () => {
     clearSelection,
     isSelected,
     selectedCount,
+    selectAll,
   } = usePageSelection();
+
+  const [showDedupToast, setShowDedupToast] = useState(false);
+  const [rangeExternalUpdate, setRangeExternalUpdate] = useState(0);
+  const [exportFilename, setExportFilename] = useState(() => generateDefaultFilename());
+
+  const ensureManifestSaved = useCallback(async () => {
+    if (hasUnsavedChanges) {
+      await saveNowAsync();
+    }
+  }, [hasUnsavedChanges, saveNowAsync]);
+
+  const handleRangeSelectionChange = useCallback(
+    (indices: number[], hasDuplicates: boolean) => {
+      if (hasDuplicates) {
+        setShowDedupToast(true);
+      }
+      const pageIds = indices
+        .map((i) => manipulationVisiblePages[i]?.pageId)
+        .filter(Boolean) as string[];
+      if (pageIds.length > 0) {
+        selectAll(pageIds);
+      } else {
+        clearSelection();
+      }
+    },
+    [manipulationVisiblePages, clearSelection, selectAll],
+  );
 
   const documentColors = useDocumentColors(fileMetadata);
 
@@ -185,6 +218,15 @@ export const PdfAssemblyView: React.FC = () => {
   const allVisiblePageIds = useMemo(
     () => manipulationVisiblePages.map((p) => p.pageId),
     [manipulationVisiblePages],
+  );
+
+  const selectedIndicesForRange = useMemo(
+    () =>
+      [...selectedPageIds]
+        .map((id) => manipulationVisiblePages.findIndex((p) => p.pageId === id))
+        .filter((i) => i >= 0)
+        .sort((a, b) => a - b),
+    [selectedPageIds, manipulationVisiblePages],
   );
 
   const activePreviewPage = useMemo(() => {
@@ -285,6 +327,7 @@ export const PdfAssemblyView: React.FC = () => {
         toggleSelection(pageId);
         setActivePageId(pageId);
       }
+      setRangeExternalUpdate((c) => c + 1);
     },
     [toggleSelection, multiToggle, rangeSelect, allVisiblePageIds],
   );
@@ -439,10 +482,31 @@ export const PdfAssemblyView: React.FC = () => {
             />
           </div>
         </div>
-        <ExportPanel
-          sessionId={sessionId!}
-          nonDeletedPageCount={manipulationVisiblePages.length}
-        />
+        <div className={styles.exportBar} data-testid="pdf-export-bar">
+          <ExportPanel
+            sessionId={sessionId!}
+            nonDeletedPageCount={manipulationVisiblePages.length}
+            filename={exportFilename}
+            onFilenameChange={setExportFilename}
+            onBeforeExport={ensureManifestSaved}
+          />
+          <div className={styles.exportBarGroup}>
+            <RangeInput
+              maxPage={manipulationVisiblePages.length}
+              selectedIndices={selectedIndicesForRange}
+              onSelectionChange={handleRangeSelectionChange}
+              externalUpdate={rangeExternalUpdate}
+            />
+            <ExportSelectedButton
+              sessionId={sessionId!}
+              selectedCount={selectedCount}
+              selectedPageIndices={selectedIndicesForRange}
+              filename={exportFilename}
+              onBeforeExport={ensureManifestSaved}
+              onExportComplete={clearSelection}
+            />
+          </div>
+        </div>
         </PdfWorkerProvider>
       )}
 
@@ -523,6 +587,11 @@ export const PdfAssemblyView: React.FC = () => {
           </button>
         </div>
       )}
+
+      <DeduplicationToast
+        visible={showDedupToast}
+        onDismiss={() => setShowDedupToast(false)}
+      />
     </div>
   );
 };

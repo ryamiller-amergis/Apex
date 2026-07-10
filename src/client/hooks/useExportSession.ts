@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 interface ExportSessionParams {
   sessionId: string;
   filename?: string;
+  pages?: number[];
 }
 
 function generateDefaultFilename(): string {
@@ -21,14 +22,19 @@ function ensurePdfExtension(name: string): string {
 
 export function useExportSession() {
   return useMutation<void, Error & { code?: string }, ExportSessionParams>({
-    mutationFn: async ({ sessionId, filename }) => {
+    mutationFn: async ({ sessionId, filename, pages }) => {
       const finalFilename = filename ? ensurePdfExtension(filename) : generateDefaultFilename();
+
+      const body: Record<string, unknown> = { filename: finalFilename };
+      if (pages && pages.length > 0) {
+        body.pages = pages;
+      }
 
       const res = await fetch(`/api/pdf/sessions/${sessionId}/export`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: finalFilename }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {

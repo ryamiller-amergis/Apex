@@ -126,6 +126,28 @@
   margin: 0 0 0.75rem 0;
 }
 
+/* ── Export bar (filename + page range + actions) ────── */
+
+.exportBar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.exportBarGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
 /* ── Reorder Sync Error Toast ────────────────────────── */
 
 .errorToast {

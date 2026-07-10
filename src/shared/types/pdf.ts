@@ -69,6 +69,11 @@ export interface ExportRequest {
   filename?: string;
 }
 
+export interface ExtractionRequest {
+  filename?: string;
+  pages?: number[];
+}
+
 export interface ExportWorkerInput {
   manifest: PageManifestEntry[];
   filePaths: Record<string, string>;
@@ -99,6 +104,7 @@ export const PDF_ERROR_CODES = {
   INVALID_FILENAME: 'INVALID_FILENAME',
   NO_PAGES: 'NO_PAGES',
   EXPORT_FAILED: 'EXPORT_FAILED',
+  INVALID_PAGE_INDICES: 'INVALID_PAGE_INDICES',
 } as const;
 
 export type PdfErrorCode = typeof PDF_ERROR_CODES[keyof typeof PDF_ERROR_CODES];

@@ -234,9 +234,20 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
     const { sessionId } = req.params;
-    const { filename } = req.body as { filename?: string };
+    const { filename, pages } = req.body as { filename?: string; pages?: number[] };
 
-    const result = await assembleAndExport(sessionId, userId, filename);
+    // Validate pages array if provided
+    if (pages !== undefined) {
+      if (!Array.isArray(pages) || pages.some((p) => typeof p !== 'number')) {
+        res.status(400).json({
+          error: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
+          message: 'pages must be an array of numbers',
+        });
+        return;
+      }
+    }
+
+    const result = await assembleAndExport(sessionId, userId, filename, pages);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
@@ -259,6 +270,10 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       return;
     }
     if (code === PDF_ERROR_CODES.INVALID_FILENAME) {
+      res.status(400).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.INVALID_PAGE_INDICES) {
       res.status(400).json({ error: code, message });
       return;
     }

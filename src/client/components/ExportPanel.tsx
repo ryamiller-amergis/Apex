@@ -5,14 +5,29 @@ import styles from './ExportPanel.module.css';
 interface ExportPanelProps {
   sessionId: string;
   nonDeletedPageCount: number;
+  /** Controlled filename; falls back to internal default when omitted. */
+  filename?: string;
+  onFilenameChange?: (filename: string) => void;
+  /** Called before export so callers can persist unsaved assembly changes. */
+  onBeforeExport?: () => Promise<void>;
 }
 
-export const ExportPanel: React.FC<ExportPanelProps> = ({ sessionId, nonDeletedPageCount }) => {
-  const [filename, setFilename] = useState(() => generateDefaultFilename());
+export const ExportPanel: React.FC<ExportPanelProps> = ({
+  sessionId,
+  nonDeletedPageCount,
+  filename: controlledFilename,
+  onFilenameChange,
+  onBeforeExport,
+}) => {
+  const [internalFilename, setInternalFilename] = useState(() => generateDefaultFilename());
   const [error, setError] = useState<string | null>(null);
+  const [isPreparing, setIsPreparing] = useState(false);
+
+  const filename = controlledFilename ?? internalFilename;
+  const setFilename = onFilenameChange ?? setInternalFilename;
 
   const exportMutation = useExportSession();
-  const isExporting = exportMutation.isPending;
+  const isExporting = exportMutation.isPending || isPreparing;
   const isEmpty = nonDeletedPageCount === 0;
 
   useEffect(() => {
@@ -27,15 +42,26 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ sessionId, nonDeletedP
     }
   }, [exportMutation.isError, exportMutation.error]);
 
-  const handleExport = useCallback(() => {
+  const runExport = useCallback(async () => {
     setError(null);
-    exportMutation.mutate({ sessionId, filename });
-  }, [exportMutation, sessionId, filename]);
+    setIsPreparing(true);
+    try {
+      await onBeforeExport?.();
+      exportMutation.mutate({ sessionId, filename });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save assembly before export.');
+    } finally {
+      setIsPreparing(false);
+    }
+  }, [onBeforeExport, exportMutation, sessionId, filename]);
+
+  const handleExport = useCallback(() => {
+    void runExport();
+  }, [runExport]);
 
   const handleRetry = useCallback(() => {
-    setError(null);
-    exportMutation.mutate({ sessionId, filename });
-  }, [exportMutation, sessionId, filename]);
+    void runExport();
+  }, [runExport]);
 
   const handleDismissError = useCallback(() => {
     setError(null);
@@ -43,7 +69,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ sessionId, nonDeletedP
 
   return (
     <>
-      <div className={styles.panel} data-testid="pdf-export-panel">
+      <div className={styles.filenameGroup} data-testid="pdf-export-panel">
         <label htmlFor="pdf-export-filename" className={styles.filenameLabel}>
           Filename
         </label>
