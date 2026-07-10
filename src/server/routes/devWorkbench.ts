@@ -10,7 +10,7 @@ import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
 import {
   checkoutDefaultBranch,
-  checkoutNewBranch,
+  checkoutFeatureBranch,
   createFeatureBranch,
   computeDiff,
   pushBranch,
@@ -252,7 +252,7 @@ router.post('/start', async (req: Request, res: Response) => {
           });
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
-          await checkoutNewBranch(workspaceDir, branchName);
+          await checkoutFeatureBranch(workspaceDir, branchName, defaultBranch);
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
@@ -285,14 +285,18 @@ router.post('/start', async (req: Request, res: Response) => {
           const adoService = new AzureDevOpsService(project);
 
           let workItemTitle = `wi-${workItemId}`;
+          let workItemType = '';
           try {
             const wiResult = await adoService.queryWorkItemsByWiql({
-              wiql: `SELECT [System.Id],[System.Title] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
-              fields: ['System.Id', 'System.Title'],
+              wiql: `SELECT [System.Id],[System.Title],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+              fields: ['System.Id', 'System.Title', 'System.WorkItemType'],
             });
             const firstItem = wiResult.items[0];
             if (firstItem?.fields?.['System.Title']) {
               workItemTitle = firstItem.fields['System.Title'] as string;
+            }
+            if (firstItem?.fields?.['System.WorkItemType']) {
+              workItemType = firstItem.fields['System.WorkItemType'] as string;
             }
           } catch {
             // Non-fatal — fall back to numeric slug
@@ -306,7 +310,7 @@ router.post('/start', async (req: Request, res: Response) => {
             provider,
           });
 
-          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
+          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle, defaultBranch);
 
           // Inject design-doc attachments from the Feature work item (Gap 4 fix).
           try {
@@ -319,6 +323,12 @@ router.post('/start', async (req: Request, res: Response) => {
             await adoService.setWorkItemState(workItemId!, 'In Progress');
           } catch (adoErr) {
             console.warn('[dev-workbench] setWorkItemState(In Progress) failed (non-fatal):', (adoErr as Error).message);
+          }
+
+          // Features have their child PBIs/TBIs/Bugs carry the working state.
+          // Move not-yet-started children into "In Progress" alongside the Feature.
+          if (workItemType === 'Feature') {
+            await cascadeChildStates(adoService, workItemId!, ['New', 'Approved', 'Committed'], 'In Progress');
           }
 
           const thread = await createThread(userId, {
@@ -899,6 +909,39 @@ async function resolveCheckoutContext(
 }
 
 /**
+ * Cascades a work-item state transition to a Feature's child PBIs/TBIs/Bugs.
+ * Only children whose current state is in `fromStates` are moved to `toState`.
+ * Fully non-throwing — every failure (child lookup or an individual transition)
+ * is logged and swallowed so it never aborts PR creation or session setup.
+ */
+async function cascadeChildStates(
+  adoService: AzureDevOpsService,
+  featureId: number,
+  fromStates: string[],
+  toState: string,
+): Promise<void> {
+  try {
+    const children = await adoService.getFeatureChildren(featureId);
+    for (const child of children) {
+      if (!fromStates.includes(child.state)) continue;
+      try {
+        await adoService.setWorkItemState(child.id, toState);
+      } catch (err) {
+        console.warn(
+          `[dev-workbench] cascade setWorkItemState(${child.id} -> ${toState}) failed (non-fatal):`,
+          (err as Error).message,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[dev-workbench] cascadeChildStates for feature ${featureId} failed (non-fatal):`,
+      (err as Error).message,
+    );
+  }
+}
+
+/**
  * Pushes the feature branch (commit + merge + push) and sets branchPushed = true
  * on the session. Does NOT create a PR.
  */
@@ -962,7 +1005,24 @@ async function createSessionPr(
       });
 
       if (workItemId) {
-        await adoService.setWorkItemState(workItemId, 'In Pull Request');
+        let workItemType = '';
+        try {
+          const wiResult = await adoService.queryWorkItemsByWiql({
+            wiql: `SELECT [System.Id],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+            fields: ['System.Id', 'System.WorkItemType'],
+          });
+          workItemType = (wiResult.items[0]?.fields?.['System.WorkItemType'] as string) ?? '';
+        } catch {
+          // Non-fatal — fall back to treating it as a leaf work item.
+        }
+
+        if (workItemType === 'Feature') {
+          // Features have no "In Pull Request" state. Keep the Feature "In Progress"
+          // and move the children currently "In Progress" to "In Pull Request".
+          await cascadeChildStates(adoService, workItemId, ['In Progress'], 'In Pull Request');
+        } else {
+          await adoService.setWorkItemState(workItemId, 'In Pull Request');
+        }
         await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
       }
     }
