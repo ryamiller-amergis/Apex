@@ -102,12 +102,12 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
               <strong>Click to upload</strong> or drag &amp; drop
             </p>
             <p className={styles.dropzoneHeroHint}>
-              PDF · up to 100 MB each · 500 pages max
+              PDF or Word (.docx) · up to 100 MB each · 500 pages max
             </p>
             <input
               ref={inputRef}
               type="file"
-              accept=".pdf,application/pdf"
+              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               multiple
               className={styles.dropzoneInput}
               onChange={onInputChange}
@@ -200,7 +200,7 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           multiple
           className={styles.dropzoneInput}
           onChange={onInputChange}
@@ -295,6 +295,14 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                         <span>{formatBytes(f.sizeBytes)}</span>
                         <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
                       </p>
+                      {f.convertedFrom && (
+                        <span
+                          className={styles.convertedBadge}
+                          data-testid={`pdf-converted-badge-${f.fileId}`}
+                        >
+                          Converted from Word
+                        </span>
+                      )}
                     </div>
                     {onRemoveFile && (
                       <button
