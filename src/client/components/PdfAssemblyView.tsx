@@ -15,6 +15,7 @@ import { ExportPanel } from './ExportPanel';
 import { ExportSelectedButton } from './ExportSelectedButton';
 import { RangeInput } from './RangeInput';
 import { DeduplicationToast } from './DeduplicationToast';
+import { generateDefaultFilename } from '../hooks/useExportSession';
 import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
@@ -143,6 +144,7 @@ export const PdfAssemblyView: React.FC = () => {
     dismissReorderUndo,
     hasUnsavedChanges,
     saveNow,
+    saveNowAsync,
     syncDelete,
     togglePageInAssembly,
     addToAssemblyAt,
@@ -164,6 +166,13 @@ export const PdfAssemblyView: React.FC = () => {
 
   const [showDedupToast, setShowDedupToast] = useState(false);
   const [rangeExternalUpdate, setRangeExternalUpdate] = useState(0);
+  const [exportFilename, setExportFilename] = useState(() => generateDefaultFilename());
+
+  const ensureManifestSaved = useCallback(async () => {
+    if (hasUnsavedChanges) {
+      await saveNowAsync();
+    }
+  }, [hasUnsavedChanges, saveNowAsync]);
 
   const handleRangeSelectionChange = useCallback(
     (indices: number[], hasDuplicates: boolean) => {
@@ -473,22 +482,31 @@ export const PdfAssemblyView: React.FC = () => {
             />
           </div>
         </div>
-        <ExportPanel
-          sessionId={sessionId!}
-          nonDeletedPageCount={manipulationVisiblePages.length}
-        />
-        <ExportSelectedButton
-          sessionId={sessionId!}
-          selectedCount={selectedCount}
-          selectedPageIndices={selectedIndicesForRange}
-          onExportComplete={clearSelection}
-        />
-        <RangeInput
-          maxPage={manipulationVisiblePages.length}
-          selectedIndices={selectedIndicesForRange}
-          onSelectionChange={handleRangeSelectionChange}
-          externalUpdate={rangeExternalUpdate}
-        />
+        <div className={styles.exportBar} data-testid="pdf-export-bar">
+          <ExportPanel
+            sessionId={sessionId!}
+            nonDeletedPageCount={manipulationVisiblePages.length}
+            filename={exportFilename}
+            onFilenameChange={setExportFilename}
+            onBeforeExport={ensureManifestSaved}
+          />
+          <div className={styles.exportBarGroup}>
+            <RangeInput
+              maxPage={manipulationVisiblePages.length}
+              selectedIndices={selectedIndicesForRange}
+              onSelectionChange={handleRangeSelectionChange}
+              externalUpdate={rangeExternalUpdate}
+            />
+            <ExportSelectedButton
+              sessionId={sessionId!}
+              selectedCount={selectedCount}
+              selectedPageIndices={selectedIndicesForRange}
+              filename={exportFilename}
+              onBeforeExport={ensureManifestSaved}
+              onExportComplete={clearSelection}
+            />
+          </div>
+        </div>
         </PdfWorkerProvider>
       )}
 

@@ -6,6 +6,8 @@ interface ExportSelectedButtonProps {
   sessionId: string;
   selectedCount: number;
   selectedPageIndices: number[];
+  filename?: string;
+  onBeforeExport?: () => Promise<void>;
   onExportComplete?: () => void;
 }
 
@@ -13,10 +15,13 @@ export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
   sessionId,
   selectedCount,
   selectedPageIndices,
+  filename,
+  onBeforeExport,
   onExportComplete,
 }) => {
   const exportMutation = useExportSession();
-  const isExporting = exportMutation.isPending;
+  const [isPreparing, setIsPreparing] = useState(false);
+  const isExporting = exportMutation.isPending || isPreparing;
   const isDisabled = selectedCount === 0 || isExporting;
   const [error, setError] = useState<string | null>(null);
 
@@ -33,12 +38,25 @@ export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
     }
   }, [exportMutation.isError, exportMutation.error]);
 
+  const runExport = useCallback(async () => {
+    if (selectedCount === 0) return;
+    setError(null);
+    setIsPreparing(true);
+    try {
+      await onBeforeExport?.();
+      const sortedPages = [...selectedPageIndices].sort((a, b) => a - b);
+      exportMutation.mutate({ sessionId, pages: sortedPages, filename });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save assembly before export.');
+    } finally {
+      setIsPreparing(false);
+    }
+  }, [selectedCount, onBeforeExport, exportMutation, sessionId, selectedPageIndices, filename]);
+
   const handleClick = useCallback(() => {
     if (isDisabled) return;
-    setError(null);
-    const sortedPages = [...selectedPageIndices].sort((a, b) => a - b);
-    exportMutation.mutate({ sessionId, pages: sortedPages });
-  }, [isDisabled, exportMutation, sessionId, selectedPageIndices]);
+    void runExport();
+  }, [isDisabled, runExport]);
 
   return (
     <>

@@ -2,9 +2,10 @@ import { renderHook, act } from '@testing-library/react';
 import type { PageManifestEntry } from '../../../shared/types/pdf';
 
 const mockMutate = jest.fn();
+const mockMutateAsync = jest.fn().mockResolvedValue({ pageCount: 0, updatedAt: '' });
 
 jest.mock('../usePdfSession', () => ({
-  useUpdateManifest: () => ({ mutate: mockMutate }),
+  useUpdateManifest: () => ({ mutate: mockMutate, mutateAsync: mockMutateAsync }),
 }));
 
 jest.mock('@tanstack/react-query', () => ({
@@ -327,6 +328,30 @@ describe('usePageManipulation', () => {
     });
   });
 
+  it('saveNowAsync awaits mutateAsync and clears unsaved state', async () => {
+    const manifest = ['A', 'B'].map((id) => makeEntry(id));
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.reorder(0, 1);
+    });
+
+    expect(result.current.hasUnsavedChanges).toBe(true);
+
+    await act(async () => {
+      await result.current.saveNowAsync();
+    });
+
+    expect(mockMutateAsync).toHaveBeenCalledWith({
+      sessionId,
+      manifest: expect.any(Array),
+    });
+    expect(result.current.hasUnsavedChanges).toBe(false);
+  });
+
   it('hasUnsavedChanges is true after local modification', () => {
     const manifest = ['A', 'B'].map((id) => makeEntry(id));
 
@@ -476,8 +501,22 @@ describe('usePageManipulation', () => {
       expect(result.current.hasUnsavedChanges).toBe(false);
     });
 
-    // AC#4: refresh shows last synced order (serverManifest update resets local)
-    it('resets to serverManifest on prop change (simulates refresh)', () => {
+    // AC#4: with no local edits, serverManifest update replaces local (refresh / post-save)
+    it('resets to serverManifest on prop change when there are no local edits', () => {
+      const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+      const { result, rerender } = renderHook(
+        ({ serverManifest }) => usePageManipulation({ sessionId, serverManifest }),
+        { initialProps: { serverManifest: manifest } },
+      );
+
+      const refreshedManifest = ['C', 'A', 'B'].map((id) => makeEntry(id));
+      rerender({ serverManifest: refreshedManifest });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A', 'B']);
+    });
+
+    it('preserves local reorder and appends newly uploaded pages', () => {
       const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
 
       const { result, rerender } = renderHook(
@@ -490,12 +529,38 @@ describe('usePageManipulation', () => {
       });
 
       expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['B', 'C', 'A']);
+      expect(result.current.hasUnsavedChanges).toBe(true);
 
-      // Simulate refresh — server returns the synced order
-      const refreshedManifest = ['C', 'A', 'B'].map((id) => makeEntry(id));
-      rerender({ serverManifest: refreshedManifest });
+      // Upload adds page D on the server while keeping the old server order for A/B/C
+      const afterUpload = [
+        makeEntry('A'),
+        makeEntry('B'),
+        makeEntry('C'),
+        makeEntry('D'),
+      ];
+      rerender({ serverManifest: afterUpload });
 
-      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A', 'B']);
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['B', 'C', 'A', 'D']);
+      expect(result.current.hasUnsavedChanges).toBe(true);
+    });
+
+    it('drops pages removed on the server while preserving local order of remaining pages', () => {
+      const manifest = ['A', 'B', 'C'].map((id) => makeEntry(id));
+
+      const { result, rerender } = renderHook(
+        ({ serverManifest }) => usePageManipulation({ sessionId, serverManifest }),
+        { initialProps: { serverManifest: manifest } },
+      );
+
+      act(() => {
+        result.current.reorder(0, 2);
+      });
+
+      // File containing B was removed on the server
+      rerender({ serverManifest: [makeEntry('A'), makeEntry('C')] });
+
+      expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['C', 'A']);
+      expect(result.current.hasUnsavedChanges).toBe(true);
     });
   });
 

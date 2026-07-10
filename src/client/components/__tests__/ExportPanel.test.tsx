@@ -6,7 +6,7 @@
  *         empty-session (disabled button)
  */
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ExportPanel } from '../ExportPanel';
 
@@ -66,13 +66,15 @@ beforeEach(() => {
 
 describe('ExportPanel', () => {
   // AC-0: export triggers download via mutation
-  it('AC-0: calls mutate with sessionId and filename when Export is clicked', () => {
+  it('AC-0: calls mutate with sessionId and filename when Export is clicked', async () => {
     renderPanel();
 
     const exportButton = screen.getByTestId('pdf-export-button');
     fireEvent.click(exportButton);
 
-    expect(mockMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
     expect(mockMutate).toHaveBeenCalledWith({
       sessionId: 'session-123',
       filename: 'merged-document-20260709-1500.pdf',
@@ -98,7 +100,7 @@ describe('ExportPanel', () => {
   });
 
   // AC-2: custom filename passed to mutate
-  it('AC-2: passes custom filename to mutate when user changes input', () => {
+  it('AC-2: passes custom filename to mutate when user changes input', async () => {
     renderPanel();
 
     const input = screen.getByTestId('pdf-export-filename-input');
@@ -107,9 +109,11 @@ describe('ExportPanel', () => {
     const exportButton = screen.getByTestId('pdf-export-button');
     fireEvent.click(exportButton);
 
-    expect(mockMutate).toHaveBeenCalledWith({
-      sessionId: 'session-123',
-      filename: 'my-custom-report.pdf',
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledWith({
+        sessionId: 'session-123',
+        filename: 'my-custom-report.pdf',
+      });
     });
   });
 
@@ -128,7 +132,7 @@ describe('ExportPanel', () => {
   });
 
   // AC-3: retry button calls mutate again
-  it('AC-3: retry button triggers export again', () => {
+  it('AC-3: retry button triggers export again', async () => {
     mockMutationState.isError = true;
     mockMutationState.error = Object.assign(
       new Error('Export failed'),
@@ -139,7 +143,9 @@ describe('ExportPanel', () => {
     const retryButton = screen.getByTestId('pdf-export-retry-button');
     fireEvent.click(retryButton);
 
-    expect(mockMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
   });
 
   // BR-008: default filename format pre-populated
@@ -208,5 +214,86 @@ describe('ExportPanel', () => {
     const input = screen.getByTestId('pdf-export-filename-input');
     expect(input).toHaveAttribute('id', 'pdf-export-filename');
     expect(screen.getByLabelText('Filename')).toBe(input);
+  });
+
+  it('awaits onBeforeExport before calling mutate', async () => {
+    let resolveBefore!: () => void;
+    const onBeforeExport = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveBefore = resolve;
+        }),
+    );
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          onBeforeExport={onBeforeExport}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+    await waitFor(() => {
+      expect(onBeforeExport).toHaveBeenCalledTimes(1);
+    });
+    expect(mockMutate).not.toHaveBeenCalled();
+
+    resolveBefore();
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('shows an error and skips mutate when onBeforeExport fails', async () => {
+    const onBeforeExport = jest.fn().mockRejectedValue(new Error('Save failed'));
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          onBeforeExport={onBeforeExport}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+    expect(await screen.findByTestId('pdf-export-error-toast')).toHaveTextContent('Save failed');
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('uses controlled filename when provided', async () => {
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          filename="controlled-name.pdf"
+          onFilenameChange={jest.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByTestId('pdf-export-filename-input') as HTMLInputElement;
+    expect(input.value).toBe('controlled-name.pdf');
+
+    fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledWith({
+        sessionId: 'session-123',
+        filename: 'controlled-name.pdf',
+      });
+    });
   });
 });

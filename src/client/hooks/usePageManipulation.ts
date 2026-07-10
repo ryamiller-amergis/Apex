@@ -29,6 +29,23 @@ function manifestsEqual(a: PageManifestEntry[], b: PageManifestEntry[]): boolean
   return false;
 }
 
+/**
+ * Keep local order/edits for pages that still exist on the server, drop removed
+ * pages, and append any newly uploaded pages at the end.
+ */
+function mergeServerIntoLocal(
+  local: PageManifestEntry[],
+  server: PageManifestEntry[],
+): PageManifestEntry[] {
+  const serverIds = new Set(server.map((p) => p.pageId));
+  const localIds = new Set(local.map((p) => p.pageId));
+
+  const kept = local.filter((p) => serverIds.has(p.pageId));
+  const added = server.filter((p) => !localIds.has(p.pageId));
+
+  return [...kept, ...added];
+}
+
 export function usePageManipulation({ sessionId, serverManifest }: UsePageManipulationArgs) {
   const [localManifest, setLocalManifest] = useState<PageManifestEntry[]>(serverManifest);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
@@ -36,12 +53,30 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
   const [lastSynced, setLastSynced] = useState<PageManifestEntry[]>(serverManifest);
   const [reorderSyncError, setReorderSyncError] = useState<string | null>(null);
   const lastSyncedRef = useRef<PageManifestEntry[]>(serverManifest);
-  const { mutate } = useUpdateManifest();
+  const localManifestRef = useRef<PageManifestEntry[]>(serverManifest);
+  const { mutate, mutateAsync } = useUpdateManifest();
+
+  localManifestRef.current = localManifest;
 
   useEffect(() => {
-    setLocalManifest(serverManifest);
-    setLastSynced(serverManifest);
-    lastSyncedRef.current = serverManifest;
+    const prevLocal = localManifestRef.current;
+    const prevSynced = lastSyncedRef.current;
+    const hasLocalEdits = manifestsEqual(prevLocal, prevSynced);
+
+    // No unsaved edits — take the server manifest as-is (refresh / post-save).
+    if (!hasLocalEdits) {
+      setLocalManifest(serverManifest);
+      setLastSynced(serverManifest);
+      lastSyncedRef.current = serverManifest;
+      return;
+    }
+
+    // Preserve local reorder/rotations/deletes; append newly uploaded pages.
+    const mergedLocal = mergeServerIntoLocal(prevLocal, serverManifest);
+    const mergedSynced = mergeServerIntoLocal(prevSynced, serverManifest);
+    setLocalManifest(mergedLocal);
+    setLastSynced(mergedSynced);
+    lastSyncedRef.current = mergedSynced;
   }, [serverManifest]);
 
   const hasUnsavedChanges = useMemo(
@@ -52,8 +87,17 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
   const saveNow = useCallback(() => {
     mutate({ sessionId, manifest: localManifest });
     setLastSynced(localManifest);
+    lastSyncedRef.current = localManifest;
     setUndoReorderState(null);
   }, [sessionId, mutate, localManifest]);
+
+  /** Persist local manifest and wait for the server before continuing (e.g. export). */
+  const saveNowAsync = useCallback(async () => {
+    await mutateAsync({ sessionId, manifest: localManifest });
+    setLastSynced(localManifest);
+    lastSyncedRef.current = localManifest;
+    setUndoReorderState(null);
+  }, [sessionId, mutateAsync, localManifest]);
 
   const visiblePages = useMemo(
     () => localManifest.filter((p) => !p.deleted),
@@ -230,6 +274,7 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
     dismissReorderUndo,
     hasUnsavedChanges,
     saveNow,
+    saveNowAsync,
     syncDelete,
     togglePageInAssembly,
     addToAssemblyAt,
