@@ -34,6 +34,37 @@
   background: rgba(39, 71, 217, 0.04);
 }
 
+.thumbnailCardDragging {
+  opacity: 0.4;
+}
+
+.thumbnailCardDropBefore {
+  box-shadow: -4px 0 0 0 var(--accent-color);
+}
+
+.thumbnailCardDropAfter {
+  box-shadow: 4px 0 0 0 var(--accent-color);
+}
+
+.thumbnailCardJustMoved {
+  animation: movePulse 0.6s ease-out;
+}
+
+@keyframes movePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(39, 71, 217, 0.5);
+    transform: scale(0.96);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(39, 71, 217, 0.3);
+    transform: scale(1.02);
+  }
+  100% {
+    box-shadow: none;
+    transform: scale(1);
+  }
+}
+
 /* ── Canvas Area ─────────────────────────────────────── */
 
 .canvasWrapper {
@@ -152,4 +183,21 @@
 .errorText {
   font-size: 0.625rem;
   opacity: 0.8;
+}
+
+.retryButton {
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.retryButton:hover {
+  opacity: 1;
 }

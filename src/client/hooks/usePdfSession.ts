@@ -3,6 +3,7 @@ import type {
   PdfSession,
   CreateSessionResponse,
   UploadFilesResponse,
+  PageManifestEntry,
 } from '../../shared/types/pdf';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -61,6 +62,46 @@ export function useUploadPdfFiles() {
         body: formData,
       });
     },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+    },
+  });
+}
+
+export function useRemovePdfFile() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error & { code?: string }, { sessionId: string; fileId: string }>({
+    mutationFn: async ({ sessionId, fileId }) => {
+      const res = await fetch(`/api/pdf/sessions/${sessionId}/files/${fileId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as Error & { code?: string };
+        err.code = body.error?.code;
+        throw err;
+      }
+    },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+    },
+  });
+}
+
+export function useUpdateManifest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { pageCount: number; updatedAt: string },
+    Error & { code?: string },
+    { sessionId: string; manifest: PageManifestEntry[] }
+  >({
+    mutationFn: ({ sessionId, manifest }) =>
+      apiFetch(`/api/pdf/sessions/${sessionId}/manifest`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manifest }),
+      }),
     onSuccess: (_data, { sessionId }) => {
       queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
     },

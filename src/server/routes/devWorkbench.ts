@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { AzureDevOpsService } from '../services/azureDevOps';
@@ -307,6 +308,13 @@ router.post('/start', async (req: Request, res: Response) => {
 
           const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle);
 
+          // Inject design-doc attachments from the Feature work item (Gap 4 fix).
+          try {
+            await injectAdoAttachments(adoService, workItemId!, workItemTitle, workspaceDir);
+          } catch (attachErr) {
+            console.warn('[dev-workbench] attachment injection failed (non-fatal):', (attachErr as Error).message);
+          }
+
           try {
             await adoService.setWorkItemState(workItemId!, 'In Progress');
           } catch (adoErr) {
@@ -418,6 +426,7 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       status: session.status,
       setupError: session.setupError,
       prUrl: session.prUrl,
+      branchPushed: session.branchPushed ?? false,
       createdAt: session.createdAt,
       prdId: session.prdId,
       featureId: session.featureId,
@@ -508,29 +517,11 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
         return;
       }
 
-      // Clean merge — push and open PR.
-      await finalisePush(
-        sessionId,
-        session.branchName,
-        baseBranch,
-        repo,
-        session.project,
-        session.workItemId,
-        provider,
-        adoService,
-      );
+      // Clean merge — push only (no PR).
+      await pushFeatureBranch(sessionId, session.branchName);
     } else if (session.branchPushed) {
-      // Workspace gone but branch already pushed to remote — create PR directly
-      await finalisePushRemoteOnly(
-        sessionId,
-        session.branchName,
-        baseBranch,
-        repo,
-        session.project,
-        session.workItemId,
-        provider,
-        adoService,
-      );
+      // Workspace gone but branch already pushed — nothing more to do for push.
+      // The /pr endpoint will create the PR when the user clicks "Create PR".
     } else {
       res.status(409).json({
         error: 'Workspace is no longer available and branch was not pushed to remote. The changes have been lost.',
@@ -538,8 +529,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       return;
     }
 
-    const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
-    res.json({ ok: true, status: 'clean', branch: session.branchName, prUrl: updated?.prUrl ?? null });
+    res.json({ ok: true, status: 'clean', branch: session.branchName, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
       res.status(403).json({ error: (err as Error).message });
@@ -618,23 +608,9 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     const workspaceDir = getWorkspaceDir(sessionId);
     await completeMerge(workspaceDir);
 
-    const skillConfig = await getSkillConfig(session.project);
-    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
-    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
+    await pushFeatureBranch(sessionId, session.branchName);
 
-    await finalisePush(
-      sessionId,
-      session.branchName,
-      baseBranch,
-      repo,
-      session.project,
-      session.workItemId,
-      provider,
-      adoService,
-    );
-
-    const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
-    res.json({ ok: true, prUrl: updated?.prUrl ?? null });
+    res.json({ ok: true, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
       res.status(403).json({ error: (err as Error).message });
@@ -671,6 +647,53 @@ router.post('/sessions/:id/conflicts/abort', async (req: Request, res: Response)
   } catch (err) {
     console.error('[dev-workbench] abortMerge failed:', (err as Error).message);
     res.status(500).json({ error: `Failed to abort merge: ${(err as Error).message}` });
+  }
+});
+
+// POST /sessions/:id/pr — create a PR for an already-pushed branch (idempotent)
+router.post('/sessions/:id/pr', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = getUserId(req);
+
+    const session = await db.query.devSessions.findFirst({
+      where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
+    });
+
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (!session.branchName) { res.status(400).json({ error: 'Session has no branch' }); return; }
+    if (!session.branchPushed) { res.status(400).json({ error: 'Branch has not been pushed yet' }); return; }
+    if (session.prUrl) {
+      // Idempotent — PR already created
+      res.json({ prUrl: session.prUrl });
+      return;
+    }
+
+    const skillConfig = await getSkillConfig(session.project);
+    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
+    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
+
+    await createSessionPr(
+      sessionId,
+      session.branchName,
+      baseBranch,
+      repo,
+      session.project,
+      session.workItemId,
+      provider,
+      adoService,
+    );
+
+    const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
+    res.json({ prUrl: updated?.prUrl ?? null });
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: (err as Error).message });
+      return;
+    }
+    const message = (err as Error).message;
+    console.error('[dev-workbench] createPr failed:', message);
+    res.status(500).json({ error: `Failed to create pull request: ${message}` });
   }
 });
 
@@ -729,6 +752,133 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Fetches design-doc attachments from the ADO Feature work item (or its parent
+ * Feature if the assigned item is a PBI/TBI) and writes them into
+ * `.ai-pilot/output/{slug}-design-spec/` in the workspace, so the dev prompt's
+ * "pre-loaded design context" claim is true for ADO sessions.
+ *
+ * Non-fatal — caller wraps in try/catch.
+ */
+/**
+ * Maps a raw ADO attachment file name to the canonical design-spec file name the
+ * dev prompt/skill expects, or returns null if the attachment is not a design doc.
+ *
+ * Tolerant of real-world naming: case, singular/typo variants of "assumptions",
+ * and an optional leading `{slug}-` prefix (e.g. `blackout-design.md`).
+ */
+function canonicalizeDesignAttachmentName(rawName: string): string | null {
+  const base = (rawName.split(/[\\/]/).pop() ?? '').toLowerCase().trim();
+  if (!base) return null;
+  if (base.endsWith('design.md')) return 'design.md';
+  if (base.endsWith('tech-spec.md') || base.endsWith('techspec.md')) return 'tech-spec.md';
+  if (
+    base.endsWith('assumptions.md') || base.endsWith('assumption.md') ||
+    base.endsWith('asumptions.md') || base.endsWith('asumption.md')
+  ) {
+    return 'assumptions.md';
+  }
+  if (base.endsWith('prototype.html') || base.endsWith('prototype.htm')) return 'prototype.html';
+  return null;
+}
+
+async function injectAdoAttachments(
+  adoService: AzureDevOpsService,
+  workItemId: number,
+  workItemTitle: string,
+  workspaceDir: string,
+): Promise<void> {
+  // Query the assigned work item with relations to get attachments + type.
+  const wiResult = await adoService.queryWorkItemsByWiql({
+    wiql: `SELECT [System.Id],[System.Title],[System.WorkItemType],[System.Parent] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+    fields: ['System.Id', 'System.Title', 'System.WorkItemType', 'System.Parent'],
+    includeRelations: true,
+  });
+
+  let targetItem = wiResult.items[0];
+  if (!targetItem) return;
+
+  const workItemType: string = targetItem.fields['System.WorkItemType'] ?? '';
+
+  // If not a Feature, walk up to the parent Feature for attachments.
+  if (workItemType !== 'Feature') {
+    const parentId: number | undefined = targetItem.fields['System.Parent'];
+    if (parentId) {
+      const parentResult = await adoService.queryWorkItemsByWiql({
+        wiql: `SELECT [System.Id],[System.Title],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${parentId}`,
+        fields: ['System.Id', 'System.Title', 'System.WorkItemType'],
+        includeRelations: true,
+      });
+      if (parentResult.items[0]) {
+        targetItem = parentResult.items[0];
+      }
+    }
+  }
+
+  const relations = targetItem.relations ?? [];
+  const attachments = relations
+    .map((rel) => {
+      if (rel.rel !== 'AttachedFile' || !rel.url) return null;
+      const rawName = rel.attributes?.['name'] as string | undefined;
+      if (!rawName) return null;
+      const canonicalName = canonicalizeDesignAttachmentName(rawName);
+      if (!canonicalName) return null;
+      return { url: rel.url, rawName, canonicalName };
+    })
+    .filter((a): a is { url: string; rawName: string; canonicalName: string } => a !== null);
+
+  const featureTitleForLog = (targetItem.fields['System.Title'] as string | undefined) ?? workItemTitle;
+  if (attachments.length === 0) {
+    console.warn(
+      `[dev-workbench] injectAdoAttachments: no design-doc attachments found on work item ${workItemId} ` +
+        `("${featureTitleForLog}") — .ai-pilot/output will have no design spec`,
+    );
+    return;
+  }
+
+  // Derive slug from the Feature title or fall back to the work item ID.
+  const featureTitle: string = (targetItem.fields['System.Title'] as string | undefined) ?? workItemTitle;
+  const slug = featureTitle
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || `feature-${workItemId}`;
+
+  const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+  const specDir = path.join(outputDir, `${slug}-design-spec`);
+  fs.mkdirSync(specDir, { recursive: true });
+
+  let written = 0;
+  for (const att of attachments) {
+    try {
+      const content = await adoService.getAttachmentText(att.url);
+      if (content) {
+        fs.writeFileSync(path.join(specDir, att.canonicalName), content, 'utf-8');
+        written++;
+      } else {
+        console.warn(`[dev-workbench] injectAdoAttachments: empty content for attachment ${att.rawName}`);
+      }
+    } catch (fileErr) {
+      console.warn(`[dev-workbench] failed to write attachment ${att.rawName}:`, (fileErr as Error).message);
+    }
+  }
+  console.log(
+    `[dev-workbench] injectAdoAttachments: wrote ${written}/${attachments.length} design-doc attachment(s) ` +
+      `for work item ${workItemId} to ${specDir}`,
+  );
+
+  // Write placeholder PRD and backlog so the prompt's references to those files don't fail silently.
+  const prdPath = path.join(outputDir, `${slug}.prd.md`);
+  if (!fs.existsSync(prdPath)) {
+    const featureWiTitle = featureTitle;
+    fs.writeFileSync(prdPath, `# ${featureWiTitle}\n\n_Work item #${workItemId}_\n`, 'utf-8');
+  }
+  const backlogPath = path.join(outputDir, `${slug}.backlog.json`);
+  if (!fs.existsSync(backlogPath)) {
+    fs.writeFileSync(backlogPath, '{}', 'utf-8');
+  }
+}
+
 async function resolveCheckoutContext(
   skillConfig: ProjectSkillConfig | null,
   project: string,
@@ -749,11 +899,33 @@ async function resolveCheckoutContext(
 }
 
 /**
- * Pushes the feature branch, opens a PR, transitions the work item
- * to "In Pull Request" (ADO only), attaches the PR hyperlink, and persists
- * the PR URL on the session record. Shared by the clean-push and conflict-complete paths.
+ * Pushes the feature branch (commit + merge + push) and sets branchPushed = true
+ * on the session. Does NOT create a PR.
  */
-async function finalisePush(
+async function pushFeatureBranch(
+  sessionId: string,
+  branchName: string,
+): Promise<void> {
+  const workspaceDir = getWorkspaceDir(sessionId);
+  await pushMergedBranch(workspaceDir, branchName);
+
+  await db
+    .update(devSessions)
+    .set({
+      status: 'in_progress',
+      branchPushed: true,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(devSessions.id, sessionId));
+}
+
+/**
+ * Creates a PR from an already-pushed branch, transitions the work item
+ * to "In Pull Request" (ADO only), attaches the PR hyperlink, and persists
+ * the PR URL on the session record. Used by both the /pr endpoint and the
+ * remote-only fallback (workspace gone but branch already pushed).
+ */
+async function createSessionPr(
   sessionId: string,
   branchName: string,
   baseBranch: string,
@@ -763,10 +935,6 @@ async function finalisePush(
   provider: SkillProvider,
   adoService: AzureDevOpsService | null,
 ): Promise<void> {
-  const workspaceDir = getWorkspaceDir(sessionId);
-
-  await pushMergedBranch(workspaceDir, branchName);
-
   let prUrl: string | null = null;
   try {
     const description = workItemId
@@ -800,65 +968,6 @@ async function finalisePush(
     }
   } catch (prErr) {
     console.warn('[dev-workbench] PR creation failed (non-fatal):', (prErr as Error).message);
-  }
-
-  await db
-    .update(devSessions)
-    .set({
-      status: 'in_progress',
-      prUrl,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(devSessions.id, sessionId));
-}
-
-/**
- * Creates a PR from an already-pushed branch when the local workspace is gone.
- * Skips the local merge step — the hosting platform handles merge conflicts.
- */
-async function finalisePushRemoteOnly(
-  sessionId: string,
-  branchName: string,
-  baseBranch: string,
-  repo: string,
-  project: string,
-  workItemId: number | null,
-  provider: SkillProvider,
-  adoService: AzureDevOpsService | null,
-): Promise<void> {
-  let prUrl: string | null = null;
-  try {
-    const description = workItemId
-      ? `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`
-      : `Automated implementation via APEX dev workbench.`;
-    const title = `[APEX] ${branchName.replace('feature/', '')}`;
-
-    if (provider === 'github') {
-      prUrl = await githubCatalog.createPullRequest({
-        repo,
-        sourceBranch: branchName,
-        targetBranch: baseBranch,
-        title,
-        description,
-      });
-    } else if (adoService) {
-      prUrl = await adoService.createPullRequest({
-        repo,
-        project,
-        sourceBranch: branchName,
-        targetBranch: baseBranch,
-        title,
-        description,
-        workItemId: workItemId ?? undefined,
-      });
-
-      if (workItemId) {
-        await adoService.setWorkItemState(workItemId, 'In Pull Request');
-        await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
-      }
-    }
-  } catch (prErr) {
-    console.warn('[dev-workbench] PR creation (remote-only) failed:', (prErr as Error).message);
   }
 
   await db

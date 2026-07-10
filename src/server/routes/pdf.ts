@@ -11,6 +11,9 @@ import {
   validateAndIngest,
   resolveFilePath,
   getPdfTempDir,
+  updateManifest,
+  removeFile,
+  assembleAndExport,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -174,6 +177,119 @@ router.post(
     }
   },
 );
+
+// ── PUT /api/pdf/sessions/:sessionId/manifest ─────────────────────────────────
+
+router.put('/sessions/:sessionId/manifest', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+
+    const session = await loadAndValidateSession(sessionId, userId, res);
+    if (!session) return;
+
+    const result = await updateManifest(sessionId, userId, req.body.manifest);
+    res.json(result);
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    if (code === PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID) {
+      res.status(400).json({ error: { code, message: (err as Error).message } });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION) {
+      res.status(400).json({ error: { code, message: (err as Error).message } });
+      return;
+    }
+    console.error('[pdf] PUT manifest error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── DELETE /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────
+
+router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId, fileId } = req.params;
+
+    const session = await loadAndValidateSession(sessionId, userId, res);
+    if (!session) return;
+
+    await removeFile(sessionId, userId, fileId);
+    res.status(204).end();
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    if (code === 'FILE_NOT_FOUND') {
+      res.status(404).json({ error: { code, message: 'File not found' } });
+      return;
+    }
+    console.error('[pdf] DELETE file error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── POST /api/pdf/sessions/:sessionId/export ──────────────────────────────────
+
+router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+    const { filename, pages } = req.body as { filename?: string; pages?: number[] };
+
+    // Validate pages array if provided
+    if (pages !== undefined) {
+      if (!Array.isArray(pages) || pages.some((p) => typeof p !== 'number')) {
+        res.status(400).json({
+          error: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
+          message: 'pages must be an array of numbers',
+        });
+        return;
+      }
+    }
+
+    const result = await assembleAndExport(sessionId, userId, filename, pages);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Length', result.pdfBytes.length);
+    res.end(Buffer.from(result.pdfBytes));
+  } catch (err: unknown) {
+    const code = (err as any)?.code;
+    const message = (err as Error)?.message ?? 'Internal server error';
+
+    if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+      res.status(404).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+      res.status(403).json({ error: code, message: 'You do not have access to this session' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+      res.status(410).json({ error: code, message: 'This session has expired' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.INVALID_FILENAME) {
+      res.status(400).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.INVALID_PAGE_INDICES) {
+      res.status(400).json({ error: code, message });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.NO_PAGES) {
+      res.status(422).json({ error: code, message: 'Session has no pages to export' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.EXPORT_FAILED) {
+      res.status(500).json({ error: code, message: 'PDF assembly failed. Please retry.' });
+      return;
+    }
+
+    console.error('[pdf] POST export error:', err);
+    res.status(500).json({ error: 'EXPORT_FAILED', message: 'PDF assembly failed. Please retry.' });
+  }
+});
 
 // ── GET /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────────
 

@@ -1,22 +1,25 @@
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
+import { resolveDataRoot } from '../utils/dataDir';
+import { Worker } from 'worker_threads';
 import type {
   FileUploadResult,
   PageManifestEntry,
   PdfFileMetadata,
+  ExportWorkerInput,
+  ExportWorkerOutput,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-sessions');
+const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(resolveDataRoot(), 'pdf-sessions');
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
@@ -335,6 +338,122 @@ export async function validateAndIngest(
   };
 }
 
+// ── File removal ───────────────────────────────────────────────────────────────
+
+export async function removeFile(
+  sessionId: string,
+  userId: string,
+  fileId: string,
+): Promise<void> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const fileMeta = existingMetadata.find((f) => f.fileId === fileId);
+  if (!fileMeta) {
+    const err = new Error('File not found') as Error & { code: string };
+    err.code = 'FILE_NOT_FOUND';
+    throw err;
+  }
+
+  const updatedMetadata = existingMetadata.filter((f) => f.fileId !== fileId);
+  const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const updatedManifest = existingManifest.filter((p) => p.fileId !== fileId);
+
+  await db
+    .update(pdfSessions)
+    .set({
+      fileMetadata: updatedMetadata,
+      pageManifest: updatedManifest,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  const filePath = resolveFilePath(sessionId, fileId);
+  if (filePath) {
+    await safeDeleteFile(filePath);
+  }
+}
+
+// ── Manifest update ────────────────────────────────────────────────────────────
+
+const VALID_ROTATIONS = new Set([0, 90, 180, 270]);
+
+export async function updateManifest(
+  sessionId: string,
+  userId: string,
+  manifest: PageManifestEntry[],
+): Promise<{ pageCount: number; updatedAt: string }> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const knownFileIds = new Set(
+    ((session.fileMetadata ?? []) as PdfFileMetadata[]).map((f) => f.fileId),
+  );
+
+  for (const entry of manifest) {
+    if (!knownFileIds.has(entry.fileId)) {
+      const err = new Error('Invalid file ID in manifest') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID;
+      throw err;
+    }
+    if (!VALID_ROTATIONS.has(entry.rotation)) {
+      const err = new Error('Invalid rotation value') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION;
+      throw err;
+    }
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await db
+    .update(pdfSessions)
+    .set({ pageManifest: manifest, updatedAt })
+    .where(eq(pdfSessions.id, sessionId));
+
+  const pageCount = manifest.filter((p) => !p.deleted).length;
+
+  return { pageCount, updatedAt };
+}
+
 // ── File serving ───────────────────────────────────────────────────────────────
 
 /**
@@ -379,7 +498,157 @@ export async function expireOldSessions(): Promise<{ expired: number; errors: nu
   return { expired, errors };
 }
 
+// ── Export ─────────────────────────────────────────────────────────────────────
+
+const FILENAME_DISALLOWED = /[/\\:*?"<>|]/g;
+const MAX_FILENAME_LENGTH = 255;
+
+export function sanitizeExportFilename(raw?: string): string {
+  if (!raw || raw.trim().length === 0) {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
+    return `merged-document-${stamp}.pdf`;
+  }
+
+  let name = raw.trim().replace(FILENAME_DISALLOWED, '');
+  if (name.length === 0) {
+    return sanitizeExportFilename(); // all chars were disallowed — fall back to default
+  }
+  if (name.length > MAX_FILENAME_LENGTH) {
+    name = name.slice(0, MAX_FILENAME_LENGTH);
+  }
+  if (!name.toLowerCase().endsWith('.pdf')) {
+    name += '.pdf';
+  }
+  return name;
+}
+
+export interface AssembleAndExportResult {
+  pdfBytes: Uint8Array;
+  filename: string;
+}
+
+export async function assembleAndExport(
+  sessionId: string,
+  userId: string,
+  rawFilename?: string,
+  pages?: number[],
+): Promise<AssembleAndExportResult> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('You do not have access to this session') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('This session has expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const manifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const nonDeletedPages = manifest.filter((p) => !p.deleted);
+
+  if (nonDeletedPages.length === 0) {
+    const err = new Error('Session has no pages to export') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.NO_PAGES;
+    throw err;
+  }
+
+  // When pages filter is provided, validate indices and select subset
+  let pagesToExport = nonDeletedPages;
+  if (pages && pages.length > 0) {
+    const maxIndex = nonDeletedPages.length - 1;
+    const invalidIndices = pages.filter((i) => i < 0 || i > maxIndex || !Number.isInteger(i));
+    if (invalidIndices.length > 0) {
+      const err = new Error(`Page indices out of bounds. Valid range: 0-${maxIndex}`) as Error & { code: string };
+      err.code = PDF_ERROR_CODES.INVALID_PAGE_INDICES;
+      throw err;
+    }
+    pagesToExport = pages.map((i) => nonDeletedPages[i]);
+  }
+
+  const filename = sanitizeExportFilename(rawFilename);
+
+  const fileMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const filePaths: Record<string, string> = {};
+  for (const fm of fileMetadata) {
+    const resolved = resolveFilePath(sessionId, fm.fileId);
+    if (resolved) {
+      filePaths[fm.fileId] = resolved;
+    }
+  }
+
+  const missingFiles = pagesToExport.filter((p) => !filePaths[p.fileId]);
+  if (missingFiles.length > 0) {
+    const err = new Error('Source files missing on disk') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.EXPORT_FAILED;
+    throw err;
+  }
+
+  const workerInput: ExportWorkerInput = {
+    manifest: pagesToExport,
+    filePaths,
+  };
+
+  const result = await runPdfExport(workerInput);
+
+  if (!result.success || !result.pdfBytes) {
+    const err = new Error(result.error ?? 'PDF assembly failed. Please retry.') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.EXPORT_FAILED;
+    throw err;
+  }
+
+  await db
+    .update(pdfSessions)
+    .set({
+      status: 'exported' as const,
+      exportFilename: filename,
+      updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  return { pdfBytes: result.pdfBytes, filename };
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/**
+ * Run PDF assembly in a worker thread when the compiled .js exists (production).
+ * Under local ts-node/nodemon only the .ts source is present — worker threads do
+ * not inherit the main process's -P tsconfig.server.json, so fall back to
+ * in-process assemblePdf (already exported for unit tests).
+ */
+async function runPdfExport(input: ExportWorkerInput): Promise<ExportWorkerOutput> {
+  const jsPath = path.join(__dirname, '../workers/pdfExportWorker.js');
+  if (fs.existsSync(jsPath)) {
+    return new Promise<ExportWorkerOutput>((resolve, reject) => {
+      const worker = new Worker(jsPath, { workerData: input });
+      worker.on('message', (msg: ExportWorkerOutput) => resolve(msg));
+      worker.on('error', (err) => reject(err));
+      worker.on('exit', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Worker exited with code ${code}`));
+        }
+      });
+    });
+  }
+
+  const { assemblePdf } = await import('../workers/pdfExportWorker');
+  return assemblePdf(input);
+}
 
 function sanitizeFilename(name: string): string {
   return path.basename(name).replace(/[^a-zA-Z0-9._\-]/g, '_');

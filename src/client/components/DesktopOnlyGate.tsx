@@ -13,5 +13,5 @@ export const DesktopOnlyGate: React.FC<DesktopOnlyGateProps> = ({ children }) =>
     return <MobileGuidanceMessage />;
   }
 
-  return <div data-testid="pdf-tools-desktop-gate">{children}</div>;
+  return <div data-testid="pdf-tools-desktop-gate" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>{children}</div>;
 };

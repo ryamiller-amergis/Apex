@@ -130,13 +130,14 @@ resource "azurerm_linux_web_app" "main" {
     }
   }
 
-  # Runtime config (app settings, startup command, affinity) is managed by
+  # Runtime config (app settings, startup command, node runtime, affinity) is managed by
   # .github/workflows/deploy.yml after provision — keep Terraform from drifting.
   lifecycle {
     create_before_destroy = true
     ignore_changes = [
       app_settings,
       site_config[0].app_command_line,
+      site_config[0].application_stack,
       client_affinity_enabled,
       tags,
       identity,
@@ -166,6 +167,7 @@ resource "azurerm_linux_web_app_slot" "staging" {
     ignore_changes = [
       app_settings,
       site_config[0].app_command_line,
+      site_config[0].application_stack,
       client_affinity_enabled,
       tags,
     ]

@@ -23,11 +23,12 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useDevSession: jest.fn(),
   useDevDiff: jest.fn(),
   usePushBranch: jest.fn(),
+  useCreatePr: jest.fn(),
 }));
 
 import { useChatThread, useSendMessage, useCancelRun } from '../../hooks/useChatThreads';
 import { useChatStream } from '../../hooks/useChatStream';
-import { useDevSession, useDevDiff, usePushBranch } from '../../hooks/useDevWorkbench';
+import { useDevSession, useDevDiff, usePushBranch, useCreatePr } from '../../hooks/useDevWorkbench';
 
 const diffText = [
   'diff --git a/src/a.ts b/src/a.ts',
@@ -99,6 +100,12 @@ function setupMocks() {
   });
 
   (usePushBranch as jest.Mock).mockReturnValue({
+    mutateAsync: jest.fn(),
+    isPending: false,
+    error: null,
+  });
+
+  (useCreatePr as jest.Mock).mockReturnValue({
     mutateAsync: jest.fn(),
     isPending: false,
     error: null,

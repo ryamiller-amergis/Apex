@@ -1,0 +1,47 @@
+.container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.input {
+  flex: 1;
+  min-width: 140px;
+  max-width: 240px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.input:focus {
+  border-color: var(--accent-color);
+}
+
+.inputError {
+  border-color: var(--error-color, #f87171);
+}
+
+.inputError:focus {
+  border-color: var(--error-color, #f87171);
+}
+
+.error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--error-color, #dc2626);
+  white-space: nowrap;
+}

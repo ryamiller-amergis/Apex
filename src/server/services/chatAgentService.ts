@@ -34,6 +34,8 @@ import type { ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import { notifyRunEvent } from './pgNotifyService';
+import { isMaxviewConfigured } from './maxviewAuthService';
+import { isFeatureEnabled } from './featureFlagService';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -57,6 +59,8 @@ interface ThreadState {
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Cached flag — true when the thread backs an interview row (gets longer idle timeout) */
   isInterviewThread: boolean;
+  /** True when the thread backs a dev-session (gets extended run timeout for sequential implementation) */
+  isDevSession: boolean;
 }
 
 const threads = new Map<string, ThreadState>();
@@ -298,9 +302,15 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
 /**
  * Build the mcpServers map for the Cursor SDK agent.
  * Always includes ado-skills; conditionally adds any MCP pill selected for this thread.
+ * When `maxviewEnabled` is set, the always-on MaxView timecard-debug MCP proxy is
+ * added (gated by the `maxview-mcp` feature flag + server config in the caller).
  * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
  */
-function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Record<string, McpServerConfig> {
+function buildMcpServers(
+  kickoff: ChatThreadKickoff,
+  adoSkillsUrl: string,
+  options?: { maxviewEnabled?: boolean },
+): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
@@ -325,7 +335,41 @@ function buildMcpServers(kickoff: ChatThreadKickoff, adoSkillsUrl: string): Reco
     }
   }
 
+  if (options?.maxviewEnabled) {
+    servers['maxview'] = {
+      url: `http://localhost:${process.env.PORT ?? 3001}/mcp/maxview`,
+    };
+  }
+
   return servers;
+}
+
+/**
+ * Whether the always-on MaxView timecard-debug MCP should be wired into this
+ * thread's agent. Requires both server-side config (env) and the `maxview-mcp`
+ * feature flag being enabled for the user/project. Fails closed on any error.
+ */
+async function isMaxviewMcpEnabled(userId: string, project: string): Promise<boolean> {
+  if (!isMaxviewConfigured()) return false;
+  try {
+    return await isFeatureEnabled('maxview-mcp', { userId, project });
+  } catch (err) {
+    console.error('[chat] maxview-mcp flag check failed:', (err as Error).message);
+    return false;
+  }
+}
+
+/** System-prompt guidance describing the MaxView timecard-debug MCP tools. */
+function buildMaxviewPromptHint(): string {
+  return [
+    `# MaxView timecard debugging (via \`maxview\` MCP server)`,
+    `You have access to the read-only \`maxview\` MCP server for debugging MaxView timecards. Use it whenever the user asks about a specific timecard, its RecruitCare integration, or its status history. All results are PHI/PII-masked and scoped to the service account's data visibility. Available tools:`,
+    `- \`get_timecard_detail(timecardId)\` — a single timecard's masked detail (entries, status, hours, presence flags); returns null when not found`,
+    `- \`search_timecards(employeeId?, worksiteId?, statusId?, startDate?, endDate?, page?, pageSize?)\` — search timecards (dates default to the last 3 months; pageSize capped at 100)`,
+    `- \`get_timecard_integration(timecardId)\` — MaxView↔RecruitCare integration diagnostics (status, blocking reasons, scrubbed errors, field-level match/mismatch flags)`,
+    `- \`get_timecard_history(timecardId)\` — status-change history (acting user masked; status, timestamp, comment-presence preserved)`,
+    `Always call these tools instead of guessing timecard data. If a lookup returns null, tell the user the timecard was not found.`,
+  ].join('\n');
 }
 
 function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
@@ -742,11 +786,10 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
+  const hasApexPath = !!(kickoff as any).prdId; // Apex PRD-sourced session
   const parts: string[] = [
     `# Development workspace`,
-    `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo on branch \`${branch}\`.`,
-    `You can read, edit, and create files directly. All changes are local — do NOT push, create PRs, or run git push.`,
+    `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo. The feature branch has already been created and checked out — you are on it now.`,
     ``,
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -760,7 +803,7 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   if (isGitHub) {
     parts.push(
       `# Repo access`,
-      `Skills from this project's ${repoLabel} are pre-loaded into the conversation by the system when applicable.`,
+      `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
       ``,
     );
   } else {
@@ -770,66 +813,95 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `- \`list_repo_dir\`    — browse repo directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
       `- \`search_repo_code\` — search code in the repo`,
+      `- \`query_work_items\` — query ADO work items`,
       ``,
     );
   }
 
-  parts.push(
-    ...buildScopePolicyLines(kickoff),
-    ``,
-    `# Pre-loaded design context`,
-    `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
-    `- **PRD markdown** — \`{slug}.prd.md\``,
-    `- **Backlog JSON** — \`{slug}.backlog.json\` (epics, features, PBIs, TBIs, dependsOn, parallelGroup)`,
-    `- **Test cases** — \`{slug}.test-cases.json\` (verification targets per PBI)`,
-    `- **Design spec** — \`{slug}-design-spec/{feature-slug}-design.md\``,
-    `- **Tech spec** — \`{slug}-design-spec/{feature-slug}-tech-spec.md\``,
-    `- **Assumptions** — \`{slug}-design-spec/{feature-slug}-assumptions.md\``,
-    ``,
-    `Read these files first — they define WHAT to build, architectural decisions, API contracts,`,
-    `data models, component structures, and test expectations. The tech spec is your primary`,
-    `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
-    `\`parallelGroup\` fields) to determine execution order.`,
-    ``,
-    `# Execution mode — MULTITASK by default`,
-    `When the design spec or backlog defines items that can run in parallel (same \`parallelGroup\`,`,
-    `or no inter-dependencies), you MUST dispatch them as parallel subagents (via the Task tool`,
-    `with \`run_in_background: true\`). Only serialize items that have explicit \`dependsOn\` edges`,
-    `to earlier items. This maximizes throughput and matches the design spec's intended phases.`,
-    ``,
-    `# Your task`,
-    `You are implementing the feature identified by this session. Your job:`,
-    `1. If a development skill path is configured, load it and follow its instructions.`,
-    `2. Otherwise, read the design artifacts above and implement the required changes directly.`,
-    `3. Edit files directly using the built-in file tools (Write/Edit). The cwd is the repo root.`,
-    `4. Do NOT push changes, create branches, commit, or run git commands. All your edits will be captured as a diff by APEX.`,
-    `5. Focus on clean, working code that addresses the feature requirements from the design spec.`,
-    `6. When your implementation and tests are complete, dispatch the built-in code-reviewer subagent (via the Task tool) to review the changes before handing back to the user.`,
-    ``,
-    `# Important constraints`,
-    `- This IS a real repo checkout — you can read any project file directly from disk.`,
-    `- Do NOT run \`git push\`, \`git commit\`, or create pull requests.`,
-    `- Write clean, production-quality code.`,
-    `- Follow existing project conventions you observe in the codebase.`,
-    `- Use parallel subagents (multitask) for independent work items — do NOT serialize unnecessarily.`,
-  );
+  parts.push(...buildScopePolicyLines(kickoff), ``);
+
+  if (hasApexPath) {
+    // Apex PRD-sourced path: full design context injected by injectDevContextFiles
+    parts.push(
+      `# Pre-loaded design context`,
+      `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
+      `- **PRD markdown** — \`{slug}.prd.md\``,
+      `- **Backlog JSON** — \`{slug}.backlog.json\` (epics, features, PBIs, TBIs, dependsOn, parallelGroup)`,
+      `- **Test cases** — \`{slug}.test-cases.json\` (verification targets per PBI)`,
+      `- **Design spec** — \`{slug}-design-spec/{feature-slug}-design.md\``,
+      `- **Tech spec** — \`{slug}-design-spec/{feature-slug}-tech-spec.md\``,
+      `- **Assumptions** — \`{slug}-design-spec/{feature-slug}-assumptions.md\``,
+      ``,
+      `Read these files first — they define WHAT to build, architectural decisions, API contracts,`,
+      `data models, component structures, and test expectations. The tech spec is your primary`,
+      `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
+      `\`parallelGroup\` fields) to determine execution order.`,
+      ``,
+    );
+  } else {
+    // ADO path: design-doc attachments injected by injectAdoAttachments at session setup
+    parts.push(
+      `# Design context`,
+      `The following design artifacts have been injected into \`.ai-pilot/output/\` in this workspace:`,
+      `- **Design spec** — \`{slug}-design-spec/design.md\``,
+      `- **Tech spec** — \`{slug}-design-spec/tech-spec.md\``,
+      `- **Assumptions** — \`{slug}-design-spec/assumptions.md\``,
+      `- **Prototype** — \`{slug}-design-spec/prototype.html\` (if present)`,
+      `- **PRD placeholder** — \`{slug}.prd.md\``,
+      `Read these first — they define the feature's scope, architecture, API contracts, and test targets.`,
+      ``,
+    );
+  }
 
   if (kickoff.skillPath) {
+    // Skill configured: hand off governance entirely to the project dev skill.
     parts.push(
+      `# APEX → Project → APEX governance`,
+      `APEX has already handled all git setup:`,
+      `- Cloned the repo at \`${branch}\``,
+      `- Created and checked out the feature branch (this is where you are now)`,
+      `- Injected the design artifacts above`,
+      ``,
+      `Your role is to follow the project development skill exactly. Load it now, then follow ALL of its phases —`,
+      `including scope confirmation (Phase 0.5), plan (Phase 1 — STOP for human approval), implement (Phase 2),`,
+      `and code review (Step 5).`,
+      ``,
+      `CRITICAL: Do NOT write any source code until the human explicitly approves the Phase 1 plan.`,
+      ``,
+      `CRITICAL — APEX SDK file-write constraint: You are running inside the APEX Cursor SDK agent runtime.`,
+      `ALL file edits MUST be made directly by you in the current working directory.`,
+      `Do NOT use the Task tool to dispatch sub-agents for file writes — sub-agent file changes run in`,
+      `isolated SDK processes that are NOT written to the session workspace, so they will be invisible to`,
+      `APEX's diff, push, and PR flow. You may still use the execution lanes from the plan to structure`,
+      `the implementation order, but work through each lane yourself, directly, one file at a time.`,
+      `You MAY use Task sub-agents for read-only work (research, code review) — just not for writing files.`,
+      ``,
+      `APEX owns all git operations after you finish: committing, pushing, opening PRs, ADO state transitions.`,
+      `You must NOT run git commit, git push, git branch, or open pull requests.`,
       ``,
       `# Development skill`,
-      `A development skill has been configured. Load it first:`,
+      `Load it now:`,
     );
     if (isGitHub) {
-      parts.push(
-        `The skill content will be pre-loaded below by the system.`,
-      );
+      parts.push(`The skill content will be pre-loaded below by the system.`);
     } else {
       parts.push(
         `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
       );
     }
-    parts.push(`Follow the skill's instructions for implementing this feature.`);
+    parts.push(`Follow the skill's instructions exactly, starting from Phase 0.`);
+  } else {
+    // No skill configured: minimal direct-implement fallback.
+    parts.push(
+      `# Your task`,
+      `No development skill is configured for this project. Implement the feature using the design artifacts above.`,
+      `Read the design spec and tech spec in \`.ai-pilot/output/\` first, then implement the required changes.`,
+      ``,
+      `# Important constraints`,
+      `- This IS a real repo checkout — you can read any project file directly from disk.`,
+      `- Do NOT run \`git push\`, \`git commit\`, create branches, or open pull requests — APEX owns those steps.`,
+      `- Write clean, production-quality code. Follow existing project conventions in the codebase.`,
+    );
   }
 
   return parts.join('\n');
@@ -847,7 +919,12 @@ function broadcast(state: ThreadState, event: SseEvent) {
 
 function resetIdleTimer(state: ThreadState) {
   if (state.idleTimer) clearTimeout(state.idleTimer);
-  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  // Don't start the idle timer while a run is active — the timer will be reset
+  // in the run's finally block. Starting it now could fire closeThread mid-run.
+  if (state.thread.status === 'running') return;
+  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS
+    : state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS  // dev sessions get 2-hour window
+    : IDLE_TIMEOUT_MS;
   state.idleTimer = setTimeout(() => closeThread(state.thread.id), timeout);
 }
 
@@ -929,6 +1006,7 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     agent: null,
     idleTimer: null,
     isInterviewThread: isInterview,
+    isDevSession: thread.kickoff?.mode === 'development',
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
@@ -1027,6 +1105,7 @@ export async function createThread(
     agent: null,
     idleTimer: null,
     isInterviewThread: false,
+    isDevSession: thread.kickoff?.mode === 'development',
   };
 
   threads.set(threadId, state);
@@ -1560,7 +1639,12 @@ export async function sendMessage(
   }
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl);
+  const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled });
+  console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
+    maxviewEnabled,
+    maxviewConfigured: isMaxviewConfigured(),
+  });
 
   const turnId = uuidv4();
   const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
@@ -1612,25 +1696,47 @@ export async function sendMessage(
       }
     }
 
+    if (maxviewEnabled) {
+      initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
+    }
+
     prompt = `${initialPrompt}\n\n---\n\n${promptText}`;
   } else {
     prompt = promptText;
   }
 
   let agentRunId: string | undefined;
+  let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
 
   try {
     // Create or resume the agent (retry up to 3x on transient errors)
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
 
+    const codeReviewerAgent = {
+      description:
+        'Rigorous MaxView code reviewer. Reviews changed files against MaxView layer boundaries, coding standards, existing-code protection rules, and the approved design spec. Every finding must cite a specific rule file, design-doc section, or repo path.',
+      prompt:
+        `You are a senior engineer reviewing a MaxView feature implementation. Your job:\n` +
+        `1. Read the MaxView repo rules from .cursor/rules/ (especially backend-layer-boundaries.mdc, coding-standards.mdc, existing-code-protection.mdc, testing-standards.mdc, typescript-typecheck.mdc, ui-design-standards.mdc).\n` +
+        `2. Read AGENTS.md and CONTEXT.md for project context.\n` +
+        `3. Review the diff provided against those rules and the design docs in .ai-pilot/output/.\n` +
+        `4. For every finding: cite the specific rule file / design-doc section / repo path. Do NOT produce generic advice.\n` +
+        `5. Group findings by severity: Must-fix, Should-fix, Nice-to-have.\n` +
+        `6. Format: [Severity] Title — File:lines — Snippet — Suggested change (as diff) — Reason.\n` +
+        `Be thorough but only flag real violations. If no issues, say so explicitly.`,
+      model: { id: 'claude-opus-4-6' },
+    };
+
     if (!state.agent) {
       if (state.thread.cursorAgentId) {
+        // Agent.resume accepts Partial<AgentOptions>, which includes agents.
         state.agent = await retryWithBackoff(
           () => Agent.resume(state.thread.cursorAgentId!, {
             apiKey,
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
             mcpServers,
+            agents: { 'code-reviewer': codeReviewerAgent },
           }),
           sdkRetryOpts,
         );
@@ -1641,6 +1747,7 @@ export async function sendMessage(
             model: { id: resolvedModel },
             local: { cwd: state.thread.workspaceDir },
             mcpServers,
+            agents: { 'code-reviewer': codeReviewerAgent },
           }),
           sdkRetryOpts,
         );
@@ -1666,7 +1773,8 @@ export async function sendMessage(
     persistThread(state.thread);
 
     // ── Insert agent_runs record as 'queued', then atomically claim it ──────
-    const runTimeoutAt = new Date(Date.now() + IDLE_TIMEOUT_MS).toISOString();
+    const runTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+    const runTimeoutAt = new Date(Date.now() + runTimeoutMs).toISOString();
     agentRunId = state.thread.activeRunId ?? threadId;
     await db.insert(agentRuns).values({
       id: agentRunId,
@@ -1702,6 +1810,36 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
 
+    // Shared heartbeat helper — call from any event handler that can run > 90s
+    // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
+    // agentRunId is always assigned before this function is ever called.
+    const bumpHeartbeat = async (): Promise<void> => {
+      if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
+      lastHeartbeatMs = Date.now();
+      const runId = agentRunId!;
+      const [runRow] = await db.update(agentRuns)
+        .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+        .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
+        .returning({ status: agentRuns.status });
+      if (!runRow) {
+        const cancelledRow = await db.query.agentRuns.findFirst({
+          where: eq(agentRuns.id, runId),
+          columns: { status: true },
+        });
+        if (cancelledRow?.status === 'cancelled') {
+          console.log(`[chat] Run ${runId} cancelled by another worker, aborting stream`);
+          throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
+        }
+      }
+    };
+
+    // Background heartbeat — bumps every 30s unconditionally so long thinking
+    // phases that emit no stream events don't trigger the reaper's expiry threshold.
+    backgroundHeartbeatId = setInterval(() => {
+      lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
+      bumpHeartbeat().catch(() => {});
+    }, 30_000);
+
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
 
@@ -1715,25 +1853,7 @@ export async function sendMessage(
                   agentTextBuffer += block.text;
                   broadcast(state, { type: 'token', text: block.text });
                   notifyRunEvent(threadId, { type: 'token', data: block.text }).catch(() => {});
-                  // Periodic heartbeat + cancel check
-                  if (Date.now() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
-                    lastHeartbeatMs = Date.now();
-                    const [runRow] = await db.update(agentRuns)
-                      .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
-                      .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'running')))
-                      .returning({ status: agentRuns.status });
-                    if (!runRow) {
-                      // Run was cancelled or failed by another worker/reaper
-                      const cancelledRow = await db.query.agentRuns.findFirst({
-                        where: eq(agentRuns.id, agentRunId),
-                        columns: { status: true },
-                      });
-                      if (cancelledRow?.status === 'cancelled') {
-                        console.log(`[chat] Run ${agentRunId} cancelled by another worker, aborting stream`);
-                        throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
-                      }
-                    }
-                  }
+                  await bumpHeartbeat();
                 }
                 if (block.type === 'tool_use') {
                   // Snapshot reasoning text accumulated before this tool call
@@ -1764,6 +1884,7 @@ export async function sendMessage(
                   broadcast(state, { type: 'message', message: toolMsg });
                   pgInsertMessage(threadId, toolMsg).catch(() => {});
                   notifyRunEvent(threadId, { type: 'tool_call', data: { toolName: block.name } }).catch(() => {});
+                  await bumpHeartbeat();
                 }
               }
             } else if (event.type === 'thinking') {
@@ -1785,6 +1906,7 @@ export async function sendMessage(
                 text: thinkingText,
                 durationMs: (event as any).thinking_duration_ms,
               });
+              await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
               const tc = event as any;
               broadcast(state, {
@@ -1812,7 +1934,7 @@ export async function sendMessage(
                   apiKey,
                   model: { id: resolvedModel },
                   local: { cwd: state.thread.workspaceDir },
-                  mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                  mcpServers,
                 }),
                 sdkRetryOpts,
               );
@@ -1844,7 +1966,7 @@ export async function sendMessage(
                 apiKey,
                 model: { id: resolvedModel },
                 local: { cwd: state.thread.workspaceDir },
-                mcpServers: { 'ado-skills': { url: mcpServerUrl } },
+                mcpServers,
               }),
               sdkRetryOpts,
             );
@@ -2016,6 +2138,10 @@ export async function sendMessage(
       console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
     }
   } finally {
+    if (backgroundHeartbeatId !== null) {
+      clearInterval(backgroundHeartbeatId);
+      backgroundHeartbeatId = null;
+    }
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);
@@ -2067,15 +2193,10 @@ export async function closeThread(threadId: string): Promise<void> {
     state.agent = null;
   }
 
-  // Persist status=closed so history survives idle eviction and server restarts.
-  state.thread.status = 'closed';
-  await pgUpsertThread(state.thread);
-
-  threads.delete(threadId);
-
-  // Workspace deletion protection: skip if this thread backs an active dev
-  // session that has unpushed changes (the workspace is still needed).
-  let shouldDeleteWorkspace = true;
+  // For dev sessions with unpushed changes: evict from memory (free resources)
+  // but leave the thread status as-is (idle) and preserve the workspace.
+  // This lets users log out, navigate away, or hit the idle timeout and then
+  // return to find their session intact and the textarea still enabled.
   if (state.thread.kickoff?.mode === 'development') {
     const session = await db.query.devSessions.findFirst({
       where: eq(devSessions.chatThreadId, threadId),
@@ -2085,16 +2206,22 @@ export async function closeThread(threadId: string): Promise<void> {
       const isActive = session.status === 'in_progress' || session.status === 'setting_up' || session.status === 'conflict';
       const hasUnpushed = !session.branchPushed;
       if (isActive || hasUnpushed) {
-        shouldDeleteWorkspace = false;
+        console.log(`[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`);
+        threads.delete(threadId);
+        return;
       }
     }
   }
 
-  if (shouldDeleteWorkspace) {
-    try {
-      fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
-    } catch { /* non-fatal */ }
-  }
+  // Persist status=closed so history survives idle eviction and server restarts.
+  state.thread.status = 'closed';
+  await pgUpsertThread(state.thread);
+
+  threads.delete(threadId);
+
+  try {
+    fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
+  } catch { /* non-fatal */ }
 }
 
 /**

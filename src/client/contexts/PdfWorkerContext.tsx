@@ -1,6 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.mjs',
+  import.meta.url,
+).toString();
 
 interface PdfWorkerContextValue {
   getDocument: (url: string) => Promise<PDFDocumentProxy>;
@@ -20,21 +25,6 @@ export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }
   const documentCache = useRef<Map<string, PDFDocumentProxy>>(new Map());
   const loadingCache = useRef<Map<string, Promise<PDFDocumentProxy>>>(new Map());
 
-  useEffect(() => {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.mjs',
-      import.meta.url,
-    ).toString();
-
-    return () => {
-      for (const doc of documentCache.current.values()) {
-        doc.cleanup();
-      }
-      documentCache.current.clear();
-      loadingCache.current.clear();
-    };
-  }, []);
-
   const getDocument = useCallback(async (url: string): Promise<PDFDocumentProxy> => {
     const cached = documentCache.current.get(url);
     if (cached) return cached;
@@ -42,7 +32,11 @@ export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }
     const inflight = loadingCache.current.get(url);
     if (inflight) return inflight;
 
-    const loading = pdfjsLib.getDocument({ url }).promise.then(
+    const loading = pdfjsLib.getDocument({
+      url,
+      disableAutoFetch: true,
+      disableRange: true,
+    }).promise.then(
       (doc) => {
         documentCache.current.set(url, doc);
         loadingCache.current.delete(url);
@@ -58,8 +52,10 @@ export const PdfWorkerProvider: React.FC<PdfWorkerProviderProps> = ({ children }
     return loading;
   }, []);
 
+  const contextValue = React.useMemo(() => ({ getDocument }), [getDocument]);
+
   return (
-    <PdfWorkerContext.Provider value={{ getDocument }}>
+    <PdfWorkerContext.Provider value={contextValue}>
       {children}
     </PdfWorkerContext.Provider>
   );

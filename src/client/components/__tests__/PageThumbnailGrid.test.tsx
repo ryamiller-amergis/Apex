@@ -19,16 +19,8 @@ jest.mock('../../hooks/useThumbnailRenderer', () => ({
   })),
 }));
 
-jest.mock('../../hooks/usePageSelection', () => ({
-  usePageSelection: jest.fn(() => ({
-    selectedPageIds: new Set<string>(),
-    toggleSelection: jest.fn(),
-    rangeSelect: jest.fn(),
-    clearSelection: jest.fn(),
-    isSelected: jest.fn(() => false),
-    selectedCount: 0,
-  })),
-}));
+const mockIsSelected = jest.fn(() => false);
+const mockOnSelect = jest.fn();
 
 jest.mock('../../contexts/PdfWorkerContext', () => ({
   PdfWorkerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -131,6 +123,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -153,6 +147,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -170,6 +166,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -180,7 +178,7 @@ describe('PageThumbnailGrid', () => {
     expect(thumb3).toHaveTextContent('invoice.pdf');
   });
 
-  it('calls onPreview when a thumbnail is clicked', () => {
+  it('calls onPreview when a thumbnail is double-clicked', () => {
     const manifest = makeManifest();
 
     render(
@@ -189,10 +187,12 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
-    fireEvent.click(screen.getByTestId('pdf-thumbnail-1'));
+    fireEvent.dblClick(screen.getByTestId('pdf-thumbnail-1'));
 
     expect(onPreview).toHaveBeenCalledWith('p1');
   });
@@ -206,6 +206,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -224,6 +226,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -242,6 +246,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 
@@ -259,6 +265,8 @@ describe('PageThumbnailGrid', () => {
         pageManifest={manifest}
         fileMetadata={mockFileMetadata}
         onPreview={onPreview}
+        isSelected={mockIsSelected}
+        onSelect={mockOnSelect}
       />,
     );
 

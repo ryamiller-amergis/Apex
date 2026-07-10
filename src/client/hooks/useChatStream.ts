@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ChatMessage, SseEvent, SseErrorEvent, SseRetryingEvent, SseThinkingEvent, SseToolStatusEvent, ChatThreadStatus } from '../../shared/types/chat';
+import type { ChatMessage, SseEvent, SseErrorEvent, SseMessageEvent, SseRetryingEvent, SseThinkingEvent, SseToolStatusEvent, ChatThreadStatus } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface ToolProgress {
@@ -126,6 +126,7 @@ export function useChatStream(
           break;
         }
         case 'message': {
+          const messageEvent = event as SseMessageEvent;
           streamBufferRef.current = '';
           setStreamingText('');
           setThinkingText('');
@@ -134,8 +135,8 @@ export function useChatStream(
           setRetryReason(null);
           clearRetryTimeout();
           setMessages((prev) => {
-            const exists = prev.some((m) => m.id === event.message.id);
-            return exists ? prev : [...prev, event.message];
+            const exists = prev.some((m) => m.id === messageEvent.message.id);
+            return exists ? prev : [...prev, messageEvent.message];
           });
           break;
         }
@@ -307,9 +308,17 @@ export function useChatStream(
       }
     };
 
-    poll();
-    pollTimerRef.current = window.setInterval(poll, 5_000);
-    return () => clearPollTimer();
+    // Delay first poll by 4 seconds to give SSE time to reconnect after a
+    // page refresh — avoids surfacing a stale "Worker lost" reaper row before
+    // the SSE stream re-establishes and clears the polling condition.
+    const initialPollDelay = window.setTimeout(() => {
+      poll();
+      pollTimerRef.current = window.setInterval(poll, 5_000);
+    }, 4_000);
+    return () => {
+      window.clearTimeout(initialPollDelay);
+      clearPollTimer();
+    };
   }, [threadId, status, isConnected, clearPollTimer]);
 
   return { messages, streamingText, thinkingText, toolProgress, status, isConnected, prdReady, backlogReady, isRetrying, retryReason };

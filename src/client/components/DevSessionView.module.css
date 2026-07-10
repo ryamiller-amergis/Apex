@@ -666,9 +666,18 @@
 .log-icon {
   flex-shrink: 0;
   width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   font-size: 0.8125rem;
   padding-top: 1px;
+  color: var(--text-secondary);
+}
+
+.log-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .log-content {
@@ -739,6 +748,12 @@
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-secondary);
+  transition: border-color 0.3s ease, background 0.3s ease;
+}
+
+.turn-activity-live {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 4%, var(--bg-secondary));
 }
 
 .turn-activity-toggle {
@@ -978,6 +993,28 @@
   cursor: not-allowed;
 }
 
+.create-pr-btn {
+  padding: 8px 16px;
+  background: var(--success-color);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  align-self: flex-start;
+}
+
+.create-pr-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.create-pr-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .push-error {
   margin: 0;
   font-size: 0.75rem;
@@ -1186,4 +1223,73 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ── Shimmer rotating word ── */
+
+.shimmer {
+  font-weight: 600;
+  background: linear-gradient(
+    90deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 35%,
+    var(--accent-color) 50%,
+    var(--text-muted) 65%,
+    var(--text-muted) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 2s linear infinite;
+}
+
+@keyframes shimmer-sweep {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ── Sticky checklist container ── */
+
+.checklist-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 8px 16px 0;
+  background: var(--bg-primary);
+}
+
+/* ── Markdown tables inside agent bubbles ── */
+
+.agent-bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin: 10px 0;
+  overflow-x: auto;
+  display: block;
+}
+
+.agent-bubble th,
+.agent-bubble td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
+.agent-bubble th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.agent-bubble td {
+  color: var(--text-secondary);
+}
+
+.agent-bubble tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
 }

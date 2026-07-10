@@ -124,7 +124,46 @@ export async function checkoutDefaultBranch(opts: {
     throw new Error(`git clone failed: ${redactSecrets(raw, secret)}`);
   }
 
+  // The cloned repo's .gitignore does not cover `.ai-pilot`, so the design-context
+  // files APEX injects into the workspace would otherwise be picked up by every
+  // `git add -A` (diff panel, auto-push, base-merge commit) and end up in the PR.
+  // Adding the path to the local `.git/info/exclude` suppresses git tracking of it
+  // everywhere at once while leaving the files on disk for the agent to read.
+  excludeAiPilotFromGit(workspaceDir);
+
   return workspaceDir;
+}
+
+/**
+ * Adds `.ai-pilot/` to the workspace's local `.git/info/exclude` so the injected
+ * design-context files are never staged, diffed, committed, or pushed — without
+ * touching the committed `.gitignore`. Idempotent and non-fatal: the files stay
+ * on disk (readable by the agent); only their git tracking is suppressed.
+ */
+export function excludeAiPilotFromGit(workspaceDir: string): void {
+  const entry = '.ai-pilot/';
+  const excludePath = path.join(workspaceDir, '.git', 'info', 'exclude');
+  try {
+    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+
+    const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf-8') : '';
+    const alreadyExcluded = existing
+      .split(/\r?\n/)
+      .some((line) => line.trim() === entry);
+    if (alreadyExcluded) return;
+
+    const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+    fs.appendFileSync(
+      excludePath,
+      `${prefix}# APEX-injected design context — excluded from diffs and commits\n${entry}\n`,
+      'utf-8',
+    );
+  } catch (err) {
+    console.warn(
+      '[repoCheckoutService] failed to write .ai-pilot exclude (non-fatal):',
+      (err as Error).message,
+    );
+  }
 }
 
 /**

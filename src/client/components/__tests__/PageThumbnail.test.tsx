@@ -60,12 +60,23 @@ describe('PageThumbnail', () => {
     expect(label).toHaveTextContent('report.pdf p.3');
   });
 
-  it('calls onPreview with pageId when clicked', () => {
+  it('calls onSelect with pageId on single click', () => {
+    const onSelect = jest.fn();
+    renderThumbnail({ onSelect });
+    const card = screen.getByTestId('pdf-thumbnail-1');
+
+    fireEvent.click(card);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith('page-1', false, false);
+  });
+
+  it('calls onPreview with pageId when double-clicked', () => {
     const onPreview = jest.fn();
     renderThumbnail({ onPreview });
     const card = screen.getByTestId('pdf-thumbnail-1');
 
-    fireEvent.click(card);
+    fireEvent.dblClick(card);
 
     expect(onPreview).toHaveBeenCalledTimes(1);
     expect(onPreview).toHaveBeenCalledWith('page-1');
@@ -79,7 +90,7 @@ describe('PageThumbnail', () => {
     fireEvent.click(card, { shiftKey: true });
 
     expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect).toHaveBeenCalledWith('page-1', true);
+    expect(onSelect).toHaveBeenCalledWith('page-1', true, false);
   });
 
   it('calls onPreview when Enter key pressed', () => {
@@ -116,7 +127,7 @@ describe('PageThumbnail', () => {
     const card = screen.getByTestId('pdf-thumbnail-1');
     expect(card).toHaveAttribute(
       'aria-label',
-      '1 — report.pdf page 3. Click or press Enter to preview.',
+      '1 — report.pdf page 3. Click to select, double-click to preview.',
     );
   });
 
