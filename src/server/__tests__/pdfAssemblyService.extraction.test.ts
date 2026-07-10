@@ -52,7 +52,12 @@ jest.mock('fs', () => {
   const actual = jest.requireActual('fs');
   return {
     ...actual,
-    existsSync: jest.fn().mockReturnValue(true),
+    existsSync: jest.fn((p: string) => {
+      if (typeof p === 'string' && (p.includes('.pdf') || p.includes('pdfExportWorker.js'))) {
+        return true;
+      }
+      return actual.existsSync(p);
+    }),
     mkdirSync: jest.fn(),
   };
 });
@@ -74,10 +79,12 @@ import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+const FILE_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
 function makeSession(pageCount: number, userId = 'user-1') {
   const pages = Array.from({ length: pageCount }, (_, i) => ({
     pageId: `page-${i}`,
-    fileId: 'file-1',
+    fileId: FILE_ID,
     sourcePageIndex: i,
     rotation: 0,
     deleted: false,
@@ -87,7 +94,7 @@ function makeSession(pageCount: number, userId = 'user-1') {
     userId,
     status: 'active',
     pageManifest: pages,
-    fileMetadata: [{ fileId: 'file-1', storedName: 'file-1.pdf', sizeBytes: 1000 }],
+    fileMetadata: [{ fileId: FILE_ID, storedName: `${FILE_ID}.pdf`, sizeBytes: 1000 }],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
