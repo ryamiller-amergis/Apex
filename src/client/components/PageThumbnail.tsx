@@ -1,6 +1,8 @@
 import React, { useRef, useCallback, useEffect } from 'react';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
+import { useBlankDetection } from '../hooks/useBlankDetection';
+import { BlankPageBadge } from './BlankPageBadge';
 import styles from './PageThumbnail.module.css';
 
 const THUMBNAIL_WIDTH = 180;
@@ -55,6 +57,8 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     }
   }, [imageBitmap]);
 
+  const { isBlank } = useBlankDetection(canvasRef.current, imageBitmap);
+
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.shiftKey || e.ctrlKey || e.metaKey) {
@@ -85,6 +89,8 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     .filter(Boolean)
     .join(' ');
 
+  const ariaLabel = `${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}.${isBlank ? ' Likely blank page.' : ''} Click or press Enter to preview.`;
+
   return (
     <div
       ref={cardRef}
@@ -93,7 +99,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="gridcell"
-      aria-label={`${assemblyPosition} — ${sourceFileName} page ${originalPageNumber}. Click or press Enter to preview.`}
+      aria-label={ariaLabel}
       aria-selected={isSelected}
       data-testid={`pdf-thumbnail-${assemblyPosition}`}
       data-page-id={pageId}
@@ -107,6 +113,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
           </div>
         )}
         <canvas ref={canvasRef} className={styles.canvas} />
+        <BlankPageBadge isBlank={isBlank} pageIndex={assemblyPosition - 1} />
         <div className={styles.previewOverlay}>
           <span className={styles.previewIcon}>🔍</span>
         </div>
