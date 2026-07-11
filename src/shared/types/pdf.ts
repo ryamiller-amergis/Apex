@@ -10,6 +10,7 @@ export interface PdfFileMetadata {
   sizeBytes: number;
   pageCount: number;
   convertedFrom?: string;
+  originalMimeType?: string;
   uploadedAt: string;
 }
 
@@ -53,6 +54,7 @@ export interface FileUploadResult {
   status: 'success' | 'error';
   pageCount?: number;
   sizeBytes?: number;
+  convertedFrom?: string;
   error?: {
     code: string;
     message: string;
@@ -95,6 +97,9 @@ export const PDF_ERROR_CODES = {
   SESSION_SIZE_EXCEEDED: 'SESSION_SIZE_EXCEEDED',
   SESSION_PAGES_EXCEEDED: 'SESSION_PAGES_EXCEEDED',
   UNSUPPORTED_FORMAT: 'UNSUPPORTED_FORMAT',
+  CONVERSION_FAILED: 'CONVERSION_FAILED',
+  CONVERSION_TIMEOUT: 'CONVERSION_TIMEOUT',
+  CONVERSION_UNAVAILABLE: 'CONVERSION_UNAVAILABLE',
   SESSION_LIMIT_REACHED: 'SESSION_LIMIT_REACHED',
   MANIFEST_INVALID_FILE_ID: 'MANIFEST_INVALID_FILE_ID',
   MANIFEST_INVALID_ROTATION: 'MANIFEST_INVALID_ROTATION',

@@ -16,6 +16,7 @@ import type {
   ExportWorkerOutput,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import { documentConversionService } from './documentConversionService';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -116,9 +117,12 @@ export async function validateAndIngest(
   const sanitizedOriginalName = sanitizeFilename(originalName);
 
   // ── MIME type check ──────────────────────────────────────────────────────────
+  const isDocx =
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    path.extname(sanitizedOriginalName).toLowerCase() === '.docx';
   const isSupportedMime =
     mimeType === 'application/pdf' ||
-    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    isDocx;
 
   if (!isSupportedMime) {
     await safeDeleteFile(filePath);
@@ -132,17 +136,9 @@ export async function validateAndIngest(
     };
   }
 
-  // DOCX files are not yet handled by this service (requires documentConversionService)
-  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    await safeDeleteFile(filePath);
-    return {
-      originalName: sanitizedOriginalName,
-      status: 'error',
-      error: {
-        code: PDF_ERROR_CODES.UNSUPPORTED_FORMAT,
-        message: 'Word document conversion is not yet available.',
-      },
-    };
+  // ── .docx → convert to PDF, then ingest the result ───────────────────────────
+  if (isDocx) {
+    return convertAndIngestDocx(sessionId, filePath, sanitizedOriginalName, mimeType);
   }
 
   // ── File size check ──────────────────────────────────────────────────────────
@@ -621,6 +617,179 @@ export async function assembleAndExport(
     .where(eq(pdfSessions.id, sessionId));
 
   return { pdfBytes: result.pdfBytes, filename };
+}
+
+// ── Word document conversion + ingestion ────────────────────────────────────────
+
+async function convertAndIngestDocx(
+  sessionId: string,
+  filePath: string,
+  sanitizedOriginalName: string,
+  originalMimeType: string,
+): Promise<FileUploadResult> {
+  // Read the .docx file
+  let docxBuffer: Buffer;
+  try {
+    docxBuffer = await fsPromises.readFile(filePath);
+  } catch {
+    await safeDeleteFile(filePath);
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+    };
+  }
+
+  // File size check (applied to the original docx)
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    await safeDeleteFile(filePath);
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+    };
+  }
+
+  if (stat.size > MAX_FILE_BYTES) {
+    await safeDeleteFile(filePath);
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: {
+        code: PDF_ERROR_CODES.FILE_TOO_LARGE,
+        message: 'This file exceeds the 100 MB size limit. Please upload a smaller file.',
+      },
+    };
+  }
+
+  // Convert .docx → PDF via documentConversionService
+  let pdfBuffer: Buffer;
+  try {
+    pdfBuffer = await documentConversionService.convert(docxBuffer, sanitizedOriginalName);
+  } catch (err: unknown) {
+    await safeDeleteFile(filePath);
+    const code = (err as any)?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED;
+    const message =
+      (err as Error)?.message ??
+      'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.';
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code, message },
+    };
+  }
+
+  // Delete original .docx from disk immediately (security: A6)
+  await safeDeleteFile(filePath);
+
+  // Validate the converted PDF with pdf-lib
+  let doc: PDFDocument;
+  try {
+    doc = await PDFDocument.load(pdfBuffer);
+  } catch {
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: {
+        code: PDF_ERROR_CODES.CONVERSION_FAILED,
+        message: 'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
+      },
+    };
+  }
+
+  const pageCount = doc.getPageCount();
+  const pdfSize = pdfBuffer.length;
+
+  // Session-level limit checks
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code: 'SESSION_NOT_FOUND', message: 'Session not found.' },
+    };
+  }
+
+  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const currentTotalBytes = existingMetadata.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
+  const currentTotalPages = (session.pageManifest ?? []).filter((p) => !p.deleted).length;
+
+  if (currentTotalBytes + pdfSize > MAX_SESSION_BYTES) {
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: {
+        code: PDF_ERROR_CODES.SESSION_SIZE_EXCEEDED,
+        message: 'Adding this file would exceed the 250 MB session limit. Remove files or start a new session.',
+      },
+    };
+  }
+
+  if (currentTotalPages + pageCount > MAX_SESSION_PAGES) {
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: {
+        code: PDF_ERROR_CODES.SESSION_PAGES_EXCEEDED,
+        message: 'Adding this file would exceed the 500-page session limit.',
+      },
+    };
+  }
+
+  // Persist converted PDF to session directory
+  const fileId = crypto.randomUUID();
+  const storedName = `${fileId}.pdf`;
+  const sessionDir = getSessionDir(sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const destPath = path.join(sessionDir, storedName);
+  await fsPromises.writeFile(destPath, pdfBuffer);
+
+  // Build file metadata with convertedFrom provenance
+  const newFileMeta: PdfFileMetadata = {
+    fileId,
+    originalName: sanitizedOriginalName,
+    storedName,
+    mimeType: 'application/pdf',
+    sizeBytes: pdfSize,
+    pageCount,
+    convertedFrom: sanitizedOriginalName,
+    originalMimeType: originalMimeType,
+    uploadedAt: new Date().toISOString(),
+  };
+
+  const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const newPages: PageManifestEntry[] = Array.from({ length: pageCount }, (_, i) => ({
+    pageId: crypto.randomUUID(),
+    fileId,
+    sourcePageIndex: i,
+    rotation: 0 as const,
+    deleted: false,
+  }));
+
+  await db
+    .update(pdfSessions)
+    .set({
+      fileMetadata: [...existingMetadata, newFileMeta],
+      pageManifest: [...existingManifest, ...newPages],
+      updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId));
+
+  return {
+    fileId,
+    originalName: sanitizedOriginalName,
+    status: 'success',
+    pageCount,
+    sizeBytes: pdfSize,
+    convertedFrom: sanitizedOriginalName,
+  };
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

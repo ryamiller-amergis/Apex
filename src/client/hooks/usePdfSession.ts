@@ -62,9 +62,8 @@ export function useUploadPdfFiles() {
         body: formData,
       });
     },
-    onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
-    },
+    onSuccess: (_data, { sessionId }) =>
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] }),
   });
 }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
 import type { PageManifestEntry, PdfFileMetadata, PdfSession } from '../../../shared/types/pdf';
@@ -222,6 +222,37 @@ describe('PdfAssemblyView', () => {
     expect(screen.getByText(/Password-protected/)).toBeInTheDocument();
   });
 
+  it('dismisses an upload error without refreshing the page', async () => {
+    mockUploadFiles.mockResolvedValue({
+      files: [{
+        originalName: 'broken.docx',
+        status: 'error',
+        error: {
+          code: 'CONVERSION_FAILED',
+          message: 'This Word document could not be converted.',
+        },
+      }],
+    });
+
+    renderWithQuery(<PdfAssemblyView />);
+    const input = screen.getByTestId('pdf-file-input');
+    const file = new File(['invalid'], 'broken.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    const dismissButton = await screen.findByRole('button', {
+      name: 'Dismiss error for broken.docx',
+    });
+    fireEvent.click(dismissButton);
+
+    await waitFor(() => {
+      expect(screen.queryByText('broken.docx')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('pdf-upload-errors')).not.toBeInTheDocument();
+    });
+  });
+
   it('handles drag and drop events on the dropzone', () => {
     renderWithQuery(<PdfAssemblyView />);
     const dropzone = screen.getByTestId('pdf-dropzone');
@@ -229,6 +260,63 @@ describe('PdfAssemblyView', () => {
     fireEvent.dragOver(dropzone, { dataTransfer: { files: [] } });
     fireEvent.dragLeave(dropzone, { dataTransfer: { files: [] } });
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
+  });
+
+  it('uploads a dropped .docx in an active session and shows Converting...', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-active');
+    mockSessionData = {
+      ...makeSession([]),
+      id: 'sess-active',
+      fileMetadata: [],
+      pageManifest: [],
+    };
+
+    let resolveUpload!: (value: {
+      files: Array<{
+        fileId: string;
+        originalName: string;
+        status: 'success';
+        pageCount: number;
+        sizeBytes: number;
+        convertedFrom: string;
+      }>;
+    }) => void;
+    mockUploadFiles.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+
+    renderWithQuery(<PdfAssemblyView />);
+    const wordFile = new File(['docx-data'], 'proposal.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+
+    fireEvent.drop(screen.getByTestId('pdf-dropzone'), {
+      dataTransfer: { files: [wordFile] },
+    });
+
+    await waitFor(() => {
+      expect(mockUploadFiles).toHaveBeenCalledWith({
+        sessionId: 'sess-active',
+        files: [wordFile],
+      });
+      expect(screen.getByText('proposal.docx')).toBeInTheDocument();
+      expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      resolveUpload({
+        files: [{
+          fileId: 'word-file',
+          originalName: 'proposal.docx',
+          status: 'success',
+          pageCount: 2,
+          sizeBytes: 2048,
+          convertedFrom: 'proposal.docx',
+        }],
+      });
+    });
   });
 
   describe('export bar wiring', () => {

@@ -122,6 +122,32 @@ describe('usePageManipulation', () => {
     expect(result.current.visiblePages.map((p) => p.pageId)).toEqual(['p1', 'p3']);
   });
 
+  it('handles reorder, rotate, and delete for converted Word pages identically', () => {
+    const manifest = [
+      makeEntry('word-a', { fileId: 'converted-word-file', sourcePageIndex: 0 }),
+      makeEntry('word-b', { fileId: 'converted-word-file', sourcePageIndex: 1 }),
+      makeEntry('word-c', { fileId: 'converted-word-file', sourcePageIndex: 2 }),
+    ];
+
+    const { result } = renderHook(() =>
+      usePageManipulation({ sessionId, serverManifest: manifest }),
+    );
+
+    act(() => {
+      result.current.reorder(2, 0);
+    });
+    act(() => {
+      result.current.rotate(new Set(['word-a']));
+    });
+    act(() => {
+      result.current.deletePages(new Set(['word-b']));
+    });
+
+    expect(result.current.localManifest.find((page) => page.pageId === 'word-a')?.rotation).toBe(90);
+    expect(result.current.localManifest.find((page) => page.pageId === 'word-b')?.deleted).toBe(true);
+    expect(result.current.visiblePages.map((page) => page.pageId)).toEqual(['word-c', 'word-a']);
+  });
+
   // VT-10: delete blocked when only 1 non-deleted page remains
   it('deletePages blocks when deletion would remove all pages', () => {
     const manifest = [makeEntry('p1')];

@@ -33,7 +33,9 @@ export interface PdfDocumentSidebarProps {
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading: boolean;
   createSessionPending: boolean;
+  convertingFiles?: string[];
   errors: FileUploadResult[];
+  onDismissError?: (error: FileUploadResult) => void;
   sessionLimitError: boolean;
   children?: React.ReactNode;
 }
@@ -54,7 +56,9 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
   onInputChange,
   isUploading,
   createSessionPending,
+  convertingFiles = [],
   errors,
+  onDismissError,
   sessionLimitError,
 }) => {
   const sortedFiles = useMemo(
@@ -102,12 +106,12 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
               <strong>Click to upload</strong> or drag &amp; drop
             </p>
             <p className={styles.dropzoneHeroHint}>
-              PDF · up to 100 MB each · 500 pages max
+              PDF or Word (.docx) · up to 100 MB each · 500 pages max
             </p>
             <input
               ref={inputRef}
               type="file"
-              accept=".pdf,application/pdf"
+              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               multiple
               className={styles.dropzoneInput}
               onChange={onInputChange}
@@ -138,10 +142,28 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
             <div className={styles.uploadingOverlay} data-testid="pdf-uploading">
               <div className={styles.spinner} />
               <p className={styles.uploadingText}>
-                {createSessionPending ? 'Creating session…' : 'Uploading and validating…'}
+                {createSessionPending
+                  ? 'Creating session…'
+                  : convertingFiles.length > 0
+                    ? 'Converting...'
+                    : 'Uploading and validating…'}
               </p>
             </div>
           )}
+
+          {convertingFiles.map((filename, index) => (
+            <div
+              key={`${filename}-${index}`}
+              className={styles.convertingCard}
+              data-testid="pdf-converting-file"
+            >
+              <div className={styles.spinner} />
+              <div className={styles.fileInfo}>
+                <p className={styles.fileName}>{filename}</p>
+                <p className={styles.convertingText}>Converting...</p>
+              </div>
+            </div>
+          ))}
 
           {/* Upload errors */}
           {errors.length > 0 && (
@@ -153,10 +175,21 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                     <span className={styles.errorFileName}>{err.originalName}</span>
                     {' — '}
                     {ERROR_LABELS[err.error?.code ?? ''] ?? err.error?.message ?? 'Upload failed'}
-                    {err.error?.message && err.error.code && (
+                    {ERROR_LABELS[err.error?.code ?? ''] && err.error?.message && (
                       <> &middot; {err.error.message}</>
                     )}
                   </p>
+                  {onDismissError && (
+                    <button
+                      type="button"
+                      className={styles.errorDismiss}
+                      aria-label={`Dismiss error for ${err.originalName}`}
+                      title="Dismiss error"
+                      onClick={() => onDismissError(err)}
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -200,7 +233,7 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           multiple
           className={styles.dropzoneInput}
           onChange={onInputChange}
@@ -213,7 +246,11 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
         <div className={styles.uploadingOverlay} data-testid="pdf-uploading">
           <div className={styles.spinner} />
           <p className={styles.uploadingText}>
-            {createSessionPending ? 'Creating session…' : 'Uploading…'}
+            {createSessionPending
+              ? 'Creating session…'
+              : convertingFiles.length > 0
+                ? 'Converting...'
+                : 'Uploading…'}
           </p>
         </div>
       )}
@@ -228,10 +265,21 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                 <span className={styles.errorFileName}>{err.originalName}</span>
                 {' — '}
                 {ERROR_LABELS[err.error?.code ?? ''] ?? err.error?.message ?? 'Upload failed'}
-                {err.error?.message && err.error.code && (
+                {ERROR_LABELS[err.error?.code ?? ''] && err.error?.message && (
                   <> &middot; {err.error.message}</>
                 )}
               </p>
+              {onDismissError && (
+                <button
+                  type="button"
+                  className={styles.errorDismiss}
+                  aria-label={`Dismiss error for ${err.originalName}`}
+                  title="Dismiss error"
+                  onClick={() => onDismissError(err)}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -248,12 +296,26 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
       )}
 
       {/* File list or empty state */}
-      {sortedFiles.length > 0 ? (
+      {sortedFiles.length > 0 || convertingFiles.length > 0 ? (
         <>
           <p className={styles.fileListLabel}>
-            Documents ({sortedFiles.length})
+            Documents ({sortedFiles.length + convertingFiles.length})
           </p>
           <div className={styles.fileList} role="list" aria-label="Uploaded files">
+            {convertingFiles.map((filename, index) => (
+              <div
+                key={`${filename}-${index}`}
+                className={styles.convertingCard}
+                role="listitem"
+                data-testid="pdf-converting-file"
+              >
+                <div className={styles.spinner} />
+                <div className={styles.fileInfo}>
+                  <p className={styles.fileName}>{filename}</p>
+                  <p className={styles.convertingText}>Converting...</p>
+                </div>
+              </div>
+            ))}
             {sortedFiles.map((f) => {
               const isExpanded = f.fileId === selectedFileId && !collapsedFileIds.has(f.fileId);
               return (
@@ -295,6 +357,14 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                         <span>{formatBytes(f.sizeBytes)}</span>
                         <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
                       </p>
+                      {f.convertedFrom && (
+                        <span
+                          className={styles.convertedBadge}
+                          data-testid={`pdf-converted-badge-${f.fileId}`}
+                        >
+                          Converted from Word
+                        </span>
+                      )}
                     </div>
                     {onRemoveFile && (
                       <button

@@ -31,6 +31,7 @@ export const PdfAssemblyView: React.FC = () => {
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [fileIdToDelete, setFileIdToDelete] = useState<string | null>(null);
   const [justMovedPageId, setJustMovedPageId] = useState<string | null>(null);
+  const [convertingFiles, setConvertingFiles] = useState<string[]>([]);
   const justMovedTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -54,10 +55,17 @@ export const PdfAssemblyView: React.FC = () => {
     [uploadResults],
   );
 
+  const handleDismissUploadError = useCallback((error: FileUploadResult) => {
+    setUploadResults((current) => current.filter((result) => result !== error));
+  }, []);
+
   const handleFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
 
     let activeSessionId = sessionId;
+    const wordFilenames = files
+      .filter((file) => file.name.toLowerCase().endsWith('.docx'))
+      .map((file) => file.name);
 
     if (!activeSessionId) {
       try {
@@ -70,11 +78,26 @@ export const PdfAssemblyView: React.FC = () => {
       }
     }
 
+    if (wordFilenames.length > 0) {
+      setConvertingFiles((current) => [...current, ...wordFilenames]);
+    }
+
     try {
       const result = await uploadFiles.mutateAsync({ sessionId: activeSessionId, files });
       setUploadResults((prev) => [...prev, ...result.files]);
     } catch {
       // mutation error handled by TanStack Query
+    } finally {
+      if (wordFilenames.length > 0) {
+        setConvertingFiles((current) => {
+          const remaining = [...current];
+          for (const filename of wordFilenames) {
+            const index = remaining.indexOf(filename);
+            if (index >= 0) remaining.splice(index, 1);
+          }
+          return remaining;
+        });
+      }
     }
   }, [sessionId, createSession, uploadFiles]);
 
@@ -417,7 +440,9 @@ export const PdfAssemblyView: React.FC = () => {
             onInputChange={handleInputChange}
             isUploading={isUploading}
             createSessionPending={createSession.isPending}
+            convertingFiles={convertingFiles}
             errors={errors}
+            onDismissError={handleDismissUploadError}
             sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
           />
         </div>
@@ -441,7 +466,9 @@ export const PdfAssemblyView: React.FC = () => {
             onInputChange={handleInputChange}
             isUploading={isUploading}
             createSessionPending={createSession.isPending}
+            convertingFiles={convertingFiles}
             errors={errors}
+            onDismissError={handleDismissUploadError}
             sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
             onRemoveFile={handleRemoveFileClick}
           />
