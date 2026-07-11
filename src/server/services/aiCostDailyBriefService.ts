@@ -23,6 +23,67 @@ import type { AiCostDailyBrief } from '../../shared/types/aiCostAnalytics';
 
 const BRIEF_MODEL = process.env.BEDROCK_INSIGHTS_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-6';
 
+// ── Outcome / value mapping ───────────────────────────────────────────────────
+
+const FEATURE_OUTCOME_LABELS: Record<string, string> = {
+  interview: 'feature interview sessions',
+  prd: 'PRD generations',
+  'design-doc': 'design documents',
+  'design-prototype': 'UI prototypes',
+  'my-work': 'dev work sessions',
+  standup: 'standup facilitations',
+  'ui-lab': 'UI Lab designs',
+};
+
+/** Estimated engineering-hours saved per workflow run (heuristics). */
+const TIME_SAVINGS_HOURS: Record<string, number> = {
+  interview: 2,
+  prd: 8,
+  'design-doc': 6,
+  'design-prototype': 4,
+  'my-work': 3,
+  standup: 1,
+  'ui-lab': 2,
+};
+
+function outcomeLabel(feature: string): string {
+  return FEATURE_OUTCOME_LABELS[feature] ?? feature;
+}
+
+type WorkflowOutcomes = {
+  interviews: number;
+  prds: number;
+  designDocs: number;
+  prototypes: number;
+  myWork: number;
+  standups: number;
+  uiLab: number;
+};
+
+function computeHoursSaved(outcomes: WorkflowOutcomes): number {
+  return (
+    outcomes.interviews * (TIME_SAVINGS_HOURS['interview'] ?? 0) +
+    outcomes.prds * (TIME_SAVINGS_HOURS['prd'] ?? 0) +
+    outcomes.designDocs * (TIME_SAVINGS_HOURS['design-doc'] ?? 0) +
+    outcomes.prototypes * (TIME_SAVINGS_HOURS['design-prototype'] ?? 0) +
+    outcomes.myWork * (TIME_SAVINGS_HOURS['my-work'] ?? 0) +
+    outcomes.standups * (TIME_SAVINGS_HOURS['standup'] ?? 0) +
+    outcomes.uiLab * (TIME_SAVINGS_HOURS['ui-lab'] ?? 0)
+  );
+}
+
+function buildWorkflowSummary(outcomes: WorkflowOutcomes, totalWorkflows: number): string {
+  const parts: string[] = [];
+  if (outcomes.interviews > 0) parts.push(`${outcomes.interviews} interview${outcomes.interviews > 1 ? 's' : ''}`);
+  if (outcomes.prds > 0) parts.push(`${outcomes.prds} PRD${outcomes.prds > 1 ? 's' : ''}`);
+  if (outcomes.designDocs > 0) parts.push(`${outcomes.designDocs} design doc${outcomes.designDocs > 1 ? 's' : ''}`);
+  if (outcomes.prototypes > 0) parts.push(`${outcomes.prototypes} prototype${outcomes.prototypes > 1 ? 's' : ''}`);
+  if (outcomes.myWork > 0) parts.push(`${outcomes.myWork} dev session${outcomes.myWork > 1 ? 's' : ''}`);
+  if (outcomes.uiLab > 0) parts.push(`${outcomes.uiLab} UI Lab design${outcomes.uiLab > 1 ? 's' : ''}`);
+  if (outcomes.standups > 0) parts.push(`${outcomes.standups} standup${outcomes.standups > 1 ? 's' : ''}`);
+  return parts.length > 0 ? parts.join(', ') : `${totalWorkflows} workflows`;
+}
+
 function resolveRegion(): string {
   if (/^(us|eu|ap)\./.test(BRIEF_MODEL)) return 'us-east-1';
   return process.env.AWS_REGION ?? 'us-east-1';
@@ -66,6 +127,8 @@ function buildMorningPrompt(
   forecast: { projectedEomUsd: number; trendDirection: string; trendPct: number },
   topFeatures: Array<{ feature: string; costUsd: number; interactions: number; avgCost: number }>,
   topModels: Array<{ model: string; provider: string; costUsd: number; pct: number }>,
+  outcomes: WorkflowOutcomes,
+  totalWorkflows: number,
 ): string {
   const dateLabel = new Date(briefDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const trendSign = forecast.trendDirection === 'up' ? '+' : forecast.trendDirection === 'down' ? '-' : '';
@@ -75,42 +138,45 @@ function buildMorningPrompt(
   const burnRate = mtd.daysIn > 0
     ? ((mtd.costUsd / mtd.daysIn) * mtd.daysInMonth).toFixed(2)
     : null;
-  const cursorPct = yesterday.costUsd > 0 ? (yesterday.cursorCostUsd / yesterday.costUsd * 100).toFixed(0) : '0';
-  const bedrockPct = yesterday.costUsd > 0 ? (yesterday.bedrockCostUsd / yesterday.costUsd * 100).toFixed(0) : '0';
-  const costPerInteraction = yesterday.interactions > 0 ? (yesterday.costUsd / yesterday.interactions).toFixed(4) : '0';
+  const costPerWorkflow = totalWorkflows > 0 ? (yesterday.costUsd / totalWorkflows).toFixed(4) : '0';
+  const hoursSaved = computeHoursSaved(outcomes);
+  const costPerHour = hoursSaved > 0 ? (yesterday.costUsd / hoursSaved).toFixed(4) : null;
+  const workflowSummary = buildWorkflowSummary(outcomes, totalWorkflows);
 
-  return `You are generating a morning AI cost brief for the "${project}" project. This is a Fitbit-style daily summary — leadership opens the app and sees what yesterday looked like. Be punchy, specific, and forward-looking.
+  return `You are generating a morning AI productivity brief for the "${project}" project. This is an EXECUTIVE-GRADE summary — always lead with outcomes and productivity, then softly mention investment cost. Frame AI spend as an investment, never as an expense.
 
-## Yesterday (${dateLabel})
-- Total AI spend: $${yesterday.costUsd.toFixed(4)} | ${yesterday.interactions} interactions | $${costPerInteraction} avg/interaction
-- Cursor SDK: $${yesterday.cursorCostUsd.toFixed(4)} (${cursorPct}%) | AWS Bedrock: $${yesterday.bedrockCostUsd.toFixed(4)} (${bedrockPct}%)
-${wow !== null ? `- vs same day last week: ${parseFloat(wow) >= 0 ? '+' : ''}${wow}% ($${priorWeekSameDay.costUsd.toFixed(4)})` : '- No comparison data for same day last week'}
+## Apex Productivity — ${dateLabel}
+- Workflows completed: ${totalWorkflows} total — ${workflowSummary}
+- Estimated work assisted: ~${hoursSaved}h (heuristics: interview=2h, PRD=8h, design doc=6h, prototype=4h, dev session=3h, standup=1h, UI Lab=2h)
+- AI invested: $${yesterday.costUsd.toFixed(4)}${costPerHour ? ` = $${costPerHour}/hr of AI-assisted work` : ''}
+- Investment efficiency: $${costPerWorkflow}/workflow avg (${totalWorkflows} workflows for $${yesterday.costUsd.toFixed(4)})
+${wow !== null ? `- vs same day last week: ${parseFloat(wow) >= 0 ? '+' : ''}${wow}% change in investment ($${priorWeekSameDay.costUsd.toFixed(4)} prior)` : '- No comparison data for same day last week'}
 
-## Month-to-Date
-- Spent $${mtd.costUsd.toFixed(2)} in ${mtd.daysIn} days
-${burnRate ? `- At this rate: $${burnRate} projected for the full month` : ''}
+## Month-to-Date Investment
+- Invested $${mtd.costUsd.toFixed(2)} over ${mtd.daysIn} days
+${burnRate ? `- At current pace: est. $${burnRate} for the full month` : ''}
 - Official EOM forecast: $${forecast.projectedEomUsd.toFixed(2)} (trend: ${trendSign}${Math.abs(forecast.trendPct).toFixed(1)}% ${forecast.trendDirection})
 
-## Yesterday's Top Features
-${topFeatures.length > 0 ? topFeatures.map(f => `- ${f.feature}: $${f.costUsd.toFixed(4)} (${f.interactions} runs, $${f.avgCost.toFixed(4)}/run)`).join('\n') : '- No feature activity recorded'}
+## Yesterday's Workflow Breakdown
+${topFeatures.length > 0 ? topFeatures.map(f => `- ${outcomeLabel(f.feature)}: ${f.interactions} run${f.interactions !== 1 ? 's' : ''} · $${f.costUsd.toFixed(4)} invested ($${f.avgCost.toFixed(4)}/run)`).join('\n') : '- No workflow activity recorded'}
 
 ## Model Mix (yesterday)
-${topModels.length > 0 ? topModels.map(m => `- ${m.model} [${m.provider}]: $${m.costUsd.toFixed(4)} (${m.pct}% of spend)`).join('\n') : '- No model data'}
+${topModels.length > 0 ? topModels.map(m => `- ${m.model} [${m.provider}]: $${m.costUsd.toFixed(4)} (${m.pct}% of investment)`).join('\n') : '- No model data'}
 
 Respond with ONLY this JSON (no markdown fences):
 {
-  "headline": "One punchy sentence — lead with the most significant number or change",
+  "headline": "One punchy sentence — MUST open with what Apex produced (workflow count/type), end with investment cost",
   "keyBullets": [
-    "Yesterday cost bullet — actual $ with context (vs prior week if available)",
-    "Efficiency or model insight — cost per interaction, most expensive workflow, or model observation",
-    "Month trajectory — MTD burn rate and where we're heading"
+    "Workflow productivity bullet — what was built/assisted, estimated hours of work delivered",
+    "Investment efficiency bullet — cost per workflow or cost per hour, top workflow type by cost",
+    "Month trajectory — MTD investment and EOM forecast, framed as budget health not expense"
   ],
   "alerts": []
 }
 
 Rules:
-- headline ≤ 15 words, past tense, must include a dollar figure
-- keyBullets: exactly 3, ≤ 20 words each, dollar amounts, past tense, no fluff
+- headline ≤ 15 words, past tense, MUST open with workflow count or outcomes — NEVER open with a dollar amount
+- keyBullets: exactly 3, ≤ 20 words each, use "invested" not "spent", frame positively
 - alerts: add ONE alert only if projected EOM > $100, or yesterday > $10, or WoW increase > 40% — otherwise empty array
 - Never invent numbers — only use figures provided above`;
 }
@@ -125,6 +191,8 @@ function buildAfternoonPrompt(
   mtd: { costUsd: number },
   forecast: { projectedEomUsd: number },
   topFeaturesToday: Array<{ feature: string; costUsd: number; interactions: number }>,
+  outcomes: WorkflowOutcomes,
+  totalWorkflows: number,
 ): string {
   const hourNow = new Date().getHours();
   const dateLabel = new Date(todayDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
@@ -134,35 +202,39 @@ function buildAfternoonPrompt(
   const projectedEndOfDay = hourNow > 0
     ? (todaySoFar.costUsd / hourNow * 24).toFixed(4)
     : null;
+  const hoursSaved = computeHoursSaved(outcomes);
+  const costPerWorkflow = totalWorkflows > 0 ? (todaySoFar.costUsd / totalWorkflows).toFixed(4) : '0';
+  const workflowSummary = buildWorkflowSummary(outcomes, totalWorkflows);
 
-  return `You are generating a 2pm AI cost update for "${project}" — a mid-day check-in for leadership. Focus on what's happening TODAY so far.
+  return `You are generating a 2pm AI productivity update for "${project}" — a mid-day executive check-in. Lead with what Apex has PRODUCED today, not what it cost. Frame AI spend as investment, never as expense.
 
-## Today So Far (as of ${hourNow}:00, ${dateLabel})
-- AI spend today: $${todaySoFar.costUsd.toFixed(4)} across ${todaySoFar.interactions} interactions
-- Cursor SDK: $${todaySoFar.cursorCostUsd.toFixed(4)} | AWS Bedrock: $${todaySoFar.bedrockCostUsd.toFixed(4)}
-${pacePct !== null ? `- Pace vs yesterday: ${pacePct}% of yesterday's full-day total ($${yesterdayFull.costUsd.toFixed(4)})` : ''}
-${projectedEndOfDay ? `- Projected end-of-day: $${projectedEndOfDay} if current pace continues` : ''}
+## Apex Activity Today (as of ${hourNow}:00, ${dateLabel})
+- Workflows completed so far: ${totalWorkflows} — ${workflowSummary}
+- Estimated work assisted today: ~${hoursSaved}h
+- AI invested today: $${todaySoFar.costUsd.toFixed(4)} ($${costPerWorkflow}/workflow avg)
+${pacePct !== null ? `- Pace vs yesterday's full day: ${pacePct}% ($${yesterdayFull.costUsd.toFixed(4)} full day)` : ''}
+${projectedEndOfDay ? `- Projected end-of-day investment: $${projectedEndOfDay} if current pace continues` : ''}
 
 ## Month Context
-- MTD: $${mtd.costUsd.toFixed(2)} | Updated EOM projection: $${forecast.projectedEomUsd.toFixed(2)}
+- MTD investment: $${mtd.costUsd.toFixed(2)} | Updated EOM projection: $${forecast.projectedEomUsd.toFixed(2)}
 
 ## Today's Active Workflows
-${topFeaturesToday.length > 0 ? topFeaturesToday.map(f => `- ${f.feature}: $${f.costUsd.toFixed(4)} (${f.interactions} runs)`).join('\n') : '- No workflows active yet today'}
+${topFeaturesToday.length > 0 ? topFeaturesToday.map(f => `- ${outcomeLabel(f.feature)}: ${f.interactions} run${f.interactions !== 1 ? 's' : ''} · $${f.costUsd.toFixed(4)} invested`).join('\n') : '- No workflows active yet today'}
 
 Respond with ONLY this JSON (no markdown fences):
 {
-  "headline": "One punchy sentence about today's activity level",
+  "headline": "One punchy sentence about what Apex has delivered today, with investment cost mentioned last",
   "keyBullets": [
-    "Today-so-far spend with pace context vs yesterday",
-    "Most active workflow or noteworthy pattern today",
-    "Month trajectory — updated EOM if it changed materially"
+    "Today's workflow productivity — what has been built or assisted so far, hours of work delivered",
+    "Investment efficiency — cost per workflow, most active workflow type today",
+    "Month trajectory — updated MTD and EOM if changed materially, framed as budget health"
   ],
   "alerts": []
 }
 
 Rules:
-- headline ≤ 15 words, present tense ("is running", "has spent"), must include a number
-- keyBullets: exactly 3, ≤ 20 words each, present/today context
+- headline ≤ 15 words, present tense ("has delivered", "is on track"), MUST open with workflow count or outcomes — NEVER open with a dollar amount
+- keyBullets: exactly 3, ≤ 20 words each, use "invested" not "spent"
 - alerts: only if today's pace would project to > 2x yesterday's full day — otherwise empty
 - Never invent numbers`;
 }
@@ -206,6 +278,18 @@ export async function generateDailyBrief(
     avgCost: f.avgCostUsd,
   }));
 
+  // Workflow outcome counts (user-facing features only)
+  const outcomes: WorkflowOutcomes = {
+    interviews: dayFeatures.find(f => f.feature === 'interview')?.interactions ?? 0,
+    prds: dayFeatures.find(f => f.feature === 'prd')?.interactions ?? 0,
+    designDocs: dayFeatures.find(f => f.feature === 'design-doc')?.interactions ?? 0,
+    prototypes: dayFeatures.find(f => f.feature === 'design-prototype')?.interactions ?? 0,
+    myWork: dayFeatures.find(f => f.feature === 'my-work')?.interactions ?? 0,
+    standups: dayFeatures.find(f => f.feature === 'standup')?.interactions ?? 0,
+    uiLab: dayFeatures.find(f => f.feature === 'ui-lab')?.interactions ?? 0,
+  };
+  const totalWorkflows = Object.values(outcomes).reduce((a, b) => a + b, 0);
+
   let prompt: string;
   let totalCostUsd: number;
   let totalInteractions: number;
@@ -247,9 +331,11 @@ export async function generateDailyBrief(
       { projectedEomUsd: forecast.projectedEndOfMonthUsd, trendDirection: forecast.trendDirection, trendPct: forecast.trendPct },
       topFeatures,
       topModels,
+      outcomes,
+      totalWorkflows,
     );
     totalCostUsd = daySummary.totalCostUsd;
-    totalInteractions = daySummary.totalInteractions;
+    totalInteractions = totalWorkflows;
   } else {
     // Afternoon — also need yesterday's full-day for pace comparison
     const yesterday = new Date(now);
@@ -269,9 +355,11 @@ export async function generateDailyBrief(
       { costUsd: mtdSummary.totalCostUsd },
       { projectedEomUsd: forecast.projectedEndOfMonthUsd },
       topFeatures,
+      outcomes,
+      totalWorkflows,
     );
     totalCostUsd = daySummary.totalCostUsd;
-    totalInteractions = daySummary.totalInteractions;
+    totalInteractions = totalWorkflows;
   }
 
   const { text, inputTokens, outputTokens } = await callModel(prompt);

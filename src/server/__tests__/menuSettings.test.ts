@@ -7,8 +7,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 9 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(9);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 10 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(10);
   });
 
   it('contains the expected keys in order', () => {
@@ -23,6 +23,7 @@ describe('menuSettings shared types', () => {
       'ui-lab',
       'feature-requests',
       'pdf-tools',
+      'ai-cost',
     ]);
   });
 
@@ -38,6 +39,7 @@ describe('menuSettings shared types', () => {
       'UI Lab',
       'Feature Requests',
       'PDF Tools',
+      'AI Cost Analytics',
     ]);
   });
 

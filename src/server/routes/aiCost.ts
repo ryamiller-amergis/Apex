@@ -3,7 +3,6 @@ import { requirePermission, requireProjectAccess } from '../middleware/rbac';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import * as analytics from '../services/aiCostAnalyticsService';
 import { getForecast } from '../services/aiCostForecastService';
-import { generateInsightsForProject } from '../services/aiCostInsightsService';
 import { getLatestDailyBrief, generateDailyBrief } from '../services/aiCostDailyBriefService';
 import { db } from '../db/drizzle';
 import { aiPricing } from '../db/schema';
@@ -191,59 +190,6 @@ router.get(
       res.json(data);
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch forecast' });
-    }
-  },
-);
-
-// GET /api/ai-cost/insights
-router.get(
-  '/insights',
-  requireProjectAccess(getProjectParam),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const project = (req.query.project as string) ?? 'all';
-      const to = new Date().toISOString().split('T')[0]!;
-      const fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - 30);
-      const from = fromDate.toISOString().split('T')[0]!;
-
-      const cached = await analytics.getCachedInsights(project, from, to);
-      if (cached) {
-        res.json(cached);
-        return;
-      }
-      res.json({
-        project,
-        periodFrom: from,
-        periodTo: to,
-        modelUsed: '',
-        headline: null,
-        insights: [],
-        recommendations: [],
-        riskFlags: [],
-        generatedAt: null,
-      });
-    } catch (err) {
-      res.status(500).json({ error: 'Failed to fetch insights' });
-    }
-  },
-);
-
-// POST /api/ai-cost/insights/refresh — triggers immediate insights generation and waits
-router.post(
-  '/insights/refresh',
-  async (req: Request, res: Response): Promise<void> => {
-    const project = (req.body?.project as string) || (req.query.project as string);
-    if (!project) {
-      res.status(400).json({ error: 'project is required' });
-      return;
-    }
-    try {
-      await generateInsightsForProject(project);
-      res.json({ message: 'Insights generated successfully' });
-    } catch (err) {
-      console.error('[aiCost] Insights refresh failed:', err);
-      res.status(500).json({ error: 'Insights generation failed', detail: (err as Error).message });
     }
   },
 );

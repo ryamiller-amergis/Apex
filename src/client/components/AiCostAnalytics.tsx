@@ -454,7 +454,7 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
 
           <div className={styles.briefBannerStats}>
             <div className={styles.briefStat}>
-              <div className={styles.briefStatLabel}>{brief.briefType === 'afternoon' ? 'Today So Far' : 'Yesterday'}</div>
+              <div className={styles.briefStatLabel}>AI Investment</div>
               <div className={styles.briefStatValue}>{formatCost(brief.totalCostUsd)}</div>
             </div>
             <div className={styles.briefStatSep} />
@@ -469,7 +469,7 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
             </div>
             <div className={styles.briefStatSep} />
             <div className={styles.briefStat}>
-              <div className={styles.briefStatLabel}>{brief.briefType === 'afternoon' ? "Today's Interactions" : "Yesterday's Interactions"}</div>
+              <div className={styles.briefStatLabel}>Workflows Run</div>
               <div className={styles.briefStatValue}>{brief.totalInteractions}</div>
             </div>
           </div>
@@ -755,72 +755,75 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
         </div>
       </div>
 
-      {/* Top Users — super admin only */}
-      {isSuperAdmin && byUser && byUser.length > 0 && (
+      {/* Top Users + Interaction Log — wrapped in a flex column so chartCardFit's
+          align-self/height overrides take effect and spacing is consistent. */}
+      <div className={styles.sectionsColumn}>
+        {isSuperAdmin && byUser && byUser.length > 0 && (
+          <div className={`${styles.chartCard} ${styles.chartCardFit}`}>
+            <div className={styles.chartHeader}>
+              <div>
+                <p className={styles.chartTitle}>Top Users by Spend</p>
+                <p className={styles.chartSubtitle}>Click a row to drill down · Super admin only</p>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    {['User', 'Total Spend', 'Cursor SDK', 'AWS Bedrock', 'Interactions', 'Top Feature'].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {byUser.map((u) => (
+                    <tr
+                      key={u.userId}
+                      style={{ cursor: 'pointer', transition: 'background 0.1s' }}
+                      onClick={() => setDrillDown({ type: 'total', label: u.displayName || u.email || u.userId })}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-secondary)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-color), #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
+                            {(u.displayName || u.email || '?')[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{u.displayName || u.userId}</div>
+                            {u.email && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.email}</div>}
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text-primary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.costUsd)}</td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.cursorCostUsd)}</td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.bedrockCostUsd)}</td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{u.interactions}</td>
+                      <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>
+                        {u.topFeature && (
+                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: `${getFeatureColor(u.topFeature)}18`, color: getFeatureColor(u.topFeature), fontWeight: 500 }}>
+                            {featureLabel(u.topFeature)}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Drill-down events */}
         <div className={styles.chartCard}>
           <div className={styles.chartHeader}>
             <div>
-              <p className={styles.chartTitle}>Top Users by Spend</p>
-              <p className={styles.chartSubtitle}>Click a row to drill down · Super admin only</p>
+              <p className={styles.chartTitle}>Interaction Log</p>
+              <p className={styles.chartSubtitle}>Every AI call with token & cost breakdown</p>
             </div>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr>
-                  {['User', 'Total Spend', 'Cursor SDK', 'AWS Bedrock', 'Interactions', 'Top Feature'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {byUser.map((u) => (
-                  <tr
-                    key={u.userId}
-                    style={{ cursor: 'pointer', transition: 'background 0.1s' }}
-                    onClick={() => setDrillDown({ type: 'total', label: u.displayName || u.email || u.userId })}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-secondary)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-color), #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
-                          {(u.displayName || u.email || '?')[0].toUpperCase()}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{u.displayName || u.userId}</div>
-                          {u.email && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.email}</div>}
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text-primary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.costUsd)}</td>
-                    <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.cursorCostUsd)}</td>
-                    <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{formatCost(u.bedrockCostUsd)}</td>
-                    <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>{u.interactions}</td>
-                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>
-                      {u.topFeature && (
-                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: `${getFeatureColor(u.topFeature)}18`, color: getFeatureColor(u.topFeature), fontWeight: 500 }}>
-                          {featureLabel(u.topFeature)}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <EventsTable filters={filters} />
         </div>
-      )}
-
-      {/* Drill-down events */}
-      <div className={styles.chartCard}>
-        <div className={styles.chartHeader}>
-          <div>
-            <p className={styles.chartTitle}>Interaction Log</p>
-            <p className={styles.chartSubtitle}>Every AI call with token & cost breakdown</p>
-          </div>
-        </div>
-        <EventsTable filters={filters} />
       </div>
     </div>
 

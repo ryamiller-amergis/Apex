@@ -12,8 +12,7 @@ import {
   Cell,
 } from 'recharts';
 import styles from './AiCostDrillDown.module.css';
-import { useAiCostEvents, useAiCostTimeseries, useAiCostByModel, useAiCostInsights, type AiCostFilters } from '../hooks/useAiCostAnalytics';
-import type { AiCostInsightsResponse } from '../../shared/types/aiCostAnalytics';
+import { useAiCostEvents, useAiCostTimeseries, useAiCostByModel, type AiCostFilters } from '../hooks/useAiCostAnalytics';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,45 +63,6 @@ function shortModel(modelId: string): string {
     .replace(/-20\d{6}.*$/, '');
 }
 
-// ── AI narrative generator ─────────────────────────────────────────────────────
-
-function buildNarrative(
-  dimension: DrillDownDimension,
-  insights: AiCostInsightsResponse | undefined,
-  totalCost: number,
-  totalInteractions: number,
-): { headline: string; bullets: string[] } {
-  if (insights?.insights?.length) {
-    const filtered = insights.insights.filter((i) => {
-      const lower = i.toLowerCase();
-      if (dimension.type === 'feature' && 'feature' in dimension)
-        return lower.includes(dimension.feature.replace('-', ' ')) || lower.includes(dimension.label.toLowerCase());
-      if (dimension.type === 'provider' && 'provider' in dimension)
-        return lower.includes(dimension.provider);
-      return true;
-    });
-    if (filtered.length > 0) {
-      return {
-        headline: insights.headline ?? `Analysis for ${dimension.label}`,
-        bullets: filtered.slice(0, 3),
-      };
-    }
-  }
-
-  const avgCost = totalInteractions > 0 ? totalCost / totalInteractions : 0;
-  return {
-    headline: `${dimension.label}: ${formatCost(totalCost)} over the selected period`,
-    bullets: [
-      `${totalInteractions} interactions recorded, averaging ${formatCost(avgCost)} each`,
-      avgCost < 0.01
-        ? 'Very low cost per interaction — efficient model selection'
-        : avgCost < 0.10
-        ? 'Moderate cost per interaction — within expected range'
-        : 'Higher cost per interaction — consider model tier review',
-    ].filter(Boolean),
-  };
-}
-
 // ── Drill-down panel ───────────────────────────────────────────────────────────
 
 interface AiCostDrillDownProps {
@@ -130,7 +90,6 @@ export const AiCostDrillDown: React.FC<AiCostDrillDownProps> = ({ dimension, fil
   const { data: events, isLoading: eventsLoading } = useAiCostEvents(scopedFilters, 1, 30);
   const { data: timeseries, isLoading: tsLoading } = useAiCostTimeseries(scopedFilters);
   const { data: byModel } = useAiCostByModel(scopedFilters);
-  const { data: insights } = useAiCostInsights(filters.project ?? '');
 
   // Close on Escape
   useEffect(() => {
@@ -146,8 +105,6 @@ export const AiCostDrillDown: React.FC<AiCostDrillDownProps> = ({ dimension, fil
   const totalCache = events?.events.reduce((s, e) => s + e.cacheReadTokens + e.cacheWriteTokens, 0) ?? 0;
   const totalTokens = totalInput + totalOutput + totalCache;
   const avgCost = (events?.total ?? 0) > 0 ? totalCost / (events?.total ?? 1) : 0;
-
-  const narrative = buildNarrative(dimension, insights, totalCost, events?.total ?? 0);
 
   // Token breakdown bar proportions
   const inputPct = totalTokens > 0 ? (totalInput / totalTokens) * 100 : 33;
@@ -208,30 +165,6 @@ export const AiCostDrillDown: React.FC<AiCostDrillDownProps> = ({ dimension, fil
               <div className={styles.heroStatValue}>{formatTokens(totalInput + totalOutput)}</div>
               <div className={styles.heroStatSub}>{formatTokens(totalCache)} cached</div>
             </div>
-          </div>
-
-          {/* AI Narrative */}
-          <div className={styles.aiNarrative}>
-            <div className={styles.aiNarrativeGlow} />
-          <div className={styles.aiNarrativeHeader}>
-            <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: 16, height: 16, flexShrink: 0 }}>
-              <path d="M20 72L43 22H56L34 72H20Z" fill="var(--accent-color)" />
-              <path d="M52 22L78 72H61L43 38L52 22Z" fill="var(--accent-color)" opacity="0.9" />
-              <path d="M40 72L49 54L58 72H40Z" fill="var(--bg-secondary)" />
-            </svg>
-            <span className={styles.aiNarrativeTitle}>AI Analysis</span>
-          </div>
-            <p className={styles.aiNarrativeText}>{narrative.headline}</p>
-            {narrative.bullets.length > 0 && (
-              <ul className={styles.aiNarrativeBullets}>
-                {narrative.bullets.map((b, i) => (
-                  <li key={i} className={styles.aiNarrativeBullet}>
-                    <span className={styles.bulletDot} />
-                    {b}
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
 
           {/* Spend trend */}

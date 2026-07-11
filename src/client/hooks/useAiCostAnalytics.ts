@@ -9,7 +9,6 @@ import type {
   AiCostEventsResponse,
   AiCostReconciliation,
   AiCostForecast,
-  AiCostInsightsResponse,
   AiCostDailyBrief,
   AiPricingRow,
   ProjectComparison,
@@ -116,37 +115,6 @@ export function useAiCostForecast(project: string) {
     queryFn: () => fetchJson(`/api/ai-cost/forecast?project=${encodeURIComponent(project)}`),
     staleTime: 30 * 60 * 1000,
     enabled: !!project,
-  });
-}
-
-export function useAiCostInsights(project: string) {
-  return useQuery<AiCostInsightsResponse>({
-    queryKey: ['ai-cost', 'insights', project],
-    queryFn: () => fetchJson(`/api/ai-cost/insights?project=${encodeURIComponent(project)}`),
-    staleTime: 30 * 60 * 1000,
-    enabled: !!project,
-  });
-}
-
-export function useRefreshInsights(project: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      fetch('/api/ai-cost/insights/refresh', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project }),
-      }).then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error((body as any).detail || (body as any).error || 'Refresh failed');
-        }
-        return res.json();
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ai-cost', 'insights', project] });
-    },
   });
 }
 

@@ -4,7 +4,7 @@
  * Hourly background job that:
  *  1. Syncs authoritative Cursor billing events from the Admin API
  *  2. Runs cost allocation to distribute Cursor chargedCents to ai_usage_events
- *  3. Generates daily AI cost insights via Bedrock (once/day per project)
+ *  3. Generates daily AI cost briefs at 8am (morning) and 2pm (afternoon)
  *
  * Mirrors the StandupSchedulerService singleton pattern.
  */
@@ -15,7 +15,6 @@ import { generateBriefForAllProjects } from './aiCostDailyBriefService';
 export class AiCostSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
-  private lastInsightsRun: Date | null = null;
   private lastBriefRun: Date | null = null;
   private readonly CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -53,18 +52,8 @@ export class AiCostSchedulerService {
       // Step 2: Allocate costs
       await runCostAllocation();
 
-      // Step 3: Generate daily insights (once per day)
+      // Step 3: Generate briefs at 8am (morning — yesterday's recap) and 2pm (afternoon — today so far)
       const now = new Date();
-      const shouldRunInsights =
-        !this.lastInsightsRun ||
-        now.getDate() !== this.lastInsightsRun.getDate();
-
-      if (shouldRunInsights) {
-        await this.runDailyInsights();
-        this.lastInsightsRun = now;
-      }
-
-      // Step 4: Generate briefs at 8am (morning — yesterday's recap) and 2pm (afternoon — today so far)
       const hour = now.getHours();
       const isMorning = hour === 8;
       const isAfternoon = hour === 14;
@@ -94,14 +83,6 @@ export class AiCostSchedulerService {
     }
   }
 
-  private async runDailyInsights(): Promise<void> {
-    try {
-      const { generateInsightsForAllProjects } = await import('./aiCostInsightsService');
-      await generateInsightsForAllProjects();
-    } catch (err) {
-      console.error('[AiCostScheduler] Insights generation failed:', (err as Error).message);
-    }
-  }
 }
 
 export const aiCostScheduler = new AiCostSchedulerService();

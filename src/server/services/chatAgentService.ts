@@ -2047,7 +2047,7 @@ export async function sendMessage(
 
       // Record usage event (fire-and-forget, never blocks)
       {
-        const kickoff = state.thread.kickoff ?? {};
+        const kickoff = state.thread.kickoff ?? {} as import('../../shared/types/chat').ChatThreadKickoff;
         const inputEst = estimateTokens(text ?? '');
         const outputEst = estimateTokens(agentTextBuffer ?? '');
         recordAiUsage({
@@ -2165,7 +2165,7 @@ export async function sendMessage(
 
     // Record error usage event (fire-and-forget)
     {
-      const kickoff = state.thread?.kickoff ?? {};
+      const kickoff = state.thread?.kickoff ?? {} as import('../../shared/types/chat').ChatThreadKickoff;
       recordAiUsage({
         provider: 'cursor',
         modelId: resolvedModel,

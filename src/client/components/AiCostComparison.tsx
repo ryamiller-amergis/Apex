@@ -406,53 +406,51 @@ const EfficiencyTable: React.FC<EfficiencyTableProps> = ({ projects }) => {
   if (!rows.length) return <div className={styles.emptyState}>No data</div>;
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table className={styles.efficiencyTable}>
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>$/Interaction</th>
-            <th>$/PRD</th>
-            <th>$/Design Doc</th>
-            <th>$/Prototype</th>
-            <th>Provider Split</th>
-            <th>Interactions</th>
-            <th>Total Spend</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const effClass =
-              r.costPerInteraction < avgCostPerInteraction ? styles.cellGreen
-              : r.costPerInteraction > avgCostPerInteraction * 1.3 ? styles.cellRed
-              : styles.cellNeutral;
+    <table className={styles.efficiencyTable}>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>$/Interaction</th>
+          <th>$/PRD</th>
+          <th>$/Design Doc</th>
+          <th>$/Prototype</th>
+          <th>Provider Split</th>
+          <th>Interactions</th>
+          <th>Total Spend</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const effClass =
+            r.costPerInteraction < avgCostPerInteraction ? styles.cellGreen
+            : r.costPerInteraction > avgCostPerInteraction * 1.3 ? styles.cellRed
+            : styles.cellNeutral;
 
-            return (
-              <tr key={r.project}>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: projectColor(r.rank - 1), flexShrink: 0 }} />
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.project}</span>
-                  </div>
-                </td>
-                <td className={effClass}>{formatCost(r.costPerInteraction)}</td>
-                <td className={styles.cellNeutral}>{r.costPerPrd != null ? formatCost(r.costPerPrd) : '—'}</td>
-                <td className={styles.cellNeutral}>{r.costPerDoc != null ? formatCost(r.costPerDoc) : '—'}</td>
-                <td className={styles.cellNeutral}>{r.costPerProto != null ? formatCost(r.costPerProto) : '—'}</td>
-                <td>
-                  <div className={styles.providerSplit}>
-                    <span className={`${styles.splitPill} ${styles.splitCursor}`}>{r.cursorPct.toFixed(0)}% C</span>
-                    <span className={`${styles.splitPill} ${styles.splitBedrock}`}>{r.bedrockPct.toFixed(0)}% B</span>
-                  </div>
-                </td>
-                <td>{r.interactions.toLocaleString()}</td>
-                <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{formatCost(r.totalCostUsd)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+          return (
+            <tr key={r.project}>
+              <td>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: projectColor(r.rank - 1), flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.project}</span>
+                </div>
+              </td>
+              <td className={effClass}>{formatCost(r.costPerInteraction)}</td>
+              <td className={styles.cellNeutral}>{r.costPerPrd != null ? formatCost(r.costPerPrd) : '—'}</td>
+              <td className={styles.cellNeutral}>{r.costPerDoc != null ? formatCost(r.costPerDoc) : '—'}</td>
+              <td className={styles.cellNeutral}>{r.costPerProto != null ? formatCost(r.costPerProto) : '—'}</td>
+              <td>
+                <div className={styles.providerSplit}>
+                  <span className={`${styles.splitPill} ${styles.splitCursor}`}>{r.cursorPct.toFixed(0)}% C</span>
+                  <span className={`${styles.splitPill} ${styles.splitBedrock}`}>{r.bedrockPct.toFixed(0)}% B</span>
+                </div>
+              </td>
+              <td>{r.interactions.toLocaleString()}</td>
+              <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{formatCost(r.totalCostUsd)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 };
 
@@ -594,7 +592,7 @@ export const AiCostComparison: React.FC<AiCostComparisonProps> = ({ onBack }) =>
                 </p>
               </div>
             </div>
-            <div className={styles.card}>
+            <div className={styles.card} style={{ overflowX: 'auto' }}>
               <EfficiencyTable projects={projects} />
             </div>
           </div>

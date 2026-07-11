@@ -3,19 +3,17 @@
  * Drizzle-based aggregations for the /api/ai-cost endpoints.
  */
 import { db } from '../db/drizzle';
-import { aiUsageEvents, cursorUsageEvents, aiPricing, aiCostInsights } from '../db/schema';
-import { and, eq, gte, lte, sql, desc, asc, or, isNull } from 'drizzle-orm';
+import { aiUsageEvents, cursorUsageEvents, aiPricing } from '../db/schema';
+import { and, eq, gte, lte, sql, desc, asc } from 'drizzle-orm';
 import type {
   AiCostSummary,
   AiCostTimeseriesPoint,
   AiCostByFeature,
   AiCostByModel,
   AiCostByProject,
-  AiCostEvent,
   AiCostEventsResponse,
   AiCostReconciliation,
   AiPricingRow,
-  AiCostInsightsResponse,
   ProjectComparison,
 } from '../../shared/types/aiCostAnalytics';
 
@@ -478,24 +476,3 @@ export async function getProjectComparison(f: Omit<DateFilter, 'project' | 'feat
   return { projects, featureRankings, period: { from: f.from, to: f.to } };
 }
 
-export async function getCachedInsights(project: string, periodFrom: string, periodTo: string): Promise<AiCostInsightsResponse | null> {
-  const row = await db.query.aiCostInsights.findFirst({
-    where: and(
-      eq(aiCostInsights.project, project),
-      eq(aiCostInsights.periodFrom, periodFrom),
-      eq(aiCostInsights.periodTo, periodTo),
-    ),
-  });
-  if (!row) return null;
-  return {
-    project: row.project,
-    periodFrom: row.periodFrom,
-    periodTo: row.periodTo,
-    modelUsed: row.modelUsed,
-    headline: row.headline,
-    insights: (row.insights as string[]) ?? [],
-    recommendations: (row.recommendations as string[]) ?? [],
-    riskFlags: (row.riskFlags as string[]) ?? [],
-    generatedAt: row.generatedAt,
-  };
-}
