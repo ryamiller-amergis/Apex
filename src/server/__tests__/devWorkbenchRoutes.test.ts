@@ -45,6 +45,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 jest.mock('../services/repoCheckoutService', () => ({
   checkoutDefaultBranch: jest.fn().mockResolvedValue('/tmp/workspace'),
+  checkoutFeatureBranch: jest.fn().mockResolvedValue(undefined),
   createFeatureBranch: jest.fn().mockReturnValue('feature/apex-42-shift-scheduler'),
   computeDiff: jest.fn().mockReturnValue({ diffText: 'diff', changedFiles: ['a.ts'] }),
   pushBranch: jest.fn(),

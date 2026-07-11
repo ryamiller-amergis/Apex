@@ -173,10 +173,11 @@ export async function createFeatureBranch(
   workspaceDir: string,
   workItemId: number,
   workItemTitle: string,
+  baseBranch: string,
 ): Promise<string> {
   const slug = slugify(workItemTitle);
   const branchName = `feature/apex-${workItemId}-${slug}`;
-  await git(safeArgs(workspaceDir, ['checkout', '-b', branchName]), { cwd: workspaceDir });
+  await checkoutFeatureBranch(workspaceDir, branchName, baseBranch);
   return branchName;
 }
 
@@ -185,6 +186,94 @@ export async function createFeatureBranch(
  */
 export async function checkoutNewBranch(workspaceDir: string, branchName: string): Promise<void> {
   await git(safeArgs(workspaceDir, ['checkout', '-b', branchName]), { cwd: workspaceDir });
+}
+
+/**
+ * Establishes the feature branch in the workspace, reconciling with an existing
+ * remote branch of the same name so that reruns for the same work item CONTINUE
+ * the same branch (and its pull request) instead of colliding on push with a
+ * non-fast-forward rejection.
+ *
+ * - If `origin/<branchName>` already exists: create the local branch FROM the
+ *   remote tip (preserving all prior committed work), then merge the base branch
+ *   in so the agent starts from an up-to-date branch — done here, before any
+ *   agent work begins.
+ * - Otherwise: create a fresh local branch off the just-cloned base branch
+ *   (original behaviour for first-time runs).
+ *
+ * A base-branch merge conflict during reuse is non-fatal: the merge is aborted
+ * and the branch is left at the remote tip. The push-time `syncWithBase` step
+ * re-attempts the base merge and surfaces any conflicts to the in-app resolver.
+ */
+export async function checkoutFeatureBranch(
+  workspaceDir: string,
+  branchName: string,
+  baseBranch: string,
+): Promise<void> {
+  const release = await workspaceMutex.acquire(workspaceDir);
+  try {
+    const remoteRefs = (
+      await git(safeArgs(workspaceDir, ['ls-remote', '--heads', 'origin', branchName]), {
+        cwd: workspaceDir,
+        timeout: LONG_TIMEOUT_MS,
+      })
+    ).trim();
+
+    if (!remoteRefs) {
+      // First run for this work item — fresh branch off the cloned base branch.
+      await git(safeArgs(workspaceDir, ['checkout', '-b', branchName]), { cwd: workspaceDir });
+      return;
+    }
+
+    // Rerun — the branch already exists on the remote. Continue it by branching
+    // from the remote tip so the push is a fast-forward and the prior work
+    // (design docs, earlier commits) is preserved.
+    await git(safeArgs(workspaceDir, ['fetch', 'origin', branchName]), {
+      cwd: workspaceDir,
+      timeout: LONG_TIMEOUT_MS,
+    });
+    await git(safeArgs(workspaceDir, ['checkout', '-b', branchName, `origin/${branchName}`]), {
+      cwd: workspaceDir,
+    });
+
+    // Bring the base branch up to date before the agent starts working.
+    try {
+      await git(safeArgs(workspaceDir, ['fetch', 'origin', baseBranch]), {
+        cwd: workspaceDir,
+        timeout: LONG_TIMEOUT_MS,
+      });
+      await git(
+        safeArgs(workspaceDir, [
+          'merge',
+          '--no-ff',
+          `origin/${baseBranch}`,
+          '-m',
+          `Merge latest ${baseBranch} into feature branch`,
+        ]),
+        {
+          cwd: workspaceDir,
+          env: {
+            GIT_AUTHOR_NAME: 'AI Pilot',
+            GIT_AUTHOR_EMAIL: 'ai-pilot@noreply',
+            GIT_COMMITTER_NAME: 'AI Pilot',
+            GIT_COMMITTER_EMAIL: 'ai-pilot@noreply',
+          },
+        },
+      );
+    } catch (mergeErr) {
+      try {
+        await git(safeArgs(workspaceDir, ['merge', '--abort']), { cwd: workspaceDir });
+      } catch {
+        // Nothing to abort.
+      }
+      console.warn(
+        '[repoCheckoutService] base merge during feature-branch reuse hit conflicts; deferring to push-time resolver:',
+        (mergeErr as Error).message,
+      );
+    }
+  } finally {
+    release();
+  }
 }
 
 export async function computeDiff(workspaceDir: string): Promise<{ diffText: string; changedFiles: string[] }> {
