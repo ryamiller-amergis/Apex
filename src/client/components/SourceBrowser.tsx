@@ -1,8 +1,15 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
-import type { PdfFileMetadata, PageManifestEntry, FileUploadResult } from '../../shared/types/pdf';
+import type {
+  PdfConversionJob,
+  PdfFileMetadata,
+  PageManifestEntry,
+  FileUploadResult,
+} from '../../shared/types/pdf';
 import type { DocumentColor } from '../hooks/useDocumentColors';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
+import { PdfConversionStatus } from './PdfConversionStatus';
+import type { PdfUploadProgress } from '../hooks/usePdfSession';
 import styles from './SourceBrowser.module.css';
 
 function formatBytes(bytes: number): string {
@@ -19,6 +26,9 @@ const ERROR_LABELS: Record<string, string> = {
   SESSION_SIZE_EXCEEDED: 'Session size limit',
   SESSION_PAGES_EXCEEDED: 'Page limit exceeded',
   UNSUPPORTED_FORMAT: 'Unsupported format',
+  CONVERSION_FAILED: 'Conversion failed',
+  CONVERSION_TIMEOUT: 'Conversion timed out',
+  CONVERSION_UNAVAILABLE: 'Conversion unavailable',
 };
 
 const MINI_WIDTH = 72;
@@ -140,7 +150,10 @@ export interface SourceBrowserProps {
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading: boolean;
   createSessionPending: boolean;
+  uploadProgress?: PdfUploadProgress | null;
+  conversionJobs?: PdfConversionJob[];
   errors: FileUploadResult[];
+  onDismissError?: (error: FileUploadResult) => void;
   sessionLimitError: boolean;
   onRemoveFile?: (fileId: string) => void;
 }
@@ -161,7 +174,10 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
   onInputChange,
   isUploading,
   createSessionPending,
+  uploadProgress = null,
+  conversionJobs = [],
   errors,
+  onDismissError,
   sessionLimitError,
   onRemoveFile,
 }) => {
@@ -171,6 +187,20 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
     () => [...fileMetadata].sort((a, b) => a.originalName.localeCompare(b.originalName)),
     [fileMetadata],
   );
+  const activeConversionJobs = useMemo(
+    () => conversionJobs.filter((job) => job.status === 'queued' || job.status === 'processing'),
+    [conversionJobs],
+  );
+  const isSendingUpload =
+    !createSessionPending && uploadProgress?.phase === 'uploading';
+  const uploadPercent = uploadProgress?.percent ?? 0;
+  const uploadStatusText = createSessionPending
+    ? 'Creating session…'
+    : uploadProgress?.phase === 'processing'
+      ? 'Validating and parsing documents…'
+      : isSendingUpload
+        ? `Uploading… ${uploadPercent}%`
+        : 'Uploading and validating…';
 
   const pagesByFile = useMemo(() => {
     const map = new Map<string, PageManifestEntry[]>();
@@ -216,12 +246,12 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
           <strong>Click to upload</strong> or drag &amp; drop
         </p>
         <p className={styles['dropzone-hint']}>
-          PDF up to 100 MB &middot; 500 pages
+          PDF or Word (.docx) up to 100 MB &middot; 500 pages
         </p>
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           multiple
           className={styles['dropzone-input']}
           onChange={onInputChange}
@@ -231,11 +261,29 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
 
       {/* Uploading indicator */}
       {isUploading && (
-        <div className={styles['uploading-overlay']} data-testid="pdf-uploading">
+        <div
+          className={styles['uploading-overlay']}
+          data-testid="pdf-uploading"
+          role="status"
+          aria-live="polite"
+        >
           <div className={styles.spinner} />
-          <p className={styles['uploading-text']}>
-            {createSessionPending ? 'Creating session…' : 'Uploading…'}
-          </p>
+          <p className={styles['uploading-text']}>{uploadStatusText}</p>
+          {isSendingUpload && (
+            <div
+              className={styles['upload-progress']}
+              role="progressbar"
+              aria-label="File upload progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={uploadPercent}
+            >
+              <div
+                className={styles['upload-progress-fill']}
+                style={{ width: `${uploadPercent}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -249,10 +297,21 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                 <span className={styles['error-file-name']}>{err.originalName}</span>
                 {' — '}
                 {ERROR_LABELS[err.error?.code ?? ''] ?? err.error?.message ?? 'Upload failed'}
-                {err.error?.message && err.error.code && (
+                {ERROR_LABELS[err.error?.code ?? ''] && err.error?.message && (
                   <> &middot; {err.error.message}</>
                 )}
               </p>
+              {onDismissError && (
+                <button
+                  type="button"
+                  className={styles['error-dismiss']}
+                  aria-label={`Dismiss error for ${err.originalName}`}
+                  title="Dismiss error"
+                  onClick={() => onDismissError(err)}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -269,12 +328,29 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
       )}
 
       {/* Document list or empty state */}
-      {sortedFiles.length > 0 ? (
+      {sortedFiles.length > 0 || activeConversionJobs.length > 0 ? (
         <>
           <p className={styles['file-list-label']}>
-            Documents ({sortedFiles.length})
+            Documents ({sortedFiles.length + activeConversionJobs.length})
           </p>
           <div className={styles['file-list']} role="list" aria-label="Source documents">
+            {activeConversionJobs.map((job, index) => (
+              <div
+                key={job.id}
+                className={`${styles['file-card']} ${styles['converting-card']}`}
+                role="listitem"
+                data-testid="pdf-converting-file"
+                aria-label={`${job.originalName}, ${job.status === 'queued' ? 'waiting to convert' : 'converting'}`}
+              >
+                <div className={styles.spinner} />
+                <div className={styles['file-info']}>
+                  <p className={styles['file-name']}>{job.originalName}</p>
+                  <p className={styles['converting-text']}>
+                    <PdfConversionStatus job={job} queuePosition={index} />
+                  </p>
+                </div>
+              </div>
+            ))}
             {sortedFiles.map((f) => {
               const isExpanded = expandedFileIds.has(f.fileId);
               const color = documentColors.get(f.fileId);
@@ -311,6 +387,14 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                         <span>{formatBytes(f.sizeBytes)}</span>
                         <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
                       </p>
+                      {f.convertedFrom && (
+                        <span
+                          className={styles['converted-badge']}
+                          data-testid={`pdf-converted-badge-${f.fileId}`}
+                        >
+                          Converted from Word
+                        </span>
+                      )}
                     </div>
                     {onRemoveFile && (
                       <button

@@ -29,6 +29,7 @@ jest.mock('react-window', () => ({
     cellProps,
     columnCount,
     rowCount,
+    gridRef,
   }: {
     cellComponent: React.ComponentType<{
       ariaAttributes: { 'aria-colindex': number; role: 'gridcell' };
@@ -44,6 +45,10 @@ jest.mock('react-window', () => ({
     defaultHeight?: number;
     defaultWidth?: number;
     role?: string;
+    gridRef?: React.MutableRefObject<{
+      element: HTMLDivElement;
+      scrollToRow: jest.Mock;
+    } | null>;
   }) => {
     const cells: React.ReactNode[] = [];
     for (let row = 0; row < rowCount; row++) {
@@ -60,7 +65,20 @@ jest.mock('react-window', () => ({
         );
       }
     }
-    return <div data-testid="mock-grid">{cells}</div>;
+    return (
+      <div
+        data-testid="mock-grid"
+        ref={(element) => {
+          if (gridRef) {
+            gridRef.current = element
+              ? { element, scrollToRow: jest.fn() }
+              : null;
+          }
+        }}
+      >
+        {cells}
+      </div>
+    );
   },
 }));
 
@@ -72,7 +90,19 @@ jest.mock('../ManipulationToolbar', () => ({
       data-can-move-up={String(props.canMoveUp)}
       data-can-move-down={String(props.canMoveDown)}
       data-has-unsaved={String(props.hasUnsavedChanges)}
-    />
+    >
+      <button
+        type="button"
+        data-testid="toolbar-select-all"
+        onClick={
+          Number(props.selectedCount) === Number(props.totalPages)
+            ? props.onDeselectAll as () => void
+            : props.onSelectAll as () => void
+        }
+      >
+        Toggle all
+      </button>
+    </div>
   ),
 }));
 
@@ -120,6 +150,8 @@ const defaultProps = {
   documentColors: defaultColors,
   isSelected: () => false,
   selectedCount: 0,
+  onSelectAll: jest.fn(),
+  onDeselectAll: jest.fn(),
   onSelect: jest.fn(),
   onReorder: jest.fn(),
   onRotate: jest.fn(),
@@ -166,6 +198,66 @@ describe('AssemblyLane', () => {
     expect(screen.getByTestId('pdf-thumbnail-3')).toBeInTheDocument();
   });
 
+  it('forwards Select All and Deselect All actions from the toolbar', () => {
+    const onSelectAll = jest.fn();
+    const onDeselectAll = jest.fn();
+    const view = render(
+      <AssemblyLane
+        {...defaultProps}
+        onSelectAll={onSelectAll}
+        onDeselectAll={onDeselectAll}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('toolbar-select-all'));
+    expect(onSelectAll).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <AssemblyLane
+        {...defaultProps}
+        selectedCount={3}
+        onSelectAll={onSelectAll}
+        onDeselectAll={onDeselectAll}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('toolbar-select-all'));
+    expect(onDeselectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders every converted page when a multi-page Word upload is appended', () => {
+    const convertedFile: PdfFileMetadata = {
+      fileId: 'word-file',
+      originalName: 'converted.docx',
+      storedName: 'word-file.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 4096,
+      pageCount: 3,
+      convertedFrom: 'converted.docx',
+      uploadedAt: '2026-07-11T00:00:00Z',
+    };
+    const convertedPages = makePages(3, 'word-file').map((page, index) => ({
+      ...page,
+      pageId: `word-page-${index + 1}`,
+    }));
+
+    const { rerender } = render(
+      <AssemblyLane {...defaultProps} visiblePages={[]} localManifest={[]} />,
+    );
+
+    rerender(
+      <AssemblyLane
+        {...defaultProps}
+        visiblePages={convertedPages}
+        localManifest={convertedPages}
+        fileMetadata={[convertedFile]}
+      />,
+    );
+
+    expect(screen.getByText('converted.docx p.1')).toBeInTheDocument();
+    expect(screen.getByText('converted.docx p.2')).toBeInTheDocument();
+    expect(screen.getByText('converted.docx p.3')).toBeInTheDocument();
+  });
+
   it('ManipulationToolbar receives correct props', () => {
     render(
       <AssemblyLane
@@ -196,6 +288,83 @@ describe('AssemblyLane', () => {
 
     const main = screen.getByRole('main', { name: /page assembly/i });
     expect(main).toBeInTheDocument();
+  });
+
+  it('preserves the virtualized grid and scroll position after a large reorder', () => {
+    const initialPages = makePages(100);
+    const onReorder = jest.fn();
+
+    const Harness = () => {
+      const [pages, setPages] = React.useState(initialPages);
+      const reorder = (fromIndex: number, toIndex: number) => {
+        onReorder(fromIndex, toIndex);
+        setPages((current) => {
+          const next = [...current];
+          const [moved] = next.splice(fromIndex, 1);
+          next.splice(toIndex, 0, moved);
+          return next;
+        });
+      };
+
+      return (
+        <AssemblyLane
+          {...defaultProps}
+          localManifest={pages}
+          visiblePages={pages}
+          onReorder={reorder}
+        />
+      );
+    };
+
+    render(<Harness />);
+
+    const gridBefore = screen.getByTestId('mock-grid');
+    gridBefore.scrollTop = 2400;
+    gridBefore.scrollLeft = 12;
+
+    const source = screen.getByTestId('pdf-thumbnail-90');
+    const target = screen.getByTestId('pdf-thumbnail-95');
+    jest.spyOn(target, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 200,
+      width: 100,
+      height: 200,
+      toJSON: () => ({}),
+    });
+
+    const gridContainer = gridBefore.closest('[class*="gridContainer"]') as HTMLElement;
+    jest.spyOn(gridContainer, 'getBoundingClientRect').mockReturnValue({
+      x: -500,
+      y: 0,
+      top: 0,
+      left: -500,
+      right: 1500,
+      bottom: 1000,
+      width: 2000,
+      height: 1000,
+      toJSON: () => ({}),
+    });
+
+    const dataTransfer = {
+      types: ['text/plain'],
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData: jest.fn(),
+      getData: jest.fn(),
+    };
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer, clientX: 10, clientY: 500 });
+    fireEvent.drop(target, { dataTransfer, clientX: 10, clientY: 500 });
+
+    expect(onReorder).toHaveBeenCalledWith(89, 94);
+    expect(screen.getByTestId('mock-grid')).toBe(gridBefore);
+    expect(gridBefore.scrollTop).toBe(2400);
+    expect(gridBefore.scrollLeft).toBe(12);
   });
 
   describe('cross-panel drag from SourceBrowser', () => {

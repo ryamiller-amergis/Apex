@@ -173,6 +173,7 @@
 .uploadingOverlay {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--accent-color);
@@ -200,6 +201,21 @@
   margin: 0;
 }
 
+.uploadProgress {
+  flex-basis: 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-color-light);
+}
+
+.uploadProgressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-color);
+  transition: width 0.2s ease;
+}
+
 /* ── Error Cards ─────────────────────────────────────── */
 
 .errorCard {
@@ -222,10 +238,31 @@
   font-size: 0.75rem;
   color: var(--error-color);
   margin: 0;
+  flex: 1;
 }
 
 .errorFileName {
   font-weight: 600;
+}
+
+.errorDismiss {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--error-color);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.errorDismiss:hover,
+.errorDismiss:focus-visible {
+  background: rgba(211, 47, 47, 0.12);
+  outline: none;
 }
 
 /* ── Empty State ─────────────────────────────────────── */
@@ -291,6 +328,36 @@
 .fileCardSelected {
   border-color: var(--accent-color);
   background: rgba(39, 71, 217, 0.06);
+}
+
+.convertingCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-color);
+  border-radius: 8px;
+  background: rgba(39, 71, 217, 0.06);
+  box-shadow: var(--shadow-sm);
+  animation: conversionCardIn 0.3s ease;
+}
+
+.convertingText {
+  margin: 2px 0 0;
+  color: var(--accent-color);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+@keyframes conversionCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .chevronBtn {
@@ -404,4 +471,17 @@
   outline: 2px solid var(--accent-color);
   outline-offset: 1px;
   opacity: 1;
+}
+
+.convertedBadge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(33, 150, 243, 0.12);
+  color: #1976d2;
+  margin-top: 2px;
+  letter-spacing: 0.01em;
 }

@@ -1,6 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
 import fs from 'fs';
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument, PDFPage, degrees } from 'pdf-lib';
 import type { ExportWorkerInput, ExportWorkerOutput } from '../../shared/types/pdf';
 
 /**
@@ -12,36 +12,58 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
   try {
     const { manifest, filePaths } = input;
     const outputDoc = await PDFDocument.create();
-    const loadedDocs = new Map<string, PDFDocument>();
+    const activeEntries = manifest.filter((entry) => !entry.deleted);
+    const entriesByFile = new Map<
+      string,
+      Array<{ entry: (typeof activeEntries)[number]; outputIndex: number }>
+    >();
 
-    for (const entry of manifest) {
-      if (entry.deleted) continue;
+    activeEntries.forEach((entry, outputIndex) => {
+      const groupedEntries = entriesByFile.get(entry.fileId) ?? [];
+      groupedEntries.push({ entry, outputIndex });
+      entriesByFile.set(entry.fileId, groupedEntries);
+    });
 
-      const filePath = filePaths[entry.fileId];
+    const copiedPagesByOutputIndex: PDFPage[] = [];
+
+    for (const [fileId, groupedEntries] of entriesByFile) {
+      const filePath = filePaths[fileId];
       if (!filePath) {
-        return { success: false, error: `Source file not found for fileId: ${entry.fileId}` };
+        return { success: false, error: `Source file not found for fileId: ${fileId}` };
+      }
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: `File missing on disk: ${filePath}` };
       }
 
-      let sourceDoc = loadedDocs.get(entry.fileId);
-      if (!sourceDoc) {
-        if (!fs.existsSync(filePath)) {
-          return { success: false, error: `File missing on disk: ${filePath}` };
+      const fileBytes = fs.readFileSync(filePath);
+      const sourceDoc = await PDFDocument.load(fileBytes);
+      const pageCount = sourceDoc.getPageCount();
+      const invalidEntry = groupedEntries.find(
+        ({ entry }) =>
+          entry.sourcePageIndex < 0 || entry.sourcePageIndex >= pageCount,
+      );
+      if (invalidEntry) {
+        return {
+          success: false,
+          error: `Invalid page index ${invalidEntry.entry.sourcePageIndex} for fileId: ${fileId}`,
+        };
+      }
+
+      // One copyPages call per source avoids repeated pdf-lib setup for large exports.
+      const copiedPages = await outputDoc.copyPages(
+        sourceDoc,
+        groupedEntries.map(({ entry }) => entry.sourcePageIndex),
+      );
+      copiedPages.forEach((copiedPage, index) => {
+        const { entry, outputIndex } = groupedEntries[index];
+        if (entry.rotation !== 0) {
+          copiedPage.setRotation(degrees(entry.rotation));
         }
-        const fileBytes = fs.readFileSync(filePath);
-        sourceDoc = await PDFDocument.load(fileBytes);
-        loadedDocs.set(entry.fileId, sourceDoc);
-      }
+        copiedPagesByOutputIndex[outputIndex] = copiedPage;
+      });
+    }
 
-      if (entry.sourcePageIndex < 0 || entry.sourcePageIndex >= sourceDoc.getPageCount()) {
-        return { success: false, error: `Invalid page index ${entry.sourcePageIndex} for fileId: ${entry.fileId}` };
-      }
-
-      const [copiedPage] = await outputDoc.copyPages(sourceDoc, [entry.sourcePageIndex]);
-
-      if (entry.rotation !== 0) {
-        copiedPage.setRotation(degrees(entry.rotation));
-      }
-
+    for (const copiedPage of copiedPagesByOutputIndex) {
       outputDoc.addPage(copiedPage);
     }
 

@@ -1,15 +1,24 @@
-import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useRef,
+  useMemo,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+} from 'react';
 import { Grid, type GridImperativeAPI } from 'react-window';
 import { PageThumbnail } from './PageThumbnail';
 import { ManipulationToolbar } from './ManipulationToolbar';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
 import styles from './AssemblyLane.module.css';
 
-const THUMBNAIL_WIDTH = 160;
-const THUMBNAIL_HEIGHT = 208;
+// PageThumbnail is 200px wide. Grid cells include 8px of padding on each side,
+// and the row height also accommodates the portrait canvas and source label.
+const THUMBNAIL_WIDTH = 216;
+const THUMBNAIL_HEIGHT = 304;
 const MIN_COLUMNS = 1;
-const AUTO_SCROLL_ZONE = 60;
-const AUTO_SCROLL_MAX_SPEED = 12;
+const AUTO_SCROLL_ZONE = 96;
+const AUTO_SCROLL_MAX_SPEED = 28;
 
 export interface AssemblyLaneProps {
   sessionId: string;
@@ -19,6 +28,8 @@ export interface AssemblyLaneProps {
   documentColors: Map<string, { bg: string; border: string; text: string; label: string }>;
   isSelected: (pageId: string) => boolean;
   selectedCount: number;
+  onSelectAll: () => void;
+  onDeselectAll: () => void;
   onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onRotate: () => void;
@@ -159,6 +170,8 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
   documentColors,
   isSelected,
   selectedCount,
+  onSelectAll,
+  onDeselectAll,
   onSelect,
   onReorder,
   onRotate,
@@ -180,10 +193,10 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [dropEdge, setDropEdge] = useState<DropEdge>(null);
   const [isExternalDragOver, setIsExternalDragOver] = useState(false);
-  const externalDragCounterRef = useRef(0);
 
   const autoScrollRafRef = useRef<number | null>(null);
-  const autoScrollSpeedRef = useRef(0);
+  const autoScrollSpeedRef = useRef({ x: 0, y: 0 });
+  const restoreScrollPositionRef = useRef<{ top: number; left: number } | null>(null);
 
   const fileNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -206,6 +219,14 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
   const rowCount = useMemo(
     () => Math.ceil(visiblePages.length / columnCount),
     [visiblePages.length, columnCount],
+  );
+
+  // Remount only when pages are added or removed. Keeping this key independent
+  // of page order prevents react-window from resetting scroll position after a
+  // reorder while still refreshing stale cells after multi-page uploads.
+  const gridContentKey = useMemo(
+    () => visiblePages.map((page) => page.pageId).sort().join(','),
+    [visiblePages],
   );
 
   useEffect(() => {
@@ -231,8 +252,18 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
     } catch { /* ignore out-of-range */ }
   }, [justMovedPageId, visiblePages, columnCount]);
 
+  useLayoutEffect(() => {
+    const position = restoreScrollPositionRef.current;
+    const scrollEl = gridRef.current?.element;
+    if (!position || !scrollEl) return;
+
+    scrollEl.scrollTop = position.top;
+    scrollEl.scrollLeft = position.left;
+    restoreScrollPositionRef.current = null;
+  }, [visiblePages]);
+
   const stopAutoScroll = useCallback(() => {
-    autoScrollSpeedRef.current = 0;
+    autoScrollSpeedRef.current = { x: 0, y: 0 };
     if (autoScrollRafRef.current !== null) {
       cancelAnimationFrame(autoScrollRafRef.current);
       autoScrollRafRef.current = null;
@@ -241,11 +272,14 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
 
   const runAutoScroll = useCallback(() => {
     const scrollEl = gridRef.current?.element;
-    if (!scrollEl || autoScrollSpeedRef.current === 0) {
+    const { x, y } = autoScrollSpeedRef.current;
+    if (!scrollEl || (x === 0 && y === 0)) {
       autoScrollRafRef.current = null;
       return;
     }
-    scrollEl.scrollTop += autoScrollSpeedRef.current;
+
+    scrollEl.scrollTop += y;
+    scrollEl.scrollLeft += x;
     autoScrollRafRef.current = requestAnimationFrame(runAutoScroll);
   }, []);
 
@@ -261,21 +295,33 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
       if (!el || (!dragPageId && !isExternal)) return;
 
       const rect = el.getBoundingClientRect();
-      const y = e.clientY;
-      const distFromTop = y - rect.top;
-      const distFromBottom = rect.bottom - y;
+      const distFromTop = e.clientY - rect.top;
+      const distFromBottom = rect.bottom - e.clientY;
+      const distFromLeft = e.clientX - rect.left;
+      const distFromRight = rect.right - e.clientX;
 
-      let speed = 0;
+      let speedY = 0;
       if (distFromTop < AUTO_SCROLL_ZONE) {
-        speed = -AUTO_SCROLL_MAX_SPEED * (1 - distFromTop / AUTO_SCROLL_ZONE);
+        speedY = -AUTO_SCROLL_MAX_SPEED *
+          Math.min(1, Math.max(0, 1 - distFromTop / AUTO_SCROLL_ZONE));
       } else if (distFromBottom < AUTO_SCROLL_ZONE) {
-        speed = AUTO_SCROLL_MAX_SPEED * (1 - distFromBottom / AUTO_SCROLL_ZONE);
+        speedY = AUTO_SCROLL_MAX_SPEED *
+          Math.min(1, Math.max(0, 1 - distFromBottom / AUTO_SCROLL_ZONE));
       }
 
-      autoScrollSpeedRef.current = speed;
-      if (speed !== 0 && autoScrollRafRef.current === null) {
+      let speedX = 0;
+      if (distFromLeft < AUTO_SCROLL_ZONE) {
+        speedX = -AUTO_SCROLL_MAX_SPEED *
+          Math.min(1, Math.max(0, 1 - distFromLeft / AUTO_SCROLL_ZONE));
+      } else if (distFromRight < AUTO_SCROLL_ZONE) {
+        speedX = AUTO_SCROLL_MAX_SPEED *
+          Math.min(1, Math.max(0, 1 - distFromRight / AUTO_SCROLL_ZONE));
+      }
+
+      autoScrollSpeedRef.current = { x: speedX, y: speedY };
+      if ((speedX !== 0 || speedY !== 0) && autoScrollRafRef.current === null) {
         autoScrollRafRef.current = requestAnimationFrame(runAutoScroll);
-      } else if (speed === 0) {
+      } else if (speedX === 0 && speedY === 0) {
         stopAutoScroll();
       }
     },
@@ -285,7 +331,6 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
   const handleContainerDragEnter = useCallback(
     (e: React.DragEvent) => {
       if (e.dataTransfer.types.includes('application/x-pdf-page')) {
-        externalDragCounterRef.current += 1;
         setIsExternalDragOver(true);
       }
     },
@@ -294,12 +339,11 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
 
   const handleContainerDragLeave = useCallback(
     (e: React.DragEvent) => {
+      const nextTarget = e.relatedTarget as Node | null;
+      if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+
       if (e.dataTransfer.types.includes('application/x-pdf-page')) {
-        externalDragCounterRef.current -= 1;
-        if (externalDragCounterRef.current <= 0) {
-          externalDragCounterRef.current = 0;
-          setIsExternalDragOver(false);
-        }
+        setIsExternalDragOver(false);
       }
       stopAutoScroll();
     },
@@ -319,7 +363,6 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
       setDropTargetId(null);
       setDropEdge(null);
       setIsExternalDragOver(false);
-      externalDragCounterRef.current = 0;
       stopAutoScroll();
     },
     [visiblePages, dropEdge, onAddFromSource, stopAutoScroll],
@@ -351,16 +394,28 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
         return;
       }
       const fromIndex = visiblePages.findIndex((p) => p.pageId === dragPageId);
-      const toIndex = visiblePages.findIndex((p) => p.pageId === targetPageId);
-      if (fromIndex >= 0 && toIndex >= 0) {
-        onReorder(fromIndex, toIndex);
+      const targetIndex = visiblePages.findIndex((p) => p.pageId === targetPageId);
+      if (fromIndex >= 0 && targetIndex >= 0) {
+        let toIndex = targetIndex + (dropEdge === 'after' ? 1 : 0);
+        if (fromIndex < toIndex) toIndex -= 1;
+        toIndex = Math.max(0, Math.min(toIndex, visiblePages.length - 1));
+        if (fromIndex !== toIndex) {
+          const scrollEl = gridRef.current?.element;
+          if (scrollEl) {
+            restoreScrollPositionRef.current = {
+              top: scrollEl.scrollTop,
+              left: scrollEl.scrollLeft,
+            };
+          }
+          onReorder(fromIndex, toIndex);
+        }
       }
       setDragPageId(null);
       setDropTargetId(null);
       setDropEdge(null);
       stopAutoScroll();
     },
-    [dragPageId, visiblePages, onReorder, stopAutoScroll],
+    [dragPageId, dropEdge, visiblePages, onReorder, stopAutoScroll],
   );
 
   useEffect(() => {
@@ -385,6 +440,8 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
         canMoveUp={canMoveUp}
         canMoveDown={canMoveDown}
         totalPages={visiblePages.length}
+        onSelectAll={onSelectAll}
+        onDeselectAll={onDeselectAll}
         onSave={onSave}
         hasUnsavedChanges={hasUnsavedChanges}
       />
@@ -451,6 +508,7 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
         >
           <div className={styles.gridInner}>
             <Grid<ThumbnailCellProps>
+              key={gridContentKey}
               cellComponent={ThumbnailCell}
               cellProps={{
                 visiblePages,

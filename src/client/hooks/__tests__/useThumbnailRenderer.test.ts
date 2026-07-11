@@ -36,6 +36,7 @@ function createMockDocument(numPages = 5) {
   const mockPage = {
     getViewport: jest.fn().mockReturnValue(mockViewport),
     render: jest.fn().mockReturnValue(renderPromise),
+    getTextContent: jest.fn().mockResolvedValue({ items: [] as Array<{ str: string }> }),
   };
 
   return {
@@ -74,8 +75,42 @@ describe('useThumbnailRenderer', () => {
     });
 
     expect(result.current.imageBitmap).toBe(mockImageBitmap);
+    expect(result.current.hasTextContent).toBe(false);
     expect(result.current.error).toBeNull();
     expect(doc.getPage).toHaveBeenCalledWith(1); // pageIndex 0 → pdf page 1
+  });
+
+  it('reports searchable text content for conservative blank-page detection', async () => {
+    const doc = createMockDocument();
+    doc._mockPage.getTextContent.mockResolvedValue({
+      items: [{ str: 'Quarterly report' }],
+    });
+
+    const { result } = renderHook(() =>
+      useThumbnailRenderer(doc as never, 0, 0, 1),
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('loaded');
+    });
+
+    expect(result.current.hasTextContent).toBe(true);
+  });
+
+  it('keeps the rendered thumbnail when text extraction is unavailable', async () => {
+    const doc = createMockDocument();
+    doc._mockPage.getTextContent.mockRejectedValue(new Error('No text layer'));
+
+    const { result } = renderHook(() =>
+      useThumbnailRenderer(doc as never, 0, 0, 1),
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('loaded');
+    });
+
+    expect(result.current.imageBitmap).toBe(mockImageBitmap);
+    expect(result.current.hasTextContent).toBe(false);
   });
 
   it('uses rotation in viewport', async () => {

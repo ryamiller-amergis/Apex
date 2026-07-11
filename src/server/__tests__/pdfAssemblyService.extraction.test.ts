@@ -6,14 +6,16 @@
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
 const mockFindFirst = jest.fn();
+const mockFindMany = jest.fn();
 const mockSet = jest.fn().mockReturnThis();
 const mockWhere = jest.fn().mockResolvedValue([]);
 const mockUpdate = jest.fn().mockReturnValue({ set: mockSet });
+const mockRm = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
-      pdfSessions: { findFirst: mockFindFirst },
+      pdfSessions: { findFirst: mockFindFirst, findMany: mockFindMany },
     },
     update: mockUpdate,
   },
@@ -67,14 +69,18 @@ jest.mock('fs/promises', () => ({
   rename: jest.fn().mockResolvedValue(undefined),
   copyFile: jest.fn().mockResolvedValue(undefined),
   unlink: jest.fn().mockResolvedValue(undefined),
-  rm: jest.fn().mockResolvedValue(undefined),
+  rm: mockRm,
 }));
 
 mockSet.mockReturnValue({ where: mockWhere });
 
 // ── Imports ────────────────────────────────────────────────────────────────────
 
-import { assembleAndExport } from '../services/pdfAssemblyService';
+import {
+  assembleAndExport,
+  cleanupSessionFiles,
+  expireOldSessions,
+} from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -117,6 +123,20 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
 
     expect(result.pdfBytes).toBeDefined();
     expect(result.filename).toMatch(/^merged-document-.*\.pdf$/);
+  });
+
+  it('keeps the session active after exporting selected pages', async () => {
+    const session = makeSession(5);
+    mockFindFirst.mockResolvedValue(session);
+
+    await assembleAndExport('session-1', 'user-1', undefined, [0, 2]);
+
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.not.objectContaining({ status: 'exported' }),
+    );
+    expect(mockSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'exported' }),
+    );
   });
 
   // VT-10: Out-of-bounds indices rejected
@@ -193,5 +213,30 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     ).rejects.toMatchObject({
       code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
     });
+  });
+
+  it('removes all temporary files for a completed session', async () => {
+    await cleanupSessionFiles('session-1');
+
+    expect(mockRm).toHaveBeenCalledWith(
+      expect.stringContaining('session-1'),
+      { recursive: true, force: true },
+    );
+  });
+
+  it('cleans expired active and exported sessions as a fallback', async () => {
+    mockFindMany.mockResolvedValue([
+      { id: 'active-expired', status: 'active' },
+      { id: 'exported-expired', status: 'exported' },
+    ]);
+
+    const result = await expireOldSessions();
+
+    expect(result).toEqual({ expired: 2, errors: 0 });
+    expect(mockRm).toHaveBeenCalledTimes(2);
+    expect(mockSet).toHaveBeenCalledTimes(2);
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'expired' }),
+    );
   });
 });

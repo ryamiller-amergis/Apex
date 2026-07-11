@@ -50,7 +50,7 @@ describe('MobileGuidanceMessage', () => {
     render(<MobileGuidanceMessage />);
     expect(screen.getByTestId('pdf-tools-mobile-guidance')).toBeInTheDocument();
     expect(
-      screen.getByText(/PDF Tools is available on desktop browsers/i),
+      screen.getByText(/PDF Assembly Tool is available on desktop browsers/i),
     ).toBeInTheDocument();
   });
 
@@ -300,9 +300,9 @@ describe('PdfToolsRouteGuard', () => {
   });
 });
 
-// ── AppSidebar — PDF Tools nav item ───────────────────────────────────────
+// ── AppSidebar — PDF Assembly Tool nav item ───────────────────────────────
 
-describe('AppSidebar — PDF Tools nav item', () => {
+describe('AppSidebar — PDF Assembly Tool nav item', () => {
   const baseSidebarProps = {
     currentView: 'home',
     collapsed: false,
@@ -323,7 +323,7 @@ describe('AppSidebar — PDF Tools nav item', () => {
     mockedUseBreakpoint.mockReturnValue({ isMobile: false, isTablet: false, isDesktop: true });
   });
 
-  it('shows PDF Tools when enabled in menu and user has pdf-assembly:use permission', () => {
+  it('shows PDF Assembly Tool when enabled in menu and user has pdf-assembly:use permission', () => {
     const onNavigatePdfTools = jest.fn();
     render(
       <AppSidebar
@@ -334,10 +334,10 @@ describe('AppSidebar — PDF Tools nav item', () => {
       />,
     );
     expect(screen.getByTestId('nav-item-pdf-tools')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'PDF Tools' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'PDF Assembly Tool' })).toBeInTheDocument();
   });
 
-  it('hides PDF Tools when menu visibility is disabled', () => {
+  it('hides PDF Assembly Tool when menu visibility is disabled', () => {
     render(
       <AppSidebar
         {...baseSidebarProps}
@@ -347,10 +347,10 @@ describe('AppSidebar — PDF Tools nav item', () => {
       />,
     );
     expect(screen.queryByTestId('nav-item-pdf-tools')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'PDF Tools' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'PDF Assembly Tool' })).not.toBeInTheDocument();
   });
 
-  it('hides PDF Tools when user lacks pdf-assembly:use permission', () => {
+  it('hides PDF Assembly Tool when user lacks pdf-assembly:use permission', () => {
     render(
       <AppSidebar
         {...baseSidebarProps}
@@ -362,7 +362,7 @@ describe('AppSidebar — PDF Tools nav item', () => {
     expect(screen.queryByTestId('nav-item-pdf-tools')).not.toBeInTheDocument();
   });
 
-  it('shows PDF Tools for super admin regardless of menu and permission', () => {
+  it('shows PDF Assembly Tool for super admin regardless of menu and permission', () => {
     render(
       <AppSidebar
         {...baseSidebarProps}

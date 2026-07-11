@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PageThumbnail, PageThumbnailProps } from '../PageThumbnail';
 
 jest.mock('../../hooks/usePdfDocument', () => ({
@@ -129,6 +129,89 @@ describe('PageThumbnail', () => {
       'aria-label',
       '1 — report.pdf page 3. Click to select, double-click to preview.',
     );
+  });
+
+  it('detects a blank page after drawing the rendered bitmap', async () => {
+    const pixels = new Uint8ClampedArray(180 * 233 * 4);
+    const context = {
+      drawImage: jest.fn(() => {
+        for (let i = 0; i < pixels.length; i += 4) {
+          pixels[i] = 255;
+          pixels[i + 1] = 255;
+          pixels[i + 2] = 255;
+          pixels[i + 3] = 255;
+        }
+      }),
+      getImageData: jest.fn(() => ({
+        data: pixels,
+        width: 180,
+        height: 233,
+      })),
+    };
+    const getContextSpy = jest
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(() => context as unknown as CanvasRenderingContext2D);
+    const imageBitmap = {
+      width: 180,
+      height: 233,
+      close: jest.fn(),
+    } as unknown as ImageBitmap;
+
+    try {
+      const view = renderThumbnail();
+      (useThumbnailRenderer as jest.Mock).mockReturnValue({
+        status: 'loaded',
+        imageBitmap,
+        error: null,
+      });
+
+      view.rerender(<PageThumbnail {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('blank-page-badge-0')).toBeInTheDocument();
+      });
+      expect(context.drawImage).toHaveBeenCalled();
+    } finally {
+      getContextSpy.mockRestore();
+    }
+  });
+
+  it('does not show a blank badge when the PDF page contains text', async () => {
+    const pixels = new Uint8ClampedArray(180 * 233 * 4).fill(255);
+    const context = {
+      drawImage: jest.fn(),
+      getImageData: jest.fn(() => ({
+        data: pixels,
+        width: 180,
+        height: 233,
+      })),
+    };
+    const getContextSpy = jest
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(() => context as unknown as CanvasRenderingContext2D);
+    const imageBitmap = {
+      width: 180,
+      height: 233,
+      close: jest.fn(),
+    } as unknown as ImageBitmap;
+
+    try {
+      (useThumbnailRenderer as jest.Mock).mockReturnValue({
+        status: 'loaded',
+        imageBitmap,
+        hasTextContent: true,
+        error: null,
+      });
+
+      renderThumbnail();
+
+      await waitFor(() => {
+        expect(context.drawImage).toHaveBeenCalled();
+      });
+      expect(screen.queryByTestId('blank-page-badge-0')).not.toBeInTheDocument();
+    } finally {
+      getContextSpy.mockRestore();
+    }
   });
 
   it('shows error state when rendering fails', () => {

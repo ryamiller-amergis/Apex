@@ -19,7 +19,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },
   { key: 'feature-requests', label: 'Feature Requests' },
-  { key: 'pdf-tools', label: 'PDF Tools' },
+  { key: 'pdf-tools', label: 'PDF Assembly Tool' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
 ];
 

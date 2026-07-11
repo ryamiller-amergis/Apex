@@ -26,7 +26,7 @@ export const MobileGuidanceMessage: React.FC = () => (
       </span>
       <h1 className={styles.heading}>Desktop required</h1>
       <p className={styles.message}>
-        PDF Tools is available on desktop browsers. Please switch to a desktop
+        PDF Assembly Tool is available on desktop browsers. Please switch to a desktop
         device to use this feature.
       </p>
     </div>

@@ -1,5 +1,12 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { useCreatePdfSession, usePdfSession, useUploadPdfFiles, useActivePdfSessions, useRemovePdfFile } from '../hooks/usePdfSession';
+import {
+  useCreatePdfSession,
+  usePdfSession,
+  useUploadPdfFiles,
+  useActivePdfSessions,
+  useRemovePdfFile,
+  type PdfUploadProgress,
+} from '../hooks/usePdfSession';
 import { usePageManipulation } from '../hooks/usePageManipulation';
 import { usePageSelection } from '../hooks/usePageSelection';
 import { useDocumentColors } from '../hooks/useDocumentColors';
@@ -16,13 +23,26 @@ import { ExportSelectedButton } from './ExportSelectedButton';
 import { RangeInput } from './RangeInput';
 import { DeduplicationToast } from './DeduplicationToast';
 import { generateDefaultFilename } from '../hooks/useExportSession';
-import type { FileUploadResult, PageManifestEntry } from '../../shared/types/pdf';
+import type {
+  FileUploadResult,
+  PageManifestEntry,
+  PdfConversionJob,
+} from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
+
+const MIN_ASSEMBLY_PANE_PERCENT = 30;
+const MAX_ASSEMBLY_PANE_PERCENT = 75;
+const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
 
 export const PdfAssemblyView: React.FC = () => {
   const [sessionId, setSessionId] = useState<string | null>(
     () => sessionStorage.getItem('pdf-active-session'),
   );
+  const [isSourceBrowserCollapsed, setIsSourceBrowserCollapsed] = useState(false);
+  const [assemblyPanePercent, setAssemblyPanePercent] = useState(
+    DEFAULT_ASSEMBLY_PANE_PERCENT,
+  );
+  const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploadResults, setUploadResults] = useState<FileUploadResult[]>([]);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
@@ -31,8 +51,11 @@ export const PdfAssemblyView: React.FC = () => {
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [fileIdToDelete, setFileIdToDelete] = useState<string | null>(null);
   const [justMovedPageId, setJustMovedPageId] = useState<string | null>(null);
+  const [dismissedConversionIds, setDismissedConversionIds] = useState<Set<string>>(new Set());
+  const [uploadProgress, setUploadProgress] = useState<PdfUploadProgress | null>(null);
   const justMovedTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const workspacePanelsRef = useRef<HTMLDivElement>(null);
 
   const createSession = useCreatePdfSession();
   const { data: session } = usePdfSession(sessionId);
@@ -49,16 +72,51 @@ export const PdfAssemblyView: React.FC = () => {
     }
   }, [sessionId, activeSessions]);
 
-  const errors = useMemo(
-    () => uploadResults.filter((r) => r.status === 'error'),
-    [uploadResults],
-  );
+  const conversionJobs = useMemo<PdfConversionJob[]>(() => {
+    const serverJobs = session?.conversionJobs ?? [];
+    const serverJobIds = new Set(serverJobs.map((job) => job.id));
+    const optimisticJobs: PdfConversionJob[] = uploadResults
+      .filter((result) =>
+        result.status === 'queued' &&
+        !!result.conversionId &&
+        !serverJobIds.has(result.conversionId))
+      .map((result) => ({
+        id: result.conversionId!,
+        sessionId: sessionId ?? '',
+        originalName: result.originalName,
+        status: 'queued',
+        createdAt: new Date().toISOString(),
+      }));
+    return [...serverJobs, ...optimisticJobs];
+  }, [session?.conversionJobs, sessionId, uploadResults]);
+
+  const errors = useMemo(() => {
+    const uploadErrors = uploadResults.filter((result) => result.status === 'error');
+    const conversionErrors: FileUploadResult[] = conversionJobs
+      .filter((job) => job.status === 'failed' && !dismissedConversionIds.has(job.id))
+      .map((job) => ({
+        conversionId: job.id,
+        originalName: job.originalName,
+        status: 'error',
+        error: job.error ?? {
+          code: 'CONVERSION_FAILED',
+          message: 'This Word document could not be converted.',
+        },
+      }));
+    return [...uploadErrors, ...conversionErrors];
+  }, [conversionJobs, dismissedConversionIds, uploadResults]);
+
+  const handleDismissUploadError = useCallback((error: FileUploadResult) => {
+    setUploadResults((current) => current.filter((result) => result !== error));
+    if (error.conversionId) {
+      setDismissedConversionIds((current) => new Set(current).add(error.conversionId!));
+    }
+  }, []);
 
   const handleFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
 
     let activeSessionId = sessionId;
-
     if (!activeSessionId) {
       try {
         const result = await createSession.mutateAsync({});
@@ -71,10 +129,16 @@ export const PdfAssemblyView: React.FC = () => {
     }
 
     try {
-      const result = await uploadFiles.mutateAsync({ sessionId: activeSessionId, files });
+      const result = await uploadFiles.mutateAsync({
+        sessionId: activeSessionId,
+        files,
+        onProgress: setUploadProgress,
+      });
       setUploadResults((prev) => [...prev, ...result.files]);
     } catch {
       // mutation error handled by TanStack Query
+    } finally {
+      setUploadProgress(null);
     }
   }, [sessionId, createSession, uploadFiles]);
 
@@ -174,6 +238,36 @@ export const PdfAssemblyView: React.FC = () => {
     }
   }, [hasUnsavedChanges, saveNowAsync]);
 
+  const handleStartNewSession = useCallback(async () => {
+    try {
+      await ensureManifestSaved();
+      const result = await createSession.mutateAsync({});
+
+      setSessionId(result.sessionId);
+      sessionStorage.setItem('pdf-active-session', result.sessionId);
+      setUploadResults([]);
+      setDismissedConversionIds(new Set());
+      setUploadProgress(null);
+      setPreviewPageId(null);
+      setActivePageId(null);
+      setFileIdToDelete(null);
+      setShowDeleteConfirm(false);
+      setDeleteBlockedMessage(null);
+      setJustMovedPageId(null);
+      setShowDedupToast(false);
+      setRangeExternalUpdate((count) => count + 1);
+      setExportFilename(generateDefaultFilename());
+      setIsSourceBrowserCollapsed(false);
+      clearSelection();
+    } catch {
+      // Mutation errors are surfaced by the existing session error UI.
+    }
+  }, [clearSelection, createSession, ensureManifestSaved]);
+
+  const handleExportComplete = useCallback(() => {
+    void handleStartNewSession();
+  }, [handleStartNewSession]);
+
   const handleRangeSelectionChange = useCallback(
     (indices: number[], hasDuplicates: boolean) => {
       if (hasDuplicates) {
@@ -219,6 +313,16 @@ export const PdfAssemblyView: React.FC = () => {
     () => manipulationVisiblePages.map((p) => p.pageId),
     [manipulationVisiblePages],
   );
+
+  const handleSelectAllPages = useCallback(() => {
+    selectAll(allVisiblePageIds);
+    setRangeExternalUpdate((count) => count + 1);
+  }, [allVisiblePageIds, selectAll]);
+
+  const handleDeselectAllPages = useCallback(() => {
+    clearSelection();
+    setRangeExternalUpdate((count) => count + 1);
+  }, [clearSelection]);
 
   const selectedIndicesForRange = useMemo(
     () =>
@@ -371,6 +475,66 @@ export const PdfAssemblyView: React.FC = () => {
 
   const isEmpty = fileMetadata.length === 0;
 
+  const updateAssemblyPanePercent = useCallback((clientX: number) => {
+    const workspace = workspacePanelsRef.current;
+    if (!workspace) return;
+
+    const rect = workspace.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    const nextPercent = ((clientX - rect.left) / rect.width) * 100;
+    setAssemblyPanePercent(
+      Math.min(
+        MAX_ASSEMBLY_PANE_PERCENT,
+        Math.max(MIN_ASSEMBLY_PANE_PERCENT, Math.round(nextPercent)),
+      ),
+    );
+  }, []);
+
+  const handleWorkspaceResizePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      setIsResizingWorkspace(true);
+      updateAssemblyPanePercent(event.clientX);
+    },
+    [updateAssemblyPanePercent],
+  );
+
+  const handleWorkspaceResizePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isResizingWorkspace) return;
+      updateAssemblyPanePercent(event.clientX);
+    },
+    [isResizingWorkspace, updateAssemblyPanePercent],
+  );
+
+  const handleWorkspaceResizePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isResizingWorkspace) return;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      setIsResizingWorkspace(false);
+    },
+    [isResizingWorkspace],
+  );
+
+  const handleWorkspaceResizeKeyDown = useCallback((event: React.KeyboardEvent) => {
+    let nextPercent: number | null = null;
+    if (event.key === 'ArrowLeft') nextPercent = assemblyPanePercent - 5;
+    if (event.key === 'ArrowRight') nextPercent = assemblyPanePercent + 5;
+    if (event.key === 'Home') nextPercent = MIN_ASSEMBLY_PANE_PERCENT;
+    if (event.key === 'End') nextPercent = MAX_ASSEMBLY_PANE_PERCENT;
+    if (nextPercent === null) return;
+
+    event.preventDefault();
+    setAssemblyPanePercent(
+      Math.min(
+        MAX_ASSEMBLY_PANE_PERCENT,
+        Math.max(MIN_ASSEMBLY_PANE_PERCENT, nextPercent),
+      ),
+    );
+  }, [assemblyPanePercent]);
+
   return (
     <div className={styles.container} data-testid="pdf-assembly-view">
       {/* Header — full when empty, compact when files present to maximize preview */}
@@ -378,7 +542,7 @@ export const PdfAssemblyView: React.FC = () => {
         {isEmpty ? (
           <>
             <div className={styles.headerLeft}>
-              <h1 className={styles.heading}>PDF Tools</h1>
+              <h1 className={styles.heading}>PDF Assembly Tool</h1>
               <p className={styles.subheading}>Upload, validate, and assemble PDF documents</p>
             </div>
             {sessionId && (
@@ -390,11 +554,42 @@ export const PdfAssemblyView: React.FC = () => {
           </>
         ) : (
           <>
-            <h1 className={styles.headingCompact}>PDF Tools</h1>
-            <span className={styles.sessionBadge}>
-              <span className={styles.sessionDot} />
-              Session active
-            </span>
+            <h1 className={styles.headingCompact}>PDF Assembly Tool</h1>
+            <div className={styles.headerActions}>
+              <button
+                type="button"
+                className={styles.headerButton}
+                onClick={() => setIsSourceBrowserCollapsed((collapsed) => !collapsed)}
+                aria-expanded={!isSourceBrowserCollapsed}
+                aria-controls="pdf-source-browser"
+                aria-label={isSourceBrowserCollapsed ? 'Show source documents' : 'Hide source documents'}
+                title={isSourceBrowserCollapsed ? 'Show source documents' : 'Hide source documents'}
+                data-testid="pdf-toggle-source-browser"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M9 4v16" />
+                  <path d={isSourceBrowserCollapsed ? 'm13 9 3 3-3 3' : 'm16 9-3 3 3 3'} />
+                </svg>
+                {isSourceBrowserCollapsed ? 'Show sources' : 'Hide sources'}
+              </button>
+              <button
+                type="button"
+                className={styles.headerButton}
+                onClick={handleStartNewSession}
+                disabled={createSession.isPending}
+                data-testid="pdf-new-session"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                {createSession.isPending ? 'Starting…' : 'New session'}
+              </button>
+              <span className={styles.sessionBadge}>
+                <span className={styles.sessionDot} />
+                Session active
+              </span>
+            </div>
           </>
         )}
       </div>
@@ -417,7 +612,10 @@ export const PdfAssemblyView: React.FC = () => {
             onInputChange={handleInputChange}
             isUploading={isUploading}
             createSessionPending={createSession.isPending}
+            uploadProgress={uploadProgress}
+            conversionJobs={conversionJobs}
             errors={errors}
+            onDismissError={handleDismissUploadError}
             sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
           />
         </div>
@@ -425,61 +623,101 @@ export const PdfAssemblyView: React.FC = () => {
         /* Three-panel body: SourceBrowser (left) | AssemblyLane (center) | Preview (right) */
         <PdfWorkerProvider>
         <div className={styles.body}>
-          <SourceBrowser
-            fileMetadata={fileMetadata}
-            localManifest={localManifest}
-            sessionId={sessionId!}
-            documentColors={documentColors}
-            isPageInAssembly={isPageInAssembly}
-            onTogglePageInAssembly={handleTogglePageInAssembly}
-            dragActive={dragActive}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDropzoneClick={handleDropzoneClick}
-            inputRef={inputRef}
-            onInputChange={handleInputChange}
-            isUploading={isUploading}
-            createSessionPending={createSession.isPending}
-            errors={errors}
-            sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
-            onRemoveFile={handleRemoveFileClick}
-          />
+          {!isSourceBrowserCollapsed && (
+            <div id="pdf-source-browser" className={styles.sourceBrowserPanel}>
+              <SourceBrowser
+                fileMetadata={fileMetadata}
+                localManifest={localManifest}
+                sessionId={sessionId!}
+                documentColors={documentColors}
+                isPageInAssembly={isPageInAssembly}
+                onTogglePageInAssembly={handleTogglePageInAssembly}
+                dragActive={dragActive}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDropzoneClick={handleDropzoneClick}
+                inputRef={inputRef}
+                onInputChange={handleInputChange}
+                isUploading={isUploading}
+                createSessionPending={createSession.isPending}
+                uploadProgress={uploadProgress}
+                conversionJobs={conversionJobs}
+                errors={errors}
+                onDismissError={handleDismissUploadError}
+                sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
+                onRemoveFile={handleRemoveFileClick}
+              />
+            </div>
+          )}
 
-          <AssemblyLane
-            sessionId={sessionId!}
-            localManifest={localManifest}
-            visiblePages={manipulationVisiblePages}
-            fileMetadata={fileMetadata}
-            documentColors={documentColors}
-            isSelected={isSelected}
-            selectedCount={selectedCount}
-            onSelect={handlePageSelect}
-            onReorder={handleReorder}
-            onRotate={handleRotate}
-            onDelete={handleDeleteClick}
-            onMoveUp={handleMoveUp}
-            onMoveDown={handleMoveDown}
-            canMoveUp={canMoveUp}
-            canMoveDown={canMoveDown}
-            onSave={saveNow}
-            hasUnsavedChanges={hasUnsavedChanges}
-            activePageId={activePageId}
-            onActivePage={setActivePageId}
-            onPreview={handlePreview}
-            justMovedPageId={justMovedPageId}
-            onAddFromSource={handleAddFromSource}
-          />
+          <div
+            ref={workspacePanelsRef}
+            className={`${styles.workspacePanels} ${isResizingWorkspace ? styles.workspaceResizing : ''}`}
+          >
+            <div
+              className={styles.assemblyPanel}
+              style={{ flexBasis: `${assemblyPanePercent}%` }}
+            >
+              <AssemblyLane
+                sessionId={sessionId!}
+                localManifest={localManifest}
+                visiblePages={manipulationVisiblePages}
+                fileMetadata={fileMetadata}
+                documentColors={documentColors}
+                isSelected={isSelected}
+                selectedCount={selectedCount}
+                onSelectAll={handleSelectAllPages}
+                onDeselectAll={handleDeselectAllPages}
+                onSelect={handlePageSelect}
+                onReorder={handleReorder}
+                onRotate={handleRotate}
+                onDelete={handleDeleteClick}
+                onMoveUp={handleMoveUp}
+                onMoveDown={handleMoveDown}
+                canMoveUp={canMoveUp}
+                canMoveDown={canMoveDown}
+                onSave={saveNow}
+                hasUnsavedChanges={hasUnsavedChanges}
+                activePageId={activePageId}
+                onActivePage={setActivePageId}
+                onPreview={handlePreview}
+                justMovedPageId={justMovedPageId}
+                onAddFromSource={handleAddFromSource}
+              />
+            </div>
 
-          <div className={styles.previewPanel} role="complementary" aria-label="Page preview">
-            <PdfInlinePreview
-              sessionId={sessionId!}
-              fileId={activePreviewPage?.fileId ?? null}
-              sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
-              rotation={activePreviewPage?.rotation ?? 0}
-              sourceFileName={activePreviewFileName}
-              originalPageNumber={(activePreviewPage?.sourcePageIndex ?? 0) + 1}
-            />
+            <div
+              className={styles.workspaceDivider}
+              role="separator"
+              aria-label="Resize assembly and preview panels"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_ASSEMBLY_PANE_PERCENT}
+              aria-valuemax={MAX_ASSEMBLY_PANE_PERCENT}
+              aria-valuenow={assemblyPanePercent}
+              aria-valuetext={`Assembly lane ${assemblyPanePercent}%`}
+              tabIndex={0}
+              onPointerDown={handleWorkspaceResizePointerDown}
+              onPointerMove={handleWorkspaceResizePointerMove}
+              onPointerUp={handleWorkspaceResizePointerUp}
+              onPointerCancel={handleWorkspaceResizePointerUp}
+              onKeyDown={handleWorkspaceResizeKeyDown}
+              onDoubleClick={() => setAssemblyPanePercent(DEFAULT_ASSEMBLY_PANE_PERCENT)}
+              data-testid="pdf-workspace-divider"
+            >
+              <span className={styles.workspaceDividerHandle} aria-hidden="true" />
+            </div>
+
+            <div className={styles.previewPanel} role="complementary" aria-label="Page preview">
+              <PdfInlinePreview
+                sessionId={sessionId!}
+                fileId={activePreviewPage?.fileId ?? null}
+                sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
+                rotation={activePreviewPage?.rotation ?? 0}
+                sourceFileName={activePreviewFileName}
+                originalPageNumber={(activePreviewPage?.sourcePageIndex ?? 0) + 1}
+              />
+            </div>
           </div>
         </div>
         <div className={styles.exportBar} data-testid="pdf-export-bar">
@@ -489,6 +727,7 @@ export const PdfAssemblyView: React.FC = () => {
             filename={exportFilename}
             onFilenameChange={setExportFilename}
             onBeforeExport={ensureManifestSaved}
+            onExportComplete={handleExportComplete}
           />
           <div className={styles.exportBarGroup}>
             <RangeInput
