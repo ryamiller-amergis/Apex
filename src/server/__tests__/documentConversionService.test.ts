@@ -159,7 +159,7 @@ describe('documentConversionService', () => {
 
   // ── DoD-4: error handling — timeout ─────────────────────────────────────────
 
-  test('DoD-4: throws ConversionError with CONVERSION_TIMEOUT after 30 seconds', async () => {
+  test('DoD-4: throws ConversionError with CONVERSION_TIMEOUT after the configured timeout', async () => {
     jest.useFakeTimers();
 
     mockPostMessage.mockImplementation(() => {
@@ -167,11 +167,11 @@ describe('documentConversionService', () => {
     });
 
     const promise = service.convert(Buffer.from('slow'), 'large.docx');
-    jest.advanceTimersByTime(31_000);
+    // Async jobs allow a 15-minute default while retaining a finite runaway guard.
+    jest.advanceTimersByTime(15 * 60_000 + 1_000);
 
     await expect(promise).rejects.toThrow(ConversionError);
     try {
-      jest.advanceTimersByTime(31_000);
       await promise;
     } catch (err) {
       expect((err as ConversionError).code).toBe(PDF_ERROR_CODES.CONVERSION_TIMEOUT);

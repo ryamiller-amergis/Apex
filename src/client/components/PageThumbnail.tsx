@@ -5,7 +5,7 @@ import { useBlankDetection } from '../hooks/useBlankDetection';
 import { BlankPageBadge } from './BlankPageBadge';
 import styles from './PageThumbnail.module.css';
 
-const THUMBNAIL_WIDTH = 180;
+const THUMBNAIL_WIDTH = 200;
 const THUMBNAIL_HEIGHT = Math.round(THUMBNAIL_WIDTH * (22 / 17));
 
 type DropEdge = 'before' | 'after' | null;
@@ -58,7 +58,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const cardRef = useRef<HTMLDivElement>(null);
 
   const { document, isLoading: isDocLoading, error: docError, retry: retryDoc } = usePdfDocument(fileUrl);
-  const { status, imageBitmap } = useThumbnailRenderer(
+  const { status, imageBitmap, hasTextContent } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
     rotation,
@@ -78,7 +78,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     }
   }, [imageBitmap]);
 
-  const { isBlank } = useBlankDetection(canvasRef.current, imageBitmap);
+  const { isBlank } = useBlankDetection(canvasRef.current, imageBitmap, hasTextContent);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {

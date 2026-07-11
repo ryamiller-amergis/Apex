@@ -3,7 +3,7 @@ import fsPromises from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
 import { resolveDataRoot } from '../utils/dataDir';
@@ -17,6 +17,11 @@ import type {
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 import { documentConversionService } from './documentConversionService';
+import {
+  enqueuePdfConversion,
+  getPdfConversionJobs,
+  processPendingPdfConversions,
+} from './pdfConversionJobService';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +30,7 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
 const MAX_CONCURRENT_SESSIONS = 3;
+const EXPORTED_SESSION_CLEANUP_GRACE_MS = 15 * 60 * 1000;
 
 // PDF magic number: first 4 bytes are "%PDF"
 const PDF_MAGIC = Buffer.from('%PDF');
@@ -35,6 +41,10 @@ export function getPdfTempDir(): string {
 
 export function getSessionDir(sessionId: string): string {
   return path.join(PDF_TEMP_DIR, sessionId);
+}
+
+export async function cleanupSessionFiles(sessionId: string): Promise<void> {
+  await fsPromises.rm(getSessionDir(sessionId), { recursive: true, force: true });
 }
 
 // ── Session management ─────────────────────────────────────────────────────────
@@ -81,9 +91,16 @@ export async function createSession(
 }
 
 export async function getSession(sessionId: string) {
-  return db.query.pdfSessions.findFirst({
+  startPendingDocxConversions();
+  const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
+  if (!session) return undefined;
+
+  return {
+    ...session,
+    conversionJobs: await getPdfConversionJobs(sessionId),
+  };
 }
 
 export async function getActiveSessions(userId: string) {
@@ -136,9 +153,20 @@ export async function validateAndIngest(
     };
   }
 
-  // ── .docx → convert to PDF, then ingest the result ───────────────────────────
+  // ── .docx → queue conversion and return immediately ──────────────────────────
   if (isDocx) {
-    return convertAndIngestDocx(sessionId, filePath, sanitizedOriginalName, mimeType);
+    const result = await enqueuePdfConversion(
+      sessionId,
+      filePath,
+      sanitizedOriginalName,
+      mimeType,
+      getSessionDir(sessionId),
+      MAX_FILE_BYTES,
+    );
+    if (result.status === 'queued') {
+      startPendingDocxConversions();
+    }
+    return result;
   }
 
   // ── File size check ──────────────────────────────────────────────────────────
@@ -474,13 +502,15 @@ export async function expireOldSessions(): Promise<{ expired: number; errors: nu
   let errors = 0;
 
   const expiredSessions = await db.query.pdfSessions.findMany({
-    where: and(eq(pdfSessions.status, 'active'), lt(pdfSessions.expiresAt, now)),
+    where: and(
+      or(eq(pdfSessions.status, 'active'), eq(pdfSessions.status, 'exported')),
+      lt(pdfSessions.expiresAt, now),
+    ),
   });
 
   for (const session of expiredSessions) {
     try {
-      const sessionDir = getSessionDir(session.id);
-      await fsPromises.rm(sessionDir, { recursive: true, force: true });
+      await cleanupSessionFiles(session.id);
       await db
         .update(pdfSessions)
         .set({ status: 'expired', updatedAt: now })
@@ -523,6 +553,7 @@ export function sanitizeExportFilename(raw?: string): string {
 export interface AssembleAndExportResult {
   pdfBytes: Uint8Array;
   filename: string;
+  pageCount: number;
 }
 
 export async function assembleAndExport(
@@ -606,22 +637,34 @@ export async function assembleAndExport(
     throw err;
   }
 
-  await db
-    .update(pdfSessions)
-    .set({
-      status: 'exported' as const,
-      exportFilename: filename,
-      updatedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
-    })
-    .where(eq(pdfSessions.id, sessionId));
+  const isPartialExport = pages !== undefined && pages.length > 0;
+  if (isPartialExport) {
+    // Extraction is non-destructive; keep the assembly available for more work.
+    await touchSession(sessionId);
+  } else {
+    // Final export completes the session. The route removes files after the
+    // response finishes; this short expiry is a fallback if that cleanup fails.
+    await db
+      .update(pdfSessions)
+      .set({
+        status: 'exported' as const,
+        exportFilename: filename,
+        updatedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + EXPORTED_SESSION_CLEANUP_GRACE_MS).toISOString(),
+      })
+      .where(eq(pdfSessions.id, sessionId));
+  }
 
-  return { pdfBytes: result.pdfBytes, filename };
+  return {
+    pdfBytes: result.pdfBytes,
+    filename,
+    pageCount: pagesToExport.length,
+  };
 }
 
 // ── Word document conversion + ingestion ────────────────────────────────────────
 
-async function convertAndIngestDocx(
+export async function convertAndIngestDocx(
   sessionId: string,
   filePath: string,
   sanitizedOriginalName: string,
@@ -790,6 +833,16 @@ async function convertAndIngestDocx(
     sizeBytes: pdfSize,
     convertedFrom: sanitizedOriginalName,
   };
+}
+
+export function kickPendingDocxConversions(): Promise<void> {
+  return processPendingPdfConversions(convertAndIngestDocx);
+}
+
+function startPendingDocxConversions(): void {
+  void kickPendingDocxConversions().catch((error) => {
+    console.error('[pdf-conversion] Background processor failed:', error);
+  });
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

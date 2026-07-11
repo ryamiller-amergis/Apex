@@ -16,7 +16,20 @@ export class ConversionError extends Error {
 
 // ── Constants ───────────────────────────────────────────────────────────────────
 
-const CONVERSION_TIMEOUT_MS = 30_000;
+// Conversion runs outside the upload request, so large documents are not bound by
+// Azure's HTTP timeout. Keep a generous finite ceiling to terminate hung WASM work.
+const MIN_CONVERSION_TIMEOUT_MS = 60_000;
+const MAX_CONVERSION_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_CONVERSION_TIMEOUT_MS = 15 * 60_000;
+
+function resolveConversionTimeoutMs(): number {
+  const raw = process.env.DOCX_CONVERSION_TIMEOUT_MS;
+  const parsed = raw != null && raw !== '' ? Number(raw) : DEFAULT_CONVERSION_TIMEOUT_MS;
+  if (!Number.isFinite(parsed)) return DEFAULT_CONVERSION_TIMEOUT_MS;
+  return Math.min(MAX_CONVERSION_TIMEOUT_MS, Math.max(MIN_CONVERSION_TIMEOUT_MS, parsed));
+}
+
+const CONVERSION_TIMEOUT_MS = resolveConversionTimeoutMs();
 
 // ── Internal types ──────────────────────────────────────────────────────────────
 

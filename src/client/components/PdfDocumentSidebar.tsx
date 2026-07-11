@@ -1,5 +1,11 @@
 import React, { useMemo, useState, useCallback } from 'react';
-import type { PdfFileMetadata, FileUploadResult } from '../../shared/types/pdf';
+import type {
+  PdfConversionJob,
+  PdfFileMetadata,
+  FileUploadResult,
+} from '../../shared/types/pdf';
+import { PdfConversionStatus } from './PdfConversionStatus';
+import type { PdfUploadProgress } from '../hooks/usePdfSession';
 import styles from './PdfDocumentSidebar.module.css';
 
 function formatBytes(bytes: number): string {
@@ -16,6 +22,9 @@ const ERROR_LABELS: Record<string, string> = {
   SESSION_SIZE_EXCEEDED: 'Session size limit',
   SESSION_PAGES_EXCEEDED: 'Page limit exceeded',
   UNSUPPORTED_FORMAT: 'Unsupported format',
+  CONVERSION_FAILED: 'Conversion failed',
+  CONVERSION_TIMEOUT: 'Conversion timed out',
+  CONVERSION_UNAVAILABLE: 'Conversion unavailable',
 };
 
 export interface PdfDocumentSidebarProps {
@@ -33,7 +42,8 @@ export interface PdfDocumentSidebarProps {
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading: boolean;
   createSessionPending: boolean;
-  convertingFiles?: string[];
+  uploadProgress?: PdfUploadProgress | null;
+  conversionJobs?: PdfConversionJob[];
   errors: FileUploadResult[];
   onDismissError?: (error: FileUploadResult) => void;
   sessionLimitError: boolean;
@@ -56,7 +66,8 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
   onInputChange,
   isUploading,
   createSessionPending,
-  convertingFiles = [],
+  uploadProgress = null,
+  conversionJobs = [],
   errors,
   onDismissError,
   sessionLimitError,
@@ -65,6 +76,20 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
     () => [...fileMetadata].sort((a, b) => a.originalName.localeCompare(b.originalName)),
     [fileMetadata],
   );
+  const activeConversionJobs = useMemo(
+    () => conversionJobs.filter((job) => job.status === 'queued' || job.status === 'processing'),
+    [conversionJobs],
+  );
+  const isSendingUpload =
+    !createSessionPending && uploadProgress?.phase === 'uploading';
+  const uploadPercent = uploadProgress?.percent ?? 0;
+  const uploadStatusText = createSessionPending
+    ? 'Creating session…'
+    : uploadProgress?.phase === 'processing'
+      ? 'Validating and parsing documents…'
+      : isSendingUpload
+        ? `Uploading… ${uploadPercent}%`
+        : 'Uploading and validating…';
 
   const [collapsedFileIds, setCollapsedFileIds] = useState<Set<string>>(new Set());
 
@@ -139,28 +164,46 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
 
           {/* Uploading state inside the card */}
           {isUploading && (
-            <div className={styles.uploadingOverlay} data-testid="pdf-uploading">
+            <div
+              className={styles.uploadingOverlay}
+              data-testid="pdf-uploading"
+              role="status"
+              aria-live="polite"
+            >
               <div className={styles.spinner} />
-              <p className={styles.uploadingText}>
-                {createSessionPending
-                  ? 'Creating session…'
-                  : convertingFiles.length > 0
-                    ? 'Converting...'
-                    : 'Uploading and validating…'}
-              </p>
+              <p className={styles.uploadingText}>{uploadStatusText}</p>
+              {isSendingUpload && (
+                <div
+                  className={styles.uploadProgress}
+                  role="progressbar"
+                  aria-label="File upload progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={uploadPercent}
+                >
+                  <div
+                    className={styles.uploadProgressFill}
+                    style={{ width: `${uploadPercent}%` }}
+                  />
+                </div>
+              )}
             </div>
           )}
 
-          {convertingFiles.map((filename, index) => (
+          {activeConversionJobs.map((job, index) => (
             <div
-              key={`${filename}-${index}`}
+              key={job.id}
               className={styles.convertingCard}
               data-testid="pdf-converting-file"
+              role="status"
+              aria-live="polite"
             >
               <div className={styles.spinner} />
               <div className={styles.fileInfo}>
-                <p className={styles.fileName}>{filename}</p>
-                <p className={styles.convertingText}>Converting...</p>
+                <p className={styles.fileName}>{job.originalName}</p>
+                <p className={styles.convertingText}>
+                  <PdfConversionStatus job={job} queuePosition={index} />
+                </p>
               </div>
             </div>
           ))}
@@ -228,7 +271,7 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
           <strong>Click to upload</strong> or drag &amp; drop
         </p>
         <p className={styles.dropzoneHint}>
-          PDF up to 100 MB &middot; 250 MB/session &middot; 500 pages
+          PDF or Word (.docx) &middot; 100 MB/file &middot; 500 pages
         </p>
         <input
           ref={inputRef}
@@ -243,15 +286,29 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
 
       {/* Uploading indicator */}
       {isUploading && (
-        <div className={styles.uploadingOverlay} data-testid="pdf-uploading">
+        <div
+          className={styles.uploadingOverlay}
+          data-testid="pdf-uploading"
+          role="status"
+          aria-live="polite"
+        >
           <div className={styles.spinner} />
-          <p className={styles.uploadingText}>
-            {createSessionPending
-              ? 'Creating session…'
-              : convertingFiles.length > 0
-                ? 'Converting...'
-                : 'Uploading…'}
-          </p>
+          <p className={styles.uploadingText}>{uploadStatusText}</p>
+          {isSendingUpload && (
+            <div
+              className={styles.uploadProgress}
+              role="progressbar"
+              aria-label="File upload progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={uploadPercent}
+            >
+              <div
+                className={styles.uploadProgressFill}
+                style={{ width: `${uploadPercent}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -296,23 +353,26 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
       )}
 
       {/* File list or empty state */}
-      {sortedFiles.length > 0 || convertingFiles.length > 0 ? (
+      {sortedFiles.length > 0 || activeConversionJobs.length > 0 ? (
         <>
           <p className={styles.fileListLabel}>
-            Documents ({sortedFiles.length + convertingFiles.length})
+            Documents ({sortedFiles.length + activeConversionJobs.length})
           </p>
           <div className={styles.fileList} role="list" aria-label="Uploaded files">
-            {convertingFiles.map((filename, index) => (
+            {activeConversionJobs.map((job, index) => (
               <div
-                key={`${filename}-${index}`}
+                key={job.id}
                 className={styles.convertingCard}
                 role="listitem"
                 data-testid="pdf-converting-file"
+                aria-label={`${job.originalName}, ${job.status === 'queued' ? 'waiting to convert' : 'converting'}`}
               >
                 <div className={styles.spinner} />
                 <div className={styles.fileInfo}>
-                  <p className={styles.fileName}>{filename}</p>
-                  <p className={styles.convertingText}>Converting...</p>
+                  <p className={styles.fileName}>{job.originalName}</p>
+                  <p className={styles.convertingText}>
+                    <PdfConversionStatus job={job} queuePosition={index} />
+                  </p>
                 </div>
               </div>
             ))}

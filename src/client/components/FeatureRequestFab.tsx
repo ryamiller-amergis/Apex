@@ -18,6 +18,11 @@ interface Position {
   y: number;
 }
 
+interface ViewportSize {
+  width: number;
+  height: number;
+}
+
 interface FeatureRequestFabProps {
   onRequestFeature: () => void;
 }
@@ -39,12 +44,43 @@ function getDefaultPosition(): Position {
   });
 }
 
+function repositionForViewport(
+  position: Position,
+  previousViewport: ViewportSize,
+  nextViewport: ViewportSize,
+): Position {
+  const anchoredRight = position.x + FAB_SIZE / 2 >= previousViewport.width / 2;
+  const anchoredBottom = position.y + FAB_SIZE / 2 >= previousViewport.height / 2;
+
+  return clampPosition({
+    x: anchoredRight
+      ? nextViewport.width - (previousViewport.width - position.x)
+      : position.x,
+    y: anchoredBottom
+      ? nextViewport.height - (previousViewport.height - position.y)
+      : position.y,
+  });
+}
+
 function loadStoredPosition(): Position | null {
   try {
     const stored = localStorage.getItem(FAB_STORAGE_KEY);
     if (!stored) return null;
-    const parsed = JSON.parse(stored) as Partial<Position>;
+    const parsed = JSON.parse(stored) as Partial<Position & {
+      viewportWidth: number;
+      viewportHeight: number;
+    }>;
     if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+      if (
+        typeof parsed.viewportWidth === 'number' &&
+        typeof parsed.viewportHeight === 'number'
+      ) {
+        return repositionForViewport(
+          { x: parsed.x, y: parsed.y },
+          { width: parsed.viewportWidth, height: parsed.viewportHeight },
+          { width: window.innerWidth, height: window.innerHeight },
+        );
+      }
       return clampPosition({ x: parsed.x, y: parsed.y });
     }
   } catch {
@@ -99,6 +135,10 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestF
   });
   const suppressClickRef = useRef(false);
   const positionRef = useRef<Position | null>(null);
+  const viewportRef = useRef<ViewportSize>({
+    width: typeof window === 'undefined' ? 0 : window.innerWidth,
+    height: typeof window === 'undefined' ? 0 : window.innerHeight,
+  });
 
   useEffect(() => {
     positionRef.current = position;
@@ -106,7 +146,17 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestF
 
   useEffect(() => {
     const handleResize = () => {
-      setPosition((prev) => (prev ? clampPosition(prev) : prev));
+      const previousViewport = viewportRef.current;
+      const nextViewport = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+      setPosition((prev) =>
+        prev
+          ? repositionForViewport(prev, previousViewport, nextViewport)
+          : prev,
+      );
+      viewportRef.current = nextViewport;
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -179,7 +229,11 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestF
       const latest = positionRef.current;
       if (latest) {
         try {
-          localStorage.setItem(FAB_STORAGE_KEY, JSON.stringify(latest));
+          localStorage.setItem(FAB_STORAGE_KEY, JSON.stringify({
+            ...latest,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+          }));
         } catch {
           // ignore quota errors
         }

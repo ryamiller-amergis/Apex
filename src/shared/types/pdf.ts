@@ -1,6 +1,22 @@
 // ── PDF Assembly — Shared Types ────────────────────────────────────────────────
 
 export type PdfSessionStatus = 'active' | 'exported' | 'expired';
+export type PdfConversionStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+export interface PdfConversionJob {
+  id: string;
+  sessionId: string;
+  originalName: string;
+  status: PdfConversionStatus;
+  fileId?: string | null;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
 
 export interface PdfFileMetadata {
   fileId: string;
@@ -29,6 +45,7 @@ export interface PdfSession {
   status: PdfSessionStatus;
   pageManifest: PageManifestEntry[];
   fileMetadata: PdfFileMetadata[];
+  conversionJobs: PdfConversionJob[];
   exportFilename?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -51,7 +68,8 @@ export interface CreateSessionResponse {
 export interface FileUploadResult {
   fileId?: string;
   originalName: string;
-  status: 'success' | 'error';
+  status: 'success' | 'queued' | 'error';
+  conversionId?: string;
   pageCount?: number;
   sizeBytes?: number;
   convertedFrom?: string;
@@ -64,6 +82,17 @@ export interface FileUploadResult {
 export interface UploadFilesResponse {
   files: FileUploadResult[];
 }
+
+/**
+ * MVP performance objectives. These are soft targets because PDF complexity,
+ * file size, network speed, and host capacity all affect wall-clock time.
+ */
+export const PDF_MVP_PERFORMANCE_TARGETS = {
+  uploadPageCount: 50,
+  uploadAndParseMs: 10_000,
+  exportPageCount: 100,
+  assembleAndExportMs: 15_000,
+} as const;
 
 // ── Export Types ───────────────────────────────────────────────────────────────
 
@@ -119,5 +148,6 @@ export type PdfErrorCode = typeof PDF_ERROR_CODES[keyof typeof PDF_ERROR_CODES];
 export interface ThumbnailRenderState {
   status: 'idle' | 'loading' | 'loaded' | 'error';
   imageBitmap: ImageBitmap | null;
+  hasTextContent?: boolean;
   error: string | null;
 }

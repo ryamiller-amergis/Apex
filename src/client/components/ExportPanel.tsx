@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useExportSession, generateDefaultFilename } from '../hooks/useExportSession';
 import styles from './ExportPanel.module.css';
 
@@ -10,6 +10,8 @@ interface ExportPanelProps {
   onFilenameChange?: (filename: string) => void;
   /** Called before export so callers can persist unsaved assembly changes. */
   onBeforeExport?: () => Promise<void>;
+  /** Called after the export download has started successfully. */
+  onExportComplete?: () => void;
 }
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({
@@ -18,10 +20,12 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   filename: controlledFilename,
   onFilenameChange,
   onBeforeExport,
+  onExportComplete,
 }) => {
   const [internalFilename, setInternalFilename] = useState(() => generateDefaultFilename());
   const [error, setError] = useState<string | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
+  const hasReportedSuccessRef = useRef(false);
 
   const filename = controlledFilename ?? internalFilename;
   const setFilename = onFilenameChange ?? setInternalFilename;
@@ -31,10 +35,16 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   const isEmpty = nonDeletedPageCount === 0;
 
   useEffect(() => {
-    if (exportMutation.isSuccess) {
-      setError(null);
+    if (!exportMutation.isSuccess) {
+      hasReportedSuccessRef.current = false;
+      return;
     }
-  }, [exportMutation.isSuccess]);
+
+    if (hasReportedSuccessRef.current) return;
+    hasReportedSuccessRef.current = true;
+    setError(null);
+    onExportComplete?.();
+  }, [exportMutation.isSuccess, onExportComplete]);
 
   useEffect(() => {
     if (exportMutation.isError) {
@@ -95,7 +105,9 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           {isExporting ? (
             <>
               <span className={styles.spinner} data-testid="pdf-export-loading" />
-              Exporting…
+              {isPreparing
+                ? 'Preparing…'
+                : `Exporting ${nonDeletedPageCount} ${nonDeletedPageCount === 1 ? 'page' : 'pages'}…`}
             </>
           ) : (
             <>

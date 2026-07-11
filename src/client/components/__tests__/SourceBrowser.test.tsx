@@ -146,16 +146,34 @@ describe('SourceBrowser', () => {
     expect(screen.getByTestId('pdf-uploading')).toBeInTheDocument();
   });
 
-  it('shows Converting... for a pending Word file', () => {
+  it('shows determinate upload progress', () => {
+    renderBrowser({
+      isUploading: true,
+      uploadProgress: { phase: 'uploading', percent: 65 },
+    });
+
+    expect(screen.getByText('Uploading… 65%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '65',
+    );
+  });
+
+  it('shows queued status for a pending Word file', () => {
     renderBrowser({
       fileMetadata: [],
       localManifest: [],
-      isUploading: true,
-      convertingFiles: ['proposal.docx'],
+      conversionJobs: [{
+        id: 'conversion-1',
+        sessionId: 'session-1',
+        originalName: 'proposal.docx',
+        status: 'queued',
+        createdAt: '2026-01-01T00:00:00Z',
+      }],
     });
 
     expect(screen.getByText('proposal.docx')).toBeInTheDocument();
-    expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
+    expect(screen.getByText('Waiting to convert…')).toBeInTheDocument();
   });
 
   it('shows converted Word provenance and page thumbnails after conversion', () => {
@@ -167,7 +185,7 @@ describe('SourceBrowser', () => {
     renderBrowser({
       fileMetadata: [convertedFile],
       localManifest: makeManifest('word-file', 2),
-      convertingFiles: [],
+      conversionJobs: [],
     });
 
     expect(screen.getByText('proposal.docx')).toBeInTheDocument();

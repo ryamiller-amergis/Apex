@@ -173,6 +173,7 @@
 .uploadingOverlay {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--accent-color);
@@ -198,6 +199,21 @@
   color: var(--accent-color);
   font-weight: 500;
   margin: 0;
+}
+
+.uploadProgress {
+  flex-basis: 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-color-light);
+}
+
+.uploadProgressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-color);
+  transition: width 0.2s ease;
 }
 
 /* ── Error Cards ─────────────────────────────────────── */
@@ -322,6 +338,8 @@
   border: 1px solid var(--accent-color);
   border-radius: 8px;
   background: rgba(39, 71, 217, 0.06);
+  box-shadow: var(--shadow-sm);
+  animation: conversionCardIn 0.3s ease;
 }
 
 .convertingText {
@@ -329,6 +347,17 @@
   color: var(--accent-color);
   font-size: 0.6875rem;
   font-weight: 600;
+}
+
+@keyframes conversionCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .chevronBtn {

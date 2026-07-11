@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { PdfInlinePreview } from '../PdfInlinePreview';
 
 const mockGetPage = jest.fn();
@@ -55,6 +55,9 @@ const baseProps = {
 describe('PdfInlinePreview', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      { drawImage: jest.fn() } as unknown as CanvasRenderingContext2D,
+    );
     installResizeObserver(CONTAINER_WIDTH, CONTAINER_HEIGHT);
     mockGetPage.mockResolvedValue({
       getViewport: ({ scale }: { scale: number; rotation: number }) => ({
@@ -63,6 +66,10 @@ describe('PdfInlinePreview', () => {
       }),
       render: mockRender,
     });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('renders empty state when fileId is null', () => {
@@ -116,6 +123,21 @@ describe('PdfInlinePreview', () => {
     const usesWidthWell = canvas.width >= (CONTAINER_WIDTH - 16) * 0.7;
     const usesHeightWell = canvas.height >= (CONTAINER_HEIGHT - 32) * 0.7;
     expect(usesWidthWell || usesHeightWell).toBe(true);
+  });
+
+  it('zooms the preview independently and resets to fit', async () => {
+    render(<PdfInlinePreview {...baseProps} />);
+
+    await waitFor(() => {
+      expect(mockGetPage).toHaveBeenCalled();
+    });
+
+    expect(screen.getByTestId('pdf-preview-zoom')).toHaveTextContent('100%');
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByTestId('pdf-preview-zoom')).toHaveTextContent('125%');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    expect(screen.getByTestId('pdf-preview-zoom')).toHaveTextContent('100%');
   });
 
   it('shows source file info after rendering completes', async () => {

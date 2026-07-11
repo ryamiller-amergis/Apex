@@ -4,6 +4,11 @@ import type { ThumbnailRenderState } from '../../shared/types/pdf';
 
 const MAX_CACHE_SIZE = 200;
 
+interface CachedThumbnail {
+  imageBitmap: ImageBitmap;
+  hasTextContent: boolean;
+}
+
 export function useThumbnailRenderer(
   document: PDFDocumentProxy | null,
   pageIndex: number,
@@ -14,27 +19,33 @@ export function useThumbnailRenderer(
   const [state, setState] = useState<ThumbnailRenderState>({
     status: 'idle',
     imageBitmap: null,
+    hasTextContent: false,
     error: null,
   });
 
-  const cacheRef = useRef<Map<string, ImageBitmap>>(new Map());
+  const cacheRef = useRef<Map<string, CachedThumbnail>>(new Map());
   const cacheKeysRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!document) {
-      setState({ status: 'idle', imageBitmap: null, error: null });
+      setState({ status: 'idle', imageBitmap: null, hasTextContent: false, error: null });
       return;
     }
 
     const cacheKey = `${fileUrl ?? ''}:${pageIndex}:${rotation}:${scale}`;
     const cached = cacheRef.current.get(cacheKey);
     if (cached) {
-      setState({ status: 'loaded', imageBitmap: cached, error: null });
+      setState({
+        status: 'loaded',
+        imageBitmap: cached.imageBitmap,
+        hasTextContent: cached.hasTextContent,
+        error: null,
+      });
       return;
     }
 
     let cancelled = false;
-    setState({ status: 'loading', imageBitmap: null, error: null });
+    setState({ status: 'loading', imageBitmap: null, hasTextContent: false, error: null });
 
     (async () => {
       try {
@@ -45,6 +56,16 @@ export function useThumbnailRenderer(
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (page as any).render({ canvasContext, viewport, canvas: null }).promise;
+        let hasTextContent = false;
+        try {
+          const textContent = await page.getTextContent();
+          hasTextContent = textContent.items.some((item) => {
+            return 'str' in item && typeof item.str === 'string' && item.str.trim().length > 0;
+          });
+        } catch {
+          // Text extraction is a conservative signal only; pixel detection remains
+          // available for image-only or malformed text layers.
+        }
         const bitmap = await createImageBitmap(canvas);
 
         if (cancelled) {
@@ -55,19 +76,20 @@ export function useThumbnailRenderer(
         if (cacheRef.current.size >= MAX_CACHE_SIZE) {
           const evictKey = cacheKeysRef.current.shift()!;
           const evicted = cacheRef.current.get(evictKey);
-          if (evicted) evicted.close();
+          if (evicted) evicted.imageBitmap.close();
           cacheRef.current.delete(evictKey);
         }
 
-        cacheRef.current.set(cacheKey, bitmap);
+        cacheRef.current.set(cacheKey, { imageBitmap: bitmap, hasTextContent });
         cacheKeysRef.current.push(cacheKey);
 
-        setState({ status: 'loaded', imageBitmap: bitmap, error: null });
+        setState({ status: 'loaded', imageBitmap: bitmap, hasTextContent, error: null });
       } catch (err: unknown) {
         if (!cancelled) {
           setState({
             status: 'error',
             imageBitmap: null,
+            hasTextContent: false,
             error: err instanceof Error ? err.message : String(err),
           });
         }
@@ -83,7 +105,7 @@ export function useThumbnailRenderer(
     const cache = cacheRef.current;
     return () => {
       for (const bitmap of cache.values()) {
-        bitmap.close();
+        bitmap.imageBitmap.close();
       }
       cache.clear();
       cacheKeysRef.current = [];

@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
+import { performance } from 'perf_hooks';
 import { ensureAuthenticated } from '../middleware/auth';
 import { requirePermission } from '../middleware/rbac';
 import {
@@ -14,8 +15,12 @@ import {
   updateManifest,
   removeFile,
   assembleAndExport,
+  cleanupSessionFiles,
 } from '../services/pdfAssemblyService';
-import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import {
+  PDF_ERROR_CODES,
+  PDF_MVP_PERFORMANCE_TARGETS,
+} from '../../shared/types/pdf';
 
 const router = express.Router();
 
@@ -136,6 +141,7 @@ router.get('/sessions/:sessionId', async (req, res): Promise<void> => {
 router.post(
   '/sessions/:sessionId/upload',
   (req, res, next) => {
+    res.locals.pdfUploadStartedAt = performance.now();
     // Run Multer first so files are on disk before we do ownership check
     upload.array('files')(req, res, (err) => {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
@@ -169,6 +175,28 @@ router.post(
           validateAndIngest(sessionId, f.path, f.originalname, f.mimetype),
         ),
       );
+
+      const durationMs = Math.round(
+        performance.now() - (res.locals.pdfUploadStartedAt as number),
+      );
+      res.setHeader(
+        'Server-Timing',
+        `pdf-upload-parse;dur=${durationMs};desc="PDF upload and parse"`,
+      );
+
+      const uploadedPageCount = results[0]?.pageCount ?? 0;
+      if (
+        files.length === 1 &&
+        uploadedPageCount >= PDF_MVP_PERFORMANCE_TARGETS.uploadPageCount &&
+        durationMs > PDF_MVP_PERFORMANCE_TARGETS.uploadAndParseMs
+      ) {
+        console.warn('[pdf-performance] Upload and parse exceeded MVP target', {
+          durationMs,
+          targetMs: PDF_MVP_PERFORMANCE_TARGETS.uploadAndParseMs,
+          pageCount: uploadedPageCount,
+          sizeBytes: results[0]?.sizeBytes,
+        });
+      }
 
       res.status(200).json({ files: results });
     } catch (err) {
@@ -232,6 +260,7 @@ router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<vo
 
 router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   try {
+    const exportStartedAt = performance.now();
     const userId = getUserId(req);
     const { sessionId } = req.params;
     const { filename, pages } = req.body as { filename?: string; pages?: number[] };
@@ -248,10 +277,33 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
     }
 
     const result = await assembleAndExport(sessionId, userId, filename, pages);
+    const durationMs = Math.round(performance.now() - exportStartedAt);
+
+    res.setHeader(
+      'Server-Timing',
+      `pdf-assemble-export;dur=${durationMs};desc="PDF assembly and export"`,
+    );
+    if (
+      result.pageCount >= PDF_MVP_PERFORMANCE_TARGETS.exportPageCount &&
+      durationMs > PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs
+    ) {
+      console.warn('[pdf-performance] Assembly and export exceeded MVP target', {
+        durationMs,
+        targetMs: PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs,
+        pageCount: result.pageCount,
+      });
+    }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
     res.setHeader('Content-Length', result.pdfBytes.length);
+    if (!pages || pages.length === 0) {
+      res.once('finish', () => {
+        void cleanupSessionFiles(sessionId).catch((cleanupError) => {
+          console.error('[pdf] Failed to clean exported session files:', cleanupError);
+        });
+      });
+    }
     res.end(Buffer.from(result.pdfBytes));
   } catch (err: unknown) {
     const code = (err as any)?.code;

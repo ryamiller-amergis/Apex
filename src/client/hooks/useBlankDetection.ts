@@ -28,11 +28,15 @@ export function isPageBlank(canvas: HTMLCanvasElement): boolean {
   return ratio <= BLANK_RATIO_THRESHOLD;
 }
 
-export function useBlankDetection(canvas: HTMLCanvasElement | null, renderKey?: unknown): BlankDetectionResult {
+export function useBlankDetection(
+  canvas: HTMLCanvasElement | null,
+  renderKey?: unknown,
+  hasTextContent = false,
+): BlankDetectionResult {
   const [isBlank, setIsBlank] = useState(false);
 
   useEffect(() => {
-    if (!canvas || !renderKey) {
+    if (!canvas || !renderKey || hasTextContent) {
       setIsBlank(false);
       return;
     }
@@ -40,7 +44,7 @@ export function useBlankDetection(canvas: HTMLCanvasElement | null, renderKey?: 
     // PageThumbnail draws the bitmap in an earlier effect. Detecting here ensures
     // pixel analysis runs after that draw instead of against an empty canvas.
     setIsBlank(isPageBlank(canvas));
-  }, [canvas, renderKey]);
+  }, [canvas, renderKey, hasTextContent]);
 
   return { isBlank };
 }

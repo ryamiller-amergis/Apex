@@ -37,7 +37,7 @@ describe('menuSettings shared types', () => {
       'Standup',
       'UI Lab',
       'Feature Requests',
-      'PDF Tools',
+      'PDF Assembly Tool',
     ]);
   });
 

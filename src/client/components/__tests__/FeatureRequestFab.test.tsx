@@ -18,6 +18,9 @@ describe('FeatureRequestFab', () => {
 
   beforeEach(() => {
     onRequestFeature.mockReset();
+    localStorage.clear();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 800, writable: true });
   });
 
   it('opens the menu when the FAB is clicked', () => {
@@ -65,5 +68,22 @@ describe('FeatureRequestFab', () => {
 
     fireEvent.click(fab);
     expect(screen.getByRole('menuitem', { name: /Ask Apex/i })).toBeInTheDocument();
+  });
+
+  it('preserves its viewport-edge offset while the window resizes', () => {
+    render(<FeatureRequestFab onRequestFeature={onRequestFeature} />);
+    const fabContainer = screen.getByRole('button', { name: 'Open Apex menu' }).parentElement!;
+
+    expect(fabContainer).toHaveStyle({ left: '1128px', top: '728px' });
+
+    window.innerWidth = 900;
+    window.innerHeight = 600;
+    fireEvent(window, new Event('resize'));
+    expect(fabContainer).toHaveStyle({ left: '828px', top: '528px' });
+
+    window.innerWidth = 1200;
+    window.innerHeight = 800;
+    fireEvent(window, new Event('resize'));
+    expect(fabContainer).toHaveStyle({ left: '1128px', top: '728px' });
   });
 });
