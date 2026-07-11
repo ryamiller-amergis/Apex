@@ -166,6 +166,40 @@ describe('AssemblyLane', () => {
     expect(screen.getByTestId('pdf-thumbnail-3')).toBeInTheDocument();
   });
 
+  it('renders every converted page when a multi-page Word upload is appended', () => {
+    const convertedFile: PdfFileMetadata = {
+      fileId: 'word-file',
+      originalName: 'converted.docx',
+      storedName: 'word-file.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 4096,
+      pageCount: 3,
+      convertedFrom: 'converted.docx',
+      uploadedAt: '2026-07-11T00:00:00Z',
+    };
+    const convertedPages = makePages(3, 'word-file').map((page, index) => ({
+      ...page,
+      pageId: `word-page-${index + 1}`,
+    }));
+
+    const { rerender } = render(
+      <AssemblyLane {...defaultProps} visiblePages={[]} localManifest={[]} />,
+    );
+
+    rerender(
+      <AssemblyLane
+        {...defaultProps}
+        visiblePages={convertedPages}
+        localManifest={convertedPages}
+        fileMetadata={[convertedFile]}
+      />,
+    );
+
+    expect(screen.getByText('converted.docx p.1')).toBeInTheDocument();
+    expect(screen.getByText('converted.docx p.2')).toBeInTheDocument();
+    expect(screen.getByText('converted.docx p.3')).toBeInTheDocument();
+  });
+
   it('ManipulationToolbar receives correct props', () => {
     render(
       <AssemblyLane

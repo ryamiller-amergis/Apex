@@ -113,6 +113,18 @@ describe('pdfAssemblyService — .docx upload routing', () => {
     expect(result.status).toBe('success');
   });
 
+  test('AC-0: recognizes a .docx filename when drag-and-drop supplies no MIME type', async () => {
+    const result = await validateAndIngest(
+      SESSION_ID,
+      '/tmp/upload.docx',
+      'report.docx',
+      '',
+    );
+
+    expect(mockConvert).toHaveBeenCalledWith(docxBuffer, 'report.docx');
+    expect(result.status).toBe('success');
+  });
+
   test('DoD-2: does NOT call documentConversionService.convert for .pdf MIME type', async () => {
     mockReadFile.mockResolvedValue(validPdfBuffer);
 
@@ -167,7 +179,9 @@ describe('pdfAssemblyService — .docx upload routing', () => {
 
     expect(result.status).toBe('error');
     expect(result.error?.code).toBe(PDF_ERROR_CODES.CONVERSION_FAILED);
-    expect(result.error?.message).toContain('could not be converted');
+    expect(result.error?.message).toBe(
+      'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
+    );
   });
 
   test('AC-1: returns CONVERSION_TIMEOUT when conversion times out', async () => {

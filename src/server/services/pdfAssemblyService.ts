@@ -117,9 +117,12 @@ export async function validateAndIngest(
   const sanitizedOriginalName = sanitizeFilename(originalName);
 
   // ── MIME type check ──────────────────────────────────────────────────────────
+  const isDocx =
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    path.extname(sanitizedOriginalName).toLowerCase() === '.docx';
   const isSupportedMime =
     mimeType === 'application/pdf' ||
-    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    isDocx;
 
   if (!isSupportedMime) {
     await safeDeleteFile(filePath);
@@ -134,7 +137,7 @@ export async function validateAndIngest(
   }
 
   // ── .docx → convert to PDF, then ingest the result ───────────────────────────
-  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+  if (isDocx) {
     return convertAndIngestDocx(sessionId, filePath, sanitizedOriginalName, mimeType);
   }
 
@@ -692,7 +695,7 @@ async function convertAndIngestDocx(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.CONVERSION_FAILED,
-        message: 'The converted PDF is invalid. Try saving the document as PDF from Word directly.',
+        message: 'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
       },
     };
   }

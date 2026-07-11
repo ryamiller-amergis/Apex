@@ -140,7 +140,9 @@ export interface SourceBrowserProps {
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading: boolean;
   createSessionPending: boolean;
+  convertingFiles?: string[];
   errors: FileUploadResult[];
+  onDismissError?: (error: FileUploadResult) => void;
   sessionLimitError: boolean;
   onRemoveFile?: (fileId: string) => void;
 }
@@ -161,7 +163,9 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
   onInputChange,
   isUploading,
   createSessionPending,
+  convertingFiles = [],
   errors,
+  onDismissError,
   sessionLimitError,
   onRemoveFile,
 }) => {
@@ -216,12 +220,12 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
           <strong>Click to upload</strong> or drag &amp; drop
         </p>
         <p className={styles['dropzone-hint']}>
-          PDF up to 100 MB &middot; 500 pages
+          PDF or Word (.docx) up to 100 MB &middot; 500 pages
         </p>
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           multiple
           className={styles['dropzone-input']}
           onChange={onInputChange}
@@ -234,7 +238,11 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
         <div className={styles['uploading-overlay']} data-testid="pdf-uploading">
           <div className={styles.spinner} />
           <p className={styles['uploading-text']}>
-            {createSessionPending ? 'Creating session…' : 'Uploading…'}
+            {createSessionPending
+              ? 'Creating session…'
+              : convertingFiles.length > 0
+                ? 'Converting...'
+                : 'Uploading…'}
           </p>
         </div>
       )}
@@ -249,10 +257,21 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                 <span className={styles['error-file-name']}>{err.originalName}</span>
                 {' — '}
                 {ERROR_LABELS[err.error?.code ?? ''] ?? err.error?.message ?? 'Upload failed'}
-                {err.error?.message && err.error.code && (
+                {ERROR_LABELS[err.error?.code ?? ''] && err.error?.message && (
                   <> &middot; {err.error.message}</>
                 )}
               </p>
+              {onDismissError && (
+                <button
+                  type="button"
+                  className={styles['error-dismiss']}
+                  aria-label={`Dismiss error for ${err.originalName}`}
+                  title="Dismiss error"
+                  onClick={() => onDismissError(err)}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -269,12 +288,26 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
       )}
 
       {/* Document list or empty state */}
-      {sortedFiles.length > 0 ? (
+      {sortedFiles.length > 0 || convertingFiles.length > 0 ? (
         <>
           <p className={styles['file-list-label']}>
-            Documents ({sortedFiles.length})
+            Documents ({sortedFiles.length + convertingFiles.length})
           </p>
           <div className={styles['file-list']} role="list" aria-label="Source documents">
+            {convertingFiles.map((filename, index) => (
+              <div
+                key={`${filename}-${index}`}
+                className={`${styles['file-card']} ${styles['converting-card']}`}
+                role="listitem"
+                data-testid="pdf-converting-file"
+              >
+                <div className={styles.spinner} />
+                <div className={styles['file-info']}>
+                  <p className={styles['file-name']}>{filename}</p>
+                  <p className={styles['converting-text']}>Converting...</p>
+                </div>
+              </div>
+            ))}
             {sortedFiles.map((f) => {
               const isExpanded = expandedFileIds.has(f.fileId);
               const color = documentColors.get(f.fileId);
@@ -311,6 +344,14 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                         <span>{formatBytes(f.sizeBytes)}</span>
                         <span>{f.pageCount} {f.pageCount === 1 ? 'page' : 'pages'}</span>
                       </p>
+                      {f.convertedFrom && (
+                        <span
+                          className={styles['converted-badge']}
+                          data-testid={`pdf-converted-badge-${f.fileId}`}
+                        >
+                          Converted from Word
+                        </span>
+                      )}
                     </div>
                     {onRemoveFile && (
                       <button

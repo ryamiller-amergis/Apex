@@ -222,10 +222,31 @@
   font-size: 0.75rem;
   color: var(--error-color);
   margin: 0;
+  flex: 1;
 }
 
 .errorFileName {
   font-weight: 600;
+}
+
+.errorDismiss {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--error-color);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.errorDismiss:hover,
+.errorDismiss:focus-visible {
+  background: rgba(211, 47, 47, 0.12);
+  outline: none;
 }
 
 /* ── Empty State ─────────────────────────────────────── */
@@ -291,6 +312,23 @@
 .fileCardSelected {
   border-color: var(--accent-color);
   background: rgba(39, 71, 217, 0.06);
+}
+
+.convertingCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-color);
+  border-radius: 8px;
+  background: rgba(39, 71, 217, 0.06);
+}
+
+.convertingText {
+  margin: 2px 0 0;
+  color: var(--accent-color);
+  font-size: 0.6875rem;
+  font-weight: 600;
 }
 
 .chevronBtn {

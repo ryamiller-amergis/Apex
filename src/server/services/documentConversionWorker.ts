@@ -1,4 +1,5 @@
 import { parentPort } from 'worker_threads';
+import path from 'path';
 
 interface ConversionMessage {
   buffer: Buffer;
@@ -11,7 +12,16 @@ interface ConversionResult {
   error?: string;
 }
 
-let convertDocument: ((buf: Buffer, opts: { outputFormat: string }) => Promise<{ data: Buffer }>) | null = null;
+type ConvertDocument = typeof import('@matbee/libreoffice-converter')['convertDocument'];
+
+let convertDocument: ConvertDocument | null = null;
+const converterWasmPath = path.join(
+  process.cwd(),
+  'node_modules',
+  '@matbee',
+  'libreoffice-converter',
+  'wasm',
+);
 
 async function ensureConverter() {
   if (!convertDocument) {
@@ -24,7 +34,11 @@ parentPort?.on('message', async (msg: ConversionMessage) => {
   const result: ConversionResult = { success: false };
   try {
     await ensureConverter();
-    const output = await convertDocument!(Buffer.from(msg.buffer), { outputFormat: 'pdf' });
+    const output = await convertDocument!(
+      Buffer.from(msg.buffer),
+      { outputFormat: 'pdf' },
+      { wasmPath: converterWasmPath },
+    );
     result.success = true;
     result.pdfBuffer = Buffer.from(output.data);
   } catch (err) {

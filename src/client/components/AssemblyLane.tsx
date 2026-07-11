@@ -208,6 +208,14 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
     [visiblePages.length, columnCount],
   );
 
+  // react-window can retain stale cells when an upload appends multiple pages
+  // without changing the current viewport. Remount the grid for a new page set
+  // so every converted page receives its own thumbnail cell.
+  const gridContentKey = useMemo(
+    () => `${columnCount}:${visiblePages.map((page) => page.pageId).join(',')}`,
+    [columnCount, visiblePages],
+  );
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -451,6 +459,7 @@ const AssemblyLaneInner: React.FC<AssemblyLaneProps> = ({
         >
           <div className={styles.gridInner}>
             <Grid<ThumbnailCellProps>
+              key={gridContentKey}
               cellComponent={ThumbnailCell}
               cellProps={{
                 visiblePages,

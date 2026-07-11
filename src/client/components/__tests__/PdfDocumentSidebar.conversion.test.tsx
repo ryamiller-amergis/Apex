@@ -70,6 +70,21 @@ describe('PdfDocumentSidebar — Word conversion UI', () => {
     expect(hint).toBeInTheDocument();
   });
 
+  test('AC-0: shows the Word filename in a Converting... state', () => {
+    render(
+      <PdfDocumentSidebar
+        {...defaultProps}
+        hero
+        isUploading
+        convertingFiles={['quarterly-report.docx']}
+      />,
+    );
+
+    expect(screen.getByText('quarterly-report.docx')).toBeInTheDocument();
+    expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('pdf-converting-file')).toBeInTheDocument();
+  });
+
   test('AC-2: shows "Converted from Word" badge when convertedFrom is present', () => {
     const convertedFile: PdfFileMetadata = {
       fileId: 'conv-1',
@@ -107,6 +122,28 @@ describe('PdfDocumentSidebar — Word conversion UI', () => {
     );
 
     expect(screen.queryByTestId('pdf-converted-badge-nat-1')).not.toBeInTheDocument();
+  });
+
+  test('AC-1: shows the required conversion failure message exactly once', () => {
+    const message =
+      'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.';
+
+    render(
+      <PdfDocumentSidebar
+        {...defaultProps}
+        errors={[
+          {
+            originalName: 'broken.docx',
+            status: 'error',
+            error: { code: 'CONVERSION_FAILED', message },
+          },
+        ]}
+      />,
+    );
+
+    const renderedError = screen.getByTestId('pdf-upload-errors').textContent ?? '';
+    expect(renderedError).toContain(message);
+    expect(renderedError.split(message)).toHaveLength(2);
   });
 
   test('AC-3: converted file appears in file list with page count and size', () => {

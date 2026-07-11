@@ -88,6 +88,10 @@ describe('SourceBrowser', () => {
   it('renders upload dropzone', () => {
     renderBrowser();
     expect(screen.getByTestId('pdf-dropzone')).toBeInTheDocument();
+    expect(screen.getByTestId('pdf-file-input')).toHaveAttribute(
+      'accept',
+      expect.stringContaining('.docx'),
+    );
   });
 
   it('renders document list with correct file names sorted A-Z', () => {
@@ -142,6 +146,37 @@ describe('SourceBrowser', () => {
     expect(screen.getByTestId('pdf-uploading')).toBeInTheDocument();
   });
 
+  it('shows Converting... for a pending Word file', () => {
+    renderBrowser({
+      fileMetadata: [],
+      localManifest: [],
+      isUploading: true,
+      convertingFiles: ['proposal.docx'],
+    });
+
+    expect(screen.getByText('proposal.docx')).toBeInTheDocument();
+    expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
+  });
+
+  it('shows converted Word provenance and page thumbnails after conversion', () => {
+    const convertedFile = {
+      ...makeFile('word-file', 'proposal.docx', 2),
+      convertedFrom: 'proposal.docx',
+    };
+
+    renderBrowser({
+      fileMetadata: [convertedFile],
+      localManifest: makeManifest('word-file', 2),
+      convertingFiles: [],
+    });
+
+    expect(screen.getByText('proposal.docx')).toBeInTheDocument();
+    expect(screen.getByText('Converted from Word')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Expand pages'));
+    expect(screen.getAllByTestId(/^mini-thumbnail-/)).toHaveLength(2);
+  });
+
   it('shows error cards for validation failures', () => {
     renderBrowser({
       errors: [{
@@ -152,6 +187,37 @@ describe('SourceBrowser', () => {
     });
     expect(screen.getByTestId('pdf-upload-errors')).toBeInTheDocument();
     expect(screen.getByText('bad.pdf')).toBeInTheDocument();
+  });
+
+  it('calls onDismissError from an error card', () => {
+    const error = {
+      originalName: 'bad.docx',
+      status: 'error' as const,
+      error: { code: 'CONVERSION_FAILED', message: 'Conversion failed' },
+    };
+    const onDismissError = jest.fn();
+
+    renderBrowser({ errors: [error], onDismissError });
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss error for bad.docx' }));
+
+    expect(onDismissError).toHaveBeenCalledWith(error);
+  });
+
+  it('shows the required Word conversion failure message exactly once', () => {
+    const message =
+      'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.';
+
+    renderBrowser({
+      errors: [{
+        originalName: 'broken.docx',
+        status: 'error',
+        error: { code: 'CONVERSION_FAILED', message },
+      }],
+    });
+
+    const renderedError = screen.getByTestId('pdf-upload-errors').textContent ?? '';
+    expect(renderedError).toContain(message);
+    expect(renderedError.split(message)).toHaveLength(2);
   });
 
   it('calls onRemoveFile when delete button clicked', () => {
