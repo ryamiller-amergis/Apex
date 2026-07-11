@@ -64,6 +64,7 @@ const mockMutateManifest = jest.fn();
 const mockMutateAsyncManifest = jest.fn();
 const mockExportMutate = jest.fn();
 let mockSessionData: PdfSession | null = null;
+let mockSessionError: (Error & { status?: number }) | null = null;
 let mockExportMutationState = {
   isPending: false,
   isSuccess: false,
@@ -79,6 +80,7 @@ jest.mock('../../hooks/usePdfSession', () => ({
   }),
   usePdfSession: (sessionId: string | null) => ({
     data: mockSessionData?.id === sessionId ? mockSessionData : null,
+    error: mockSessionError,
   }),
   useUploadPdfFiles: () => ({
     mutateAsync: mockUploadFiles,
@@ -155,6 +157,7 @@ describe('PdfAssemblyView', () => {
     jest.clearAllMocks();
     sessionStorage.clear();
     mockSessionData = null;
+    mockSessionError = null;
     mockExportMutationState = {
       isPending: false,
       isSuccess: false,
@@ -216,6 +219,63 @@ describe('PdfAssemblyView', () => {
         onProgress: expect.any(Function),
       });
     });
+  });
+
+  it('replaces an expired stored session before uploading', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-expired');
+    mockSessionError = Object.assign(new Error('Session has expired'), { status: 410 });
+
+    renderWithQuery(<PdfAssemblyView />);
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem('pdf-active-session')).toBeNull();
+    });
+
+    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(mockUploadFiles).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+    });
+  });
+
+  it('retries an upload with a fresh session when the stored session returns 410', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-expired');
+    mockUploadFiles
+      .mockRejectedValueOnce(Object.assign(new Error('Session has expired'), { status: 410 }))
+      .mockResolvedValueOnce({
+        files: [{
+          fileId: 'f1',
+          originalName: 'test.pdf',
+          status: 'success',
+          pageCount: 3,
+          sizeBytes: 1024,
+        }],
+      });
+
+    renderWithQuery(<PdfAssemblyView />);
+    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockUploadFiles).toHaveBeenNthCalledWith(1, {
+        sessionId: 'sess-expired',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(mockUploadFiles).toHaveBeenNthCalledWith(2, {
+        sessionId: 'sess-1',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+    });
+    expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-1');
   });
 
   it('displays validation errors from upload results', async () => {
