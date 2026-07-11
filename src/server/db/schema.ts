@@ -1,6 +1,11 @@
 import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
-import type { PageManifestEntry, PdfFileMetadata, PdfSessionStatus } from '../../shared/types/pdf';
+import type {
+  PageManifestEntry,
+  PdfConversionStatus,
+  PdfFileMetadata,
+  PdfSessionStatus,
+} from '../../shared/types/pdf';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
@@ -1092,6 +1097,34 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
   user: one(appUsers, {
     fields: [pdfSessions.userId],
     references: [appUsers.oid],
+  }),
+}));
+
+export const pdfConversionJobs = pgTable('pdf_conversion_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => pdfSessions.id, { onDelete: 'cascade' }),
+  originalName: text('original_name').notNull(),
+  originalMimeType: text('original_mime_type').notNull(),
+  inputPath: text('input_path').notNull(),
+  status: text('status').$type<PdfConversionStatus>().notNull().default('queued'),
+  fileId: uuid('file_id'),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  ownerInstance: text('owner_instance'),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionCreatedIdx: index('idx_pdf_conversion_jobs_session_created').on(t.sessionId, t.createdAt),
+  statusCreatedIdx: index('idx_pdf_conversion_jobs_status_created').on(t.status, t.createdAt),
+}));
+
+export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one }) => ({
+  session: one(pdfSessions, {
+    fields: [pdfConversionJobs.sessionId],
+    references: [pdfSessions.id],
   }),
 }));
 

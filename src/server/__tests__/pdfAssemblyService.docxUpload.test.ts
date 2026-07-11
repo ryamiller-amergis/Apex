@@ -8,6 +8,8 @@
 // ── Mock state ──────────────────────────────────────────────────────────────────
 
 const mockConvert = jest.fn();
+const mockEnqueueConversion = jest.fn();
+const mockProcessPendingConversions = jest.fn();
 const mockFindFirst = jest.fn();
 const mockUpdate = jest.fn().mockReturnValue({
   set: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([]) }),
@@ -25,6 +27,12 @@ jest.mock('../services/documentConversionService', () => ({
       this.code = code;
     }
   },
+}));
+
+jest.mock('../services/pdfConversionJobService', () => ({
+  enqueuePdfConversion: (...args: unknown[]) => mockEnqueueConversion(...args),
+  getPdfConversionJobs: jest.fn().mockResolvedValue([]),
+  processPendingPdfConversions: (...args: unknown[]) => mockProcessPendingConversions(...args),
 }));
 
 jest.mock('../db/drizzle', () => ({
@@ -72,7 +80,10 @@ jest.mock('worker_threads', () => ({
 
 // ── Imports ─────────────────────────────────────────────────────────────────────
 
-import { validateAndIngest } from '../services/pdfAssemblyService';
+import {
+  convertAndIngestDocx,
+  validateAndIngest,
+} from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────────
@@ -100,17 +111,24 @@ describe('pdfAssemblyService — .docx upload routing', () => {
     mockFindFirst.mockResolvedValue({ ...mockSession });
     mockReadFile.mockResolvedValue(docxBuffer);
     mockConvert.mockResolvedValue(validPdfBuffer);
+    mockEnqueueConversion.mockResolvedValue({
+      conversionId: 'conversion-1',
+      originalName: 'report.docx',
+      status: 'queued',
+    });
+    mockProcessPendingConversions.mockResolvedValue(undefined);
     mockStatSync.mockReturnValue({ size: 1024 });
   });
 
   // ── DoD-2: upload endpoint detects .docx and routes through conversion ──────
 
-  test('DoD-2: calls documentConversionService.convert for .docx MIME type', async () => {
+  test('DoD-2: queues .docx conversion without waiting for LibreOffice', async () => {
     const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
 
-    expect(mockConvert).toHaveBeenCalledTimes(1);
-    expect(mockConvert).toHaveBeenCalledWith(docxBuffer, 'report.docx');
-    expect(result.status).toBe('success');
+    expect(mockEnqueueConversion).toHaveBeenCalledTimes(1);
+    expect(mockConvert).not.toHaveBeenCalled();
+    expect(result.status).toBe('queued');
+    expect(result.conversionId).toBe('conversion-1');
   });
 
   test('AC-0: recognizes a .docx filename when drag-and-drop supplies no MIME type', async () => {
@@ -121,8 +139,8 @@ describe('pdfAssemblyService — .docx upload routing', () => {
       '',
     );
 
-    expect(mockConvert).toHaveBeenCalledWith(docxBuffer, 'report.docx');
-    expect(result.status).toBe('success');
+    expect(mockEnqueueConversion).toHaveBeenCalled();
+    expect(result.status).toBe('queued');
   });
 
   test('DoD-2: does NOT call documentConversionService.convert for .pdf MIME type', async () => {
@@ -130,20 +148,20 @@ describe('pdfAssemblyService — .docx upload routing', () => {
 
     await validateAndIngest(SESSION_ID, '/tmp/upload.pdf', 'doc.pdf', PDF_MIME);
 
-    expect(mockConvert).not.toHaveBeenCalled();
+    expect(mockEnqueueConversion).not.toHaveBeenCalled();
   });
 
   // ── DoD-3: file_metadata records convertedFrom ────────────────────────────────
 
   test('DoD-3: returns convertedFrom in FileUploadResult for .docx', async () => {
-    const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'notes.docx', DOCX_MIME);
+    const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'notes.docx', DOCX_MIME);
 
     expect(result.status).toBe('success');
     expect(result.convertedFrom).toBe('notes.docx');
   });
 
   test('DoD-3: stores convertedFrom in session file_metadata', async () => {
-    await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'notes.docx', DOCX_MIME);
+    await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'notes.docx', DOCX_MIME);
 
     const setCall = mockUpdate.mock.results[0]?.value.set;
     expect(setCall).toHaveBeenCalled();
@@ -159,7 +177,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
   // ── AC-0: successful upload returns success with pageCount ──────────────────
 
   test('AC-0: successful .docx upload returns status success with pageCount', async () => {
-    const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'doc.docx', DOCX_MIME);
+    const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'doc.docx', DOCX_MIME);
 
     expect(result.status).toBe('success');
     expect(result.pageCount).toBe(5);
@@ -175,7 +193,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
     (convError as any).code = PDF_ERROR_CODES.CONVERSION_FAILED;
     mockConvert.mockRejectedValue(convError);
 
-    const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'bad.docx', DOCX_MIME);
+    const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'bad.docx', DOCX_MIME);
 
     expect(result.status).toBe('error');
     expect(result.error?.code).toBe(PDF_ERROR_CODES.CONVERSION_FAILED);
@@ -189,7 +207,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
     (timeoutError as any).code = PDF_ERROR_CODES.CONVERSION_TIMEOUT;
     mockConvert.mockRejectedValue(timeoutError);
 
-    const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'slow.docx', DOCX_MIME);
+    const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'slow.docx', DOCX_MIME);
 
     expect(result.status).toBe('error');
     expect(result.error?.code).toBe(PDF_ERROR_CODES.CONVERSION_TIMEOUT);
@@ -198,7 +216,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
   // ── AC-3 / BR-007: converted pages stored as first-class PDF ────────────────
 
   test('AC-3: converted file stored as .pdf with standard manifest entries', async () => {
-    const result = await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
+    const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
 
     expect(result.status).toBe('success');
     // File is stored as PDF (writeFile called with PDF buffer)
@@ -221,7 +239,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
   // ── NFR-security: original .docx deleted after conversion ───────────────────
 
   test('NFR-security: deletes original .docx from disk after successful conversion', async () => {
-    await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
+    await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
 
     expect(mockUnlink).toHaveBeenCalledWith('/tmp/upload.docx');
   });
@@ -229,7 +247,7 @@ describe('pdfAssemblyService — .docx upload routing', () => {
   test('NFR-security: deletes original .docx from disk even when conversion fails', async () => {
     mockConvert.mockRejectedValue(new Error('Conversion failed'));
 
-    await validateAndIngest(SESSION_ID, '/tmp/upload.docx', 'bad.docx', DOCX_MIME);
+    await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'bad.docx', DOCX_MIME);
 
     expect(mockUnlink).toHaveBeenCalledWith('/tmp/upload.docx');
   });

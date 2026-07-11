@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
 import type { PageManifestEntry, PdfFileMetadata, PdfSession } from '../../../shared/types/pdf';
@@ -16,18 +16,31 @@ jest.mock('../SourceBrowser', () => ({
 jest.mock('../AssemblyLane', () => ({
   AssemblyLane: ({
     onReorder,
+    onSelectAll,
+    onDeselectAll,
+    selectedCount,
     visiblePages,
   }: {
     onReorder: (from: number, to: number) => void;
+    onSelectAll: () => void;
+    onDeselectAll: () => void;
+    selectedCount: number;
     visiblePages: PageManifestEntry[];
   }) => (
     <div data-testid="mock-assembly-lane">
+      <span data-testid="mock-selected-count">{selectedCount}</span>
       <button
         type="button"
         data-testid="mock-reorder-btn"
         onClick={() => onReorder(0, Math.max(visiblePages.length - 1, 0))}
       >
         Reorder
+      </button>
+      <button type="button" data-testid="mock-select-all" onClick={onSelectAll}>
+        Select All
+      </button>
+      <button type="button" data-testid="mock-deselect-all" onClick={onDeselectAll}>
+        Deselect All
       </button>
     </div>
   ),
@@ -64,8 +77,8 @@ jest.mock('../../hooks/usePdfSession', () => ({
     isPending: false,
     error: null,
   }),
-  usePdfSession: () => ({
-    data: mockSessionData,
+  usePdfSession: (sessionId: string | null) => ({
+    data: mockSessionData?.id === sessionId ? mockSessionData : null,
   }),
   useUploadPdfFiles: () => ({
     mutateAsync: mockUploadFiles,
@@ -128,6 +141,7 @@ function makeSession(pages: PageManifestEntry[]): PdfSession {
     expiresAt: '2026-07-10T16:00:00.000Z',
     fileMetadata: [file],
     pageManifest: pages,
+    conversionJobs: [],
   };
 }
 
@@ -168,7 +182,7 @@ describe('PdfAssemblyView', () => {
   it('renders the dropzone and heading', () => {
     renderWithQuery(<PdfAssemblyView />);
     expect(screen.getByTestId('pdf-assembly-view')).toBeInTheDocument();
-    expect(screen.getByText('PDF Tools')).toBeInTheDocument();
+    expect(screen.getByText('PDF Assembly Tool')).toBeInTheDocument();
     expect(screen.getByTestId('pdf-dropzone')).toBeInTheDocument();
   });
 
@@ -196,7 +210,11 @@ describe('PdfAssemblyView', () => {
     });
 
     await waitFor(() => {
-      expect(mockUploadFiles).toHaveBeenCalledWith({ sessionId: 'sess-1', files: [file] });
+      expect(mockUploadFiles).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
     });
   });
 
@@ -253,6 +271,33 @@ describe('PdfAssemblyView', () => {
     });
   });
 
+  it('surfaces an asynchronous conversion failure from session polling', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-active');
+    mockSessionData = {
+      ...makeSession([]),
+      id: 'sess-active',
+      fileMetadata: [],
+      pageManifest: [],
+      conversionJobs: [{
+        id: 'conversion-failed',
+        sessionId: 'sess-active',
+        originalName: 'large-report.docx',
+        status: 'failed',
+        error: {
+          code: 'CONVERSION_FAILED',
+          message: 'This Word document could not be converted.',
+        },
+        createdAt: '2026-07-11T05:00:00.000Z',
+        completedAt: '2026-07-11T05:01:00.000Z',
+      }],
+    };
+
+    renderWithQuery(<PdfAssemblyView />);
+
+    expect(screen.getByText('large-report.docx')).toBeInTheDocument();
+    expect(screen.getByText(/This Word document could not be converted/)).toBeInTheDocument();
+  });
+
   it('handles drag and drop events on the dropzone', () => {
     renderWithQuery(<PdfAssemblyView />);
     const dropzone = screen.getByTestId('pdf-dropzone');
@@ -262,7 +307,7 @@ describe('PdfAssemblyView', () => {
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
   });
 
-  it('uploads a dropped .docx in an active session and shows Converting...', async () => {
+  it('uploads a dropped .docx and shows its queued conversion state', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-active');
     mockSessionData = {
       ...makeSession([]),
@@ -271,21 +316,13 @@ describe('PdfAssemblyView', () => {
       pageManifest: [],
     };
 
-    let resolveUpload!: (value: {
-      files: Array<{
-        fileId: string;
-        originalName: string;
-        status: 'success';
-        pageCount: number;
-        sizeBytes: number;
-        convertedFrom: string;
-      }>;
-    }) => void;
-    mockUploadFiles.mockImplementation(
-      () => new Promise((resolve) => {
-        resolveUpload = resolve;
-      }),
-    );
+    mockUploadFiles.mockResolvedValue({
+      files: [{
+        conversionId: 'conversion-1',
+        originalName: 'proposal.docx',
+        status: 'queued',
+      }],
+    });
 
     renderWithQuery(<PdfAssemblyView />);
     const wordFile = new File(['docx-data'], 'proposal.docx', {
@@ -300,23 +337,125 @@ describe('PdfAssemblyView', () => {
       expect(mockUploadFiles).toHaveBeenCalledWith({
         sessionId: 'sess-active',
         files: [wordFile],
+        onProgress: expect.any(Function),
       });
       expect(screen.getByText('proposal.docx')).toBeInTheDocument();
-      expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
+      expect(screen.getByText('Waiting to convert…')).toBeInTheDocument();
+    });
+  });
+
+  it('selects and deselects every visible assembly page', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-select-all');
+    mockSessionData = {
+      ...makeSession([
+        makePage('page-a', 0),
+        makePage('page-b', 1),
+        makePage('page-c', 2),
+      ]),
+      id: 'sess-select-all',
+    };
+
+    renderWithQuery(<PdfAssemblyView />);
+    expect(screen.getByTestId('mock-selected-count')).toHaveTextContent('0');
+
+    fireEvent.click(screen.getByTestId('mock-select-all'));
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-selected-count')).toHaveTextContent('3');
     });
 
-    await act(async () => {
-      resolveUpload({
-        files: [{
-          fileId: 'word-file',
-          originalName: 'proposal.docx',
-          status: 'success',
-          pageCount: 2,
-          sizeBytes: 2048,
-          convertedFrom: 'proposal.docx',
-        }],
-      });
+    fireEvent.click(screen.getByTestId('mock-deselect-all'));
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-selected-count')).toHaveTextContent('0');
     });
+  });
+
+  it('collapses and restores the source document column', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([makePage('page-a', 0)]);
+
+    renderWithQuery(<PdfAssemblyView />);
+
+    expect(screen.getByTestId('mock-source-browser')).toBeInTheDocument();
+    const toggleButton = screen.getByTestId('pdf-toggle-source-browser');
+    expect(toggleButton).toHaveAccessibleName('Hide source documents');
+    expect(toggleButton).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(toggleButton);
+
+    expect(screen.queryByTestId('mock-source-browser')).not.toBeInTheDocument();
+    expect(toggleButton).toHaveAccessibleName('Show source documents');
+    expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggleButton);
+    expect(screen.getByTestId('mock-source-browser')).toBeInTheDocument();
+  });
+
+  it('resizes the assembly and preview panes with keyboard controls', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([makePage('page-a', 0)]);
+
+    renderWithQuery(<PdfAssemblyView />);
+
+    const divider = screen.getByRole('separator', {
+      name: 'Resize assembly and preview panels',
+    });
+    const assemblyPanel = screen.getByTestId('mock-assembly-lane').parentElement;
+
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+    expect(assemblyPanel).toHaveStyle({ flexBasis: '50%' });
+
+    fireEvent.keyDown(divider, { key: 'ArrowRight' });
+    expect(divider).toHaveAttribute('aria-valuenow', '55');
+    expect(assemblyPanel).toHaveStyle({ flexBasis: '55%' });
+
+    fireEvent.keyDown(divider, { key: 'Home' });
+    expect(divider).toHaveAttribute('aria-valuenow', '30');
+
+    fireEvent.doubleClick(divider);
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  it('starts a fresh session without deleting the current documents', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([makePage('page-a', 0)]);
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: 'sess-fresh',
+      status: 'active',
+      createdAt: '',
+      expiresAt: '',
+    });
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('pdf-new-session'));
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-fresh');
+    });
+
+    expect(screen.getByTestId('pdf-dropzone')).toBeInTheDocument();
+    expect(screen.queryByTestId('mock-source-browser')).not.toBeInTheDocument();
+  });
+
+  it('saves page changes before starting a fresh session', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([
+      makePage('page-a', 0),
+      makePage('page-b', 1),
+    ]);
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('mock-reorder-btn'));
+    fireEvent.click(screen.getByTestId('pdf-new-session'));
+
+    await waitFor(() => {
+      expect(mockMutateAsyncManifest).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mockMutateAsyncManifest.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateSession.mock.invocationCallOrder[0],
+    );
   });
 
   describe('export bar wiring', () => {

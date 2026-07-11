@@ -9,7 +9,11 @@ import os from 'os';
 import path from 'path';
 import { PDFDocument, degrees } from 'pdf-lib';
 import { assemblePdf } from '../workers/pdfExportWorker';
-import type { ExportWorkerInput, PageManifestEntry } from '../../shared/types/pdf';
+import {
+  PDF_MVP_PERFORMANCE_TARGETS,
+  type ExportWorkerInput,
+  type PageManifestEntry,
+} from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -151,4 +155,40 @@ describe('assemblePdf (worker core logic)', () => {
     expect(result.success).toBe(true);
     expect(result.pdfBytes).toBeDefined();
   });
+
+  it(
+    'NFR-performance: assembles a representative 100-page PDF within the MVP target',
+    async () => {
+      const file = path.join(tmpDir, 'performance-100-pages.pdf');
+      await createTestPdf(PDF_MVP_PERFORMANCE_TARGETS.exportPageCount, file);
+      const manifest: PageManifestEntry[] = Array.from(
+        { length: PDF_MVP_PERFORMANCE_TARGETS.exportPageCount },
+        (_, index) => ({
+          pageId: `performance-page-${index}`,
+          fileId: 'performance-file',
+          sourcePageIndex: index,
+          rotation: 0,
+          deleted: false,
+        }),
+      );
+
+      const startedAt = performance.now();
+      const result = await assemblePdf({
+        manifest,
+        filePaths: { 'performance-file': file },
+      });
+      const durationMs = performance.now() - startedAt;
+
+      expect(result.success).toBe(true);
+      expect(durationMs).toBeLessThan(
+        PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs,
+      );
+
+      const outputDoc = await PDFDocument.load(result.pdfBytes!);
+      expect(outputDoc.getPageCount()).toBe(
+        PDF_MVP_PERFORMANCE_TARGETS.exportPageCount,
+      );
+    },
+    PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs + 5_000,
+  );
 });

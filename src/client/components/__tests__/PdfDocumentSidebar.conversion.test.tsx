@@ -70,19 +70,73 @@ describe('PdfDocumentSidebar — Word conversion UI', () => {
     expect(hint).toBeInTheDocument();
   });
 
-  test('AC-0: shows the Word filename in a Converting... state', () => {
+  test('AC-0: shows a queued Word document without blocking the upload UI', () => {
+    render(
+      <PdfDocumentSidebar
+        {...defaultProps}
+        hero
+        conversionJobs={[{
+          id: 'conversion-1',
+          sessionId: 'session-1',
+          originalName: 'quarterly-report.docx',
+          status: 'queued',
+          createdAt: '2026-01-01T00:00:00Z',
+        }]}
+      />,
+    );
+
+    expect(screen.getByText('quarterly-report.docx')).toBeInTheDocument();
+    expect(screen.getByText('Waiting to convert…')).toBeInTheDocument();
+    expect(screen.getByTestId('pdf-converting-file')).toBeInTheDocument();
+  });
+
+  test('shows a smooth processing state after the worker claims the job', () => {
+    render(
+      <PdfDocumentSidebar
+        {...defaultProps}
+        conversionJobs={[{
+          id: 'conversion-2',
+          sessionId: 'session-1',
+          originalName: 'large-report.docx',
+          status: 'processing',
+          createdAt: '2026-01-01T00:00:00Z',
+          startedAt: '2026-01-01T00:00:01Z',
+        }]}
+      />,
+    );
+
+    expect(screen.getByText('Converting Word document…')).toBeInTheDocument();
+  });
+
+  test('NFR-progress: shows determinate progress while a large file uploads', () => {
     render(
       <PdfDocumentSidebar
         {...defaultProps}
         hero
         isUploading
-        convertingFiles={['quarterly-report.docx']}
+        uploadProgress={{ phase: 'uploading', percent: 42 }}
       />,
     );
 
-    expect(screen.getByText('quarterly-report.docx')).toBeInTheDocument();
-    expect(screen.getAllByText('Converting...').length).toBeGreaterThan(0);
-    expect(screen.getByTestId('pdf-converting-file')).toBeInTheDocument();
+    expect(screen.getByText('Uploading… 42%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', {
+      name: 'File upload progress',
+    })).toHaveAttribute('aria-valuenow', '42');
+  });
+
+  test('NFR-responsiveness: keeps a spinner visible during server-side parsing', () => {
+    render(
+      <PdfDocumentSidebar
+        {...defaultProps}
+        hero
+        isUploading
+        uploadProgress={{ phase: 'processing', percent: 100 }}
+      />,
+    );
+
+    expect(screen.getByText('Validating and parsing documents…')).toBeInTheDocument();
+    expect(screen.getByTestId('pdf-uploading')).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
   test('AC-2: shows "Converted from Word" badge when convertedFrom is present', () => {

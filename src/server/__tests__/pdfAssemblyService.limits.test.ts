@@ -40,13 +40,25 @@ jest.mock('../services/documentConversionService', () => ({
   documentConversionService: { convert: mockConvert },
 }));
 
+jest.mock('../services/pdfConversionJobService', () => ({
+  enqueuePdfConversion: jest.fn(),
+  getPdfConversionJobs: jest.fn().mockResolvedValue([]),
+  processPendingPdfConversions: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('worker_threads', () => ({
   Worker: jest.fn(),
 }));
 
 import { PDFDocument } from 'pdf-lib';
-import { validateAndIngest } from '../services/pdfAssemblyService';
-import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import {
+  convertAndIngestDocx,
+  validateAndIngest,
+} from '../services/pdfAssemblyService';
+import {
+  PDF_ERROR_CODES,
+  PDF_MVP_PERFORMANCE_TARGETS,
+} from '../../shared/types/pdf';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
 
 const SESSION_ID = 'limit-session';
@@ -57,6 +69,7 @@ const MAX_FILE_BYTES = 100 * MB;
 const MAX_SESSION_BYTES = 250 * MB;
 
 let onePagePdf: Buffer;
+let fiftyPagePdf: Buffer;
 let fiveHundredPagePdf: Buffer;
 let fiveHundredOnePagePdf: Buffer;
 
@@ -106,8 +119,9 @@ function makeSession(options: {
 
 describe('pdfAssemblyService ingestion limits', () => {
   beforeAll(async () => {
-    [onePagePdf, fiveHundredPagePdf, fiveHundredOnePagePdf] = await Promise.all([
+    [onePagePdf, fiftyPagePdf, fiveHundredPagePdf, fiveHundredOnePagePdf] = await Promise.all([
       makePdf(1),
+      makePdf(PDF_MVP_PERFORMANCE_TARGETS.uploadPageCount),
       makePdf(500),
       makePdf(501),
     ]);
@@ -136,6 +150,29 @@ describe('pdfAssemblyService ingestion limits', () => {
     expect(result.status).toBe('success');
     expect(result.pageCount).toBe(500);
   });
+
+  test(
+    'NFR-performance: parses a representative 50-page PDF within the MVP target',
+    async () => {
+      mockReadFile.mockResolvedValue(fiftyPagePdf);
+
+      const startedAt = performance.now();
+      const result = await validateAndIngest(
+        SESSION_ID,
+        '/tmp/performance-50-pages.pdf',
+        'performance-50-pages.pdf',
+        PDF_MIME,
+      );
+      const durationMs = performance.now() - startedAt;
+
+      expect(result.status).toBe('success');
+      expect(result.pageCount).toBe(PDF_MVP_PERFORMANCE_TARGETS.uploadPageCount);
+      expect(durationMs).toBeLessThan(
+        PDF_MVP_PERFORMANCE_TARGETS.uploadAndParseMs,
+      );
+    },
+    PDF_MVP_PERFORMANCE_TARGETS.uploadAndParseMs + 5_000,
+  );
 
   test('rejects a PDF containing 501 pages', async () => {
     mockReadFile.mockResolvedValue(fiveHundredOnePagePdf);
@@ -245,7 +282,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
     mockConvert.mockResolvedValue(fiveHundredPagePdf);
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/exactly-500.docx',
       'exactly-500.docx',
@@ -260,7 +297,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
     mockConvert.mockResolvedValue(fiveHundredOnePagePdf);
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/over-500.docx',
       'over-500.docx',
@@ -275,7 +312,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
     mockStatSync.mockReturnValue({ size: MAX_FILE_BYTES });
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/exactly-100mb.docx',
       'exactly-100mb.docx',
@@ -290,7 +327,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
     mockStatSync.mockReturnValue({ size: MAX_FILE_BYTES + 1 });
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/over-100mb.docx',
       'over-100mb.docx',
@@ -306,7 +343,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockFindFirst.mockResolvedValue(makeSession({ pageCount: 499 }));
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/final-word-page.docx',
       'final-word-page.docx',
@@ -320,7 +357,7 @@ describe('pdfAssemblyService ingestion limits', () => {
     mockFindFirst.mockResolvedValue(makeSession({ pageCount: 500 }));
     mockReadFile.mockResolvedValue(Buffer.from('docx-input'));
 
-    const result = await validateAndIngest(
+    const result = await convertAndIngestDocx(
       SESSION_ID,
       '/tmp/word-page-501.docx',
       'word-page-501.docx',

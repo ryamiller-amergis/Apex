@@ -176,6 +176,44 @@ describe('PageThumbnail', () => {
     }
   });
 
+  it('does not show a blank badge when the PDF page contains text', async () => {
+    const pixels = new Uint8ClampedArray(180 * 233 * 4).fill(255);
+    const context = {
+      drawImage: jest.fn(),
+      getImageData: jest.fn(() => ({
+        data: pixels,
+        width: 180,
+        height: 233,
+      })),
+    };
+    const getContextSpy = jest
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(() => context as unknown as CanvasRenderingContext2D);
+    const imageBitmap = {
+      width: 180,
+      height: 233,
+      close: jest.fn(),
+    } as unknown as ImageBitmap;
+
+    try {
+      (useThumbnailRenderer as jest.Mock).mockReturnValue({
+        status: 'loaded',
+        imageBitmap,
+        hasTextContent: true,
+        error: null,
+      });
+
+      renderThumbnail();
+
+      await waitFor(() => {
+        expect(context.drawImage).toHaveBeenCalled();
+      });
+      expect(screen.queryByTestId('blank-page-badge-0')).not.toBeInTheDocument();
+    } finally {
+      getContextSpy.mockRestore();
+    }
+  });
+
   it('shows error state when rendering fails', () => {
     (useThumbnailRenderer as jest.Mock).mockReturnValue({
       status: 'error',

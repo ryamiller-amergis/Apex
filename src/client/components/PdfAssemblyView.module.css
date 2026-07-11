@@ -50,6 +50,54 @@
   margin: 0;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.headerButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.headerButton svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.headerButton:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+}
+
+.headerButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.headerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .sessionBadge {
   display: inline-flex;
   align-items: center;
@@ -78,6 +126,86 @@
   min-height: 0;
 }
 
+.sourceBrowserPanel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-shrink: 0;
+}
+
+.workspacePanels {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.assemblyPanel {
+  display: flex;
+  flex-grow: 0;
+  flex-shrink: 0;
+  min-width: 0;
+  min-height: 0;
+  transition: flex-basis 0.2s ease;
+}
+
+.workspaceDivider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 12px;
+  min-width: 12px;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.workspaceDivider::before {
+  content: '';
+  position: absolute;
+  inset: 0 5px;
+  background: var(--border-color-light);
+  transition: all 0.2s ease;
+}
+
+.workspaceDividerHandle {
+  position: relative;
+  width: 4px;
+  height: 32px;
+  border-radius: 9999px;
+  background: var(--text-muted);
+  opacity: 0.55;
+  transition: all 0.2s ease;
+}
+
+.workspaceDivider:hover::before,
+.workspaceDivider:focus-visible::before {
+  background: var(--accent-color);
+}
+
+.workspaceDivider:hover .workspaceDividerHandle,
+.workspaceDivider:focus-visible .workspaceDividerHandle {
+  background: var(--accent-color);
+  opacity: 1;
+}
+
+.workspaceDivider:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-color);
+}
+
+.workspaceResizing,
+.workspaceResizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.workspaceResizing .assemblyPanel {
+  transition: none;
+}
+
 .previewPanel {
   flex: 1 1 0%;
   min-width: 0;
@@ -85,9 +213,6 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid var(--border-color-light);
-  padding-left: 12px;
-  transition: flex-basis 0.3s ease;
 }
 
 /* Empty / no-files state wrapper — replaces .body when isEmpty */

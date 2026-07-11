@@ -76,6 +76,24 @@ describe('useBlankDetection', () => {
     expect(result.current.isBlank).toBe(true);
   });
 
+  it('returns isBlank=false when the PDF contains searchable text despite sparse pixels', () => {
+    const canvas = createMockCanvas(150, 200, (data, w, h) => {
+      const coloredCount = Math.floor(w * h * 0.003);
+      for (let i = 0; i < coloredCount; i++) {
+        const offset = i * 4;
+        data[offset] = 0;
+        data[offset + 1] = 0;
+        data[offset + 2] = 0;
+      }
+    });
+
+    const { result } = renderHook(() =>
+      useBlankDetection(canvas, MOCK_BITMAP, true),
+    );
+
+    expect(result.current.isBlank).toBe(false);
+  });
+
   it('returns isBlank=false for a canvas with 0.8% colored pixels — above threshold (VT-04)', () => {
     const canvas = createMockCanvas(150, 200, (data, w, h) => {
       const totalPixels = w * h;

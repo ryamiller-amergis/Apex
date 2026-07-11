@@ -270,6 +270,36 @@ describe('ExportPanel', () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
+  it('calls onExportComplete once when export succeeds', () => {
+    mockMutationState.isSuccess = true;
+    const onExportComplete = jest.fn();
+    const queryClient = createQueryClient();
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          onExportComplete={onExportComplete}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(onExportComplete).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          onExportComplete={() => onExportComplete()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(onExportComplete).toHaveBeenCalledTimes(1);
+  });
+
   it('uses controlled filename when provided', async () => {
     const queryClient = createQueryClient();
 

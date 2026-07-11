@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { useExportSession } from '../hooks/useExportSession';
 import styles from './ExportSelectedButton.module.css';
 
@@ -24,12 +24,18 @@ export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
   const isExporting = exportMutation.isPending || isPreparing;
   const isDisabled = selectedCount === 0 || isExporting;
   const [error, setError] = useState<string | null>(null);
+  const hasReportedSuccessRef = useRef(false);
 
   useEffect(() => {
-    if (exportMutation.isSuccess) {
-      setError(null);
-      onExportComplete?.();
+    if (!exportMutation.isSuccess) {
+      hasReportedSuccessRef.current = false;
+      return;
     }
+
+    if (hasReportedSuccessRef.current) return;
+    hasReportedSuccessRef.current = true;
+    setError(null);
+    onExportComplete?.();
   }, [exportMutation.isSuccess, onExportComplete]);
 
   useEffect(() => {

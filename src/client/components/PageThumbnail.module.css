@@ -4,7 +4,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 180px;
+  width: 200px;
   border: 2px solid var(--border-color);
   border-radius: 8px;
   background: var(--bg-primary);
