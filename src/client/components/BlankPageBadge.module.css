@@ -31,7 +31,8 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  width: 200px;
+  box-sizing: border-box;
+  width: 160px;
   padding: 8px 10px;
   border-radius: 6px;
   background: var(--bg-primary);

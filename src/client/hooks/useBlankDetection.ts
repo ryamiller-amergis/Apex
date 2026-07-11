@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 
 export interface BlankDetectionResult {
   isBlank: boolean;
@@ -29,10 +29,17 @@ export function isPageBlank(canvas: HTMLCanvasElement): boolean {
 }
 
 export function useBlankDetection(canvas: HTMLCanvasElement | null, renderKey?: unknown): BlankDetectionResult {
-  const isBlank = useMemo(() => {
-    if (!canvas || !renderKey) return false;
-    return isPageBlank(canvas);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const [isBlank, setIsBlank] = useState(false);
+
+  useEffect(() => {
+    if (!canvas || !renderKey) {
+      setIsBlank(false);
+      return;
+    }
+
+    // PageThumbnail draws the bitmap in an earlier effect. Detecting here ensures
+    // pixel analysis runs after that draw instead of against an empty canvas.
+    setIsBlank(isPageBlank(canvas));
   }, [canvas, renderKey]);
 
   return { isBlank };
