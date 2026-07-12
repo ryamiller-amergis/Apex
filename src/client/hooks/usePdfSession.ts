@@ -11,6 +11,8 @@ export interface PdfUploadProgress {
   percent: number;
 }
 
+export type PdfApiError = Error & { code?: string; status?: number };
+
 interface UploadPdfFilesVariables {
   sessionId: string;
   files: File[];
@@ -21,19 +23,22 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as Error & { code?: string };
+    const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as PdfApiError;
     err.code = body.error?.code;
+    err.status = res.status;
     throw err;
   }
   return res.json() as Promise<T>;
 }
 
 export function usePdfSession(sessionId: string | null) {
-  return useQuery<PdfSession>({
+  return useQuery<PdfSession, PdfApiError>({
     queryKey: ['pdf-session', sessionId],
     queryFn: () => apiFetch(`/api/pdf/sessions/${sessionId}`),
     enabled: !!sessionId,
     staleTime: 5_000,
+    retry: (failureCount, error) =>
+      error.status !== 404 && error.status !== 410 && failureCount < 3,
     refetchInterval: (query) => {
       const jobs = query.state.data?.conversionJobs ?? [];
       return jobs.some((job) => job.status === 'queued' || job.status === 'processing')
@@ -53,7 +58,7 @@ export function useActivePdfSessions() {
 
 export function useCreatePdfSession() {
   const queryClient = useQueryClient();
-  return useMutation<CreateSessionResponse, Error & { code?: string }, { projectId?: string }>({
+  return useMutation<CreateSessionResponse, PdfApiError, { projectId?: string }>({
     mutationFn: (body) =>
       apiFetch('/api/pdf/sessions', {
         method: 'POST',
@@ -69,7 +74,7 @@ export function useCreatePdfSession() {
 
 export function useUploadPdfFiles() {
   const queryClient = useQueryClient();
-  return useMutation<UploadFilesResponse, Error, UploadPdfFilesVariables>({
+  return useMutation<UploadFilesResponse, PdfApiError, UploadPdfFilesVariables>({
     mutationFn: async ({ sessionId, files, onProgress }) => {
       const formData = new FormData();
       for (const f of files) {
@@ -109,8 +114,9 @@ export function useUploadPdfFiles() {
 
           const error = new Error(
             body.error?.message ?? body.error ?? `HTTP ${request.status}`,
-          ) as Error & { code?: string };
+          ) as PdfApiError;
           error.code = body.error?.code;
+          error.status = request.status;
           reject(error);
         };
 
@@ -125,7 +131,7 @@ export function useUploadPdfFiles() {
 
 export function useRemovePdfFile() {
   const queryClient = useQueryClient();
-  return useMutation<void, Error & { code?: string }, { sessionId: string; fileId: string }>({
+  return useMutation<void, PdfApiError, { sessionId: string; fileId: string }>({
     mutationFn: async ({ sessionId, fileId }) => {
       const res = await fetch(`/api/pdf/sessions/${sessionId}/files/${fileId}`, {
         method: 'DELETE',
@@ -133,8 +139,9 @@ export function useRemovePdfFile() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as Error & { code?: string };
+        const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as PdfApiError;
         err.code = body.error?.code;
+        err.status = res.status;
         throw err;
       }
     },

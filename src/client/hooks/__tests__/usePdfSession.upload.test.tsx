@@ -5,6 +5,16 @@ import { useUploadPdfFiles } from '../usePdfSession';
 
 class MockXMLHttpRequest {
   static latest: MockXMLHttpRequest;
+  static responseStatus = 200;
+  static responseBody: unknown = {
+    files: [{
+      fileId: 'file-1',
+      originalName: 'large.pdf',
+      status: 'success',
+      pageCount: 50,
+      sizeBytes: 1024,
+    }],
+  };
 
   readonly upload: {
     onprogress: ((event: ProgressEvent) => void) | null;
@@ -14,16 +24,8 @@ class MockXMLHttpRequest {
     onload: null,
   };
 
-  status = 200;
-  responseText = JSON.stringify({
-    files: [{
-      fileId: 'file-1',
-      originalName: 'large.pdf',
-      status: 'success',
-      pageCount: 50,
-      sizeBytes: 1024,
-    }],
-  });
+  status = MockXMLHttpRequest.responseStatus;
+  responseText = JSON.stringify(MockXMLHttpRequest.responseBody);
   withCredentials = false;
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -66,6 +68,16 @@ describe('useUploadPdfFiles progress', () => {
   const originalXMLHttpRequest = global.XMLHttpRequest;
 
   beforeEach(() => {
+    MockXMLHttpRequest.responseStatus = 200;
+    MockXMLHttpRequest.responseBody = {
+      files: [{
+        fileId: 'file-1',
+        originalName: 'large.pdf',
+        status: 'success',
+        pageCount: 50,
+        sizeBytes: 1024,
+      }],
+    };
     global.XMLHttpRequest =
       MockXMLHttpRequest as unknown as typeof XMLHttpRequest;
   });
@@ -107,6 +119,25 @@ describe('useUploadPdfFiles progress', () => {
     expect(onProgress).toHaveBeenNthCalledWith(3, {
       phase: 'processing',
       percent: 100,
+    });
+  });
+
+  it('preserves the HTTP status for an expired-session response', async () => {
+    MockXMLHttpRequest.responseStatus = 410;
+    MockXMLHttpRequest.responseBody = { error: 'Session has expired' };
+    const { result } = renderHook(() => useUploadPdfFiles(), {
+      wrapper: createWrapper(),
+    });
+    const file = new File(['%PDF-test'], 'large.pdf', {
+      type: 'application/pdf',
+    });
+
+    await expect(result.current.mutateAsync({
+      sessionId: 'expired-session',
+      files: [file],
+    })).rejects.toMatchObject({
+      message: 'Session has expired',
+      status: 410,
     });
   });
 });

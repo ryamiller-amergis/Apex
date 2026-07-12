@@ -5,6 +5,7 @@ import {
   useUploadPdfFiles,
   useActivePdfSessions,
   useRemovePdfFile,
+  type PdfApiError,
   type PdfUploadProgress,
 } from '../hooks/usePdfSession';
 import { usePageManipulation } from '../hooks/usePageManipulation';
@@ -27,12 +28,18 @@ import type {
   FileUploadResult,
   PageManifestEntry,
   PdfConversionJob,
+  UploadFilesResponse,
 } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
 
 const MIN_ASSEMBLY_PANE_PERCENT = 30;
 const MAX_ASSEMBLY_PANE_PERCENT = 75;
 const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
+
+function isUnavailableSessionError(error: unknown): error is PdfApiError {
+  const status = (error as PdfApiError | null)?.status;
+  return status === 404 || status === 410;
+}
 
 export const PdfAssemblyView: React.FC = () => {
   const [sessionId, setSessionId] = useState<string | null>(
@@ -58,7 +65,7 @@ export const PdfAssemblyView: React.FC = () => {
   const workspacePanelsRef = useRef<HTMLDivElement>(null);
 
   const createSession = useCreatePdfSession();
-  const { data: session } = usePdfSession(sessionId);
+  const { data: session, error: sessionError } = usePdfSession(sessionId);
   const uploadFiles = useUploadPdfFiles();
   const { data: activeSessions } = useActivePdfSessions();
   const removePdfFile = useRemovePdfFile();
@@ -71,6 +78,12 @@ export const PdfAssemblyView: React.FC = () => {
       sessionStorage.setItem('pdf-active-session', mostRecent.id);
     }
   }, [sessionId, activeSessions]);
+
+  useEffect(() => {
+    if (!sessionId || !isUnavailableSessionError(sessionError)) return;
+    sessionStorage.removeItem('pdf-active-session');
+    setSessionId(null);
+  }, [sessionError, sessionId]);
 
   const conversionJobs = useMemo<PdfConversionJob[]>(() => {
     const serverJobs = session?.conversionJobs ?? [];
@@ -117,23 +130,33 @@ export const PdfAssemblyView: React.FC = () => {
     if (files.length === 0) return;
 
     let activeSessionId = sessionId;
-    if (!activeSessionId) {
-      try {
-        const result = await createSession.mutateAsync({});
-        activeSessionId = result.sessionId;
-        setSessionId(activeSessionId);
-        sessionStorage.setItem('pdf-active-session', activeSessionId);
-      } catch {
-        return;
-      }
-    }
+    const startFreshSession = async () => {
+      const result = await createSession.mutateAsync({});
+      activeSessionId = result.sessionId;
+      setSessionId(activeSessionId);
+      sessionStorage.setItem('pdf-active-session', activeSessionId);
+    };
 
     try {
-      const result = await uploadFiles.mutateAsync({
-        sessionId: activeSessionId,
-        files,
-        onProgress: setUploadProgress,
-      });
+      if (!activeSessionId) await startFreshSession();
+
+      let result: UploadFilesResponse;
+      try {
+        result = await uploadFiles.mutateAsync({
+          sessionId: activeSessionId!,
+          files,
+          onProgress: setUploadProgress,
+        });
+      } catch (error) {
+        if (!isUnavailableSessionError(error)) throw error;
+        sessionStorage.removeItem('pdf-active-session');
+        await startFreshSession();
+        result = await uploadFiles.mutateAsync({
+          sessionId: activeSessionId!,
+          files,
+          onProgress: setUploadProgress,
+        });
+      }
       setUploadResults((prev) => [...prev, ...result.files]);
     } catch {
       // mutation error handled by TanStack Query
