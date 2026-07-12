@@ -1,0 +1,572 @@
+/* ── AI Cost Comparison — CSS Module ──────────────────────────────────────── */
+
+.page {
+  padding: 24px;
+  min-height: fit-content;
+  background: var(--bg-primary);
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.header {
+  margin-bottom: 24px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.backBtn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.titleGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.titleIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pageTitle {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.pageSubtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Period filter ───────────────────────────────────────────────────────── */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  margin-bottom: 28px;
+}
+
+.filterLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+
+.presetBtn {
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.presetBtn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.presetBtnActive {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+}
+
+/* ── Section wrapper ─────────────────────────────────────────────────────── */
+.section {
+  margin-bottom: 28px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.sectionIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.sectionSubtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+/* ── Project Leaderboard ─────────────────────────────────────────────────── */
+.leaderboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.leaderboardRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.leaderboardRow:last-child {
+  border-bottom: none;
+}
+
+.leaderboardRow:hover {
+  background: var(--bg-primary);
+}
+
+.leaderboardRowExpanded {
+  background: var(--bg-primary);
+}
+
+.rankBadge {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.rankGold {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  color: #fff;
+}
+
+.rankSilver {
+  background: linear-gradient(135deg, #94a3b8, #cbd5e1);
+  color: #fff;
+}
+
+.rankBronze {
+  background: linear-gradient(135deg, #b45309, #d97706);
+  color: #fff;
+}
+
+.rankDefault {
+  background: var(--bg-tertiary, var(--bg-primary));
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+
+.leaderboardProject {
+  flex: 0 0 160px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboardBarWrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.leaderboardBarTrack {
+  height: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.leaderboardBarCursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: #6366f1;
+  border-radius: 4px 0 0 4px;
+  transition: width 0.4s ease;
+}
+
+.leaderboardBarBedrock {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: #f59e0b;
+  transition: width 0.4s ease;
+}
+
+.leaderboardBarLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  display: flex;
+  gap: 8px;
+}
+
+.leaderboardMeta {
+  flex: 0 0 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.leaderboardCost {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboardInteractions {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.expandChevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.expandChevronOpen {
+  transform: rotate(180deg);
+}
+
+/* ── Feature breakdown (expanded row) ───────────────────────────────────── */
+.featureBreakdown {
+  padding: 12px 16px 16px 58px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.featureBreakdownTitle {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.featureBreakdownGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.featureBreakdownRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.featureBreakdownName {
+  flex: 0 0 160px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.featureBreakdownBarTrack {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.featureBreakdownBar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.featureBreakdownCost {
+  flex: 0 0 70px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Two-column grid ─────────────────────────────────────────────────────── */
+.twoCol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+@media (max-width: 900px) {
+  .twoCol {
+    grid-template-columns: 1fr;
+  }
+
+  .leaderboardProject {
+    flex: 0 0 120px;
+  }
+
+  .leaderboardMeta {
+    flex: 0 0 100px;
+  }
+}
+
+/* ── Chart card header (reused pattern) ──────────────────────────────────── */
+.chartHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.chartTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.chartSubtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 3px 0 0;
+}
+
+/* ── Efficiency table ────────────────────────────────────────────────────── */
+.efficiencyTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.efficiencyTable th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.efficiencyTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.efficiencyTable tr:last-child td {
+  border-bottom: none;
+}
+
+.efficiencyTable tr:hover td {
+  background: var(--bg-primary);
+}
+
+.cellGreen {
+  color: #059669;
+  font-weight: 600;
+}
+
+.cellRed {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.cellNeutral {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.providerSplit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.splitPill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+
+.splitCursor {
+  background: rgba(99, 102, 241, 0.12);
+  color: #6366f1;
+}
+
+.splitBedrock {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+/* ── Provider split legend ───────────────────────────────────────────────── */
+.legendRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Empty / loading ─────────────────────────────────────────────────────── */
+.emptyState {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.loadingState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────── */
+.customTooltip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+}
+
+.tooltipLabel {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.tooltipDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+/* ── Super-admin badge ───────────────────────────────────────────────────── */
+.adminBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent-color);
+  letter-spacing: 0.04em;
+}

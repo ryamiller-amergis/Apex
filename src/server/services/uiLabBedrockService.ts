@@ -5,6 +5,7 @@ import { retryWithBackoff } from '../utils/retry';
 import { getDesignSystemCatalog, getScreenInventory } from './designSystemService';
 import { getMaxviewColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
+import { recordAiUsage, computeCost } from './aiUsageService';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -309,6 +310,8 @@ export interface UiLabGenerateOptions {
   timeoutMs?: number;
   temperature?: number;
   onToken: (chunk: string) => void;
+  project?: string;
+  userId?: string;
 }
 
 export interface UiLabEditOptions {
@@ -316,15 +319,15 @@ export interface UiLabEditOptions {
   instruction: string;
   selectedSelector?: string | null;
   selectedHtml?: string | null;
-  /** Route the design targets — enables EXTEND-mode existing-page grounding on edits. */
   targetRoute?: string | null;
-  /** Original design prompt — guides keyword-based import traversal for page context. */
   featureText?: string | null;
   modelId?: string;
   maxTokens?: number;
   timeoutMs?: number;
   temperature?: number;
   onToken: (chunk: string) => void;
+  project?: string;
+  userId?: string;
 }
 
 async function invokeStreaming(
@@ -335,6 +338,8 @@ async function invokeStreaming(
   temperature: number | undefined,
   onToken: (chunk: string) => void,
   figmaBase64?: string,
+  project?: string,
+  userId?: string,
 ): Promise<string> {
   const client = makeClient(modelId);
   const content: Array<Record<string, unknown>> = [];
@@ -369,6 +374,10 @@ async function invokeStreaming(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let fullText = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
 
   try {
     const response = await retryWithBackoff(
@@ -387,12 +396,35 @@ async function invokeStreaming(
         try {
           const parsed = JSON.parse(decoded) as {
             type?: string;
+            // content_block_delta
             delta?: { type?: string; text?: string };
+            // message_delta has usage at top level
+            usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+            // message_start has usage nested under message
+            message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
           };
+
           if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
             const text = parsed.delta.text ?? '';
             fullText += text;
             onToken(text);
+          }
+
+          // message_start: input token count under parsed.message.usage
+          const startUsage = parsed.message?.usage;
+          if (startUsage) {
+            if (startUsage.input_tokens) inputTokens = startUsage.input_tokens;
+            if (startUsage.cache_read_input_tokens) cacheReadTokens = startUsage.cache_read_input_tokens;
+            if (startUsage.cache_creation_input_tokens) cacheWriteTokens = startUsage.cache_creation_input_tokens;
+          }
+
+          // message_delta: output token count under parsed.usage
+          const deltaUsage = parsed.usage;
+          if (deltaUsage) {
+            if (deltaUsage.output_tokens) outputTokens = deltaUsage.output_tokens;
+            if (deltaUsage.input_tokens) inputTokens = deltaUsage.input_tokens;
+            if (deltaUsage.cache_read_input_tokens) cacheReadTokens = deltaUsage.cache_read_input_tokens;
+            if (deltaUsage.cache_creation_input_tokens) cacheWriteTokens = deltaUsage.cache_creation_input_tokens;
           }
         } catch {
           // skip malformed event chunks
@@ -402,6 +434,40 @@ async function invokeStreaming(
   } finally {
     clearTimeout(timer);
   }
+
+  // Record exact usage (fire-and-forget)
+  // If streaming didn't emit usage events (some model versions), fall back to
+  // character-length estimation so the interaction is still recorded.
+  const hasExactTokens = inputTokens > 0 || outputTokens > 0;
+  const recordInputTokens = hasExactTokens ? inputTokens : Math.ceil(prompt.length / 4);
+  const recordOutputTokens = hasExactTokens ? outputTokens : Math.ceil(fullText.length / 4);
+  const tokenSource = hasExactTokens ? 'exact' as const : 'estimated' as const;
+  const costSource = hasExactTokens ? 'computed' as const : 'estimated' as const;
+
+  computeCost({
+    provider: 'bedrock',
+    modelId,
+    inputTokens: recordInputTokens,
+    outputTokens: recordOutputTokens,
+    cacheReadTokens: hasExactTokens ? cacheReadTokens : 0,
+    cacheWriteTokens: hasExactTokens ? cacheWriteTokens : 0,
+  })
+    .then((costUsd) => recordAiUsage({
+      provider: 'bedrock',
+      modelId,
+      feature: 'ui-lab',
+      project: project ?? 'unknown',
+      userId,
+      inputTokens: recordInputTokens,
+      outputTokens: recordOutputTokens,
+      cacheReadTokens: hasExactTokens ? cacheReadTokens : 0,
+      cacheWriteTokens: hasExactTokens ? cacheWriteTokens : 0,
+      tokenSource,
+      costUsd,
+      costSource,
+      status: 'success',
+    }))
+    .catch(() => {});
 
   return fullText;
 }
@@ -430,6 +496,8 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
     opts.temperature,
     opts.onToken,
     figmaBase64,
+    opts.project,
+    opts.userId,
   );
 }
 
@@ -450,7 +518,7 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
     contextSection,
   );
 
-  return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken);
+  return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken, undefined, opts.project, opts.userId);
 }
 
 /** Strip markdown fences that models sometimes wrap their HTML output in */

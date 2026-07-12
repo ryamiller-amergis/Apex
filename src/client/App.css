@@ -149,6 +149,7 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
   transition: margin-left 0.2s ease;
 }
 

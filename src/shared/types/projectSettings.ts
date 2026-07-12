@@ -183,6 +183,8 @@ export interface UpsertProjectSkillConfigRequest {
   uiLabRegenBedrockMaxTokens?: number | null;
   uiLabBedrockTemperature?: number | null;
   uiLabSkillPath?: string | null;
+  cursorApiKeyEnvRef?: string | null;
+  cursorServiceAccountId?: string | null;
 }
 
 export interface ProjectApprover {
