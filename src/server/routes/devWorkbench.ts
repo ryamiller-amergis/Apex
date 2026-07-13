@@ -27,6 +27,7 @@ import { db } from '../db/drizzle';
 import { devSessions, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
+import { resolveGitRemote, type GitRemote } from '../services/repoCacheService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
@@ -220,7 +221,8 @@ router.post('/start', async (req: Request, res: Response) => {
         const skillConfig = await getSkillConfig(project);
         const developmentSkillPath = skillConfig?.developmentSkillPath ?? undefined;
         const developmentModel = model ?? skillConfig?.developmentModel ?? undefined;
-        const { provider, repo, baseBranch: defaultBranch } = await resolveCheckoutContext(skillConfig, project);
+        const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, project);
+        const remote = resolveGitRemote(provider, project, repo);
 
         if (hasApexPath) {
           // Apex PRD-sourced path — skip ADO
@@ -246,13 +248,13 @@ router.post('/start', async (req: Request, res: Response) => {
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
-            branch: defaultBranch,
+            branch: baseBranch,
             sessionId,
             provider,
           });
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
-          await checkoutFeatureBranch(workspaceDir, branchName, defaultBranch);
+          await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
@@ -260,7 +262,7 @@ router.post('/start', async (req: Request, res: Response) => {
             project,
             repo,
             branch: branchName,
-            skillBranch: defaultBranch,
+            skillBranch: baseBranch,
             skillProvider: provider,
             skillPath: developmentSkillPath,
             model: developmentModel,
@@ -305,12 +307,18 @@ router.post('/start', async (req: Request, res: Response) => {
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
-            branch: defaultBranch,
+            branch: baseBranch,
             sessionId,
             provider,
           });
 
-          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle, defaultBranch);
+          const branchName = await createFeatureBranch(
+            workspaceDir,
+            workItemId!,
+            workItemTitle,
+            baseBranch,
+            remote,
+          );
 
           // Inject design-doc attachments from the Feature work item (Gap 4 fix).
           try {
@@ -335,7 +343,7 @@ router.post('/start', async (req: Request, res: Response) => {
             project,
             repo,
             branch: branchName,
-            skillBranch: defaultBranch,
+            skillBranch: baseBranch,
             skillProvider: provider,
             skillPath: developmentSkillPath,
             model: developmentModel,
@@ -361,6 +369,14 @@ router.post('/start', async (req: Request, res: Response) => {
         const message = (err as Error).message;
         console.error('[dev-workbench] async setup failed:', message);
         console.error('[dev-workbench] stack:', (err as Error).stack);
+        try {
+          cleanupWorkspace(sessionId);
+        } catch (cleanupErr) {
+          console.warn(
+            '[dev-workbench] failed setup workspace cleanup failed (non-fatal):',
+            (cleanupErr as Error).message,
+          );
+        }
         await db
           .update(devSessions)
           .set({
@@ -504,6 +520,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
 
     const skillConfig = await getSkillConfig(session.project);
     const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
+    const remote = resolveGitRemote(provider, session.project, repo);
     const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
 
     const workspaceDir = getWorkspaceDir(sessionId);
@@ -511,7 +528,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
 
     if (workspaceExists) {
       // Workspace is available — do the full sync + merge + push flow
-      const syncResult = await syncWithBase(workspaceDir, baseBranch);
+      const syncResult = await syncWithBase(workspaceDir, baseBranch, remote);
 
       if (syncResult.status === 'conflict') {
         await db
@@ -528,7 +545,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       }
 
       // Clean merge — push only (no PR).
-      await pushFeatureBranch(sessionId, session.branchName);
+      await pushFeatureBranch(sessionId, session.branchName, remote);
     } else if (session.branchPushed) {
       // Workspace gone but branch already pushed — nothing more to do for push.
       // The /pr endpoint will create the PR when the user clicks "Create PR".
@@ -618,7 +635,10 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     const workspaceDir = getWorkspaceDir(sessionId);
     await completeMerge(workspaceDir);
 
-    await pushFeatureBranch(sessionId, session.branchName);
+    const skillConfig = await getSkillConfig(session.project);
+    const { provider, repo } = await resolveCheckoutContext(skillConfig, session.project);
+    const remote = resolveGitRemote(provider, session.project, repo);
+    await pushFeatureBranch(sessionId, session.branchName, remote);
 
     res.json({ ok: true, branchPushed: true });
   } catch (err) {
@@ -948,9 +968,10 @@ async function cascadeChildStates(
 async function pushFeatureBranch(
   sessionId: string,
   branchName: string,
+  remote?: GitRemote,
 ): Promise<void> {
   const workspaceDir = getWorkspaceDir(sessionId);
-  await pushMergedBranch(workspaceDir, branchName);
+  await pushMergedBranch(workspaceDir, branchName, remote);
 
   await db
     .update(devSessions)

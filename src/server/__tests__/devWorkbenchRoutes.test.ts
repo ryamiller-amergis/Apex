@@ -8,6 +8,14 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 
 let mockPermissionGranted = true;
 let mockGroupMembershipGranted = true;
+const mockGitRemote = {
+  url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+  env: { GIT_CONFIG_COUNT: '1' },
+  secret: 'secret',
+};
+const mockResolveGitRemote = jest.fn(
+  (_provider: string, _project: string, _repo: string) => mockGitRemote,
+);
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (...keys: string[]) =>
@@ -42,6 +50,10 @@ jest.mock('../services/projectSettingsService', () => {
 });
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-1' }),
+}));
+jest.mock('../services/repoCacheService', () => ({
+  resolveGitRemote: (provider: string, project: string, repo: string) =>
+    mockResolveGitRemote(provider, project, repo),
 }));
 jest.mock('../services/repoCheckoutService', () => ({
   checkoutDefaultBranch: jest.fn().mockResolvedValue('/tmp/workspace'),
@@ -384,8 +396,8 @@ describe('POST /api/dev-workbench/sessions/:id/push', () => {
     expect(res.body.status).toBe('clean');
     expect(res.body.branchPushed).toBe(true);
     expect(res.body.prUrl).toBeUndefined();
-    expect(syncWithBase).toHaveBeenCalledWith('/tmp/workspace', 'main');
-    expect(pushMergedBranch).toHaveBeenCalledWith('/tmp/workspace', SESSION.branchName);
+    expect(syncWithBase).toHaveBeenCalledWith('/tmp/workspace', 'main', mockGitRemote);
+    expect(pushMergedBranch).toHaveBeenCalledWith('/tmp/workspace', SESSION.branchName, mockGitRemote);
   });
 
   it('returns conflict status when base merge has conflicts', async () => {
@@ -495,9 +507,14 @@ describe('POST /api/dev-workbench/sessions/:id/pr', () => {
 });
 
 describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
-  const { checkoutDefaultBranch, createFeatureBranch } = jest.requireMock('../services/repoCheckoutService') as {
+  const {
+    checkoutDefaultBranch,
+    createFeatureBranch,
+    cleanupWorkspace,
+  } = jest.requireMock('../services/repoCheckoutService') as {
     checkoutDefaultBranch: jest.Mock;
     createFeatureBranch: jest.Mock;
+    cleanupWorkspace: jest.Mock;
   };
   const fsModule = jest.requireMock('fs') as { existsSync: jest.Mock; mkdirSync: jest.Mock; writeFileSync: jest.Mock };
 
@@ -567,6 +584,13 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
       }),
     );
     expect(mockAdoAttach.getAttachmentText).toHaveBeenCalledTimes(2);
+    expect(createFeatureBranch).toHaveBeenCalledWith(
+      '/tmp/workspace',
+      42,
+      'Implement login',
+      'main',
+      mockGitRemote,
+    );
   });
 
   it('matches variant attachment names and writes them under canonical file names', async () => {
@@ -665,6 +689,20 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
     const writtenNames = fsModule.writeFileSync.mock.calls.map((c) => String(c[0]).split(/[\\/]/).pop());
     expect(writtenNames).toContain('design.md');
     expect(writtenNames).not.toContain('readme.txt');
+  });
+
+  it('cleans the partial workspace when asynchronous setup fails', async () => {
+    checkoutDefaultBranch.mockRejectedValueOnce(new Error('clone timed out'));
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(cleanupWorkspace).toHaveBeenCalledWith('session-abc');
+    expect(mockUpdateWhere).toHaveBeenCalled();
   });
 });
 

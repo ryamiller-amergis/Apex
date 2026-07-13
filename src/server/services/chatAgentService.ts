@@ -1573,7 +1573,10 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
  * so the work survives ephemeral workspace loss (app restarts, scaling).
  * Also caches the diff in the DB for the changes panel.
  */
-async function eagerPushDevSession(threadId: string): Promise<void> {
+async function eagerPushDevSession(
+  threadId: string,
+  kickoff: ChatThreadKickoff,
+): Promise<void> {
   const session = await db.query.devSessions.findFirst({
     where: eq(devSessions.chatThreadId, threadId),
   });
@@ -1582,6 +1585,7 @@ async function eagerPushDevSession(threadId: string): Promise<void> {
   if (session.status !== 'in_progress') return;
 
   const { computeDiff, pushBranch, getWorkspaceDir } = await import('./repoCheckoutService');
+  const { resolveGitRemote } = await import('./repoCacheService');
   const workspaceDir = getWorkspaceDir(session.id);
 
   if (!fs.existsSync(workspaceDir)) return;
@@ -1602,7 +1606,12 @@ async function eagerPushDevSession(threadId: string): Promise<void> {
 
   // Push branch to remote
   try {
-    await pushBranch(workspaceDir, session.branchName);
+    const remote = resolveGitRemote(
+      kickoff.skillProvider ?? 'ado',
+      kickoff.project,
+      kickoff.repo,
+    );
+    await pushBranch(workspaceDir, session.branchName, remote);
     await db
       .update(devSessions)
       .set({ branchPushed: true, updatedAt: new Date().toISOString() })
@@ -2086,7 +2095,7 @@ export async function sendMessage(
 
     // Eagerly push dev-session branches to remote so they survive workspace loss
     try {
-      await eagerPushDevSession(threadId);
+      await eagerPushDevSession(threadId, state.thread.kickoff);
     } catch (err) {
       console.warn(`[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`, (err as Error).message);
     }
