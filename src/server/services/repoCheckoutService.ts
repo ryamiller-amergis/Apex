@@ -6,6 +6,7 @@ import { git, safeArgs, LONG_TIMEOUT_MS, type GitOptions } from '../utils/asyncG
 import { workspaceMutex } from '../utils/asyncMutex';
 import {
   ensureRepoCache,
+  repairRepoCache,
   resolveGitRemote,
   type GitRemote,
 } from './repoCacheService';
@@ -95,6 +96,21 @@ async function runRemoteGit(
   }
 }
 
+function isCacheObjectError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return [
+    'missing blob',
+    'missing tree',
+    'bad object',
+    'unable to read object',
+    'failed to traverse parents',
+    'did not send all necessary objects',
+    'reference is not a tree',
+    'object file is empty',
+    'object corrupt',
+  ].some((fragment) => message.includes(fragment));
+}
+
 export async function checkoutDefaultBranch(opts: {
   project: string;
   repo: string;
@@ -130,12 +146,27 @@ export async function checkoutDefaultBranch(opts: {
       });
     } else {
       const cache = await ensureRepoCache({ project, repo, branch, provider });
-      await materializeWorkspaceFromCache(
-        cache.cacheDir,
-        workspaceDir,
-        branch,
-        cache.remote.url,
-      );
+      try {
+        await materializeWorkspaceFromCache(
+          cache.cacheDir,
+          workspaceDir,
+          branch,
+          cache.remote.url,
+        );
+      } catch (materializeError) {
+        if (!isCacheObjectError(materializeError)) throw materializeError;
+        console.warn(
+          `[repoCheckoutService] workspace materialization detected missing cache objects; ` +
+          `repairing ${provider}/${repo}@${branch}`,
+        );
+        const repaired = await repairRepoCache({ project, repo, branch, provider });
+        await materializeWorkspaceFromCache(
+          repaired.cacheDir,
+          workspaceDir,
+          branch,
+          repaired.remote.url,
+        );
+      }
     }
   } catch (err) {
     fs.rmSync(workspaceDir, { recursive: true, force: true });

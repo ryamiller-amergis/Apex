@@ -12,6 +12,11 @@ export async function materializeWorkspaceFromCache(
   branch: string,
   remoteUrl: string,
 ): Promise<void> {
+  const startedAt = Date.now();
+  const workspaceLabel = path.basename(workspaceDir);
+  console.log(
+    `[repo-workspace] phase=materialize-start session=${workspaceLabel} branch=${branch}`,
+  );
   fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
   fs.rmSync(workspaceDir, { recursive: true, force: true });
   try {
@@ -37,8 +42,17 @@ export async function materializeWorkspaceFromCache(
       safeArgs(workspaceDir, ['remote', 'set-url', 'origin', remoteUrl]),
       { cwd: workspaceDir },
     );
+    console.log(
+      `[repo-workspace] phase=materialize-complete session=${workspaceLabel} ` +
+      `branch=${branch} durationMs=${Date.now() - startedAt}`,
+    );
   } catch (err) {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
+    console.error(
+      `[repo-workspace] phase=materialize-failed session=${workspaceLabel} ` +
+      `branch=${branch} durationMs=${Date.now() - startedAt}:`,
+      (err as Error).message,
+    );
     throw err;
   }
 }

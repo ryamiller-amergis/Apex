@@ -22,6 +22,12 @@ const mockEnsureRepoCache = jest.fn().mockResolvedValue({
   remote: mockRemote,
 });
 const mockResolveGitRemote = jest.fn();
+const mockRepairRepoCache = jest.fn().mockResolvedValue({
+  cacheDir: '/data/repo-cache/maxview.git',
+  baseSha: 'repaired123',
+  stale: false,
+  remote: mockRemote,
+});
 
 jest.mock('fs');
 jest.mock('../utils/asyncGit', () => ({
@@ -38,6 +44,7 @@ jest.mock('../utils/dataDir', () => ({
 jest.mock('../services/repoCacheService', () => ({
   COLD_CACHE_TIMEOUT_MS: 1_800_000,
   ensureRepoCache: (...args: unknown[]) => mockEnsureRepoCache(...args),
+  repairRepoCache: (...args: unknown[]) => mockRepairRepoCache(...args),
   resolveGitRemote: (...args: unknown[]) => mockResolveGitRemote(...args),
 }));
 
@@ -64,6 +71,12 @@ describe('repoCheckoutService', () => {
     mockEnsureRepoCache.mockResolvedValue({
       cacheDir: '/data/repo-cache/maxview.git',
       baseSha: 'abc123',
+      stale: false,
+      remote: mockRemote,
+    });
+    mockRepairRepoCache.mockResolvedValue({
+      cacheDir: '/data/repo-cache/maxview.git',
+      baseSha: 'repaired123',
       stale: false,
       remote: mockRemote,
     });
@@ -218,6 +231,34 @@ describe('repoCheckoutService', () => {
         expect.stringContaining('.ai-pilot/'),
         'utf-8',
       );
+    });
+
+    it('repairs and retries once when workspace materialization reports a missing object', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+      let cloneAttempts = 0;
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('clone')) {
+          cloneAttempts += 1;
+          if (cloneAttempts === 1) throw new Error('fatal: missing blob abc123');
+        }
+        return '';
+      });
+
+      await expect(checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        sessionId: 'session-repair',
+      })).resolves.toBe(workspacePath('session-repair'));
+
+      expect(mockRepairRepoCache).toHaveBeenCalledWith({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        provider: 'ado',
+      });
+      expect(cloneAttempts).toBe(2);
     });
 
     it('clones a GitHub repo when provider is github', async () => {

@@ -251,6 +251,10 @@ router.post('/start', async (req: Request, res: Response) => {
             .replace(/^-|-$/g, '')
             .slice(0, 40);
 
+          console.log(
+            `[dev-workbench] setup phase=workspace-start session=${sessionId} ` +
+            `repo=${provider}/${repo} baseBranch=${baseBranch}`,
+          );
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
@@ -258,9 +262,13 @@ router.post('/start', async (req: Request, res: Response) => {
             sessionId,
             provider,
           });
+          console.log(`[dev-workbench] setup phase=workspace-ready session=${sessionId}`);
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
           await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
+          console.log(
+            `[dev-workbench] setup phase=branch-ready session=${sessionId} branch=${branchName}`,
+          );
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
@@ -310,6 +318,10 @@ router.post('/start', async (req: Request, res: Response) => {
             // Non-fatal — fall back to numeric slug
           }
 
+          console.log(
+            `[dev-workbench] setup phase=workspace-start session=${sessionId} ` +
+            `repo=${provider}/${repo} baseBranch=${baseBranch}`,
+          );
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
@@ -317,6 +329,7 @@ router.post('/start', async (req: Request, res: Response) => {
             sessionId,
             provider,
           });
+          console.log(`[dev-workbench] setup phase=workspace-ready session=${sessionId}`);
 
           const branchName = await createFeatureBranch(
             workspaceDir,
@@ -324,6 +337,9 @@ router.post('/start', async (req: Request, res: Response) => {
             workItemTitle,
             baseBranch,
             remote,
+          );
+          console.log(
+            `[dev-workbench] setup phase=branch-ready session=${sessionId} branch=${branchName}`,
           );
 
           // Inject design-doc attachments from the Feature work item (Gap 4 fix).

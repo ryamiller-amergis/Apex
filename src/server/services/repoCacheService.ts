@@ -127,7 +127,20 @@ async function readBaseSha(
   )).trim();
 }
 
-async function verifyBaseCommit(
+async function verifyBaseCommitLightweight(
+  cacheDir: string,
+  branch: string,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  const baseSha = await readBaseSha(cacheDir, branch, abortSignal);
+  await git(
+    safeArgs(cacheDir, ['cat-file', '-e', `${baseSha}^{commit}`]),
+    { cwd: cacheDir, abortSignal },
+  );
+  return baseSha;
+}
+
+async function verifyCacheConnectivity(
   cacheDir: string,
   branch: string,
   abortSignal?: AbortSignal,
@@ -190,6 +203,7 @@ async function populateColdCache(
       safeArgs(tempDir, ['remote', 'set-url', 'origin', remote.url]),
       { cwd: tempDir, abortSignal },
     );
+    await verifyCacheConnectivity(tempDir, options.branch, abortSignal);
     await assertLeaseOwned();
     abortSignal.throwIfAborted();
     fs.renameSync(tempDir, cacheDir);
@@ -250,6 +264,8 @@ async function refreshUnderLease(
   const remote = resolveGitRemote(options.provider, options.project, options.repo);
   const startedAt = Date.now();
   let stale = false;
+  let baseSha: string;
+  const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
 
   if (!cacheExists(cacheDir)) {
     if (fs.existsSync(cacheDir)) {
@@ -257,15 +273,23 @@ async function refreshUnderLease(
         `Repository cache is incomplete and was preserved because active workspaces may reference it: ${cacheDir}`,
       );
     }
+    console.log(`[repo-cache] phase=cold-clone-start repo=${repoLabel}`);
     await populateColdCacheWithRetry(cacheDir, options, remote, abortSignal, assertOwned);
+    console.log(`[repo-cache] phase=cold-clone-complete repo=${repoLabel}`);
+    baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+    console.log(`[repo-cache] phase=cold-connectivity-verified repo=${repoLabel}`);
   } else {
+    console.log(`[repo-cache] phase=incremental-fetch-start repo=${repoLabel}`);
     try {
       await refreshWarmCache(cacheDir, options, remote, abortSignal);
+      console.log(`[repo-cache] phase=incremental-fetch-complete repo=${repoLabel}`);
+      baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+      console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
     } catch (refreshError) {
       if (abortSignal.aborted) throw refreshError;
       if (!isTransientGitError(refreshError)) throw refreshError;
       try {
-        await verifyBaseCommit(cacheDir, options.branch, abortSignal);
+        baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
         stale = true;
         console.warn(
           `[repo-cache] refresh unavailable; using verified cached ${options.provider}/${options.repo}@${options.branch}:`,
@@ -278,7 +302,6 @@ async function refreshUnderLease(
     }
   }
 
-  const baseSha = await verifyBaseCommit(cacheDir, options.branch, abortSignal);
   console.log(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -299,4 +322,44 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
   });
   inFlightRefreshes.set(key, refresh);
   return refresh;
+}
+
+export function repairRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
+  const key = cacheIdentity(options);
+  return withRepoCacheLease(
+    `repo-cache:${crypto.createHash('sha256').update(key).digest('hex')}`,
+    async ({ signal, assertOwned }) => {
+      const cacheDir = getRepoCacheDir(options);
+      if (!cacheExists(cacheDir)) {
+        throw new Error(`Repository cache is unavailable for in-place repair: ${cacheDir}`);
+      }
+      const remote = resolveGitRemote(options.provider, options.project, options.repo);
+      const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
+      const startedAt = Date.now();
+      console.warn(`[repo-cache] phase=repair-refetch-start repo=${repoLabel}`);
+      await git(
+        safeArgs(cacheDir, [
+          'fetch',
+          '--refetch',
+          '--prune',
+          'origin',
+          `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+        ]),
+        {
+          cwd: cacheDir,
+          timeout: COLD_CACHE_TIMEOUT_MS,
+          idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
+          abortSignal: signal,
+          env: remote.env,
+        },
+      );
+      await assertOwned();
+      const baseSha = await verifyCacheConnectivity(cacheDir, options.branch, signal);
+      console.log(
+        `[repo-cache] phase=repair-complete repo=${repoLabel} ` +
+        `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
+      );
+      return { cacheDir, baseSha, stale: false, remote };
+    },
+  );
 }

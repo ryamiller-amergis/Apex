@@ -31,6 +31,7 @@ import {
   COLD_CACHE_TIMEOUT_MS,
   ensureRepoCache,
   getRepoCacheDir,
+  repairRepoCache,
   resolveGitRemote,
 } from '../services/repoCacheService';
 
@@ -118,6 +119,10 @@ describe('repoCacheService', () => {
       env: expect.objectContaining({ GIT_CONFIG_COUNT: '1' }),
     }));
     expect(mockFs.renameSync).toHaveBeenCalled();
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fsck', '--connectivity-only', 'abc123']),
+      expect.any(Object),
+    );
     expect(result.baseSha).toBe('abc123');
   });
 
@@ -140,6 +145,11 @@ describe('repoCacheService', () => {
       ]),
       expect.objectContaining({ env: expect.objectContaining({ GIT_CONFIG_COUNT: '1' }) }),
     );
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['cat-file', '-e', 'abc123^{commit}']),
+      expect.any(Object),
+    );
+    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('fsck'))).toBe(false);
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
   });
 
@@ -211,11 +221,10 @@ describe('repoCacheService', () => {
     );
   });
 
-  it('does not replace a corrupt cache that active workspaces may reference', async () => {
-    mockFs.existsSync.mockReturnValue(true);
+  it('does not publish a cold cache that fails connectivity verification', async () => {
     mockGit.mockImplementation(async (args: string[]) => {
-      if (args.includes('rev-parse')) return 'broken123\n';
-      if (args.includes('fsck')) throw new Error('missing reachable blob');
+      if (args.includes('rev-parse')) return 'broken-cold\n';
+      if (args.includes('fsck')) throw new Error('missing reachable tree');
       return '';
     });
 
@@ -224,7 +233,54 @@ describe('repoCacheService', () => {
       project: 'MaxView',
       repo: 'MaxView',
       branch: 'development',
-    })).rejects.toThrow('missing reachable blob');
+    })).rejects.toThrow('missing reachable tree');
+
+    expect(mockFs.renameSync).not.toHaveBeenCalled();
+    expect(mockFs.rmSync).toHaveBeenCalledWith(
+      expect.stringContaining('.tmp-'),
+      { recursive: true, force: true },
+    );
+  });
+
+  it('repairs missing reachable objects by refetching without replacing the cache', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'repaired123\n';
+      return '';
+    });
+
+    await expect(repairRepoCache({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    })).resolves.toEqual(expect.objectContaining({ baseSha: 'repaired123' }));
+
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.any(Object),
+    );
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fsck', '--connectivity-only', 'repaired123']),
+      expect.any(Object),
+    );
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a cache when lightweight post-fetch verification fails', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'broken123\n';
+      if (args.includes('cat-file')) throw new Error('missing commit object');
+      return '';
+    });
+
+    await expect(ensureRepoCache({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    })).rejects.toThrow('missing commit object');
 
     expect(mockFs.rmSync).not.toHaveBeenCalled();
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
