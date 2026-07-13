@@ -193,6 +193,7 @@ export async function linkInterview(
     .update(featureRequests)
     .set({
       interviewId,
+      status: 'in-interview',
       updatedAt: new Date().toISOString(),
     })
     .where(eq(featureRequests.id, featureRequestId))

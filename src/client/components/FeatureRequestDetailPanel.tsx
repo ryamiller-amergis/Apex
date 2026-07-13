@@ -18,6 +18,7 @@ import styles from './FeatureRequestDetailPanel.module.css';
 const STATUS_LABELS: Record<FeatureRequestStatus, string> = {
   new: 'New',
   'under-review': 'Under Review',
+  'in-interview': 'In Interview',
   planned: 'Planned',
   declined: 'Declined',
   done: 'Done',
@@ -56,6 +57,7 @@ function statusBadgeClass(s: FeatureRequestStatus): string {
   const map: Record<FeatureRequestStatus, string> = {
     new: listStyles['statusNew'],
     'under-review': listStyles['statusUnderReview'],
+    'in-interview': listStyles['statusInInterview'],
     planned: listStyles['statusPlanned'],
     declined: listStyles['statusDeclined'],
     done: listStyles['statusDone'],

@@ -256,8 +256,8 @@ describe('updateFeatureRequest', () => {
 describe('linkInterview', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('sets the interview ID and updated timestamp', async () => {
-    const updatedRow = makeRow({ interviewId: 'interview-1' });
+  it('sets the interview ID, in-interview status, and updated timestamp', async () => {
+    const updatedRow = makeRow({ interviewId: 'interview-1', status: 'in-interview' });
     const returningMock = jest.fn().mockResolvedValue([updatedRow]);
     const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
@@ -268,10 +268,12 @@ describe('linkInterview', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({
         interviewId: 'interview-1',
+        status: 'in-interview',
         updatedAt: expect.any(String),
       }),
     );
     expect(result.interviewId).toBe('interview-1');
+    expect(result.status).toBe('in-interview');
   });
 });
 

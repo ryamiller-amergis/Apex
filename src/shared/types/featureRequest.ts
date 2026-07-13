@@ -1,10 +1,16 @@
-export type FeatureRequestStatus = 'new' | 'under-review' | 'planned' | 'declined' | 'done';
+export type FeatureRequestStatus =
+  | 'new'
+  | 'under-review'
+  | 'in-interview'
+  | 'planned'
+  | 'declined'
+  | 'done';
 export type FeatureRequestAiStatus = 'pending' | 'analyzing' | 'complete' | 'failed';
 export type FeatureRequestPriority = 'low' | 'medium' | 'high' | 'critical';
 export type FeatureRequestRisk = 'low' | 'medium' | 'high';
 
 export const FEATURE_REQUEST_STATUSES: FeatureRequestStatus[] = [
-  'new', 'under-review', 'planned', 'declined', 'done',
+  'new', 'under-review', 'in-interview', 'planned', 'declined', 'done',
 ];
 
 export const FEATURE_REQUEST_AI_STATUSES: FeatureRequestAiStatus[] = [

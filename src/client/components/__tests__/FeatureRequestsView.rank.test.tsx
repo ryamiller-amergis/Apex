@@ -1,9 +1,16 @@
 import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { FeatureRequest } from '../../../shared/types/featureRequest';
 import { FeatureRequestsView } from '../FeatureRequestsView';
 
 const reorderMutateMock = jest.fn();
+const navigateMock = jest.fn();
+
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useNavigate: () => navigateMock,
+}));
 
 jest.mock('../../hooks/useFeatureRequests', () => ({
   useFeatureRequests: jest.fn(),
@@ -29,17 +36,25 @@ import { useFeatureRequests } from '../../hooks/useFeatureRequests';
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
-    can: (permission: string) => permission === 'feature-requests:manage',
+    can: (permission: string) =>
+      permission === 'feature-requests:manage' || permission === 'interviews:manage',
+    isInAnyGroup: () => true,
+    permissionsLoaded: true,
   }),
 }));
 
-function makeRequest(id: string, title: string, rank: number | null): FeatureRequest {
+function makeRequest(
+  id: string,
+  title: string,
+  rank: number | null,
+  interviewId: string | null = null,
+): FeatureRequest {
   return {
     id,
     title,
     request: 'details',
     advantage: 'benefit',
-    interviewId: null,
+    interviewId,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
     status: 'new',
@@ -70,7 +85,9 @@ function renderView(requests: FeatureRequest[]) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <FeatureRequestsView />
+      <MemoryRouter>
+        <FeatureRequestsView />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -129,5 +146,35 @@ describe('FeatureRequestsView rank reordering', () => {
       { id: 'c', rank: 2 },
       { id: 'a', rank: 3 },
     ]);
+  });
+});
+
+describe('FeatureRequestsView action menu', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('offers Kick Off Interview and View Interview from the row actions menu', () => {
+    renderView([
+      makeRequest('a', 'Alpha', 1),
+      makeRequest('b', 'Beta', 2, 'interview-1'),
+    ]);
+
+    fireEvent.click(screen.getByLabelText('Actions for Alpha'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Kick Off Interview' }));
+    expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
+      state: {
+        featureRequest: {
+          id: 'a',
+          title: 'Alpha',
+          request: 'details',
+          advantage: 'benefit',
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByLabelText('Actions for Beta'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'View Interview' }));
+    expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/interview-1');
   });
 });
