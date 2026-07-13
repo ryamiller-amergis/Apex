@@ -24,6 +24,7 @@ export interface FeatureRequest {
   title: string;
   request: string;
   advantage: string;
+  interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
   status: FeatureRequestStatus;

@@ -1,4 +1,6 @@
 import React, { useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAppShell } from '../hooks/useAppShell';
 import type {
   FeatureRequest,
   FeatureRequestStatus,
@@ -105,6 +107,11 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   onReanalyze,
   isReanalyzing,
 }) => {
+  const navigate = useNavigate();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const canKickOff = permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
   const handleClose = useCallback(() => onClose(), [onClose]);
 
   useEffect(() => {
@@ -154,6 +161,19 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
             <h3 className={styles['sectionTitle']}>Advantage</h3>
             <div className={styles['prose']}>{formatBody(fr.advantage)}</div>
           </section>
+
+          {fr.interviewId && (
+            <section className={styles['section']}>
+              <h3 className={styles['sectionTitle']}>Interview</h3>
+              <button
+                className={styles['secondaryAction']}
+                type="button"
+                onClick={() => navigate(`/backlog/interview/${fr.interviewId}`)}
+              >
+                View Interview
+              </button>
+            </section>
+          )}
 
           <section className={styles['section']}>
             <h3 className={styles['sectionTitle']}>Status</h3>
@@ -251,16 +271,36 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
           )}
         </div>
 
-        {canManage && (
+        {(canManage || (canKickOff && !fr.interviewId)) && (
           <footer className={styles['footer']}>
-            <button
-              className={listStyles['reanalyzeBtn']}
-              type="button"
-              disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
-              onClick={() => onReanalyze(fr.id)}
-            >
-              {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
-            </button>
+            {canManage && (
+              <button
+                className={listStyles['reanalyzeBtn']}
+                type="button"
+                disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
+                onClick={() => onReanalyze(fr.id)}
+              >
+                {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
+              </button>
+            )}
+            {canKickOff && !fr.interviewId && (
+              <button
+                className={styles['primaryAction']}
+                type="button"
+                onClick={() => navigate('/backlog/interview/new', {
+                  state: {
+                    featureRequest: {
+                      id: fr.id,
+                      title: fr.title,
+                      request: fr.request,
+                      advantage: fr.advantage,
+                    },
+                  },
+                })}
+              >
+                Kick Off Interview
+              </button>
+            )}
           </footer>
         )}
       </aside>

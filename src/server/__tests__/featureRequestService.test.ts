@@ -41,6 +41,7 @@ import {
   listFeatureRequests,
   getFeatureRequest,
   updateFeatureRequest,
+  linkInterview,
   resolveApexReviewers,
 } from '../services/featureRequestService';
 
@@ -54,6 +55,7 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
     title: 'Dark mode',
     request: 'Add dark mode support',
     advantage: 'Better UX at night',
+    interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
     status: 'new',
@@ -246,6 +248,30 @@ describe('updateFeatureRequest', () => {
     expect(setArg.reviewedBy).toBe('reviewer-1');
     expect(setArg.updatedAt).toBeDefined();
     expect(setArg.status).toBeUndefined();
+  });
+});
+
+// ── linkInterview ─────────────────────────────────────────────────────────────
+
+describe('linkInterview', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('sets the interview ID and updated timestamp', async () => {
+    const updatedRow = makeRow({ interviewId: 'interview-1' });
+    const returningMock = jest.fn().mockResolvedValue([updatedRow]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await linkInterview('fr-1', 'interview-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interviewId: 'interview-1',
+        updatedAt: expect.any(String),
+      }),
+    );
+    expect(result.interviewId).toBe('interview-1');
   });
 });
 

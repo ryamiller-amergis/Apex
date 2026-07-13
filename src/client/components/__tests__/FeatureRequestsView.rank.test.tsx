@@ -39,6 +39,7 @@ function makeRequest(id: string, title: string, rank: number | null): FeatureReq
     title,
     request: 'details',
     advantage: 'benefit',
+    interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
     status: 'new',
