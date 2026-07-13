@@ -22,6 +22,7 @@ export async function materializeWorkspaceFromCache(
       '--reference-if-able',
       cacheDir,
       '--dissociate',
+      '--no-local',
       '--no-hardlinks',
       '--single-branch',
       '--branch',
