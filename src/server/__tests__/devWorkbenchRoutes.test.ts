@@ -16,6 +16,9 @@ const mockGitRemote = {
 const mockResolveGitRemote = jest.fn(
   (_provider: string, _project: string, _repo: string) => mockGitRemote,
 );
+const mockScheduleWorkspaceCleanup = jest.fn();
+const mockTouchDevSessionSetup = jest.fn().mockResolvedValue(true);
+const mockActivateDevSession = jest.fn().mockResolvedValue(true);
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (...keys: string[]) =>
@@ -54,6 +57,13 @@ jest.mock('../services/chatAgentService', () => ({
 jest.mock('../services/repoCacheService', () => ({
   resolveGitRemote: (provider: string, project: string, repo: string) =>
     mockResolveGitRemote(provider, project, repo),
+}));
+jest.mock('../services/devWorkspaceCleanupService', () => ({
+  scheduleStaleDevWorkspaceCleanup: () => mockScheduleWorkspaceCleanup(),
+}));
+jest.mock('../services/devSessionSetupService', () => ({
+  touchDevSessionSetup: (...args: unknown[]) => mockTouchDevSessionSetup(...args),
+  activateDevSession: (...args: unknown[]) => mockActivateDevSession(...args),
 }));
 jest.mock('../services/repoCheckoutService', () => ({
   checkoutDefaultBranch: jest.fn().mockResolvedValue('/tmp/workspace'),
@@ -573,6 +583,7 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sessionId).toBe('session-abc');
+    expect(mockScheduleWorkspaceCleanup).toHaveBeenCalled();
 
     // Allow async setup to run
     await new Promise((resolve) => setTimeout(resolve, 50));

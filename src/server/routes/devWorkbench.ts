@@ -28,6 +28,11 @@ import { devSessions, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
 import { resolveGitRemote, type GitRemote } from '../services/repoCacheService';
+import { scheduleStaleDevWorkspaceCleanup } from '../services/devWorkspaceCleanupService';
+import {
+  activateDevSession,
+  touchDevSessionSetup,
+} from '../services/devSessionSetupService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
@@ -213,6 +218,7 @@ router.post('/start', async (req: Request, res: Response) => {
       status: 'setting_up',
     });
 
+    scheduleStaleDevWorkspaceCleanup();
     res.json({ sessionId });
 
     // Async setup — clone repo, create branch, create chat thread
@@ -258,6 +264,9 @@ router.post('/start', async (req: Request, res: Response) => {
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
 
+          if (!await touchDevSessionSetup(sessionId)) {
+            throw new Error('Development session setup expired before agent initialization.');
+          }
           const thread = await createThread(userId, {
             project,
             repo,
@@ -271,15 +280,12 @@ router.post('/start', async (req: Request, res: Response) => {
             workspaceDirOverride: workspaceDir,
           });
 
-          await db
-            .update(devSessions)
-            .set({
-              chatThreadId: thread.id,
-              branchName,
-              status: 'in_progress',
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(devSessions.id, sessionId));
+          if (!await activateDevSession(sessionId, {
+            chatThreadId: thread.id,
+            branchName,
+          })) {
+            throw new Error('Development session setup expired before activation.');
+          }
 
           console.log('[dev-workbench] apex session ready:', sessionId);
         } else {
@@ -339,6 +345,9 @@ router.post('/start', async (req: Request, res: Response) => {
             await cascadeChildStates(adoService, workItemId!, ['New', 'Approved', 'Committed'], 'In Progress');
           }
 
+          if (!await touchDevSessionSetup(sessionId)) {
+            throw new Error('Development session setup expired before agent initialization.');
+          }
           const thread = await createThread(userId, {
             project,
             repo,
@@ -353,15 +362,12 @@ router.post('/start', async (req: Request, res: Response) => {
             workspaceDirOverride: workspaceDir,
           });
 
-          await db
-            .update(devSessions)
-            .set({
-              chatThreadId: thread.id,
-              branchName,
-              status: 'in_progress',
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(devSessions.id, sessionId));
+          if (!await activateDevSession(sessionId, {
+            chatThreadId: thread.id,
+            branchName,
+          })) {
+            throw new Error('Development session setup expired before activation.');
+          }
 
           console.log('[dev-workbench] session ready:', sessionId);
         }

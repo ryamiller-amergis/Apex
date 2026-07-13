@@ -143,23 +143,20 @@ describe('repoCacheService', () => {
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
   });
 
-  it('removes an incomplete cache directory before cold initialization', async () => {
+  it('does not replace an incomplete cache that active workspaces may reference', async () => {
     mockFs.existsSync.mockImplementation((target) =>
       String(target).endsWith('.git'),
     );
 
-    await ensureRepoCache({
+    await expect(ensureRepoCache({
       provider: 'ado',
       project: 'MaxView',
       repo: 'MaxView',
       branch: 'development',
-    });
+    })).rejects.toThrow('incomplete');
 
-    expect(mockFs.rmSync).toHaveBeenCalledWith(
-      expect.stringMatching(/repo-cache.*\.git$/),
-      { recursive: true, force: true },
-    );
-    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(true);
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
   });
 
   it('uses the last verified cache when an incremental refresh is temporarily unavailable', async () => {
@@ -214,38 +211,11 @@ describe('repoCacheService', () => {
     );
   });
 
-  it('rebuilds an existing cache when post-fetch connectivity verification fails', async () => {
-    mockFs.existsSync.mockReturnValue(true);
-    let fsckAttempts = 0;
-    mockGit.mockImplementation(async (args: string[]) => {
-      if (args.includes('rev-parse')) return 'repair123\n';
-      if (args.includes('fsck')) {
-        fsckAttempts += 1;
-        if (fsckAttempts === 1) throw new Error('missing reachable blob');
-      }
-      return '';
-    });
-
-    await expect(ensureRepoCache({
-      provider: 'ado',
-      project: 'MaxView',
-      repo: 'MaxView',
-      branch: 'development',
-    })).resolves.toEqual(expect.objectContaining({ baseSha: 'repair123' }));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(
-      expect.stringContaining('repo-cache'),
-      { recursive: true, force: true },
-    );
-    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(true);
-    expect(fsckAttempts).toBe(2);
-  });
-
-  it('removes a rebuilt cache that still fails connectivity verification', async () => {
+  it('does not replace a corrupt cache that active workspaces may reference', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'broken123\n';
-      if (args.includes('fsck')) throw new Error('missing reachable tree');
+      if (args.includes('fsck')) throw new Error('missing reachable blob');
       return '';
     });
 
@@ -254,12 +224,10 @@ describe('repoCacheService', () => {
       project: 'MaxView',
       repo: 'MaxView',
       branch: 'development',
-    })).rejects.toThrow('missing reachable tree');
+    })).rejects.toThrow('missing reachable blob');
 
-    const cacheRemovals = mockFs.rmSync.mock.calls.filter(([target]) =>
-      String(target).endsWith('.git'),
-    );
-    expect(cacheRemovals).toHaveLength(2);
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
   });
 
   it('retries cold cache initialization once after cleaning the failed attempt', async () => {

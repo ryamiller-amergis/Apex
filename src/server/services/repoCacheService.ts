@@ -253,8 +253,9 @@ async function refreshUnderLease(
 
   if (!cacheExists(cacheDir)) {
     if (fs.existsSync(cacheDir)) {
-      await assertOwned();
-      fs.rmSync(cacheDir, { recursive: true, force: true });
+      throw new Error(
+        `Repository cache is incomplete and was preserved because active workspaces may reference it: ${cacheDir}`,
+      );
     }
     await populateColdCacheWithRetry(cacheDir, options, remote, abortSignal, assertOwned);
   } else {
@@ -272,42 +273,12 @@ async function refreshUnderLease(
         );
       } catch (verificationError) {
         if (abortSignal.aborted) throw verificationError;
-        await assertOwned();
-        fs.rmSync(cacheDir, { recursive: true, force: true });
-        await populateColdCacheWithRetry(
-          cacheDir,
-          options,
-          remote,
-          abortSignal,
-          assertOwned,
-        );
+        throw verificationError;
       }
     }
   }
 
-  let baseSha: string;
-  try {
-    baseSha = await verifyBaseCommit(cacheDir, options.branch, abortSignal);
-  } catch (verificationError) {
-    if (abortSignal.aborted) throw verificationError;
-    await assertOwned();
-    fs.rmSync(cacheDir, { recursive: true, force: true });
-    await populateColdCacheWithRetry(
-      cacheDir,
-      options,
-      remote,
-      abortSignal,
-      assertOwned,
-    );
-    try {
-      baseSha = await verifyBaseCommit(cacheDir, options.branch, abortSignal);
-    } catch (rebuildVerificationError) {
-      if (abortSignal.aborted) throw rebuildVerificationError;
-      await assertOwned();
-      fs.rmSync(cacheDir, { recursive: true, force: true });
-      throw rebuildVerificationError;
-    }
-  }
+  const baseSha = await verifyBaseCommit(cacheDir, options.branch, abortSignal);
   console.log(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,

@@ -56,7 +56,7 @@ describe('materializeWorkspaceFromCache', () => {
     expect(runGit(workspaceDir, ['remote', 'get-url', 'origin']))
       .toBe('https://example.invalid/repo.git');
     expect(fs.existsSync(path.join(workspaceDir, '.git', 'objects', 'info', 'alternates')))
-      .toBe(false);
+      .toBe(true);
   });
 
   it('fails without leaving a partial workspace when the branch is missing', async () => {
