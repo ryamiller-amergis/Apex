@@ -1051,6 +1051,7 @@ export const featureRequests = pgTable('feature_requests', {
   title: text('title').notNull(),
   request: text('request').notNull(),
   advantage: text('advantage').notNull(),
+  interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
   status: text('status').notNull().default('new'),
@@ -1071,6 +1072,10 @@ export const featureRequests = pgTable('feature_requests', {
 }));
 
 export const featureRequestsRelations = relations(featureRequests, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [featureRequests.interviewId],
+    references: [interviews.id],
+  }),
   submitter: one(appUsers, {
     fields: [featureRequests.submittedBy],
     references: [appUsers.oid],

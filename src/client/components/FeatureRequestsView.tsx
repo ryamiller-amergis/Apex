@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useFeatureRequests,
@@ -27,6 +28,7 @@ const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2
 const STATUS_LABELS: Record<FeatureRequestStatus, string> = {
   'new': 'New',
   'under-review': 'Under Review',
+  'in-interview': 'In Interview',
   'planned': 'Planned',
   'declined': 'Declined',
   'done': 'Done',
@@ -65,6 +67,7 @@ function statusBadgeClass(s: FeatureRequestStatus): string {
   const map: Record<FeatureRequestStatus, string> = {
     'new': styles['statusNew'],
     'under-review': styles['statusUnderReview'],
+    'in-interview': styles['statusInInterview'],
     'planned': styles['statusPlanned'],
     'declined': styles['statusDeclined'],
     'done': styles['statusDone'],
@@ -78,7 +81,8 @@ function formatDate(iso: string): string {
 }
 
 export const FeatureRequestsView: React.FC = () => {
-  const { can } = useAppShell();
+  const navigate = useNavigate();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
   const { data: requests, isLoading, error } = useFeatureRequests();
   const updateMutation = useUpdateFeatureRequest();
   const reorderMutation = useReorderFeatureRequests();
@@ -86,11 +90,36 @@ export const FeatureRequestsView: React.FC = () => {
 
   const [sortMode, setSortMode] = useState<SortMode>('rank');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const dragIndexRef = useRef<number | null>(null);
 
   const canManage = can('feature-requests:manage');
+  const canKickOff = permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+  const showActionsColumn = canManage
+    || canKickOff
+    || Boolean(requests?.some((fr) => fr.interviewId));
+
+  useEffect(() => {
+    if (openActionMenuId === null) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(`[data-fr-action-menu="${openActionMenuId}"]`)) return;
+      setOpenActionMenuId(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenActionMenuId(null);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openActionMenuId]);
 
   const sorted = useMemo(() => {
     if (!requests) return [];
@@ -189,7 +218,7 @@ export const FeatureRequestsView: React.FC = () => {
               <th>AI Analysis</th>
               <th>Team Override</th>
               <th>Rationale</th>
-              {canManage && <th>Actions</th>}
+              {showActionsColumn && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -200,9 +229,16 @@ export const FeatureRequestsView: React.FC = () => {
                 index={idx}
                 total={sorted.length}
                 canManage={canManage}
+                canKickOff={canKickOff}
+                showActions={showActionsColumn}
                 showRank={canManage && sortMode === 'rank'}
                 isDragging={dragIndex === idx}
                 isDropTarget={dropTargetIndex === idx && dragIndex !== null && dragIndex !== idx}
+                actionMenuOpen={openActionMenuId === fr.id}
+                onToggleActionMenu={() =>
+                  setOpenActionMenuId((current) => (current === fr.id ? null : fr.id))
+                }
+                onCloseActionMenu={() => setOpenActionMenuId(null)}
                 onSelect={() => setSelectedId(fr.id)}
                 onUpdate={handleUpdate}
                 onMoveUp={handleMoveUp}
@@ -227,6 +263,23 @@ export const FeatureRequestsView: React.FC = () => {
                 }}
                 onReanalyze={(id) => reanalyzeMutation.mutate(id)}
                 isReanalyzing={reanalyzeMutation.isPending}
+                onKickOffInterview={(request) => {
+                  setOpenActionMenuId(null);
+                  navigate('/backlog/interview/new', {
+                    state: {
+                      featureRequest: {
+                        id: request.id,
+                        title: request.title,
+                        request: request.request,
+                        advantage: request.advantage,
+                      },
+                    },
+                  });
+                }}
+                onViewInterview={(interviewId) => {
+                  setOpenActionMenuId(null);
+                  navigate(`/backlog/interview/${interviewId}`);
+                }}
               />
             ))}
           </tbody>
@@ -254,9 +307,14 @@ interface RowProps {
   index: number;
   total: number;
   canManage: boolean;
+  canKickOff: boolean;
+  showActions: boolean;
   showRank: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
+  actionMenuOpen: boolean;
+  onToggleActionMenu: () => void;
+  onCloseActionMenu: () => void;
   onSelect: () => void;
   onUpdate: (id: string, patch: Partial<{ status: FeatureRequestStatus; teamPriority: FeatureRequestPriority | null; teamRisk: FeatureRequestRisk | null; rank: number | null }>) => void;
   onMoveUp: (index: number) => void;
@@ -268,14 +326,17 @@ interface RowProps {
   onDrop: () => void;
   onReanalyze: (id: string) => void;
   isReanalyzing: boolean;
+  onKickOffInterview: (fr: FeatureRequest) => void;
+  onViewInterview: (interviewId: string) => void;
 }
 
 const FeatureRequestRow: React.FC<RowProps> = ({
-  fr, index, total, canManage, showRank,
-  isDragging, isDropTarget, onSelect,
+  fr, index, total, canManage, canKickOff, showActions, showRank,
+  isDragging, isDropTarget, actionMenuOpen,
+  onToggleActionMenu, onCloseActionMenu, onSelect,
   onUpdate, onMoveUp, onMoveDown,
   onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
-  onReanalyze, isReanalyzing,
+  onReanalyze, isReanalyzing, onKickOffInterview, onViewInterview,
 }) => {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -298,6 +359,10 @@ const FeatureRequestRow: React.FC<RowProps> = ({
     isDragging ? styles['rowDragging'] : '',
     isDropTarget ? styles['rowDropTarget'] : '',
   ].filter(Boolean).join(' ');
+
+  const showKickOff = canKickOff && !fr.interviewId;
+  const showViewInterview = Boolean(fr.interviewId);
+  const hasMenuItems = canManage || showKickOff || showViewInterview;
 
   return (
     <tr
@@ -439,16 +504,66 @@ const FeatureRequestRow: React.FC<RowProps> = ({
       </td>
 
       {/* Actions */}
-      {canManage && (
+      {showActions && (
         <td className={styles['actionsCell']}>
-          <button
-            className={styles['reanalyzeBtn']}
-            type="button"
-            disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
-            onClick={() => onReanalyze(fr.id)}
-          >
-            {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
-          </button>
+          {hasMenuItems ? (
+            <div className={styles['actionMenu']} data-fr-action-menu={fr.id}>
+              <button
+                className={`${styles['actionMenuBtn']}${actionMenuOpen ? ` ${styles['actionMenuBtnActive']}` : ''}`}
+                type="button"
+                title="Actions"
+                aria-label={`Actions for ${fr.title}`}
+                aria-haspopup="menu"
+                aria-expanded={actionMenuOpen}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleActionMenu();
+                }}
+              >
+                ⋯
+              </button>
+              {actionMenuOpen && (
+                <div className={styles['actionMenuPanel']} role="menu">
+                  {canManage && (
+                    <button
+                      className={styles['actionMenuItem']}
+                      type="button"
+                      role="menuitem"
+                      disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
+                      onClick={() => {
+                        onCloseActionMenu();
+                        onReanalyze(fr.id);
+                      }}
+                    >
+                      {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
+                    </button>
+                  )}
+                  {showKickOff && (
+                    <button
+                      className={styles['actionMenuItem']}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => onKickOffInterview(fr)}
+                    >
+                      Kick Off Interview
+                    </button>
+                  )}
+                  {showViewInterview && fr.interviewId && (
+                    <button
+                      className={styles['actionMenuItem']}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => onViewInterview(fr.interviewId!)}
+                    >
+                      View Interview
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>—</span>
+          )}
         </td>
       )}
     </tr>

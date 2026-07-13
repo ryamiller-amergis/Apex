@@ -57,6 +57,21 @@ export function useUpdateFeatureRequest() {
   });
 }
 
+export function useLinkFeatureRequestInterview() {
+  const qc = useQueryClient();
+  return useMutation<FeatureRequest, Error, { id: string; interviewId: string }>({
+    mutationFn: ({ id, interviewId }) =>
+      apiFetch(`/api/feature-requests/${id}/link-interview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interviewId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['feature-requests'] });
+    },
+  });
+}
+
 export function useReorderFeatureRequests() {
   const qc = useQueryClient();
   return useMutation<

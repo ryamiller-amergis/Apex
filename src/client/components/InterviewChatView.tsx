@@ -9,6 +9,7 @@ import { useChatStream } from '../hooks/useChatStream';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import { useContextEstimate } from '../hooks/useContextEstimate';
+import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
 import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
 import {
   useInterview,
@@ -235,11 +236,36 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
 
 // ── New interview compose view ────────────────────────────────────────────────
 
+interface FeatureRequestPrefill {
+  id: string;
+  title: string;
+  request: string;
+  advantage: string;
+}
+
+interface NewInterviewLocationState {
+  featureRequest?: FeatureRequestPrefill;
+}
+
+function buildFeatureRequestPrefill(featureRequest?: FeatureRequestPrefill): string {
+  if (!featureRequest) return '';
+  return [
+    'This interview originated from a feature request.',
+    '',
+    featureRequest.request,
+    '',
+    'Advantage:',
+    featureRequest.advantage,
+  ].join('\n');
+}
+
 const NewInterviewCompose: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const featureRequest = (location.state as NewInterviewLocationState | null)?.featureRequest;
   const { selectedProject, selectedSkillSettingsId } = useAppShell();
-  const [input, setInput] = useState('');
-  const [title, setTitle] = useState('');
+  const [input, setInput] = useState(() => buildFeatureRequestPrefill(featureRequest));
+  const [title, setTitle] = useState(() => featureRequest?.title ?? '');
   const [titleTouched, setTitleTouched] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -249,6 +275,7 @@ const NewInterviewCompose: React.FC = () => {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
+  const featureRequestIdRef = useRef(featureRequest?.id);
 
   const [selectedSkillOption, setSelectedSkillOption] = useState<InterviewSkillOption | null>(null);
 
@@ -303,6 +330,7 @@ const NewInterviewCompose: React.FC = () => {
 
   const startChat = useStartChat();
   const createInterview = useCreateInterview();
+  const { mutateAsync: linkFeatureRequestInterview } = useLinkFeatureRequestInterview();
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -371,6 +399,22 @@ const NewInterviewCompose: React.FC = () => {
         project: selectedProject,
         repo: resolvedRepoName,
       });
+      if (featureRequestIdRef.current) {
+        try {
+          await linkFeatureRequestInterview({
+            id: featureRequestIdRef.current,
+            interviewId: result.interviewId,
+          });
+        } catch (linkError: unknown) {
+          const error = linkError instanceof Error ? linkError : new Error(String(linkError));
+          console.error('[InterviewChatView] Failed to link feature request:', error);
+          trackException(error, {
+            context: 'interview.link-feature-request',
+            featureRequestId: featureRequestIdRef.current,
+            interviewId: result.interviewId,
+          });
+        }
+      }
       await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -387,7 +431,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, navigate, clearAttachments, model]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
