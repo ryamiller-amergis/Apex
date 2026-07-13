@@ -426,6 +426,10 @@
   background: #fef9c3;
   color: #854d0e;
 }
+.statusInInterview {
+  background: #e0e7ff;
+  color: #3730a3;
+}
 .statusPlanned {
   background: #dcfce7;
   color: #166534;
@@ -447,6 +451,10 @@
   background: rgba(234, 179, 8, 0.2);
   color: #fde047;
 }
+[data-theme="dark"] .statusInInterview {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
 [data-theme="dark"] .statusPlanned {
   background: rgba(34, 197, 94, 0.2);
   color: #86efac;
@@ -464,6 +472,72 @@
 
 .actionsCell {
   white-space: nowrap;
+  position: relative;
+}
+
+.actionMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.actionMenuBtn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 8px;
+  transition: all 0.2s ease;
+}
+
+.actionMenuBtn:hover,
+.actionMenuBtnActive {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+  color: var(--accent-color);
+}
+
+.actionMenuPanel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 180px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.actionMenuItem {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 500;
+  transition: background 0.15s ease;
+}
+
+.actionMenuItem:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.actionMenuItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.actionMenuItem:not(:last-child) {
+  border-bottom: 1px solid var(--border-color-light);
 }
 
 /* ── Responsive ────────────────────────────────── */

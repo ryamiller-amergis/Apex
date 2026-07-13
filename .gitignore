@@ -57,5 +57,8 @@ data/dev-workspaces/
 data/repo-cache/
 data/pdf-sessions/
 data/sessions/
+# Ignore all local runtime data; keep the empty baseline template in git
+data/*
+!data/ai-capability-baseline.json
 wiki-*.json
 wiki-page.json

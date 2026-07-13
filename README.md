@@ -1,205 +1,194 @@
-# Scrum Calendar
+# Apex
 
-A web application for visualizing Azure DevOps Product Backlog Items (PBIs) on a calendar with two-way sync support.
+Apex is an internal product-building and project-management platform. It centralizes AI-guided design interviews, automated PRD and design-doc generation, review workflows, daily standups, planning analytics, Azure DevOps integration, feature request triage, and cloud cost tracking into a single React + Express + PostgreSQL application.
 
-## Features
+**Core idea:** one place for delivery work — work items, documents, ceremonies, and analytics — with AI agents that automate repetitive steps and keep outputs consistent.
 
-- **Calendar View**: Month and week views with drag-and-drop support
-- **Unscheduled List**: Side panel showing PBIs without due dates
-- **Two-Way Sync**: Changes in Azure DevOps are reflected in the app within the polling interval
-- **Details Panel**: Click any PBI to view details and open in Azure DevOps
-- **Drag & Drop**:
-  - Drag PBIs to calendar dates to set due dates
-  - Drag PBIs back to unscheduled to clear due dates
+For a full product overview, see `[context.md](./context.md)`. For agent and contributor orientation, see `[AGENTS.md](./AGENTS.md)`.
+
+## Tech Stack
+
+
+| Layer        | Technologies                                                                           |
+| ------------ | -------------------------------------------------------------------------------------- |
+| Frontend     | React 18, TypeScript, Vite, React Router, TanStack Query, CSS Modules                  |
+| Backend      | Express, TypeScript, Drizzle ORM, node-pg-migrate                                      |
+| Data         | PostgreSQL 14+                                                                         |
+| Integrations | Azure DevOps, Cursor SDK, AWS Bedrock, Microsoft Teams Bot, Azure Application Insights |
+| Auth         | Azure AD (Passport / MSAL)                                                             |
+
+
+## Prerequisites
+
+- Node.js 24+
+- PostgreSQL 14+
+- Azure DevOps Personal Access Token (PAT) with Work Items (Read, Write) permissions
+- Azure AD app registration (for sign-in in full environments)
 
 ## Setup
 
-### Prerequisites
-
-- Node.js 18+
-- Azure DevOps Personal Access Token (PAT) with Work Items (Read, Write) permissions
-- PostgreSQL 14+ (for local development)
-
-### Installation
-
-1. Clone the repository:
+### 1. Clone and install
 
 ```bash
 git clone <repository-url>
 cd AI-Pilot
-```
-
-2. Install dependencies:
-
-```bash
 npm install
 ```
 
-3. Configure environment variables:
+### 2. Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set your Azure DevOps configuration:
+Minimum local values to set in `.env` (and/or `.env.local` for the database):
 
-- `ADO_ORG`: Your Azure DevOps organization URL (e.g., https://dev.azure.com/yourorg)
-- `ADO_PROJECT`: Your project name
-- `ADO_PAT`: Your Personal Access Token
-- `ADO_AREA_PATH`: (Optional) Area path to filter PBIs
-- `PORT`: Server port (default: 3001)
-- `POLL_INTERVAL`: Polling interval in seconds (default: 30)
-- `DATABASE_URL`: PostgreSQL connection string (see Database Setup below)
 
-### Database Setup
+| Variable                          | Purpose                                                  |
+| --------------------------------- | -------------------------------------------------------- |
+| `ADO_ORG`                         | Azure DevOps organization URL                            |
+| `ADO_PROJECT`                     | Default ADO project name                                 |
+| `ADO_PAT`                         | Personal Access Token                                    |
+| `ADO_AREA_PATH`                   | Optional area-path filter                                |
+| `PORT`                            | API server port (default `3001`)                         |
+| `POLL_INTERVAL`                   | ADO poll interval in seconds (default `30`)              |
+| `DATABASE_URL`                    | PostgreSQL connection string                             |
+| `AWS_REGION` / `BEDROCK_MODEL_ID` | Bedrock region and default model (when using Bedrock)    |
+| `BACKLOG_AGENT_SIGNING_SECRET`    | HMAC secret for agent callbacks (required in production) |
 
-This project uses PostgreSQL. There are two database targets: a **local** instance for development and a **cloud** instance (Azure PostgreSQL Flexible Server) deployed via Terraform.
 
-#### Local database (first-time setup)
+See `[.env.example](./.env.example)` for the full list, including Application Insights, SendGrid, and MaxView MCP options.
 
-1. Create the local database:
+### 3. Database
+
+Apex uses PostgreSQL with SQL migrations in `migrations/`. There are two common targets: a **local** database for development and a **cloud** database (Azure PostgreSQL) pointed to by `DATABASE_URL` in `.env`.
+
+#### First-time local database
 
 ```bash
 createdb -U pgadmin aipilot
-# or in psql:
-# CREATE DATABASE aipilot;
+# or in psql: CREATE DATABASE aipilot;
 ```
 
-2. Create `.env.local` (this file is git-ignored):
+Create `.env.local` (git-ignored):
 
 ```bash
-# .env.local
 DATABASE_URL=postgresql://pgadmin:yourpassword@localhost:5432/aipilot
 ```
 
-Replace `yourpassword` with your local Postgres password.
-
-3. Apply all migrations to get your local schema up to date:
+Apply migrations:
 
 ```bash
 npm run migrate:local:up
 ```
 
-#### Running migrations locally
+#### Migration commands
 
-Always develop and test migrations against your local database first.
 
-| Command | What it does |
-|---|---|
-| `npm run migrate:local:create -- <name>` | Scaffold a new `.sql` migration file |
-| `npm run migrate:local:up` | Apply all pending migrations to local DB |
-| `npm run migrate:local:down` | Roll back the last migration on local DB |
+| Command                                  | What it does                                                          |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `npm run migrate:local:create -- <name>` | Scaffold a new `.sql` migration                                       |
+| `npm run migrate:local:up`               | Apply pending migrations to local DB                                  |
+| `npm run migrate:local:down`             | Roll back the last local migration                                    |
+| `npm run migrate:up`                     | Apply pending migrations using `DATABASE_URL` from `.env` (cloud/dev) |
+| `npm run migrate:down`                   | Roll back the last migration on that target                           |
 
-**Example workflow:**
 
-```bash
-# 1. Create a new migration
-npm run migrate:local:create -- add-users-table
+Always develop and verify migrations locally first, then apply to cloud when ready. In production, migrations run as part of the CI/CD deploy pipeline before the app starts.
 
-# 2. Edit the generated file in migrations/ — write your SQL
-# 3. Apply it locally and verify
-npm run migrate:local:up
-
-# 4. Roll back if something is wrong
-npm run migrate:local:down
-
-# 5. Once verified, apply to the cloud dev database
-npm run migrate:up
-```
-
-Migration files live in `migrations/` and are plain SQL with an up and down block.
-
-#### Applying migrations to the cloud database
-
-The cloud `DATABASE_URL` is set in `.env` (pointing to Azure PostgreSQL). Running without the `local:` prefix targets the cloud DB:
-
-```bash
-npm run migrate:up    # apply to cloud dev (reads DATABASE_URL from .env)
-npm run migrate:down  # roll back on cloud dev
-```
-
-In production, migrations run automatically as part of the CI/CD deploy pipeline before the app starts.
-
-### Development
-
-Run the development server:
+### 4. Run
 
 ```bash
 npm run dev
 ```
 
-This starts both the backend server (port 3001) and frontend dev server (port 3000).
+Starts the Express API (default port `3001`) and the Vite frontend (default port `3000`).
 
-### Building
-
-Build for production:
+### Build and start (production)
 
 ```bash
 npm run build
-```
-
-Run production build:
-
-```bash
 npm start
 ```
 
-### Testing
-
-Run tests:
+### Test and lint
 
 ```bash
 npm test
+npm run lint
+npm run lint:check
 ```
 
-## Architecture
+## Project layout
 
-### Backend
-
-- Express server with TypeScript
-- Azure DevOps integration using `azure-devops-node-api`
-- REST API endpoints for work item operations
-- Retry logic with exponential backoff for API resilience
-
-### Frontend
-
-- React 18 with TypeScript
-- React Big Calendar for calendar visualization
-- React DnD for drag-and-drop functionality
-- Polling-based sync with Azure DevOps
-
-## API Endpoints
-
-### GET /api/workitems
-
-Fetch work items for a date range plus unscheduled items.
-
-Query parameters:
-
-- `from` (optional): Start date in YYYY-MM-DD format
-- `to` (optional): End date in YYYY-MM-DD format
-
-### PATCH /api/workitems/:id/due-date
-
-Update the due date for a work item.
-
-Body:
-
-```json
-{
-  "dueDate": "2024-03-15" | null
-}
+```
+src/
+├── client/                 # React frontend (Vite)
+│   ├── components/         # UI views and shared components
+│   ├── hooks/              # TanStack Query hooks and feature hooks
+│   ├── contexts/           # React contexts (e.g. notifications)
+│   ├── config/             # Client config (models, release, env)
+│   ├── services/           # Client-side helpers (e.g. telemetry)
+│   ├── utils/              # Pure client utilities
+│   ├── types/              # Client-only types
+│   ├── App.tsx             # Root routing
+│   └── main.tsx            # App entry
+├── server/                 # Express backend
+│   ├── routes/             # HTTP route handlers
+│   ├── services/           # Business logic (60+ services)
+│   ├── middleware/         # Auth, RBAC, error handling
+│   ├── db/                 # Drizzle ORM setup and schema
+│   ├── mcp/                # Hosted MCP proxies (ADO, GitHub, MaxView)
+│   ├── workers/            # Background workers (e.g. PDF export)
+│   ├── skills/             # Server-bundled skill definitions
+│   ├── utils/              # Server utilities (SSE, sanitizers, etc.)
+│   └── index.ts            # Server entry
+└── shared/                 # Code shared by client and server
+    ├── types/              # Shared TypeScript types
+    ├── config/             # Shared config (e.g. context limits)
+    ├── constants/          # Shared constants
+    └── utils/              # Shared helpers
+.cursor/
+├── skills/                 # Agent skill definitions (SKILL.md workflows)
+├── rules/                  # Coding and governance rules for agents
+└── plans/                  # Working plans
+.github/workflows/          # CI/CD (PR tests, deploy)
+design-docs/                # Feature design documents and plans
+docs/                       # Setup and ops docs (auth, security, cost, releases)
+infra/                      # Terraform for Azure (App Service, Postgres, etc.)
+migrations/                 # SQL migrations (node-pg-migrate)
+public/                     # Static assets, branding, CHANGELOG.json
+scripts/                    # Dev/CI helper scripts
+teams-app/                  # Microsoft Teams app package (manifest + icons)
+context.md                  # Product knowledge base
+AGENTS.md                   # Agent / contributor quick reference
 ```
 
-### GET /api/health
+## Architecture (short)
 
-Health check endpoint.
+- **Frontend** — React SPA with code-split views, TanStack Query for server state, and CSS custom properties for theming (Light / Dark / Amergis).
+- **Backend** — Express API; business logic lives in `src/server/services/`. Work item traffic to Azure DevOps is proxied through the server so credentials stay server-side.
+- **Persistence** — PostgreSQL for users, RBAC, interviews, PRDs, design docs, standups, notifications, feature flags, and project settings. Azure DevOps remains the system of record for work items.
+- **AI** — Cursor SDK agents and optional AWS Bedrock models, driven by per-project skill and model settings. Real-time UX uses SSE for notifications and streamed chat.
 
-## Security
+## Documentation
 
-- PAT is stored server-side only and never exposed to the frontend
-- All API calls are proxied through the backend
-- CORS is configured for development
+
+| Doc                                                | Use it for                                               |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| `[context.md](./context.md)`                       | Product overview, workflows, modules, admin capabilities |
+| `[AGENTS.md](./AGENTS.md)`                         | Feature map, key services/components, agent guidelines   |
+| `[design-docs/](./design-docs/)`                   | Design decisions behind major features                   |
+| `[public/CHANGELOG.json](./public/CHANGELOG.json)` | What shipped, newest first                               |
+| `[.cursor/skills/](./.cursor/skills/)`             | Procedures for interviews, PRDs, standups, flags, etc.   |
+
+
+## Security notes
+
+- ADO PAT and other secrets stay on the server; the frontend talks only to Apex APIs.
+- Prefer short-lived agent signing secrets in production (`BACKLOG_AGENT_SIGNING_SECRET`).
+- Do not commit `.env`, `.env.local`, or credential files.
 
 ## License
+
 MIT

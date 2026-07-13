@@ -25,6 +25,7 @@ interface FeatureRequestRow {
   title: string;
   request: string;
   advantage: string;
+  interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
   status: string;
@@ -48,6 +49,7 @@ function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
     title: row.title,
     request: row.request,
     advantage: row.advantage,
+    interviewId: row.interviewId,
     submittedBy: row.submittedBy,
     sourceProject: row.sourceProject,
     status: row.status as FeatureRequestStatus,
@@ -98,6 +100,7 @@ export async function listFeatureRequests(): Promise<FeatureRequest[]> {
       title: featureRequests.title,
       request: featureRequests.request,
       advantage: featureRequests.advantage,
+      interviewId: featureRequests.interviewId,
       submittedBy: featureRequests.submittedBy,
       sourceProject: featureRequests.sourceProject,
       status: featureRequests.status,
@@ -130,6 +133,7 @@ export async function getFeatureRequest(id: string): Promise<FeatureRequest | nu
       title: featureRequests.title,
       request: featureRequests.request,
       advantage: featureRequests.advantage,
+      interviewId: featureRequests.interviewId,
       submittedBy: featureRequests.submittedBy,
       sourceProject: featureRequests.sourceProject,
       status: featureRequests.status,
@@ -174,6 +178,25 @@ export async function updateFeatureRequest(
     .update(featureRequests)
     .set(set)
     .where(eq(featureRequests.id, id))
+    .returning();
+
+  return toFeatureRequest(row);
+}
+
+// ── linkInterview ─────────────────────────────────────────────────────────────
+
+export async function linkInterview(
+  featureRequestId: string,
+  interviewId: string,
+): Promise<FeatureRequest> {
+  const [row] = await db
+    .update(featureRequests)
+    .set({
+      interviewId,
+      status: 'in-interview',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(featureRequests.id, featureRequestId))
     .returning();
 
   return toFeatureRequest(row);
