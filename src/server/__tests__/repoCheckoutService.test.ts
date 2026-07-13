@@ -179,6 +179,7 @@ describe('repoCheckoutService', () => {
           '--reference-if-able',
           '/data/repo-cache/maxview.git',
           '--dissociate',
+          '--no-hardlinks',
           '--single-branch',
           '--branch',
           'main',
