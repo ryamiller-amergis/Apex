@@ -5,6 +5,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ReleaseView from '../ReleaseView';
 import { WorkItem } from '../../types/workitem';
 
+// Mock useAppShell so the component does not pull in the real hook chain
+// (useWorkItems → config/env), which reads `import.meta.env` and cannot be
+// evaluated under ts-jest's CommonJS transform.
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({
+    isInAnyGroup: () => true,
+    permissionsLoaded: true,
+  }),
+}));
+
 const createWrapper = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return ({ children }: { children: React.ReactNode }) => (
