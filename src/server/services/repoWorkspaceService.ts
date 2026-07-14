@@ -1,0 +1,58 @@
+import fs from 'fs';
+import path from 'path';
+import { git, safeArgs } from '../utils/asyncGit';
+import {
+  COLD_CACHE_IDLE_TIMEOUT_MS,
+  COLD_CACHE_TIMEOUT_MS,
+} from './repoGitSettings';
+
+export async function materializeWorkspaceFromCache(
+  cacheDir: string,
+  workspaceDir: string,
+  branch: string,
+  remoteUrl: string,
+): Promise<void> {
+  const startedAt = Date.now();
+  const workspaceLabel = path.basename(workspaceDir);
+  console.log(
+    `[repo-workspace] phase=materialize-start session=${workspaceLabel} branch=${branch}`,
+  );
+  fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
+  fs.rmSync(workspaceDir, { recursive: true, force: true });
+  try {
+    await git([
+      '-c',
+      'core.longpaths=true',
+      'clone',
+      '--reference',
+      cacheDir,
+      '--no-local',
+      '--no-hardlinks',
+      '--single-branch',
+      '--branch',
+      branch,
+      cacheDir,
+      workspaceDir,
+    ], {
+      cwd: path.dirname(workspaceDir),
+      timeout: COLD_CACHE_TIMEOUT_MS,
+      idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
+    });
+    await git(
+      safeArgs(workspaceDir, ['remote', 'set-url', 'origin', remoteUrl]),
+      { cwd: workspaceDir },
+    );
+    console.log(
+      `[repo-workspace] phase=materialize-complete session=${workspaceLabel} ` +
+      `branch=${branch} durationMs=${Date.now() - startedAt}`,
+    );
+  } catch (err) {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    console.error(
+      `[repo-workspace] phase=materialize-failed session=${workspaceLabel} ` +
+      `branch=${branch} durationMs=${Date.now() - startedAt}:`,
+      (err as Error).message,
+    );
+    throw err;
+  }
+}

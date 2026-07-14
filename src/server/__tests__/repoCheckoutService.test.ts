@@ -6,6 +6,28 @@ import fs from 'fs';
 import path from 'path';
 
 const mockGit = jest.fn().mockResolvedValue('');
+const mockRemote = {
+  url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+  env: {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraHeader',
+    GIT_CONFIG_VALUE_0: 'Authorization: Basic encoded',
+  },
+  secret: 'secret-pat',
+};
+const mockEnsureRepoCache = jest.fn().mockResolvedValue({
+  cacheDir: '/data/repo-cache/maxview.git',
+  baseSha: 'abc123',
+  stale: false,
+  remote: mockRemote,
+});
+const mockResolveGitRemote = jest.fn();
+const mockRepairRepoCache = jest.fn().mockResolvedValue({
+  cacheDir: '/data/repo-cache/maxview.git',
+  baseSha: 'repaired123',
+  stale: false,
+  remote: mockRemote,
+});
 
 jest.mock('fs');
 jest.mock('../utils/asyncGit', () => ({
@@ -18,6 +40,12 @@ jest.mock('../utils/asyncMutex', () => ({
 }));
 jest.mock('../utils/dataDir', () => ({
   resolveDataRoot: jest.fn(() => '/data'),
+}));
+jest.mock('../services/repoCacheService', () => ({
+  COLD_CACHE_TIMEOUT_MS: 1_800_000,
+  ensureRepoCache: (...args: unknown[]) => mockEnsureRepoCache(...args),
+  repairRepoCache: (...args: unknown[]) => mockRepairRepoCache(...args),
+  resolveGitRemote: (...args: unknown[]) => mockResolveGitRemote(...args),
 }));
 
 import {
@@ -40,6 +68,34 @@ describe('repoCheckoutService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGit.mockResolvedValue('');
+    mockEnsureRepoCache.mockResolvedValue({
+      cacheDir: '/data/repo-cache/maxview.git',
+      baseSha: 'abc123',
+      stale: false,
+      remote: mockRemote,
+    });
+    mockRepairRepoCache.mockResolvedValue({
+      cacheDir: '/data/repo-cache/maxview.git',
+      baseSha: 'repaired123',
+      stale: false,
+      remote: mockRemote,
+    });
+    mockResolveGitRemote.mockImplementation((provider: string) => {
+      if (provider === 'github') {
+        if (!process.env.GITHUB_ORG) throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
+        const secret = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT || process.env.GH_SKILL_TOKEN;
+        if (!secret) throw new Error('GitHub token must be set for GitHub repo checkout');
+        return {
+          ...mockRemote,
+          url: 'https://github.com/amergis/AI-Pilot.git',
+          secret,
+        };
+      }
+      if (!process.env.ADO_ORG || !process.env.ADO_PAT) {
+        throw new Error('ADO_ORG and ADO_PAT must be set for repo checkout');
+      }
+      return { ...mockRemote, secret: process.env.ADO_PAT };
+    });
   });
 
   describe('getWorkspaceDir', () => {
@@ -124,13 +180,36 @@ describe('repoCheckoutService', () => {
       });
 
       expect(workspaceDir).toBe(workspacePath('session-abc'));
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith(workspacePath('session-abc'), {
-        recursive: true,
+      expect(mockEnsureRepoCache).toHaveBeenCalledWith({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'main',
+        provider: 'ado',
       });
       expect(mockGit).toHaveBeenCalledWith(
-        expect.arrayContaining(['clone']),
+        expect.arrayContaining([
+          'clone',
+          '--reference',
+          '/data/repo-cache/maxview.git',
+          '--no-local',
+          '--no-hardlinks',
+          '--single-branch',
+          '--branch',
+          'main',
+          '/data/repo-cache/maxview.git',
+          workspacePath('session-abc'),
+        ]),
+        expect.objectContaining({ cwd: path.join('/data', 'dev-workspaces') }),
+      );
+      const cloneArgs = mockGit.mock.calls.find(([args]) =>
+        (args as string[]).includes('clone'),
+      )?.[0] as string[];
+      expect(cloneArgs).not.toContain('--dissociate');
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['remote', 'set-url', 'origin', mockRemote.url]),
         expect.objectContaining({ cwd: workspacePath('session-abc') }),
       );
+      expect(JSON.stringify(mockGit.mock.calls)).not.toContain('secret-pat');
     });
 
     it('excludes .ai-pilot from git tracking after cloning', async () => {
@@ -154,6 +233,34 @@ describe('repoCheckoutService', () => {
       );
     });
 
+    it('repairs and retries once when workspace materialization reports a missing object', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+      let cloneAttempts = 0;
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('clone')) {
+          cloneAttempts += 1;
+          if (cloneAttempts === 1) throw new Error('fatal: invalid object abc123');
+        }
+        return '';
+      });
+
+      await expect(checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        sessionId: 'session-repair',
+      })).resolves.toBe(workspacePath('session-repair'));
+
+      expect(mockRepairRepoCache).toHaveBeenCalledWith({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        provider: 'ado',
+      });
+      expect(cloneAttempts).toBe(2);
+    });
+
     it('clones a GitHub repo when provider is github', async () => {
       process.env.GITHUB_ORG = 'amergis';
       process.env.GITHUB_TOKEN = 'gh-secret';
@@ -170,7 +277,7 @@ describe('repoCheckoutService', () => {
       expect(workspaceDir).toBe(workspacePath('session-gh'));
       expect(mockGit).toHaveBeenCalledWith(
         expect.arrayContaining(['clone']),
-        expect.objectContaining({ cwd: workspacePath('session-gh') }),
+        expect.objectContaining({ cwd: path.join('/data', 'dev-workspaces') }),
       );
     });
   });
