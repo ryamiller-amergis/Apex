@@ -1,4 +1,4 @@
-import { bigserial, boolean, index, integer, json, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
   PageManifestEntry,
@@ -1154,16 +1154,6 @@ export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one })
     fields: [pdfConversionJobs.sessionId],
     references: [pdfSessions.id],
   }),
-}));
-
-// ── Express sessions (connect-pg-simple; multi-instance login/OAuth state) ────
-
-export const expressSessions = pgTable('session', {
-  sid: varchar('sid').primaryKey(),
-  sess: json('sess').$type<Record<string, unknown>>().notNull(),
-  expire: timestamp('expire', { withTimezone: false, mode: 'string' }).notNull(),
-}, (t) => ({
-  expireIdx: index('IDX_session_expire').on(t.expire),
 }));
 
 // ── Agent Runs (source of truth for multi-worker run status) ──────────────────
