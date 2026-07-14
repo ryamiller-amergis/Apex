@@ -154,4 +154,40 @@
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
   background: var(--bg-secondary);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryAction,
+.secondaryAction {
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 8px 14px;
+  transition: all 0.2s ease;
+}
+
+.primaryAction {
+  background: var(--accent-color);
+  border: 1px solid var(--accent-color);
+  color: var(--brand-text-inverse);
+}
+
+.primaryAction:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.secondaryAction {
+  align-self: flex-start;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.secondaryAction:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
 }

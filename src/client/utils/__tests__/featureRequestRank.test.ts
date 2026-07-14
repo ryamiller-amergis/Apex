@@ -7,6 +7,7 @@ function makeRequest(id: string, rank: number | null, createdAt: string): Featur
     title: `Request ${id}`,
     request: 'details',
     advantage: 'benefit',
+    interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
     status: 'new',

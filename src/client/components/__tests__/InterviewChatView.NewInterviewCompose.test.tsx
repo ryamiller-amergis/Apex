@@ -5,6 +5,8 @@ import { InterviewChatView } from '../InterviewChatView';
 
 // ── Module mocks ───────────────────────────────────────────────────────────────
 
+const mockLinkInterviewMutateAsync = jest.fn();
+
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(() => ({
     selectedProject: 'MaxView',
@@ -12,6 +14,12 @@ jest.mock('../../hooks/useAppShell', () => ({
     isInAnyGroup: jest.fn(() => true),
     permissionsLoaded: true,
   })),
+}));
+
+jest.mock('../../hooks/useFeatureRequests', () => ({
+  useLinkFeatureRequestInterview: () => ({
+    mutateAsync: mockLinkInterviewMutateAsync,
+  }),
 }));
 
 jest.mock('../../hooks/useChatThreads', () => ({
@@ -111,6 +119,26 @@ function renderCompose() {
   );
 }
 
+function renderFeatureRequestCompose() {
+  return render(
+    <MemoryRouter
+      initialEntries={[{
+        pathname: '/backlog/interview/new',
+        state: {
+          featureRequest: {
+            id: 'fr-1',
+            title: 'Dark mode',
+            request: 'Add dark mode support',
+            advantage: 'Better UX at night',
+          },
+        },
+      }]}
+    >
+      <InterviewChatView />
+    </MemoryRouter>,
+  );
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('NewInterviewCompose — title required', () => {
@@ -119,6 +147,7 @@ describe('NewInterviewCompose — title required', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockLinkInterviewMutateAsync.mockResolvedValue({ interviewId: 'iv-1' });
 
     startChatMutateAsync = jest.fn().mockResolvedValue({ threadId: 'thread-abc' });
     (useStartChat as jest.Mock).mockReturnValue({
@@ -147,6 +176,47 @@ describe('NewInterviewCompose — title required', () => {
     renderCompose();
     expect(screen.getByLabelText(/title/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/describe what you'd like/i)).toBeInTheDocument();
+  });
+
+  it('prefills the title and description from a feature request', () => {
+    renderFeatureRequestCompose();
+
+    expect(screen.getByLabelText(/title/i)).toHaveValue('Dark mode');
+    expect(screen.getByPlaceholderText(/describe what you'd like/i)).toHaveValue(
+      [
+        'This interview originated from a feature request.',
+        '',
+        'Add dark mode support',
+        '',
+        'Advantage:',
+        'Better UX at night',
+      ].join('\n'),
+    );
+  });
+
+  it('links the feature request after creating the interview', async () => {
+    renderFeatureRequestCompose();
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => {
+      expect(mockLinkInterviewMutateAsync).toHaveBeenCalledWith({
+        id: 'fr-1',
+        interviewId: 'iv-1',
+      });
+    });
+  });
+
+  it('continues posting the kickoff message when feature request linking fails', async () => {
+    mockLinkInterviewMutateAsync.mockRejectedValueOnce(new Error('Link failed'));
+    renderFeatureRequestCompose();
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-abc/messages',
+        expect.any(Object),
+      );
+    });
   });
 
   it('title field is marked required with an asterisk', () => {

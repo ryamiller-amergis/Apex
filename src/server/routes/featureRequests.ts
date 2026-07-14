@@ -6,6 +6,7 @@ import {
   listFeatureRequests,
   getFeatureRequest,
   updateFeatureRequest,
+  linkInterview,
   resolveApexReviewers,
 } from '../services/featureRequestService';
 import type { UpdateFeatureRequestDTO } from '../../shared/types/featureRequest';
@@ -100,6 +101,27 @@ router.patch('/:id', requirePermission('feature-requests:manage'), async (req, r
     }
 
     const updated = await updateFeatureRequest(req.params.id, userId, patch);
+    return res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /:id/link-interview — link a created interview to a feature request
+router.post('/:id/link-interview', requirePermission('feature-requests:manage'), async (req, res, next) => {
+  try {
+    const { interviewId } = req.body as { interviewId?: string };
+    const normalizedInterviewId = interviewId?.trim();
+    if (!normalizedInterviewId) {
+      return res.status(400).json({ error: 'interviewId is required' });
+    }
+
+    const existing = await getFeatureRequest(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Feature request not found' });
+    }
+
+    const updated = await linkInterview(req.params.id, normalizedInterviewId);
     return res.json(updated);
   } catch (err) {
     next(err);
