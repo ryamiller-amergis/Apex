@@ -1,7 +1,7 @@
 import type { Server } from 'http';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { prds, designDocs, testCases } from '../db/schema';
+import { prds, designDocs, testCases, devSessions } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
 import {
@@ -19,6 +19,7 @@ import { expireOldSessions } from './pdfAssemblyService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
+const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
 /**
  * How long a design prototype may sit in `generating`/`regenerating` before the
  * recovery loop treats it as orphaned. Set well above the maximum configurable Bedrock timeout
@@ -27,6 +28,57 @@ const SHUTDOWN_GRACE_MS = 10_000;
 const STALE_PROTOTYPE_MS = 25 * 60_000;
 
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
+
+function positiveDuration(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export interface StaleSetupRecoveryOptions {
+  now?: () => number;
+  setupTimeoutMs?: number;
+}
+
+/**
+ * Fail setup rows whose owner disappeared before creating a chat thread.
+ * `updatedAt` is refreshed at setup phase boundaries, so this lease is separate
+ * from agent-run heartbeat and meaningful-progress tracking.
+ */
+export async function recoverStaleDevSessionSetups(
+  options: StaleSetupRecoveryOptions = {},
+): Promise<number> {
+  const nowMs = options.now?.() ?? Date.now();
+  const setupTimeoutMs = options.setupTimeoutMs
+    ?? positiveDuration(process.env.DEV_SESSION_SETUP_TIMEOUT_MS, DEFAULT_SETUP_TIMEOUT_MS);
+  const settingUp = await db.query.devSessions.findMany({
+    where: eq(devSessions.status, 'setting_up'),
+    columns: { id: true, status: true, updatedAt: true },
+  });
+  let failed = 0;
+
+  for (const session of settingUp) {
+    const updatedAtMs = Date.parse(session.updatedAt);
+    if (Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < setupTimeoutMs) continue;
+
+    const updatedAt = new Date(nowMs).toISOString();
+    const setupError = `Setup timed out after ${Math.round(setupTimeoutMs / 60_000)} minutes. The setup worker may have restarted or stopped responding; start a new development session to retry.`;
+    await db
+      .update(devSessions)
+      .set({
+        status: 'failed',
+        setupError,
+        setupPhase: 'dependencies_failed',
+        setupDetail: setupError,
+        setupProgressAt: updatedAt,
+        updatedAt,
+      })
+      .where(and(eq(devSessions.id, session.id), eq(devSessions.status, 'setting_up')));
+    failed++;
+    console.warn(`[recovery] Failed abandoned dev session setup (sessionId=${session.id})`);
+  }
+
+  return failed;
+}
 
 /**
  * Query the database for PRDs and design docs stuck in transient statuses
@@ -44,6 +96,12 @@ let recoveryTimer: ReturnType<typeof setInterval> | null = null;
  */
 export async function recoverInFlightWork(): Promise<void> {
   let recovered = 0;
+
+  try {
+    recovered += await recoverStaleDevSessionSetups();
+  } catch (err) {
+    console.error('[recovery] Failed to recover abandoned dev session setups:', err);
+  }
 
   const generatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'generating'),

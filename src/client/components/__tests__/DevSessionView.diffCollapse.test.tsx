@@ -79,7 +79,13 @@ function setupMocks() {
   (useChatStream as jest.Mock).mockReturnValue({
     messages: [],
     streamingText: '',
+    thinkingText: '',
+    toolProgress: [],
     status: 'idle',
+    isConnected: true,
+    lastProgressAt: null,
+    isRetrying: false,
+    retryReason: null,
   });
 
   (useSendMessage as jest.Mock).mockReturnValue({

@@ -27,6 +27,11 @@ import { db } from '../db/drizzle';
 import { devSessions, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
+import {
+  bootstrapDevelopmentDependencies,
+  type DependencyBootstrapPhase,
+} from '../services/dependencyBootstrapService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { resolveGitRemote, type GitRemote } from '../services/repoCacheService';
 import { scheduleStaleDevWorkspaceCleanup } from '../services/devWorkspaceCleanupService';
 import {
@@ -36,6 +41,7 @@ import {
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
+import { logMyWorkSession } from '../services/myWorkSessionLogger';
 
 const router = Router();
 
@@ -207,6 +213,34 @@ router.post('/start', async (req: Request, res: Response) => {
 
     const userId = getUserId(req);
     const sessionId = uuidv4();
+    const dependencyBootstrapEnabled = await isFeatureEnabled(
+      'dev-dependency-bootstrap',
+      { userId, project },
+    );
+    const prepareDependencies = dependencyBootstrapEnabled
+      ? (workspaceDir: string) =>
+          bootstrapDevelopmentDependencies(workspaceDir, {
+            onPhase: (phase, detail) =>
+              recordSetupPhase(sessionId, phase, detail),
+          })
+      : async (_workspaceDir: string) => {
+          await recordSetupPhase(
+            sessionId,
+            'dependencies_skipped',
+            'Server dependency bootstrap is disabled for this session; the agent may install dependencies as needed',
+          );
+        };
+    const completedDependencySetup = dependencyBootstrapEnabled
+      ? {
+          setupPhase: 'dependencies_ready' as const,
+          setupDetail:
+            'Package-manager-aware development dependencies are ready',
+        }
+      : {
+          setupPhase: 'dependencies_skipped' as const,
+          setupDetail:
+            'Server dependency bootstrap was disabled; the agent may install dependencies as needed',
+        };
 
     await db.insert(devSessions).values({
       id: sessionId,
@@ -218,6 +252,16 @@ router.post('/start', async (req: Request, res: Response) => {
       status: 'setting_up',
     });
 
+    logMyWorkSession('session.created', {
+      sessionId,
+      project,
+      status: 'setting_up',
+      source: hasApexPath ? 'apex_backlog' : 'ado',
+      workItemId: workItemId ?? null,
+      prdId: prdId ?? null,
+      featureId: featureId ?? null,
+      dependencyBootstrapEnabled,
+    });
     scheduleStaleDevWorkspaceCleanup();
     res.json({ sessionId });
 
@@ -271,6 +315,7 @@ router.post('/start', async (req: Request, res: Response) => {
           );
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
+          await prepareDependencies(workspaceDir);
 
           if (!await touchDevSessionSetup(sessionId)) {
             throw new Error('Development session setup expired before agent initialization.');
@@ -286,15 +331,27 @@ router.post('/start', async (req: Request, res: Response) => {
             mode: 'development',
           }, {
             workspaceDirOverride: workspaceDir,
+            dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
           if (!await activateDevSession(sessionId, {
             chatThreadId: thread.id,
             branchName,
+            ...completedDependencySetup,
+            setupProgressAt: new Date().toISOString(),
           })) {
             throw new Error('Development session setup expired before activation.');
           }
 
+          logMyWorkSession('session.ready', {
+            sessionId,
+            threadId: thread.id,
+            project,
+            branch: branchName,
+            status: 'in_progress',
+            provider,
+            source: 'apex_backlog',
+          });
           console.log('[dev-workbench] apex session ready:', sessionId);
         } else {
           // Existing ADO path
@@ -361,6 +418,8 @@ router.post('/start', async (req: Request, res: Response) => {
             await cascadeChildStates(adoService, workItemId!, ['New', 'Approved', 'Committed'], 'In Progress');
           }
 
+          await prepareDependencies(workspaceDir);
+
           if (!await touchDevSessionSetup(sessionId)) {
             throw new Error('Development session setup expired before agent initialization.');
           }
@@ -376,21 +435,39 @@ router.post('/start', async (req: Request, res: Response) => {
             workItemId,
           }, {
             workspaceDirOverride: workspaceDir,
+            dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
           if (!await activateDevSession(sessionId, {
             chatThreadId: thread.id,
             branchName,
+            ...completedDependencySetup,
+            setupProgressAt: new Date().toISOString(),
           })) {
             throw new Error('Development session setup expired before activation.');
           }
 
+          logMyWorkSession('session.ready', {
+            sessionId,
+            threadId: thread.id,
+            project,
+            branch: branchName,
+            status: 'in_progress',
+            provider,
+            source: 'ado',
+          });
           console.log('[dev-workbench] session ready:', sessionId);
         }
       } catch (err) {
         const message = (err as Error).message;
         console.error('[dev-workbench] async setup failed:', message);
         console.error('[dev-workbench] stack:', (err as Error).stack);
+        logMyWorkSession('session.setup_failed', {
+          sessionId,
+          project,
+          status: 'failed',
+          error: message,
+        }, 'error');
         try {
           cleanupWorkspace(sessionId);
         } catch (cleanupErr) {
@@ -404,6 +481,9 @@ router.post('/start', async (req: Request, res: Response) => {
           .set({
             status: 'failed',
             setupError: message,
+            setupPhase: 'dependencies_failed',
+            setupDetail: sanitizeSetupDetail(message),
+            setupProgressAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           })
           .where(eq(devSessions.id, sessionId));
@@ -473,6 +553,9 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       branchName: session.branchName,
       status: session.status,
       setupError: session.setupError,
+      setupPhase: session.setupPhase,
+      setupDetail: session.setupDetail,
+      setupProgressAt: session.setupProgressAt,
       prUrl: session.prUrl,
       branchPushed: session.branchPushed ?? false,
       createdAt: session.createdAt,
@@ -505,6 +588,13 @@ router.post('/sessions/:id/close', async (req: Request, res: Response) => {
       .set({ status: 'closed', updatedAt: new Date().toISOString() })
       .where(eq(devSessions.id, sessionId));
 
+    logMyWorkSession('session.closed', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'closed',
+    });
     try {
       cleanupWorkspace(sessionId);
     } catch (cleanupErr) {
@@ -558,6 +648,14 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
           .set({ status: 'conflict', updatedAt: new Date().toISOString() })
           .where(eq(devSessions.id, sessionId));
 
+        logMyWorkSession('branch.sync_conflict', {
+          sessionId,
+          threadId: session.chatThreadId,
+          project: session.project,
+          branch: session.branchName,
+          status: 'conflict',
+          conflictedFileCount: syncResult.conflictedFiles.length,
+        }, 'warn');
         res.json({
           ok: false,
           status: 'conflict',
@@ -578,6 +676,14 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       return;
     }
 
+    logMyWorkSession('branch.pushed', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+      workspaceExists,
+    });
     res.json({ ok: true, status: 'clean', branch: session.branchName, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -662,6 +768,13 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     const remote = resolveGitRemote(provider, session.project, repo);
     await pushFeatureBranch(sessionId, session.branchName, remote);
 
+    logMyWorkSession('branch.conflict_resolved', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+    });
     res.json({ ok: true, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -695,6 +808,13 @@ router.post('/sessions/:id/conflicts/abort', async (req: Request, res: Response)
       .set({ status: 'in_progress', updatedAt: new Date().toISOString() })
       .where(eq(devSessions.id, sessionId));
 
+    logMyWorkSession('branch.conflict_aborted', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('[dev-workbench] abortMerge failed:', (err as Error).message);
@@ -737,6 +857,15 @@ router.post('/sessions/:id/pr', async (req: Request, res: Response) => {
     );
 
     const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
+    logMyWorkSession('pull_request.created', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: session.status,
+      provider,
+      hasPrUrl: Boolean(updated?.prUrl),
+    });
     res.json({ prUrl: updated?.prUrl ?? null });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -803,6 +932,40 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
 });
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+async function recordSetupPhase(
+  sessionId: string,
+  phase: DependencyBootstrapPhase,
+  detail: string,
+): Promise<void> {
+  const safeDetail = sanitizeSetupDetail(detail);
+  const progressAt = new Date().toISOString();
+  logMyWorkSession('session.setup_phase', {
+    sessionId,
+    status: 'setting_up',
+    phase,
+    detail: safeDetail,
+  });
+  console.log(`[dev-workbench] ${phase} (sessionId=${sessionId}): ${safeDetail}`);
+  await db
+    .update(devSessions)
+    .set({
+      setupPhase: phase,
+      setupDetail: safeDetail,
+      setupProgressAt: progressAt,
+      updatedAt: progressAt,
+    })
+    .where(and(eq(devSessions.id, sessionId), eq(devSessions.status, 'setting_up')));
+}
+
+function sanitizeSetupDetail(detail: string): string {
+  return detail
+    .replace(/:\/\/[^/\s@:]+:[^/\s@]+@/g, '://[redacted]@')
+    .replace(/\b(token|password|secret|api[_-]?key)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
 
 /**
  * Fetches design-doc attachments from the ADO Feature work item (or its parent

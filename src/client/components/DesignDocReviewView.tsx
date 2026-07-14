@@ -65,6 +65,9 @@ type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
 
 mermaid.initialize({
   startOnLoad: false,
+  // Prevent Mermaid from appending orphan "Syntax error in text" SVGs to <body>
+  // on parse/render failure (they survive SPA navigations and show up on other pages).
+  suppressErrorRendering: true,
   securityLevel: 'strict',
   theme: 'base',
 });
@@ -299,6 +302,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     setError(null);
     mermaid.initialize({
       startOnLoad: false,
+      suppressErrorRendering: true,
       securityLevel: 'strict',
       theme: 'base',
       themeVariables: buildMermaidThemeVariables(containerRef.current),
@@ -309,11 +313,16 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
         if (!isCancelled) setSvg(renderedSvg);
       })
       .catch((err: unknown) => {
+        // Mermaid may still leave a temp/error node with this id; remove it.
+        document.getElementById(renderIdRef.current)?.remove();
+        document.getElementById(`d${renderIdRef.current}`)?.remove();
         if (!isCancelled) setError(err instanceof Error ? err.message : 'Unable to render Mermaid diagram.');
       });
 
     return () => {
       isCancelled = true;
+      document.getElementById(renderIdRef.current)?.remove();
+      document.getElementById(`d${renderIdRef.current}`)?.remove();
     };
   }, [renderChart, themeRevision]);
 
