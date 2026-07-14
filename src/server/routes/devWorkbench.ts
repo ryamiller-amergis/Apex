@@ -32,6 +32,12 @@ import {
   type DependencyBootstrapPhase,
 } from '../services/dependencyBootstrapService';
 import { isFeatureEnabled } from '../services/featureFlagService';
+import { resolveGitRemote, type GitRemote } from '../services/repoCacheService';
+import { scheduleStaleDevWorkspaceCleanup } from '../services/devWorkspaceCleanupService';
+import {
+  activateDevSession,
+  touchDevSessionSetup,
+} from '../services/devSessionSetupService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
@@ -256,6 +262,7 @@ router.post('/start', async (req: Request, res: Response) => {
       featureId: featureId ?? null,
       dependencyBootstrapEnabled,
     });
+    scheduleStaleDevWorkspaceCleanup();
     res.json({ sessionId });
 
     // Async setup — clone repo, create branch, create chat thread
@@ -264,7 +271,8 @@ router.post('/start', async (req: Request, res: Response) => {
         const skillConfig = await getSkillConfig(project);
         const developmentSkillPath = skillConfig?.developmentSkillPath ?? undefined;
         const developmentModel = model ?? skillConfig?.developmentModel ?? undefined;
-        const { provider, repo, baseBranch: defaultBranch } = await resolveCheckoutContext(skillConfig, project);
+        const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, project);
+        const remote = resolveGitRemote(provider, project, repo);
 
         if (hasApexPath) {
           // Apex PRD-sourced path — skip ADO
@@ -287,25 +295,36 @@ router.post('/start', async (req: Request, res: Response) => {
             .replace(/^-|-$/g, '')
             .slice(0, 40);
 
+          console.log(
+            `[dev-workbench] setup phase=workspace-start session=${sessionId} ` +
+            `repo=${provider}/${repo} baseBranch=${baseBranch}`,
+          );
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
-            branch: defaultBranch,
+            branch: baseBranch,
             sessionId,
             provider,
           });
+          console.log(`[dev-workbench] setup phase=workspace-ready session=${sessionId}`);
 
           const branchName = `feature/apex-${featureId!.toLowerCase()}-${kebabTitle}`;
-          await checkoutFeatureBranch(workspaceDir, branchName, defaultBranch);
+          await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
+          console.log(
+            `[dev-workbench] setup phase=branch-ready session=${sessionId} branch=${branchName}`,
+          );
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
           await prepareDependencies(workspaceDir);
 
+          if (!await touchDevSessionSetup(sessionId)) {
+            throw new Error('Development session setup expired before agent initialization.');
+          }
           const thread = await createThread(userId, {
             project,
             repo,
             branch: branchName,
-            skillBranch: defaultBranch,
+            skillBranch: baseBranch,
             skillProvider: provider,
             skillPath: developmentSkillPath,
             model: developmentModel,
@@ -315,17 +334,14 @@ router.post('/start', async (req: Request, res: Response) => {
             dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
-          await db
-            .update(devSessions)
-            .set({
-              chatThreadId: thread.id,
-              branchName,
-              status: 'in_progress',
-              ...completedDependencySetup,
-              setupProgressAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(devSessions.id, sessionId));
+          if (!await activateDevSession(sessionId, {
+            chatThreadId: thread.id,
+            branchName,
+            ...completedDependencySetup,
+            setupProgressAt: new Date().toISOString(),
+          })) {
+            throw new Error('Development session setup expired before activation.');
+          }
 
           logMyWorkSession('session.ready', {
             sessionId,
@@ -359,15 +375,29 @@ router.post('/start', async (req: Request, res: Response) => {
             // Non-fatal — fall back to numeric slug
           }
 
+          console.log(
+            `[dev-workbench] setup phase=workspace-start session=${sessionId} ` +
+            `repo=${provider}/${repo} baseBranch=${baseBranch}`,
+          );
           const workspaceDir = await checkoutDefaultBranch({
             project,
             repo,
-            branch: defaultBranch,
+            branch: baseBranch,
             sessionId,
             provider,
           });
+          console.log(`[dev-workbench] setup phase=workspace-ready session=${sessionId}`);
 
-          const branchName = await createFeatureBranch(workspaceDir, workItemId!, workItemTitle, defaultBranch);
+          const branchName = await createFeatureBranch(
+            workspaceDir,
+            workItemId!,
+            workItemTitle,
+            baseBranch,
+            remote,
+          );
+          console.log(
+            `[dev-workbench] setup phase=branch-ready session=${sessionId} branch=${branchName}`,
+          );
 
           // Inject design-doc attachments from the Feature work item (Gap 4 fix).
           try {
@@ -390,11 +420,14 @@ router.post('/start', async (req: Request, res: Response) => {
 
           await prepareDependencies(workspaceDir);
 
+          if (!await touchDevSessionSetup(sessionId)) {
+            throw new Error('Development session setup expired before agent initialization.');
+          }
           const thread = await createThread(userId, {
             project,
             repo,
             branch: branchName,
-            skillBranch: defaultBranch,
+            skillBranch: baseBranch,
             skillProvider: provider,
             skillPath: developmentSkillPath,
             model: developmentModel,
@@ -405,17 +438,14 @@ router.post('/start', async (req: Request, res: Response) => {
             dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
-          await db
-            .update(devSessions)
-            .set({
-              chatThreadId: thread.id,
-              branchName,
-              status: 'in_progress',
-              ...completedDependencySetup,
-              setupProgressAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(devSessions.id, sessionId));
+          if (!await activateDevSession(sessionId, {
+            chatThreadId: thread.id,
+            branchName,
+            ...completedDependencySetup,
+            setupProgressAt: new Date().toISOString(),
+          })) {
+            throw new Error('Development session setup expired before activation.');
+          }
 
           logMyWorkSession('session.ready', {
             sessionId,
@@ -438,6 +468,14 @@ router.post('/start', async (req: Request, res: Response) => {
           status: 'failed',
           error: message,
         }, 'error');
+        try {
+          cleanupWorkspace(sessionId);
+        } catch (cleanupErr) {
+          console.warn(
+            '[dev-workbench] failed setup workspace cleanup failed (non-fatal):',
+            (cleanupErr as Error).message,
+          );
+        }
         await db
           .update(devSessions)
           .set({
@@ -594,6 +632,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
 
     const skillConfig = await getSkillConfig(session.project);
     const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
+    const remote = resolveGitRemote(provider, session.project, repo);
     const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
 
     const workspaceDir = getWorkspaceDir(sessionId);
@@ -601,7 +640,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
 
     if (workspaceExists) {
       // Workspace is available — do the full sync + merge + push flow
-      const syncResult = await syncWithBase(workspaceDir, baseBranch);
+      const syncResult = await syncWithBase(workspaceDir, baseBranch, remote);
 
       if (syncResult.status === 'conflict') {
         await db
@@ -626,7 +665,7 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       }
 
       // Clean merge — push only (no PR).
-      await pushFeatureBranch(sessionId, session.branchName);
+      await pushFeatureBranch(sessionId, session.branchName, remote);
     } else if (session.branchPushed) {
       // Workspace gone but branch already pushed — nothing more to do for push.
       // The /pr endpoint will create the PR when the user clicks "Create PR".
@@ -724,7 +763,10 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     const workspaceDir = getWorkspaceDir(sessionId);
     await completeMerge(workspaceDir);
 
-    await pushFeatureBranch(sessionId, session.branchName);
+    const skillConfig = await getSkillConfig(session.project);
+    const { provider, repo } = await resolveCheckoutContext(skillConfig, session.project);
+    const remote = resolveGitRemote(provider, session.project, repo);
+    await pushFeatureBranch(sessionId, session.branchName, remote);
 
     logMyWorkSession('branch.conflict_resolved', {
       sessionId,
@@ -1111,9 +1153,10 @@ async function cascadeChildStates(
 async function pushFeatureBranch(
   sessionId: string,
   branchName: string,
+  remote?: GitRemote,
 ): Promise<void> {
   const workspaceDir = getWorkspaceDir(sessionId);
-  await pushMergedBranch(workspaceDir, branchName);
+  await pushMergedBranch(workspaceDir, branchName, remote);
 
   await db
     .update(devSessions)

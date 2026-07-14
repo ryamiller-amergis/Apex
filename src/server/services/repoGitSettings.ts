@@ -1,0 +1,4 @@
+export const COLD_CACHE_TIMEOUT_MS = 30 * 60 * 1000;
+export const COLD_CACHE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+export const CACHE_FETCH_TIMEOUT_MS = 5 * 60 * 1000;
+export const CACHE_FETCH_IDLE_TIMEOUT_MS = 2 * 60 * 1000;

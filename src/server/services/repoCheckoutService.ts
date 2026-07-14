@@ -2,8 +2,21 @@ import fs from 'fs';
 import path from 'path';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import { resolveDataRoot } from '../utils/dataDir';
-import { git, safeArgs, LONG_TIMEOUT_MS } from '../utils/asyncGit';
+import { git, safeArgs, LONG_TIMEOUT_MS, type GitOptions } from '../utils/asyncGit';
 import { workspaceMutex } from '../utils/asyncMutex';
+import {
+  ensureRepoCache,
+  repairRepoCache,
+  resolveGitRemote,
+  type GitRemote,
+} from './repoCacheService';
+import {
+  COLD_CACHE_IDLE_TIMEOUT_MS,
+  COLD_CACHE_TIMEOUT_MS,
+} from './repoGitSettings';
+import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+
+export { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
 const CHECKOUT_BASE = path.join(resolveDataRoot(), 'dev-workspaces');
 
@@ -60,42 +73,49 @@ export function slugify(title: string): string {
     .replace(/-+$/, '');
 }
 
-function getGitHubOrg(): string {
-  const org = process.env.GITHUB_ORG || '';
-  if (!org) {
-    throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
-  }
-  return org;
+function withRemoteEnv(remote: GitRemote | undefined, env?: Record<string, string>): Record<string, string> | undefined {
+  if (!remote && !env) return undefined;
+  return { ...(remote?.env ?? {}), ...(env ?? {}) };
 }
 
-function getGitHubToken(): string {
-  const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT || process.env.GH_SKILL_TOKEN || '';
-  if (!token) {
-    throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set for GitHub repo checkout');
+async function runRemoteGit(
+  workspaceDir: string,
+  args: string[],
+  remote?: GitRemote,
+  options: Omit<GitOptions, 'cwd' | 'env'> & { env?: Record<string, string> } = {},
+): Promise<string> {
+  try {
+    return await git(safeArgs(workspaceDir, args), {
+      ...options,
+      cwd: workspaceDir,
+      env: withRemoteEnv(remote, options.env),
+    });
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(redactSecrets(raw, remote?.secret));
   }
-  return token;
 }
 
-function buildCloneUrl(provider: SkillProvider, project: string, repo: string): { url: string; secret?: string } {
-  if (provider === 'github') {
-    const org = getGitHubOrg();
-    const token = getGitHubToken();
-    const urlObj = new URL(`https://github.com/${org}/${repo}.git`);
-    urlObj.username = 'x-access-token';
-    urlObj.password = token;
-    return { url: urlObj.toString(), secret: token };
-  }
-
-  const orgUrl = process.env.ADO_ORG;
-  const pat = process.env.ADO_PAT;
-  if (!orgUrl || !pat) {
-    throw new Error('ADO_ORG and ADO_PAT must be set for repo checkout');
-  }
-
-  const urlObj = new URL(`${orgUrl}/${project}/_git/${repo}`);
-  urlObj.username = 'pat';
-  urlObj.password = pat;
-  return { url: urlObj.toString(), secret: pat };
+function isCacheObjectError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return [
+    'missing blob',
+    'missing tree',
+    'bad object',
+    'invalid object',
+    'unable to read object',
+    'unable to read sha1 file',
+    'could not read',
+    'failed to traverse parents',
+    'did not send all necessary objects',
+    'reference is not a tree',
+    'object file is empty',
+    'object missing',
+    'object corrupt',
+    'error in object',
+    'pack has bad object',
+    'inflate returned',
+  ].some((fragment) => message.includes(fragment));
 }
 
 export async function checkoutDefaultBranch(opts: {
@@ -108,20 +128,57 @@ export async function checkoutDefaultBranch(opts: {
   const { project, repo, branch, sessionId, provider = 'ado' } = opts;
   const workspaceDir = getWorkspaceDir(sessionId);
 
-  if (provider === 'ado') await ensureGitSafeDirectory();
-
-  const { url: cloneUrl, secret } = buildCloneUrl(provider, project, repo);
-
-  fs.mkdirSync(workspaceDir, { recursive: true });
+  await ensureGitSafeDirectory();
+  const remote = resolveGitRemote(provider, project, repo);
+  fs.mkdirSync(CHECKOUT_BASE, { recursive: true });
+  fs.rmSync(workspaceDir, { recursive: true, force: true });
 
   try {
-    await git(
-      ['-c', 'core.longpaths=true', 'clone', '--filter=blob:none', '--branch', branch, cloneUrl, '.'],
-      { cwd: workspaceDir, timeout: LONG_TIMEOUT_MS },
-    );
+    if (process.env.DEV_WORKBENCH_GIT_CACHE_ENABLED === 'false') {
+      await git([
+        '-c',
+        'core.longpaths=true',
+        'clone',
+        '--single-branch',
+        '--branch',
+        branch,
+        '--progress',
+        remote.url,
+        workspaceDir,
+      ], {
+        cwd: CHECKOUT_BASE,
+        timeout: COLD_CACHE_TIMEOUT_MS,
+        idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
+        env: remote.env,
+      });
+    } else {
+      const cache = await ensureRepoCache({ project, repo, branch, provider });
+      try {
+        await materializeWorkspaceFromCache(
+          cache.cacheDir,
+          workspaceDir,
+          branch,
+          cache.remote.url,
+        );
+      } catch (materializeError) {
+        if (!isCacheObjectError(materializeError)) throw materializeError;
+        console.warn(
+          `[repoCheckoutService] workspace materialization detected missing cache objects; ` +
+          `repairing ${provider}/${repo}@${branch}`,
+        );
+        const repaired = await repairRepoCache({ project, repo, branch, provider });
+        await materializeWorkspaceFromCache(
+          repaired.cacheDir,
+          workspaceDir,
+          branch,
+          repaired.remote.url,
+        );
+      }
+    }
   } catch (err) {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
     const raw = err instanceof Error ? err.message : String(err);
-    throw new Error(`git clone failed: ${redactSecrets(raw, secret)}`);
+    throw new Error(`git clone failed: ${redactSecrets(raw, remote.secret)}`);
   }
 
   // The cloned repo's .gitignore does not cover `.ai-pilot`, so the design-context
@@ -174,10 +231,11 @@ export async function createFeatureBranch(
   workItemId: number,
   workItemTitle: string,
   baseBranch: string,
+  remote?: GitRemote,
 ): Promise<string> {
   const slug = slugify(workItemTitle);
   const branchName = `feature/apex-${workItemId}-${slug}`;
-  await checkoutFeatureBranch(workspaceDir, branchName, baseBranch);
+  await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
   return branchName;
 }
 
@@ -209,12 +267,12 @@ export async function checkoutFeatureBranch(
   workspaceDir: string,
   branchName: string,
   baseBranch: string,
+  remote?: GitRemote,
 ): Promise<void> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
     const remoteRefs = (
-      await git(safeArgs(workspaceDir, ['ls-remote', '--heads', 'origin', branchName]), {
-        cwd: workspaceDir,
+      await runRemoteGit(workspaceDir, ['ls-remote', '--heads', 'origin', branchName], remote, {
         timeout: LONG_TIMEOUT_MS,
       })
     ).trim();
@@ -228,8 +286,11 @@ export async function checkoutFeatureBranch(
     // Rerun — the branch already exists on the remote. Continue it by branching
     // from the remote tip so the push is a fast-forward and the prior work
     // (design docs, earlier commits) is preserved.
-    await git(safeArgs(workspaceDir, ['fetch', 'origin', branchName]), {
-      cwd: workspaceDir,
+    await runRemoteGit(workspaceDir, [
+      'fetch',
+      'origin',
+      `+refs/heads/${branchName}:refs/remotes/origin/${branchName}`,
+    ], remote, {
       timeout: LONG_TIMEOUT_MS,
     });
     await git(safeArgs(workspaceDir, ['checkout', '-b', branchName, `origin/${branchName}`]), {
@@ -238,8 +299,11 @@ export async function checkoutFeatureBranch(
 
     // Bring the base branch up to date before the agent starts working.
     try {
-      await git(safeArgs(workspaceDir, ['fetch', 'origin', baseBranch]), {
-        cwd: workspaceDir,
+      await runRemoteGit(workspaceDir, [
+        'fetch',
+        'origin',
+        `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+      ], remote, {
         timeout: LONG_TIMEOUT_MS,
       });
       await git(
@@ -301,7 +365,11 @@ export async function computeDiff(workspaceDir: string): Promise<{ diffText: str
  * Commits all staged+unstaged changes, pushes the feature branch to origin,
  * and returns the branch name. Only commits if there are changes.
  */
-export async function pushBranch(workspaceDir: string, branchName: string): Promise<void> {
+export async function pushBranch(
+  workspaceDir: string,
+  branchName: string,
+  remote?: GitRemote,
+): Promise<void> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
     await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
@@ -322,8 +390,7 @@ export async function pushBranch(workspaceDir: string, branchName: string): Prom
       });
     }
 
-    await git(safeArgs(workspaceDir, ['push', '-u', 'origin', branchName]), {
-      cwd: workspaceDir,
+    await runRemoteGit(workspaceDir, ['push', '-u', 'origin', branchName], remote, {
       timeout: LONG_TIMEOUT_MS,
     });
   } finally {
@@ -346,7 +413,11 @@ export interface SyncResult {
  * branch. Returns 'clean' if the merge succeeded, 'conflict' + the
  * conflicted files if there were unresolvable conflicts.
  */
-export async function syncWithBase(workspaceDir: string, baseBranch: string): Promise<SyncResult> {
+export async function syncWithBase(
+  workspaceDir: string,
+  baseBranch: string,
+  remote?: GitRemote,
+): Promise<SyncResult> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
     await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
@@ -366,8 +437,11 @@ export async function syncWithBase(workspaceDir: string, baseBranch: string): Pr
       });
     }
 
-    await git(safeArgs(workspaceDir, ['fetch', 'origin', baseBranch]), {
-      cwd: workspaceDir,
+    await runRemoteGit(workspaceDir, [
+      'fetch',
+      'origin',
+      `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+    ], remote, {
       timeout: LONG_TIMEOUT_MS,
     });
 
@@ -449,9 +523,12 @@ export async function abortMerge(workspaceDir: string): Promise<void> {
  * Pushes an already-committed (and merged) feature branch to origin.
  * Unlike pushBranch this does NOT commit first — call after completeMerge.
  */
-export async function pushMergedBranch(workspaceDir: string, branchName: string): Promise<void> {
-  await git(safeArgs(workspaceDir, ['push', '-u', 'origin', branchName]), {
-    cwd: workspaceDir,
+export async function pushMergedBranch(
+  workspaceDir: string,
+  branchName: string,
+  remote?: GitRemote,
+): Promise<void> {
+  await runRemoteGit(workspaceDir, ['push', '-u', 'origin', branchName], remote, {
     timeout: LONG_TIMEOUT_MS,
   });
 }

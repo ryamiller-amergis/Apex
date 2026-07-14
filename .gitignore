@@ -52,6 +52,11 @@ scripts/output/
 
 # Local AI Pilot runtime/scratch artifacts
 .ai-pilot/
+data/chat-threads/
+data/dev-workspaces/
+data/repo-cache/
+data/pdf-sessions/
+data/sessions/
 # Ignore all local runtime data; keep the empty baseline template in git
 data/*
 !data/ai-capability-baseline.json

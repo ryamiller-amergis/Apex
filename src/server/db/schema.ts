@@ -120,6 +120,16 @@ export const devSessionsRelations = relations(devSessions, ({ one }) => ({
   }),
 }));
 
+export const repoCacheLeases = pgTable('repo_cache_leases', {
+  cacheKey: text('cache_key').primaryKey(),
+  ownerId: text('owner_id').notNull(),
+  generation: integer('generation').notNull().default(1),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  expiresAtIdx: index('idx_repo_cache_leases_expires_at').on(t.expiresAt),
+}));
+
 // ── RBAC Tables ───────────────────────────────────────────────────────────────
 
 export const appUsers = pgTable('app_users', {
