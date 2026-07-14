@@ -27,6 +27,11 @@ import { db } from '../db/drizzle';
 import { devSessions, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
+import {
+  bootstrapDevelopmentDependencies,
+  type DependencyBootstrapPhase,
+} from '../services/dependencyBootstrapService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
@@ -201,6 +206,34 @@ router.post('/start', async (req: Request, res: Response) => {
 
     const userId = getUserId(req);
     const sessionId = uuidv4();
+    const dependencyBootstrapEnabled = await isFeatureEnabled(
+      'dev-dependency-bootstrap',
+      { userId, project },
+    );
+    const prepareDependencies = dependencyBootstrapEnabled
+      ? (workspaceDir: string) =>
+          bootstrapDevelopmentDependencies(workspaceDir, {
+            onPhase: (phase, detail) =>
+              recordSetupPhase(sessionId, phase, detail),
+          })
+      : async (_workspaceDir: string) => {
+          await recordSetupPhase(
+            sessionId,
+            'dependencies_skipped',
+            'Server dependency bootstrap is disabled for this session; the agent may install dependencies as needed',
+          );
+        };
+    const completedDependencySetup = dependencyBootstrapEnabled
+      ? {
+          setupPhase: 'dependencies_ready' as const,
+          setupDetail:
+            'Package-manager-aware development dependencies are ready',
+        }
+      : {
+          setupPhase: 'dependencies_skipped' as const,
+          setupDetail:
+            'Server dependency bootstrap was disabled; the agent may install dependencies as needed',
+        };
 
     await db.insert(devSessions).values({
       id: sessionId,
@@ -255,6 +288,7 @@ router.post('/start', async (req: Request, res: Response) => {
           await checkoutFeatureBranch(workspaceDir, branchName, defaultBranch);
 
           await injectDevContextFiles(workspaceDir, prdId!, featureId!);
+          await prepareDependencies(workspaceDir);
 
           const thread = await createThread(userId, {
             project,
@@ -267,6 +301,7 @@ router.post('/start', async (req: Request, res: Response) => {
             mode: 'development',
           }, {
             workspaceDirOverride: workspaceDir,
+            dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
           await db
@@ -275,6 +310,8 @@ router.post('/start', async (req: Request, res: Response) => {
               chatThreadId: thread.id,
               branchName,
               status: 'in_progress',
+              ...completedDependencySetup,
+              setupProgressAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             })
             .where(eq(devSessions.id, sessionId));
@@ -331,6 +368,8 @@ router.post('/start', async (req: Request, res: Response) => {
             await cascadeChildStates(adoService, workItemId!, ['New', 'Approved', 'Committed'], 'In Progress');
           }
 
+          await prepareDependencies(workspaceDir);
+
           const thread = await createThread(userId, {
             project,
             repo,
@@ -343,6 +382,7 @@ router.post('/start', async (req: Request, res: Response) => {
             workItemId,
           }, {
             workspaceDirOverride: workspaceDir,
+            dependenciesPrepared: dependencyBootstrapEnabled,
           });
 
           await db
@@ -351,6 +391,8 @@ router.post('/start', async (req: Request, res: Response) => {
               chatThreadId: thread.id,
               branchName,
               status: 'in_progress',
+              ...completedDependencySetup,
+              setupProgressAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             })
             .where(eq(devSessions.id, sessionId));
@@ -366,6 +408,9 @@ router.post('/start', async (req: Request, res: Response) => {
           .set({
             status: 'failed',
             setupError: message,
+            setupPhase: 'dependencies_failed',
+            setupDetail: sanitizeSetupDetail(message),
+            setupProgressAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           })
           .where(eq(devSessions.id, sessionId));
@@ -435,6 +480,9 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       branchName: session.branchName,
       status: session.status,
       setupError: session.setupError,
+      setupPhase: session.setupPhase,
+      setupDetail: session.setupDetail,
+      setupProgressAt: session.setupProgressAt,
       prUrl: session.prUrl,
       branchPushed: session.branchPushed ?? false,
       createdAt: session.createdAt,
@@ -761,6 +809,34 @@ router.get('/threads/:id/diff', async (req: Request, res: Response) => {
 });
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+async function recordSetupPhase(
+  sessionId: string,
+  phase: DependencyBootstrapPhase,
+  detail: string,
+): Promise<void> {
+  const safeDetail = sanitizeSetupDetail(detail);
+  const progressAt = new Date().toISOString();
+  console.log(`[dev-workbench] ${phase} (sessionId=${sessionId}): ${safeDetail}`);
+  await db
+    .update(devSessions)
+    .set({
+      setupPhase: phase,
+      setupDetail: safeDetail,
+      setupProgressAt: progressAt,
+      updatedAt: progressAt,
+    })
+    .where(and(eq(devSessions.id, sessionId), eq(devSessions.status, 'setting_up')));
+}
+
+function sanitizeSetupDetail(detail: string): string {
+  return detail
+    .replace(/:\/\/[^/\s@:]+:[^/\s@]+@/g, '://[redacted]@')
+    .replace(/\b(token|password|secret|api[_-]?key)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
 
 /**
  * Fetches design-doc attachments from the ADO Feature work item (or its parent

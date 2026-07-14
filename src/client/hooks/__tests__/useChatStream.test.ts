@@ -11,7 +11,7 @@ interface MockES {
   addEventListener: jest.Mock;
   close: jest.Mock;
   // test helpers
-  emit: (type: string, data: unknown) => void;
+  emit: (type: string, data: unknown, lastEventId?: string) => void;
   emitOpen: () => void;
   emitError: () => void;
 }
@@ -29,9 +29,9 @@ function makeMockES(url: string): MockES {
       listeners[type].push(cb);
     }),
     close: jest.fn(),
-    emit(type: string, data: unknown) {
+    emit(type: string, data: unknown, lastEventId = '') {
       const cbs = listeners[type] ?? [];
-      const event = { data: JSON.stringify(data) } as MessageEvent;
+      const event = { data: JSON.stringify(data), lastEventId } as MessageEvent;
       cbs.forEach((cb) => cb(event));
     },
     emitOpen() {
@@ -123,6 +123,227 @@ describe('useChatStream', () => {
       lastES!.emit('message', { type: 'message', message: msg });
     });
     expect(result.current.messages).toHaveLength(1);
+  });
+
+  it('deduplicates replayed durable SSE events by lastEventId before applying them', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'tool_status',
+        callId: 'call-1',
+        toolName: 'read_file',
+        status: 'running',
+      }, 'event-1');
+      lastES!.emit('message', {
+        type: 'tool_status',
+        callId: 'call-1',
+        toolName: 'read_file',
+        status: 'running',
+      }, 'event-1');
+    });
+
+    expect(result.current.toolProgress).toHaveLength(1);
+  });
+
+  it('does not drop tokens or final messages when EventSource sticky lastEventId repeats', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    const msg = {
+      id: 'msg-live-1',
+      role: 'agent',
+      text: 'final answer',
+      ts: '2026-01-01T00:00:00Z',
+    };
+
+    act(() => {
+      // Durable events carry SSE ids. Token/message frames often do not, but the
+      // browser still reports the previous id via MessageEvent.lastEventId.
+      lastES!.emit('message', {
+        type: 'tool_status',
+        callId: 'call-1',
+        toolName: 'shell',
+        status: 'completed',
+      }, 'tool-event-1');
+      lastES!.emit('message', { type: 'token', text: 'Hel' }, 'tool-event-1');
+      lastES!.emit('message', { type: 'token', text: 'lo' }, 'tool-event-1');
+      lastES!.emit('message', { type: 'message', message: msg }, 'tool-event-1');
+    });
+
+    expect(result.current.streamingText).toBe('');
+    expect(result.current.messages).toEqual([msg]);
+  });
+
+  it('ignores a replayed durable event ID after the EventSource reconnects', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emitOpen();
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'running',
+      }, 'event-7');
+      lastES!.emitError();
+      lastES!.emitOpen();
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'running',
+      }, 'event-7');
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'idle',
+      }, 'event-8');
+    });
+
+    expect(result.current.isConnected).toBe(true);
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('bounds remembered durable event IDs and accepts an ID again after eviction', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'running',
+      }, 'event-0');
+      for (let i = 1; i <= 512; i++) {
+        lastES!.emit('message', {
+          type: 'status',
+          status: 'running',
+        }, `event-${i}`);
+      }
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'idle',
+      }, 'event-0');
+    });
+
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('continues processing events without an SSE ID for backward compatibility', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', { type: 'token', text: 'A' });
+      lastES!.emit('message', { type: 'token', text: 'A' });
+    });
+
+    expect(result.current.streamingText).toBe('AA');
+  });
+
+  it('tracks the last meaningful progress time without treating thinking fragments as progress', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    try {
+      const { result } = renderHook(() => useChatStream('t1'));
+      expect(result.current.lastProgressAt).toBeNull();
+
+      act(() => {
+        lastES!.emit('message', { type: 'thinking', text: 'raw thought' }, 'thinking-1');
+      });
+      expect(result.current.lastProgressAt).toBeNull();
+
+      jest.setSystemTime(new Date('2026-01-01T00:00:05Z'));
+      act(() => {
+        lastES!.emit('message', {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'read_file',
+          status: 'running',
+        }, 'tool-1');
+      });
+      expect(result.current.lastProgressAt).toBe(new Date('2026-01-01T00:00:05Z').getTime());
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('consumes durable semantic phase events with safe normalized metadata', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-14T12:10:00Z'));
+    try {
+      const { result } = renderHook(() => useChatStream('t1'));
+
+      act(() => {
+        lastES!.emit('message', {
+          type: 'phase',
+          phase: 'testing',
+          status: 'running',
+          detail: '  Running\n focused   tests  ',
+          durationMs: 1_250,
+          runId: 'run-1',
+          eventTimestamp: '2026-07-14T12:09:55.000Z',
+        }, 'phase-1');
+      });
+
+      expect(result.current.phaseEvents).toEqual([{
+        id: 'phase-1',
+        runId: 'run-1',
+        phase: 'testing',
+        status: 'running',
+        detail: 'Running focused tests',
+        durationMs: 1_250,
+        timestamp: Date.parse('2026-07-14T12:09:55.000Z'),
+      }]);
+      expect(result.current.lastProgressAt).toBe(Date.parse('2026-07-14T12:09:55.000Z'));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('consumes semantic envelope metadata from durable tool events without inference', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'tool_status',
+        callId: 'call-1',
+        toolName: 'run_terminal_cmd',
+        status: 'running',
+        semanticPhase: 'typecheck',
+        semanticStatus: 'running',
+        semanticDetail: 'Checking server types',
+        runId: 'run-1',
+        eventTimestamp: '2026-07-14T12:09:55.000Z',
+      }, 'tool-phase-1');
+    });
+
+    expect(result.current.phaseEvents).toEqual([
+      expect.objectContaining({
+        id: 'tool-phase-1',
+        phase: 'typecheck',
+        status: 'running',
+        detail: 'Checking server types',
+      }),
+    ]);
+  });
+
+  it('ignores malformed phase values and health events do not advance meaningful progress', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'phase',
+        phase: '__proto__',
+        status: 'running',
+        detail: 'unsafe',
+      }, 'invalid-phase');
+      lastES!.emit('message', {
+        type: 'health',
+        health: 'progress_stale',
+        detail: 'No meaningful progress for more than 2 minutes',
+        runId: 'run-1',
+        eventTimestamp: '2026-07-14T12:10:00.000Z',
+      }, 'health-1');
+    });
+
+    expect(result.current.phaseEvents).toEqual([]);
+    expect(result.current.runHealth).toMatchObject({
+      health: 'progress_stale',
+      detail: 'No meaningful progress for more than 2 minutes',
+    });
+    expect(result.current.lastProgressAt).toBeNull();
   });
 
   it('clears thinkingText on tool_call without adding a message', () => {
@@ -423,5 +644,51 @@ describe('useChatStream', () => {
     rerender({ id: 'thread-b' });
     expect(result.current.isRetrying).toBe(false);
     expect(result.current.retryReason).toBeNull();
+  });
+
+  it('keeps the EventSource open when only initialMessages identity changes', () => {
+    const seed = [{ id: 'u1', role: 'user' as const, text: 'go', ts: '2026-01-01T00:00:00Z' }];
+    const { result, rerender } = renderHook(
+      ({ messages }) => useChatStream('t1', { initialMessages: messages }),
+      { initialProps: { messages: seed } },
+    );
+    const openES = lastES!;
+
+    act(() => {
+      openES.emit('message', {
+        type: 'tool_status',
+        callId: 'c1',
+        toolName: 'edit_file',
+        status: 'running',
+        semanticPhase: 'implementation',
+        semanticStatus: 'running',
+        runId: 'run-1',
+        eventTimestamp: '2026-01-01T00:01:00Z',
+      }, 'evt-tool-1');
+    });
+    expect(result.current.toolProgress).toHaveLength(1);
+    expect(result.current.phaseEvents).toHaveLength(1);
+
+    // Simulate React Query refetch after sendMessage — new array, same content.
+    rerender({ messages: [...seed] });
+
+    expect(openES.close).not.toHaveBeenCalled();
+    expect(result.current.toolProgress).toHaveLength(1);
+    expect(result.current.phaseEvents).toHaveLength(1);
+    expect(global.EventSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('merges newly loaded initialMessages into an empty live message list', () => {
+    const seed = [{ id: 'u1', role: 'user' as const, text: 'hi', ts: '2026-01-01T00:00:00Z' }];
+    const { result, rerender } = renderHook(
+      ({ messages }) => useChatStream('t1', { initialMessages: messages }),
+      { initialProps: { messages: undefined as typeof seed | undefined } },
+    );
+
+    expect(result.current.messages).toEqual([]);
+
+    rerender({ messages: seed });
+    expect(result.current.messages).toEqual(seed);
+    expect(lastES!.close).not.toHaveBeenCalled();
   });
 });
