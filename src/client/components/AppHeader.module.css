@@ -190,3 +190,31 @@
   border-color: var(--accent-color);
   outline: none;
 }
+
+/* FEAT-001: light contrast for Home-scoped header module chrome */
+:global(.app-header--home) .hamburger-btn {
+  background: color-mix(in srgb, #FFFFFF 12%, transparent);
+  border-color: color-mix(in srgb, #FFFFFF 35%, transparent);
+  color: #FFFFFF;
+}
+
+:global(.app-header--home) .hamburger-btn:hover {
+  background: color-mix(in srgb, #FFFFFF 18%, transparent);
+  border-color: #FFFFFF;
+  color: #FFFFFF;
+}
+
+:global(.app-header--home) .repo-switcher-label {
+  color: #E2E8F0;
+}
+
+:global(.app-header--home) .repo-switcher {
+  background: color-mix(in srgb, #FFFFFF 12%, transparent);
+  border-color: color-mix(in srgb, #FFFFFF 35%, transparent);
+  color: #FFFFFF;
+}
+
+:global(.app-header--home) .repo-switcher:hover,
+:global(.app-header--home) .repo-switcher:focus {
+  border-color: #FFFFFF;
+}

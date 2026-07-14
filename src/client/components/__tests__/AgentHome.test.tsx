@@ -795,4 +795,101 @@ describe('AgentHome', () => {
       expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
     });
   });
+
+  // ── FEAT-001 Home blue background + contrast (TBI-001 / PBI-001 / PBI-002) ─
+
+  describe('FEAT-001 home blue background and contrast', () => {
+    beforeEach(() => {
+      (useProjectSkillConfig as jest.Mock).mockReturnValue({
+        data: {
+          skillRepo: 'MaxView',
+          skillBranch: 'main',
+          quickSkillPills: [
+            { label: 'Grill', skillPath: '.cursor/skills/grill-with-docs/SKILL.md', model: null },
+            { label: 'Write PRD', skillPath: '.cursor/skills/to-prd/SKILL.md', model: 'claude-opus-4-6' },
+          ],
+        },
+      });
+    });
+
+    it('DoD-0 AC-0: renders home-page-container with page class on empty Home', () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const page = screen.getByTestId('home-page-container');
+      expect(page).toBeInTheDocument();
+      expect(page.className).toMatch(/\bpage\b/);
+    });
+
+    it('DoD-3 AC-0: empty-state chrome uses composeLogo and composeHeading classes', () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const empty = screen.getByTestId('home-empty-state');
+      expect(empty).toBeInTheDocument();
+      expect(empty.querySelector('.composeLogo')).not.toBeNull();
+      expect(empty.querySelector('.composeHeading')).not.toBeNull();
+      expect(screen.getByRole('heading', { name: /What would you like to work on/i })).toBeInTheDocument();
+    });
+
+    it('DoD-4 AC-3: skill pills and composer keep themed module classes (not light-forced)', () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const empty = screen.getByTestId('home-empty-state');
+      const pills = empty.querySelectorAll('.pill');
+      expect(pills.length).toBeGreaterThan(0);
+      expect(screen.getByPlaceholderText(/Select an option above to get started/i)).toBeInTheDocument();
+      expect(document.querySelector('.inputBox')).not.toBeNull();
+    });
+
+    it('AC-1: without page class, Home remains usable (pills + composer)', () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const page = screen.getByTestId('home-page-container');
+      page.className = ''; // simulate missing Home page override stylesheet/class
+      const skillPill = screen.getByRole('button', { name: 'Grill' });
+      expect(skillPill).toBeInTheDocument();
+      fireEvent.click(skillPill);
+      expect(skillPill.className).toMatch(/pillSelected/);
+      expect(screen.getByPlaceholderText(/Let Apex know what you need/i)).toBeEnabled();
+    });
+
+    it('AC-1 PBI-002: without empty-state contrast classes, pills and composer stay usable', () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const empty = screen.getByTestId('home-empty-state');
+      empty.querySelectorAll('.composeLogo, .composeHeading, .hint, .pillDescription').forEach((el) => {
+        el.className = '';
+      });
+      expect(screen.getByRole('button', { name: 'Grill' })).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Select an option above to get started/i)).toBeInTheDocument();
+    });
+
+    it('DoD-5 AC-2: home-page-container persists across Light/Dark/Amergis theme attrs', () => {
+      const root = document.documentElement;
+      for (const theme of ['light', 'dark', 'amergis'] as const) {
+        root.setAttribute('data-theme', theme);
+        const { unmount } = renderAgentHome({ selectedProject: 'MaxView' });
+        expect(screen.getByTestId('home-page-container').className).toMatch(/\bpage\b/);
+        expect(screen.getByTestId('home-empty-state')).toBeInTheDocument();
+        unmount();
+      }
+      root.removeAttribute('data-theme');
+    });
+
+    it('AC-2 PBI-001 / DoD-5: blue page class persists with active thread', async () => {
+      renderAgentHome({ selectedProject: 'MaxView' });
+      fireEvent.click(screen.getByRole('button', { name: 'Grill' }));
+      fireEvent.change(screen.getByPlaceholderText(/Let Apex know what you need/i), {
+        target: { value: 'start session' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      await screen.findByPlaceholderText(/Continue the conversation/i);
+      expect(screen.getByTestId('home-page-container').className).toMatch(/\bpage\b/);
+      expect(screen.queryByTestId('home-empty-state')).toBeNull();
+    });
+
+    it('AC-2 PBI-002: mobile viewport still exposes empty-state contrast classes', () => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 375 });
+      renderAgentHome({ selectedProject: 'MaxView' });
+      const empty = screen.getByTestId('home-empty-state');
+      expect(empty.querySelector('.composeHeading')).not.toBeNull();
+      expect(empty.querySelector('.composeLogo')).not.toBeNull();
+      expect(screen.getByText(/Enter to send/i).className).toMatch(/\bhint\b/);
+    });
+  });
 });

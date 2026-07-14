@@ -208,3 +208,27 @@ describe('AppHeader — menu fully enabled but role missing specific permissions
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
   });
 });
+
+// ── FEAT-001 Home-route header treatment (TBI-001 / PBI-001 / PBI-002) ─────────
+
+describe('AppHeader — FEAT-001 Home blue header treatment', () => {
+  const can = (_key: string) => false;
+
+  it('DoD-1 AC-0: applies app-header--home on Home with light-contrast hook present', () => {
+    render(<AppHeader {...baseProps} currentView="home" can={can} />);
+    const header = screen.getByTestId('app-header');
+    expect(header).toHaveClass('app-header');
+    expect(header).toHaveClass('app-header--home');
+  });
+
+  it('DoD-2 AC-3: does not apply app-header--home on non-Home routes', () => {
+    const { rerender } = render(
+      <AppHeader {...baseProps} currentView="calendar" can={can} />,
+    );
+    expect(screen.getByTestId('app-header')).not.toHaveClass('app-header--home');
+    expect(screen.getByTestId('app-header')).toHaveClass('app-header');
+
+    rerender(<AppHeader {...baseProps} currentView="backlog" can={can} />);
+    expect(screen.getByTestId('app-header')).not.toHaveClass('app-header--home');
+  });
+});

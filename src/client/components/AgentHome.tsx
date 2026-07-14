@@ -1109,7 +1109,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   );
 
   return (
-    <div className={styles.page}>
+    <div className={styles.page} data-testid="home-page-container">
       {showHistory && (
         <ThreadHistorySidebar
           activeThreadId={threadId}
@@ -1128,7 +1128,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           >
             {showHistory ? '← Hide History' : '⏱ History'}
           </button>
-          <div className={styles.composeInner}>
+          <div className={styles.composeInner} data-testid="home-empty-state">
             <div className={styles.composeLogo}>
               <BrandLogo />
               <svg viewBox="0 0 154 63" fill="none" xmlns="http://www.w3.org/2000/svg">

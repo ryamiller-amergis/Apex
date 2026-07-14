@@ -189,6 +189,26 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
+/* FEAT-001: Home-route-scoped header/nav — reverts automatically off /home */
+.app-header--home {
+  background: #2563EB;
+  border-bottom-color: color-mix(in srgb, #FFFFFF 20%, transparent);
+  color: #FFFFFF;
+}
+
+.app-header--home .app-brand {
+  color: #FFFFFF;
+}
+
+.app-header--home .app-brand-text {
+  color: #FFFFFF;
+}
+
+.app-header--home .app-brand:hover {
+  border-color: color-mix(in srgb, #FFFFFF 35%, transparent);
+  background: color-mix(in srgb, #FFFFFF 10%, transparent);
+}
+
 .header-main {
   display: flex;
   align-items: center;

@@ -3,7 +3,8 @@
   flex-direction: row;
   flex: 1;
   overflow: hidden;
-  background: var(--bg-primary);
+  /* FEAT-001 / TBI-001: Home-only hard blue; do not change global --bg-primary */
+  background: #2563EB;
 }
 
 .historyToggleBtn {
@@ -58,7 +59,8 @@
 .composeLogo {
   width: max-content;
   font-size: 3.2rem;
-  color: var(--text-primary);
+  /* FEAT-001 / PBI-002: empty-state primary icon contrast on blue */
+  color: #FFFFFF;
   opacity: 0.9;
 }
 
@@ -75,7 +77,8 @@
   margin: 0;
   font-size: 1.75rem;
   font-weight: 600;
-  color: var(--text-primary);
+  /* FEAT-001 / PBI-002: empty-state primary heading on blue */
+  color: #FFFFFF;
   text-align: center;
   letter-spacing: -0.3px;
 }
@@ -131,7 +134,8 @@
 .pillDescription {
   text-align: center;
   font-size: 0.82rem;
-  color: var(--text-secondary);
+  /* FEAT-001 / PBI-002: empty-state secondary label on blue */
+  color: #E2E8F0;
   line-height: 1.45;
   max-width: 520px;
   animation: pillDescFade 0.2s ease;
@@ -145,7 +149,8 @@
 .hint {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--text-muted);
+  /* FEAT-001 / PBI-002: empty-state secondary supporting copy on blue */
+  color: #E2E8F0;
 }
 
 /* ── Skill picker ──────────────────────────────────────────────────────────── */

@@ -148,8 +148,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     closeMenu();
   };
 
+  const headerClassName =
+    currentView === 'home' ? 'app-header app-header--home' : 'app-header';
+
   return (
-    <div className="app-header">
+    <div className={headerClassName} data-testid="app-header">
       <div className="header-main">
         <button
           className="app-brand"
