@@ -47,6 +47,12 @@ import {
 } from './pgNotifyService';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import { isFeatureEnabled } from './featureFlagService';
+import {
+  getMyWorkSessionContext,
+  logMyWorkSession,
+  type MyWorkLogContext,
+  type MyWorkLogLevel,
+} from './myWorkSessionLogger';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -1876,7 +1882,24 @@ export async function sendMessage(
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
+  const myWorkContext = state.isDevSession
+    ? await getMyWorkSessionContext(threadId).catch(() => null)
+    : null;
+  const logMyWork = (
+    event: string,
+    context: MyWorkLogContext = {},
+    level: MyWorkLogLevel = 'info',
+  ): void => {
+    if (myWorkContext) logMyWorkSession(event, { ...myWorkContext, ...context }, level);
+  };
+  const runStartedAtMs = Date.now();
   console.log('[chat] sendMessage', { threadId, status: state.thread.status });
+  logMyWork('message.received', {
+    threadStatus: state.thread.status,
+    messageLength: text.length,
+    attachmentCount: attachments.length,
+    hidden: Boolean(options?.hidden),
+  });
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
   const baseApiKey = process.env.CURSOR_API_KEY;
@@ -1936,6 +1959,11 @@ export async function sendMessage(
   state.thread.lastActivityAt = userMsg.ts;
   broadcast(state, { type: 'message', message: userMsg });
   await pgInsertMessage(threadId, userMsg);
+  logMyWork('message.persisted', {
+    turnId,
+    messageLength: userMsg.text.length,
+    attachmentCount: attachmentMeta.length,
+  });
 
   // Update status
   state.thread.status = 'running';
@@ -2002,6 +2030,10 @@ export async function sendMessage(
 
     if (!state.agent) {
       if (state.thread.cursorAgentId) {
+        logMyWork('agent.resume_started', {
+          cursorAgentId: state.thread.cursorAgentId,
+          model: resolvedModel,
+        });
         // Agent.resume accepts Partial<AgentOptions>, which includes agents.
         state.agent = await retryWithBackoff(
           () => Agent.resume(state.thread.cursorAgentId!, {
@@ -2014,6 +2046,7 @@ export async function sendMessage(
           sdkRetryOpts,
         );
       } else {
+        logMyWork('agent.create_started', { model: resolvedModel });
         state.agent = await retryWithBackoff(
           () => Agent.create({
             apiKey,
@@ -2049,6 +2082,12 @@ export async function sendMessage(
     const runTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
     const runTimeoutAt = new Date(Date.now() + runTimeoutMs).toISOString();
     agentRunId = state.thread.activeRunId ?? threadId;
+    logMyWork('run.started', {
+      runId: agentRunId,
+      cursorAgentId: state.thread.cursorAgentId,
+      model: resolvedModel,
+      resumedAgent: !isFirstTurn,
+    });
     await db.insert(agentRuns).values({
       id: agentRunId,
       threadId,
@@ -2077,6 +2116,10 @@ export async function sendMessage(
       state.thread.status = 'running';
       state.thread.activeRunId = agentRunId;
       persistThread(state.thread);
+      logMyWork('run.claim_skipped', {
+        runId: agentRunId,
+        reason: 'claimed_by_another_worker',
+      }, 'warn');
       return;
     }
 
@@ -2165,6 +2208,11 @@ export async function sendMessage(
                     ts: new Date().toISOString(),
                   };
                   state.thread.messages.push(toolMsg);
+                  logMyWork('run.tool_started', {
+                    runId: agentRunId,
+                    toolName: block.name,
+                    phase: inferToolPhase(block.name, block.input),
+                  });
                   await publishRunEvent(state, agentRunId!, {
                     type: 'tool_call',
                     toolName: block.name,
@@ -2189,6 +2237,13 @@ export async function sendMessage(
             } else if (event.type === 'tool_call') {
               await flushThinkingPhase();
               const tc = event as any;
+              logMyWork('run.tool_status', {
+                runId: agentRunId,
+                toolName: tc.name ?? 'unknown',
+                toolCallId: tc.call_id ?? null,
+                toolStatus: tc.status ?? 'running',
+                phase: inferToolPhase(tc.name ?? '', tc.args),
+              }, tc.status === 'error' ? 'warn' : 'info');
               await publishRunEvent(state, agentRunId!, {
                 type: 'tool_status',
                 toolName: tc.name ?? '',
@@ -2360,6 +2415,14 @@ export async function sendMessage(
       .execute()
       .catch((e) => console.error('[chat] Failed to mark agent run completed:', e));
 
+    logMyWork('run.completed', {
+      runId: agentRunId,
+      model: resolvedModel,
+      durationMs: Date.now() - runStartedAtMs,
+      responseLength: agentTextBuffer.length,
+      prdReady,
+      backlogReady,
+    });
     await publishRunEvent(state, agentRunId!, {
       type: 'done',
       runId: state.thread.activeRunId,
@@ -2387,6 +2450,11 @@ export async function sendMessage(
         broadcast(state, { type: 'status', status: 'idle' });
         broadcast(state, { type: 'done' });
       }
+      logMyWork('run.cancelled', {
+        runId: agentRunId,
+        durationMs: Date.now() - runStartedAtMs,
+        reason: 'cross_worker_cancellation',
+      }, 'warn');
       persistThread(state.thread);
       return;
     }
@@ -2396,6 +2464,13 @@ export async function sendMessage(
     const tier = classifyError(err);
     const rawMsg = describeError(err);
     console.error(`[chat] Error tier=${tier} for thread ${threadId}:`, rawMsg);
+    logMyWork('run.failed', {
+      runId: agentRunId,
+      durationMs: Date.now() - runStartedAtMs,
+      errorTier: tier,
+      error: rawMsg,
+      cursorAgentId: state.thread.cursorAgentId,
+    }, 'error');
     trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
 
     if (state.agent) {
@@ -2504,6 +2579,15 @@ export async function cancelRun(threadId: string): Promise<void> {
 
   const activeRunId = state.thread.activeRunId;
   if (!activeRunId) return;
+  const myWorkContext = state.isDevSession
+    ? await getMyWorkSessionContext(threadId).catch(() => null)
+    : null;
+  if (myWorkContext) {
+    logMyWorkSession('run.cancel_requested', {
+      ...myWorkContext,
+      runId: activeRunId,
+    });
+  }
 
   // Mark cancelled in Postgres — works from any worker
   await db.update(agentRuns)
@@ -2534,6 +2618,13 @@ export async function cancelRun(threadId: string): Promise<void> {
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
   persistThread(state.thread);
+  if (myWorkContext) {
+    logMyWorkSession('run.cancelled', {
+      ...myWorkContext,
+      runId: activeRunId,
+      reason: 'user_requested',
+    }, 'warn');
+  }
 }
 
 export async function closeThread(threadId: string): Promise<void> {

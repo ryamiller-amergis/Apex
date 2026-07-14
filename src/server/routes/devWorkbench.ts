@@ -35,6 +35,7 @@ import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
+import { logMyWorkSession } from '../services/myWorkSessionLogger';
 
 const router = Router();
 
@@ -245,6 +246,16 @@ router.post('/start', async (req: Request, res: Response) => {
       status: 'setting_up',
     });
 
+    logMyWorkSession('session.created', {
+      sessionId,
+      project,
+      status: 'setting_up',
+      source: hasApexPath ? 'apex_backlog' : 'ado',
+      workItemId: workItemId ?? null,
+      prdId: prdId ?? null,
+      featureId: featureId ?? null,
+      dependencyBootstrapEnabled,
+    });
     res.json({ sessionId });
 
     // Async setup — clone repo, create branch, create chat thread
@@ -316,6 +327,15 @@ router.post('/start', async (req: Request, res: Response) => {
             })
             .where(eq(devSessions.id, sessionId));
 
+          logMyWorkSession('session.ready', {
+            sessionId,
+            threadId: thread.id,
+            project,
+            branch: branchName,
+            status: 'in_progress',
+            provider,
+            source: 'apex_backlog',
+          });
           console.log('[dev-workbench] apex session ready:', sessionId);
         } else {
           // Existing ADO path
@@ -397,12 +417,27 @@ router.post('/start', async (req: Request, res: Response) => {
             })
             .where(eq(devSessions.id, sessionId));
 
+          logMyWorkSession('session.ready', {
+            sessionId,
+            threadId: thread.id,
+            project,
+            branch: branchName,
+            status: 'in_progress',
+            provider,
+            source: 'ado',
+          });
           console.log('[dev-workbench] session ready:', sessionId);
         }
       } catch (err) {
         const message = (err as Error).message;
         console.error('[dev-workbench] async setup failed:', message);
         console.error('[dev-workbench] stack:', (err as Error).stack);
+        logMyWorkSession('session.setup_failed', {
+          sessionId,
+          project,
+          status: 'failed',
+          error: message,
+        }, 'error');
         await db
           .update(devSessions)
           .set({
@@ -515,6 +550,13 @@ router.post('/sessions/:id/close', async (req: Request, res: Response) => {
       .set({ status: 'closed', updatedAt: new Date().toISOString() })
       .where(eq(devSessions.id, sessionId));
 
+    logMyWorkSession('session.closed', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'closed',
+    });
     try {
       cleanupWorkspace(sessionId);
     } catch (cleanupErr) {
@@ -567,6 +609,14 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
           .set({ status: 'conflict', updatedAt: new Date().toISOString() })
           .where(eq(devSessions.id, sessionId));
 
+        logMyWorkSession('branch.sync_conflict', {
+          sessionId,
+          threadId: session.chatThreadId,
+          project: session.project,
+          branch: session.branchName,
+          status: 'conflict',
+          conflictedFileCount: syncResult.conflictedFiles.length,
+        }, 'warn');
         res.json({
           ok: false,
           status: 'conflict',
@@ -587,6 +637,14 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       return;
     }
 
+    logMyWorkSession('branch.pushed', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+      workspaceExists,
+    });
     res.json({ ok: true, status: 'clean', branch: session.branchName, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -668,6 +726,13 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
 
     await pushFeatureBranch(sessionId, session.branchName);
 
+    logMyWorkSession('branch.conflict_resolved', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+    });
     res.json({ ok: true, branchPushed: true });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -701,6 +766,13 @@ router.post('/sessions/:id/conflicts/abort', async (req: Request, res: Response)
       .set({ status: 'in_progress', updatedAt: new Date().toISOString() })
       .where(eq(devSessions.id, sessionId));
 
+    logMyWorkSession('branch.conflict_aborted', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: 'in_progress',
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('[dev-workbench] abortMerge failed:', (err as Error).message);
@@ -743,6 +815,15 @@ router.post('/sessions/:id/pr', async (req: Request, res: Response) => {
     );
 
     const updated = await db.query.devSessions.findFirst({ where: eq(devSessions.id, sessionId) });
+    logMyWorkSession('pull_request.created', {
+      sessionId,
+      threadId: session.chatThreadId,
+      project: session.project,
+      branch: session.branchName,
+      status: session.status,
+      provider,
+      hasPrUrl: Boolean(updated?.prUrl),
+    });
     res.json({ prUrl: updated?.prUrl ?? null });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -817,6 +898,12 @@ async function recordSetupPhase(
 ): Promise<void> {
   const safeDetail = sanitizeSetupDetail(detail);
   const progressAt = new Date().toISOString();
+  logMyWorkSession('session.setup_phase', {
+    sessionId,
+    status: 'setting_up',
+    phase,
+    detail: safeDetail,
+  });
   console.log(`[dev-workbench] ${phase} (sessionId=${sessionId}): ${safeDetail}`);
   await db
     .update(devSessions)

@@ -41,6 +41,7 @@ import {
   type AgentRunHealthConfig,
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
+import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
 
 const router = Router();
 
@@ -282,6 +283,10 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
  */
 router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as any).thread as ChatThread;
+  const streamStartedAt = Date.now();
+  const myWorkContext = thread.kickoff?.mode === 'development'
+    ? await getMyWorkSessionContext(req.params.id).catch(() => null)
+    : null;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -404,9 +409,25 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     .forEach(sendEnvelope);
 
   stopHeartbeat = startSseHeartbeat(res);
+  if (myWorkContext) {
+    logMyWorkSession('stream.connected', {
+      ...myWorkContext,
+      threadStatus: hydrated?.status ?? thread.status,
+      replayedMessageCount: replayMessages.length,
+      replayedEventCount: replayEvents.length,
+      resumedFromEvent: Boolean(lastEventId),
+    });
+  }
 
   req.on('close', () => {
     closeStream();
+    if (myWorkContext) {
+      logMyWorkSession('stream.disconnected', {
+        ...myWorkContext,
+        durationMs: Date.now() - streamStartedAt,
+        threadStatus: hydrated?.status ?? thread.status,
+      });
+    }
   });
 });
 

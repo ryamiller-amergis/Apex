@@ -21,6 +21,7 @@ import {
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
+import { getMyWorkSessionContext, logMyWorkSession } from './myWorkSessionLogger';
 
 const REAP_INTERVAL_MS = 60_000;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
@@ -143,6 +144,23 @@ function isWatchdogWarning(lastError: string | null | undefined): boolean {
   );
 }
 
+async function logMyWorkHealth(
+  threadId: string,
+  runId: string,
+  health: AgentRunHealth,
+  detail: string,
+  level: 'info' | 'warn' | 'error',
+): Promise<void> {
+  const context = await getMyWorkSessionContext(threadId).catch(() => null);
+  if (!context) return;
+  logMyWorkSession('run.health_changed', {
+    ...context,
+    runId,
+    health,
+    detail,
+  }, level);
+}
+
 async function failRun(
   id: string,
   threadId: string,
@@ -182,6 +200,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       if (health === 'worker_lost') {
         const detail = 'Worker lost (heartbeat expired)';
         await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -197,6 +216,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       if (health === 'hard_timeout') {
         const detail = 'Run exceeded configured hard limit';
         await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -218,6 +238,13 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             updatedAt,
           })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'queued')));
+        await logMyWorkHealth(
+          row.threadId,
+          row.id,
+          health,
+          'Never claimed (worker lost before lease)',
+          'error',
+        );
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -237,6 +264,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           .update(agentRuns)
           .set({ lastError: warning, updatedAt })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        await logMyWorkHealth(row.threadId, row.id, health, warning, 'warn');
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -252,6 +280,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           .update(agentRuns)
           .set({ lastError: null, updatedAt })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        await logMyWorkHealth(row.threadId, row.id, 'healthy', 'Meaningful progress resumed', 'info');
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
