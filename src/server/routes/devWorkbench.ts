@@ -40,6 +40,8 @@ import {
 } from '../services/devSessionSetupService';
 import { getUserId } from '../utils/requestUser';
 import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
+import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 
@@ -209,6 +211,39 @@ router.post('/start', async (req: Request, res: Response) => {
     if (!hasAdoPath && !hasApexPath) {
       res.status(400).json({ error: 'Either workItemId or prdId + featureId are required' });
       return;
+    }
+
+    // Gate ADO work items: non-admins may only start APEX-generated Features in
+    // an allowed state (so the required design docs are present); super admins
+    // ("platform admins") bypass the type/origin restriction and are limited only
+    // by state. Defense-in-depth behind the disabled button; fail-open on a
+    // transient ADO lookup error (the UI already gates, and the async setup +
+    // resolver still apply).
+    if (hasAdoPath) {
+      try {
+        const stateService = new AzureDevOpsService(project);
+        const wiResult = await stateService.queryWorkItemsByWiql({
+          wiql: `SELECT [System.Id],[System.State],[System.WorkItemType],[System.Tags] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+          fields: ['System.Id', 'System.State', 'System.WorkItemType', 'System.Tags'],
+        });
+        const fields = wiResult.items[0]?.fields;
+        if (fields) {
+          const eligibility = evaluateDevStartEligibility(
+            {
+              state: (fields['System.State'] ?? '') as string,
+              workItemType: (fields['System.WorkItemType'] ?? '') as string,
+              tags: (fields['System.Tags'] ?? '') as string,
+            },
+            { isSuperAdmin: isSuperAdminRequest(req) },
+          );
+          if (!eligibility.allowed) {
+            res.status(403).json({ error: eligibility.reason ?? 'Start Development is not available for this work item.' });
+            return;
+          }
+        }
+      } catch (gateErr) {
+        console.warn('[dev-workbench] work item start pre-check failed (non-fatal):', (gateErr as Error).message);
+      }
     }
 
     const userId = getUserId(req);

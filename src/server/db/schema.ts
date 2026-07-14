@@ -733,6 +733,25 @@ export const deploymentOutcomes = pgTable('deployment_outcomes', {
   deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }),
 });
 
+// ── Release Epic Orders ───────────────────────────────────────────────────────
+
+export const releaseEpicOrders = pgTable(
+  'release_epic_orders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    areaPath: text('area_path').notNull(),
+    adoEpicId: integer('ado_epic_id').notNull(),
+    sortRank: integer('sort_rank').notNull(),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_release_epic_orders_scope_epic').on(t.project, t.areaPath, t.adoEpicId),
+    index('idx_release_epic_orders_scope').on(t.project, t.areaPath, t.sortRank),
+  ],
+);
+
 // ── Project Menu Settings ─────────────────────────────────────────────────────
 
 export const projectMenuSettings = pgTable('project_menu_settings', {

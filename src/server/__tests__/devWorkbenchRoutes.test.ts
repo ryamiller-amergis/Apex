@@ -101,6 +101,7 @@ jest.mock('fs', () => {
   };
 });
 jest.mock('../utils/requestUser', () => ({
+  ...jest.requireActual('../utils/requestUser'),
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
 jest.mock('uuid', () => ({
@@ -367,6 +368,86 @@ describe('POST /api/dev-workbench/start', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
+  });
+
+  it('rejects Start Development when the work item is not in an allowed state', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'In Pull Request', 'System.WorkItemType': 'Feature', 'System.Tags': 'apex' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/only available for/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-admin starting a Feature without the apex tag', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Feature', 'System.Tags': 'wave-1' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/APEX-generated Features/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-admin starting a PBI even when tagged apex and startable', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Product Backlog Item', 'System.Tags': 'apex' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/only available on Features/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('allows a non-admin to start an APEX Feature in an allowed state (Committed)', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Feature', 'System.Tags': 'apex; wave-2' } }],
+      }),
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionId: 'session-abc' });
+  });
+
+  it('allows a super admin to start any type (Bug) regardless of APEX origin', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Active', 'System.WorkItemType': 'Bug', 'System.Tags': '' } }],
+      }),
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp({ displayName: 'Platform Admin', upn: 'anedunur@amergis.com' }))
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionId: 'session-abc' });
   });
 
   it('returns 500 when the session insert fails', async () => {
@@ -682,6 +763,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
               'System.Id': 42,
               'System.Title': 'Implement login',
               'System.WorkItemType': 'Feature',
+              'System.State': 'In Progress',
+              'System.Tags': 'apex; wave-1',
             },
             relations: [
               {
@@ -743,6 +826,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
             'System.Id': 42,
             'System.Title': 'Blackout Date Rule Administration',
             'System.WorkItemType': 'Feature',
+            'System.State': 'In Progress',
+            'System.Tags': 'apex; wave-1',
           },
           relations: [
             // singular / typo variant
@@ -794,6 +879,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
             'System.Id': 42,
             'System.Title': 'Implement login',
             'System.WorkItemType': 'Feature',
+            'System.State': 'In Progress',
+            'System.Tags': 'apex; wave-1',
           },
           relations: [
             {

@@ -1177,6 +1177,16 @@
   border-radius: 10px;
 }
 
+.conflict-marker-hint {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 30%, transparent);
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
 .conflict-editor {
   width: 100%;
   box-sizing: border-box;

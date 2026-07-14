@@ -164,6 +164,38 @@ export async function getDistinctReleaseVersions(): Promise<string[]> {
   return rows.map((r) => r.releaseVersion);
 }
 
+// ── renameReleaseVersion ──────────────────────────────────────────────────────
+
+/**
+ * Migrate all deployment outcome rows from `oldVersion` to `newVersion`.
+ * Also rewrites synthetic deployment IDs of the form `release:<oldVersion>`.
+ * Returns the number of rows updated.
+ */
+export async function renameOutcomeReleaseVersion(
+  oldVersion: string,
+  newVersion: string,
+): Promise<number> {
+  const oldSyntheticId = `release:${oldVersion}`;
+  const newSyntheticId = `release:${newVersion}`;
+
+  const rows = await db
+    .select({ id: deploymentOutcomes.id, deploymentId: deploymentOutcomes.deploymentId })
+    .from(deploymentOutcomes)
+    .where(eq(deploymentOutcomes.releaseVersion, oldVersion));
+
+  if (rows.length === 0) return 0;
+
+  for (const row of rows) {
+    const newDepId = row.deploymentId === oldSyntheticId ? newSyntheticId : row.deploymentId;
+    await db
+      .update(deploymentOutcomes)
+      .set({ releaseVersion: newVersion, deploymentId: newDepId })
+      .where(eq(deploymentOutcomes.id, row.id));
+  }
+
+  return rows.length;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function buildFilterConditions(filters?: OutcomeFilters) {

@@ -29,6 +29,14 @@ import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
+import { requireGroupMembership } from '../middleware/rbac';
+import {
+  getReleaseOrder,
+  applyOrderToEpics,
+  bulkUpdateReleaseOrder,
+  pruneStaleOrders,
+} from '../services/releaseOrderService';
+import { renameRelease } from '../services/releaseManagementService';
 
 const router = express.Router();
 
@@ -1084,26 +1092,101 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 
 // ============= RELEASE MANAGEMENT ROUTES =============
 
-// GET /api/releases/epics - Get all release Epics with progress
+// GET /api/releases/epics - Get all release Epics with progress, sorted by Apex manual order
 router.get('/releases/epics', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
     if (project?.toLowerCase() === 'apex') return res.json([]);
+    const normalizedArea = areaPath ?? '';
     const adoService = new AzureDevOpsService(project, areaPath);
     const epics = await adoService.getReleaseEpics();
-    res.json(epics);
+
+    // Prune and apply Apex order
+    const liveIds = epics.map((e: any) => e.id as number);
+    await pruneStaleOrders(project ?? '', normalizedArea, liveIds);
+    const { orders } = await getReleaseOrder(project ?? '', normalizedArea);
+    const sorted = applyOrderToEpics(epics as Array<{ id: number } & Record<string, unknown>>, orders);
+
+    res.json(sorted);
   } catch (error: any) {
     console.error('Error fetching release epics:', error);
     res.status(500).json({ error: 'Failed to fetch release epics' });
   }
 });
 
-// PATCH /api/releases/:epicId - Update a release Epic
+// PUT /api/releases/order - Save Apex-specific display order for releases (BA/admin only)
+router.put('/releases/order', requireGroupMembership('BA'), async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath, epicIds } = req.body as {
+      project?: string;
+      areaPath?: string;
+      epicIds?: unknown;
+    };
+
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project is required' });
+    }
+
+    if (!Array.isArray(epicIds) || epicIds.length === 0 || !epicIds.every((id) => typeof id === 'number' && Number.isInteger(id))) {
+      return res.status(400).json({ error: 'epicIds must be a non-empty array of integers' });
+    }
+
+    if (new Set(epicIds).size !== epicIds.length) {
+      return res.status(400).json({ error: 'epicIds must not contain duplicates' });
+    }
+
+    const normalizedArea = typeof areaPath === 'string' ? areaPath : '';
+    const updatedBy = getProfileOid(req) ?? 'unknown';
+
+    await bulkUpdateReleaseOrder(project.trim(), normalizedArea, epicIds, updatedBy);
+    res.json({ success: true, count: epicIds.length, updatedAt: new Date().toISOString() });
+  } catch (error: any) {
+    console.error('Error saving release order:', error);
+    res.status(500).json({ error: 'Failed to save release order' });
+  }
+});
+
+// PATCH /api/releases/:epicId/rename - Rename a release (BA/admin only, status-locked)
+router.patch('/releases/:epicId/rename', requireGroupMembership('BA'), async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const { newName, project, areaPath } = req.body as {
+      newName?: string;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!newName || typeof newName !== 'string' || !newName.trim()) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+
+    const adoService = await adoWriteForRequest(req, project, areaPath);
+    const result = await renameRelease(epicId, newName, adoService);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
+    const code = error?.code;
+    if (code === 'NOT_FOUND') return res.status(404).json({ error: error.message });
+    if (code === 'LOCKED_STATUS') return res.status(409).json({ error: error.message });
+    if (code === 'DUPLICATE_NAME') return res.status(409).json({ error: error.message });
+    if (code === 'BLANK_NAME') return res.status(400).json({ error: error.message });
+    console.error('Error renaming release:', error);
+    res.status(500).json({ error: 'Failed to rename release' });
+  }
+});
+
+// PATCH /api/releases/:epicId - Update a release Epic metadata (dates, description, status)
+// Note: title/name changes must go through PATCH /releases/:epicId/rename to keep integrations aligned.
 router.patch('/releases/:epicId', async (req: Request, res: Response) => {
   try {
     const epicId = parseInt(req.params.epicId, 10);
-    const { title, startDate, targetDate, description, status, project, areaPath } = req.body as {
-      title?: string;
+    const { startDate, targetDate, description, status, project, areaPath } = req.body as {
       startDate?: string;
       targetDate?: string;
       description?: string;
@@ -1117,7 +1200,8 @@ router.patch('/releases/:epicId', async (req: Request, res: Response) => {
     }
 
     const adoService = await adoWriteForRequest(req, project, areaPath);
-    await adoService.updateReleaseEpic(epicId, title, startDate, targetDate, description, status);
+    // title intentionally omitted — use PATCH /releases/:epicId/rename instead
+    await adoService.updateReleaseEpic(epicId, undefined, startDate, targetDate, description, status);
     res.json({ success: true });
   } catch (error: any) {
     if (isAdoUserAuthError(error)) {

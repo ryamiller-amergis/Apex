@@ -2,9 +2,37 @@ import request from 'supertest';
 import express from 'express';
 import apiRouter from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import * as releaseOrderService from '../services/releaseOrderService';
+import * as releaseManagementService from '../services/releaseManagementService';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
+
+// Mock release order so epics GET does not need DB
+jest.mock('../services/releaseOrderService', () => ({
+  pruneStaleOrders: jest.fn().mockResolvedValue(undefined),
+  getReleaseOrder: jest.fn().mockResolvedValue({ project: 'TestProject', areaPath: 'TestArea', orders: [] }),
+  applyOrderToEpics: jest.fn((epics: any[]) => epics),
+  bulkUpdateReleaseOrder: jest.fn().mockResolvedValue(undefined),
+}));
+
+// Mock release management service for rename route tests
+jest.mock('../services/releaseManagementService', () => ({
+  renameRelease: jest.fn(),
+}));
+
+// Mock RBAC middleware so tests can exercise routes without a real session.
+// requireGroupMembership returns a pass-through in tests.
+jest.mock('../middleware/rbac', () => ({
+  requireGroupMembership: () => (req: any, _res: any, next: any) => {
+    // Simulate an authenticated user with BA group membership
+    req.user = { profile: { oid: 'test-user-oid' } };
+    next();
+  },
+  requirePermission: () => (_req: any, _res: any, next: any) => next(),
+  requireAnyPermission: () => (_req: any, _res: any, next: any) => next(),
+  attachPermissions: (_req: any, _res: any, next: any) => next(),
+}));
 
 describe('Release Management API Routes', () => {
   let app: express.Application;
@@ -197,6 +225,137 @@ describe('Release Management API Routes', () => {
         .expect(400);
 
       expect(response.body).toEqual({ error: 'Invalid epic ID' });
+    });
+  });
+
+  describe('PATCH /api/releases/:epicId/rename', () => {
+    const mockRenameRelease = releaseManagementService.renameRelease as jest.Mock;
+
+    it('returns 200 with rename result on success', async () => {
+      mockRenameRelease.mockResolvedValue({
+        oldName: 'v1.0',
+        newName: 'v1.1',
+        taggedWorkItemsUpdated: 3,
+        deploymentsUpdated: 1,
+        outcomesUpdated: 2,
+      });
+
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ newName: 'v1.1', project: 'TestProject', areaPath: 'TestArea' })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.newName).toBe('v1.1');
+    });
+
+    it('returns 400 for invalid epic ID', async () => {
+      const response = await request(app)
+        .patch('/api/releases/invalid/rename')
+        .send({ newName: 'v1.1', project: 'TestProject' })
+        .expect(400);
+
+      expect(response.body.error).toBe('Invalid epic ID');
+    });
+
+    it('returns 400 when newName is missing', async () => {
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ project: 'TestProject' })
+        .expect(400);
+
+      expect(response.body.error).toBe('newName is required');
+    });
+
+    it('returns 400 when newName is blank', async () => {
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ newName: '   ', project: 'TestProject' })
+        .expect(400);
+
+      expect(response.body.error).toBe('newName is required');
+    });
+
+    it('returns 409 when status is locked', async () => {
+      const err: any = new Error('Locked');
+      err.code = 'LOCKED_STATUS';
+      mockRenameRelease.mockRejectedValue(err);
+
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ newName: 'v2', project: 'TestProject' })
+        .expect(409);
+
+      expect(response.body.error).toBe('Locked');
+    });
+
+    it('returns 409 on duplicate name', async () => {
+      const err: any = new Error('Duplicate');
+      err.code = 'DUPLICATE_NAME';
+      mockRenameRelease.mockRejectedValue(err);
+
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ newName: 'v2', project: 'TestProject' })
+        .expect(409);
+
+      expect(response.body.error).toBe('Duplicate');
+    });
+
+    it('returns 404 when epic not found', async () => {
+      const err: any = new Error('Not found');
+      err.code = 'NOT_FOUND';
+      mockRenameRelease.mockRejectedValue(err);
+
+      const response = await request(app)
+        .patch('/api/releases/123/rename')
+        .send({ newName: 'v2', project: 'TestProject' })
+        .expect(404);
+
+      expect(response.body.error).toBe('Not found');
+    });
+  });
+
+  describe('PUT /api/releases/order', () => {
+    const mockBulkUpdate = releaseOrderService.bulkUpdateReleaseOrder as jest.Mock;
+
+    it('returns 200 on successful reorder', async () => {
+      mockBulkUpdate.mockResolvedValue(undefined);
+
+      const response = await request(app)
+        .put('/api/releases/order')
+        .send({ project: 'TestProject', areaPath: 'TestArea', epicIds: [3, 1, 2] })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.count).toBe(3);
+    });
+
+    it('returns 400 when project is missing', async () => {
+      const response = await request(app)
+        .put('/api/releases/order')
+        .send({ epicIds: [1, 2] })
+        .expect(400);
+
+      expect(response.body.error).toBeDefined();
+    });
+
+    it('returns 400 when epicIds is empty', async () => {
+      const response = await request(app)
+        .put('/api/releases/order')
+        .send({ project: 'TestProject', epicIds: [] })
+        .expect(400);
+
+      expect(response.body.error).toBeDefined();
+    });
+
+    it('returns 400 when epicIds contains duplicates', async () => {
+      const response = await request(app)
+        .put('/api/releases/order')
+        .send({ project: 'TestProject', epicIds: [1, 2, 2] })
+        .expect(400);
+
+      expect(response.body.error).toBeDefined();
     });
   });
 
