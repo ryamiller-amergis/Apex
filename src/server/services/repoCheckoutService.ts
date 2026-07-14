@@ -102,12 +102,19 @@ function isCacheObjectError(error: unknown): boolean {
     'missing blob',
     'missing tree',
     'bad object',
+    'invalid object',
     'unable to read object',
+    'unable to read sha1 file',
+    'could not read',
     'failed to traverse parents',
     'did not send all necessary objects',
     'reference is not a tree',
     'object file is empty',
+    'object missing',
     'object corrupt',
+    'error in object',
+    'pack has bad object',
+    'inflate returned',
   ].some((fragment) => message.includes(fragment));
 }
 

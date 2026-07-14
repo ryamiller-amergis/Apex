@@ -240,7 +240,7 @@ describe('repoCheckoutService', () => {
       mockGit.mockImplementation(async (args: string[]) => {
         if (args.includes('clone')) {
           cloneAttempts += 1;
-          if (cloneAttempts === 1) throw new Error('fatal: missing blob abc123');
+          if (cloneAttempts === 1) throw new Error('fatal: invalid object abc123');
         }
         return '';
       });

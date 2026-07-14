@@ -120,8 +120,8 @@ describe('repoCacheService', () => {
     }));
     expect(mockFs.renameSync).toHaveBeenCalled();
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fsck', '--connectivity-only', 'abc123']),
-      expect.any(Object),
+      expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'abc123']),
+      expect.objectContaining({ timeout: COLD_CACHE_TIMEOUT_MS }),
     );
     expect(result.baseSha).toBe('abc123');
   });
@@ -151,6 +151,31 @@ describe('repoCacheService', () => {
     );
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('fsck'))).toBe(false);
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
+  });
+
+  it('repairs a warm cache when its fetched head commit cannot be read', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'head123\n';
+      if (args.includes('cat-file')) throw new Error('bad object head123');
+      return '';
+    });
+
+    await expect(ensureRepoCache({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    })).resolves.toEqual(expect.objectContaining({ baseSha: 'head123' }));
+
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.any(Object),
+    );
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'head123']),
+      expect.any(Object),
+    );
   });
 
   it('does not replace an incomplete cache that active workspaces may reference', async () => {
@@ -184,7 +209,7 @@ describe('repoCacheService', () => {
       branch: 'development',
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'cached123', stale: true }));
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fsck', '--connectivity-only', 'cached123']),
+      expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'cached123']),
       expect.any(Object),
     );
   });
@@ -261,17 +286,40 @@ describe('repoCacheService', () => {
       expect.any(Object),
     );
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fsck', '--connectivity-only', 'repaired123']),
+      expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'repaired123']),
       expect.any(Object),
     );
     expect(mockFs.rmSync).not.toHaveBeenCalled();
   });
 
-  it('does not replace a cache when lightweight post-fetch verification fails', async () => {
+  it('coalesces a queued repair after another instance completed it', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync
+      .mockReturnValueOnce('repair-before\n' as never)
+      .mockReturnValueOnce('repair-after\n' as never);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'already-fixed\n';
+      return '';
+    });
+
+    await expect(repairRepoCache({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    })).resolves.toEqual(expect.objectContaining({ baseSha: 'already-fixed' }));
+
+    expect(mockGit.mock.calls.some(([args]) =>
+      (args as string[]).includes('--refetch'),
+    )).toBe(false);
+  });
+
+  it('preserves the canonical cache when a warm repair fails', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'broken123\n';
       if (args.includes('cat-file')) throw new Error('missing commit object');
+      if (args.includes('--refetch')) throw new Error('repair unavailable');
       return '';
     });
 
@@ -280,7 +328,7 @@ describe('repoCacheService', () => {
       project: 'MaxView',
       repo: 'MaxView',
       branch: 'development',
-    })).rejects.toThrow('missing commit object');
+    })).rejects.toThrow('repair unavailable');
 
     expect(mockFs.rmSync).not.toHaveBeenCalled();
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);

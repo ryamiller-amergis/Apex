@@ -147,9 +147,63 @@ async function verifyCacheConnectivity(
 ): Promise<string> {
   const baseSha = await readBaseSha(cacheDir, branch, abortSignal);
   await git(
-    safeArgs(cacheDir, ['fsck', '--connectivity-only', baseSha]),
-    { cwd: cacheDir, abortSignal },
+    safeArgs(cacheDir, ['fsck', '--full', '--no-dangling', '--progress', baseSha]),
+    {
+      cwd: cacheDir,
+      timeout: COLD_CACHE_TIMEOUT_MS,
+      idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
+      abortSignal,
+    },
   );
+  return baseSha;
+}
+
+function repairMarkerPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-repair-complete');
+}
+
+function writeRepairMarker(cacheDir: string, baseSha: string): void {
+  fs.writeFileSync(
+    repairMarkerPath(cacheDir),
+    `${uuidv4()}:${baseSha}\n`,
+    'utf-8',
+  );
+}
+
+function readRepairMarker(cacheDir: string): string | null {
+  try {
+    return fs.readFileSync(repairMarkerPath(cacheDir), 'utf-8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function refetchAndVerifyCache(
+  cacheDir: string,
+  options: RepoCacheOptions,
+  remote: GitRemote,
+  abortSignal: AbortSignal,
+  assertOwned: () => Promise<void>,
+): Promise<string> {
+  await git(
+    safeArgs(cacheDir, [
+      'fetch',
+      '--refetch',
+      '--prune',
+      'origin',
+      `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+    ]),
+    {
+      cwd: cacheDir,
+      timeout: COLD_CACHE_TIMEOUT_MS,
+      idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
+      abortSignal,
+      env: remote.env,
+    },
+  );
+  await assertOwned();
+  const baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
+  writeRepairMarker(cacheDir, baseSha);
   return baseSha;
 }
 
@@ -203,7 +257,8 @@ async function populateColdCache(
       safeArgs(tempDir, ['remote', 'set-url', 'origin', remote.url]),
       { cwd: tempDir, abortSignal },
     );
-    await verifyCacheConnectivity(tempDir, options.branch, abortSignal);
+    const baseSha = await verifyCacheConnectivity(tempDir, options.branch, abortSignal);
+    writeRepairMarker(tempDir, baseSha);
     await assertLeaseOwned();
     abortSignal.throwIfAborted();
     fs.renameSync(tempDir, cacheDir);
@@ -283,7 +338,20 @@ async function refreshUnderLease(
     try {
       await refreshWarmCache(cacheDir, options, remote, abortSignal);
       console.log(`[repo-cache] phase=incremental-fetch-complete repo=${repoLabel}`);
-      baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+      try {
+        baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+      } catch (verificationError) {
+        if (abortSignal.aborted) throw verificationError;
+        console.warn(`[repo-cache] phase=warm-repair-start repo=${repoLabel}`);
+        baseSha = await refetchAndVerifyCache(
+          cacheDir,
+          options,
+          remote,
+          abortSignal,
+          assertOwned,
+        );
+        console.log(`[repo-cache] phase=warm-repair-complete repo=${repoLabel}`);
+      }
       console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
     } catch (refreshError) {
       if (abortSignal.aborted) throw refreshError;
@@ -326,6 +394,8 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
 
 export function repairRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
   const key = cacheIdentity(options);
+  const cacheDirAtRequest = getRepoCacheDir(options);
+  const markerAtRequest = readRepairMarker(cacheDirAtRequest);
   return withRepoCacheLease(
     `repo-cache:${crypto.createHash('sha256').update(key).digest('hex')}`,
     async ({ signal, assertOwned }) => {
@@ -336,25 +406,24 @@ export function repairRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
       const remote = resolveGitRemote(options.provider, options.project, options.repo);
       const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
       const startedAt = Date.now();
+      const currentMarker = readRepairMarker(cacheDir);
+      if (currentMarker && currentMarker !== markerAtRequest) {
+        const baseSha = await verifyBaseCommitLightweight(
+          cacheDir,
+          options.branch,
+          signal,
+        );
+        console.log(`[repo-cache] phase=repair-coalesced repo=${repoLabel}`);
+        return { cacheDir, baseSha, stale: false, remote };
+      }
       console.warn(`[repo-cache] phase=repair-refetch-start repo=${repoLabel}`);
-      await git(
-        safeArgs(cacheDir, [
-          'fetch',
-          '--refetch',
-          '--prune',
-          'origin',
-          `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
-        ]),
-        {
-          cwd: cacheDir,
-          timeout: COLD_CACHE_TIMEOUT_MS,
-          idleTimeout: COLD_CACHE_IDLE_TIMEOUT_MS,
-          abortSignal: signal,
-          env: remote.env,
-        },
+      const baseSha = await refetchAndVerifyCache(
+        cacheDir,
+        options,
+        remote,
+        signal,
+        assertOwned,
       );
-      await assertOwned();
-      const baseSha = await verifyCacheConnectivity(cacheDir, options.branch, signal);
       console.log(
         `[repo-cache] phase=repair-complete repo=${repoLabel} ` +
         `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
