@@ -2,9 +2,9 @@ import './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
 import passport from 'passport';
 
 // Load environment variables BEFORE importing routes
@@ -50,11 +50,7 @@ import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
-import { resolveDataRoot } from './utils/dataDir';
-
-type FileStoreFactory = (
-  sessionMiddleware: typeof session,
-) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
+import pool from './db';
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
@@ -81,8 +77,9 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Session configuration — in production use a file store on /home/data so OAuth
-// state and login sessions survive load balancing across App Service instances.
+// Session configuration — PostgreSQL-backed store so OAuth state and login
+// sessions are shared safely across App Service instances (file-store races
+// previously caused intermittent "invalid state" login failures).
 const sessionCookie = {
   secure: process.env.NODE_ENV === 'production',
   httpOnly: true,
@@ -91,17 +88,23 @@ const sessionCookie = {
   path: '/',
 };
 
-const sessionsDir = path.join(resolveDataRoot(), 'sessions');
-fs.mkdirSync(sessionsDir, { recursive: true });
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const createFileStore = require('session-file-store') as FileStoreFactory;
-const FileStore = createFileStore(session);
-const sessionStore = new FileStore({
-  path: sessionsDir,
-  ttl: 86400,
-  retries: 0,
-});
-console.log(`[session] Using file store at ${sessionsDir}`);
+const PgSession = connectPgSimple(session);
+const sessionStore: session.Store = process.env.DATABASE_URL
+  ? new PgSession({
+      pool,
+      tableName: 'session',
+      createTableIfMissing: false,
+      // Match cookie maxAge (seconds). connect-pg-simple also respects cookie.expires.
+      ttl: 24 * 60 * 60,
+    })
+  : (() => {
+      console.warn('[session] DATABASE_URL unset — using MemoryStore (not multi-instance safe)');
+      return new session.MemoryStore();
+    })();
+
+if (process.env.DATABASE_URL) {
+  console.log('[session] Using PostgreSQL session store (table: session)');
+}
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',

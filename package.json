@@ -58,6 +58,7 @@
     "azure-devops-node-api": "^12.5.0",
     "botbuilder": "^4.23.3",
     "connect-ensure-login": "^0.1.1",
+    "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.45.2",
@@ -80,7 +81,6 @@
     "react-window": "^2.2.7",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
-    "session-file-store": "^1.5.0",
     "uuid": "^9.0.0",
     "zod": "^4.3.6"
   },
@@ -88,6 +88,7 @@
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",
     "@testing-library/user-event": "^14.5.1",
+    "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.14",
