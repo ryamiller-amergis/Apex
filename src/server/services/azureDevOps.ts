@@ -1979,6 +1979,94 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Fetch a release Epic by ID and return its current title, state, and tags.
+   * Used during rename preflight.
+   */
+  async getReleaseEpicById(epicId: number): Promise<{ id: number; title: string; state: string; tags: string } | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(
+        epicId,
+        ['System.Title', 'System.State', 'System.Tags'],
+        undefined,
+        undefined,
+        this.project,
+      );
+      if (!wi?.fields) return null;
+      return {
+        id: epicId,
+        title: (wi.fields['System.Title'] as string) || '',
+        state: (wi.fields['System.State'] as string) || '',
+        tags: (wi.fields['System.Tags'] as string) || '',
+      };
+    });
+  }
+
+  /**
+   * Find all work-item IDs that carry the given release tag (Release:<version>).
+   * Searches across Features and Epics (and falls through to all types).
+   */
+  async findWorkItemsWithReleaseTag(releaseVersion: string): Promise<number[]> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.Tags] CONTAINS 'Release:${releaseVersion}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      return (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+    });
+  }
+
+  /**
+   * Replace Release:<oldName> with Release:<newName> on a single work item,
+   * preserving all other tags.
+   */
+  async renameReleaseTagOnWorkItem(workItemId: number, oldVersion: string, newVersion: string): Promise<void> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(workItemId, ['System.Tags'], undefined, undefined, this.project);
+      const currentTags = (wi?.fields?.['System.Tags'] as string) || '';
+
+      const oldTag = `Release:${oldVersion}`;
+      const newTag = `Release:${newVersion}`;
+
+      if (!currentTags.includes(oldTag)) return; // nothing to change
+
+      const updatedTags = currentTags
+        .split(';')
+        .map((t) => t.trim())
+        .map((t) => (t === oldTag ? newTag : t))
+        .join('; ');
+
+      await witApi.updateWorkItem(
+        {},
+        [{ op: 'add', path: '/fields/System.Tags', value: updatedTags }],
+        workItemId,
+        this.project,
+      );
+    });
+  }
+
+  /**
+   * Check whether any other release Epic (excluding `excludeEpicId`) has the given title.
+   * Returns true if a duplicate exists.
+   */
+  async releaseNameExists(name: string, excludeEpicId: number): Promise<boolean> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const escapedName = name.replace(/'/g, "''");
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion' AND [System.Title] = '${escapedName}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      const ids = (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+      return ids.some((id) => id !== excludeEpicId);
+    });
+  }
+
+  /**
    * Add a release tag to a work item
    */
   async addReleaseTag(workItemId: number, releaseVersion: string): Promise<void> {
