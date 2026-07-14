@@ -4,6 +4,7 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useAssignedWorkItems, useStartDevSession, useActiveSessions, useCloseDevSession, useCompleteFeature } from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession } from '../../shared/types/devWorkbench';
+import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
 import styles from './DevWorkbenchView.module.css';
 
 interface FeatureReadiness {
@@ -265,7 +266,7 @@ const ApexBacklogView: React.FC<{
 
 export const DevWorkbenchView: React.FC = () => {
   const navigate = useNavigate();
-  const { selectedProject } = useAppShell();
+  const { selectedProject, isSuperAdmin } = useAppShell();
   const isApex = selectedProject === 'Apex';
 
   const { data: workItems, isLoading, error } = useAssignedWorkItems(isApex ? null : (selectedProject || null));
@@ -365,6 +366,7 @@ export const DevWorkbenchView: React.FC = () => {
         <div className={styles.list}>
           {sortedWorkItems.map((item) => {
             const active = sessionByWorkItem.get(item.id);
+            const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
             return (
               <div key={item.id} className={styles.item}>
                 <div className={styles['item-info']}>
@@ -399,7 +401,8 @@ export const DevWorkbenchView: React.FC = () => {
                     <button
                       className={styles['start-btn']}
                       onClick={() => handleStart(item.id)}
-                      disabled={startingId !== null}
+                      disabled={startingId !== null || !eligibility.allowed}
+                      title={eligibility.allowed ? undefined : eligibility.reason}
                       type="button"
                     >
                       {startingId === item.id ? 'Starting...' : 'Start Development'}

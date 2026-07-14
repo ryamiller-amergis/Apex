@@ -4,6 +4,18 @@ import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackin
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
+import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+
+/**
+ * Ensures the canonical APEX origin tag is present in a tag list without
+ * duplicating it (case-insensitive). Applied only to Features APEX creates so
+ * Start Development can identify Features that carry APEX-generated design docs.
+ */
+function withApexOriginTag(tags?: string[]): string[] {
+  const base = tags ?? [];
+  const hasApex = base.some((t) => t.trim().toLowerCase() === APEX_ORIGIN_TAG);
+  return hasApex ? base : [...base, APEX_ORIGIN_TAG];
+}
 
 export class AzureDevOpsService {
   private connection: azdev.WebApi;
@@ -5081,7 +5093,7 @@ export class AzureDevOpsService {
         const num = priorityMap[feature.priority];
         if (num) featureFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
       }
-      if (feature.tags && feature.tags.length > 0) featureFields.push({ op: 'add', path: '/fields/System.Tags', value: feature.tags.join('; ') });
+      featureFields.push({ op: 'add', path: '/fields/System.Tags', value: withApexOriginTag(feature.tags).join('; ') });
       if (this.areaPath) featureFields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
       if (parentEpicAdoId) featureFields.push(buildParentRelation(parentEpicAdoId));
 
@@ -5240,7 +5252,7 @@ export class AzureDevOpsService {
       const featureMap: Record<string, number> = {};
       for (const feature of acceptedFeatures) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           buildParentRelation(epicAdoId),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5363,7 +5375,7 @@ export class AzureDevOpsService {
       let featureAdoUrl: string | undefined;
       if (!featureAdoId) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           ...(parentEpicAdoId ? [buildParentRelation(parentEpicAdoId)] : []),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5448,8 +5460,9 @@ export class AzureDevOpsService {
           }
         }
 
-        if (spec.tags && spec.tags.length > 0) {
-          patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
+        const effectiveTags = spec.type === 'Feature' ? withApexOriginTag(spec.tags) : (spec.tags ?? []);
+        if (effectiveTags.length > 0) {
+          patch.push({ op: 'add', path: '/fields/System.Tags', value: effectiveTags.join('; ') });
         }
 
         if (includeAssignedTo && spec.assignedTo) {
@@ -5695,6 +5708,7 @@ export class AzureDevOpsService {
           'System.AssignedTo',
           'System.AreaPath',
           'System.IterationPath',
+          'System.Tags',
         ],
         maxResults: 200,
       });
@@ -5708,6 +5722,7 @@ export class AzureDevOpsService {
         project,
         areaPath: (wi.fields['System.AreaPath'] ?? undefined) as string | undefined,
         iterationPath: (wi.fields['System.IterationPath'] ?? undefined) as string | undefined,
+        tags: (wi.fields['System.Tags'] ?? '') as string,
       }));
 
       console.log(`=== getWorkItemsAssignedToUser END === found ${items.length} items`);

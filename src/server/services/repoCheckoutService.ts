@@ -13,6 +13,7 @@ import {
 import {
   COLD_CACHE_IDLE_TIMEOUT_MS,
   COLD_CACHE_TIMEOUT_MS,
+  WORKTREE_GIT_TIMEOUT_MS,
 } from './repoGitSettings';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
@@ -340,18 +341,53 @@ export async function checkoutFeatureBranch(
   }
 }
 
+/**
+ * Returns true when a merge is in progress in the workspace (a conflicted or
+ * resolved-but-uncommitted merge). Used to keep the read-only diff panel from
+ * touching the index while the in-app conflict resolver owns the merge state.
+ */
+export function isMergeInProgress(workspaceDir: string): boolean {
+  return fs.existsSync(path.join(workspaceDir, '.git', 'MERGE_HEAD'));
+}
+
+/**
+ * Detects leftover git conflict markers in file content. Checks the start/end
+ * markers (which effectively never appear in real source) to avoid false
+ * positives from legitimate `=======` dividers in markdown/SQL.
+ */
+export function hasConflictMarkers(content: string): boolean {
+  return /^<<<<<<< /m.test(content) || /^>>>>>>> /m.test(content);
+}
+
+/**
+ * Computes the working-tree diff for the Changes panel WITHOUT mutating the
+ * index. It never runs `git add -A` (which previously staged files just to
+ * render a diff and, mid-merge, silently resolved conflicts — corrupting the
+ * in-app resolver). Untracked files are surfaced via intent-to-add (`add -N`,
+ * which records no content and cannot resolve a conflict), and that step is
+ * skipped entirely while a merge is in progress.
+ */
 export async function computeDiff(workspaceDir: string): Promise<{ diffText: string; changedFiles: string[] }> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
-    await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
+    if (!isMergeInProgress(workspaceDir)) {
+      // Intent-to-add makes untracked files appear in `git diff` without
+      // staging their content, so nothing is committed as a side effect.
+      await git(safeArgs(workspaceDir, ['add', '-N', '.']), {
+        cwd: workspaceDir,
+        timeout: WORKTREE_GIT_TIMEOUT_MS,
+      });
+    }
 
-    const diffText = await git(safeArgs(workspaceDir, ['diff', '--cached']), {
+    const diffText = await git(safeArgs(workspaceDir, ['diff', 'HEAD']), {
       cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024,
     });
 
-    const filesOutput = await git(safeArgs(workspaceDir, ['diff', '--cached', '--name-only']), {
+    const filesOutput = await git(safeArgs(workspaceDir, ['diff', 'HEAD', '--name-only']), {
       cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
     });
     const changedFiles = filesOutput.split('\n').filter(Boolean);
 
@@ -372,15 +408,20 @@ export async function pushBranch(
 ): Promise<void> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
-    await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
+    await git(safeArgs(workspaceDir, ['add', '-A']), {
+      cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
+    });
 
     const status = (await git(safeArgs(workspaceDir, ['status', '--porcelain']), {
       cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
     })).trim();
 
     if (status) {
       await git(safeArgs(workspaceDir, ['commit', '-m', 'Dev workbench: agent changes']), {
         cwd: workspaceDir,
+        timeout: WORKTREE_GIT_TIMEOUT_MS,
         env: {
           GIT_AUTHOR_NAME: 'AI Pilot',
           GIT_AUTHOR_EMAIL: 'ai-pilot@noreply',
@@ -420,14 +461,19 @@ export async function syncWithBase(
 ): Promise<SyncResult> {
   const release = await workspaceMutex.acquire(workspaceDir);
   try {
-    await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
+    await git(safeArgs(workspaceDir, ['add', '-A']), {
+      cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
+    });
     const pendingStatus = (await git(safeArgs(workspaceDir, ['status', '--porcelain']), {
       cwd: workspaceDir,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
     })).trim();
 
     if (pendingStatus) {
       await git(safeArgs(workspaceDir, ['commit', '-m', 'Dev workbench: agent changes']), {
         cwd: workspaceDir,
+        timeout: WORKTREE_GIT_TIMEOUT_MS,
         env: {
           GIT_AUTHOR_NAME: 'AI Pilot',
           GIT_AUTHOR_EMAIL: 'ai-pilot@noreply',
@@ -466,6 +512,7 @@ export async function syncWithBase(
 export async function listConflicts(workspaceDir: string): Promise<ConflictedFile[]> {
   const output = await git(safeArgs(workspaceDir, ['diff', '--name-only', '--diff-filter=U']), {
     cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
   });
   const paths = output.split('\n').filter(Boolean);
   return paths.map((filePath) => {
@@ -492,6 +539,7 @@ export async function writeResolvedFile(workspaceDir: string, filePath: string, 
 export async function completeMerge(workspaceDir: string): Promise<void> {
   const output = await git(safeArgs(workspaceDir, ['diff', '--name-only', '--diff-filter=U']), {
     cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
   });
   const remaining = output.split('\n').filter(Boolean);
 
@@ -501,8 +549,33 @@ export async function completeMerge(workspaceDir: string): Promise<void> {
     );
   }
 
+  // Refuse to commit leftover conflict markers — a resolved file must not still
+  // contain `<<<<<<<` / `>>>>>>>`, otherwise we would push broken source.
+  const changed = (await git(safeArgs(workspaceDir, ['diff', 'HEAD', '--name-only']), {
+    cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
+  })).split('\n').filter(Boolean);
+  const markerFiles = changed.filter((rel) => {
+    const full = path.join(workspaceDir, rel);
+    if (!fs.existsSync(full)) return false;
+    return hasConflictMarkers(fs.readFileSync(full, 'utf-8'));
+  });
+  if (markerFiles.length > 0) {
+    throw new Error(
+      `Cannot complete merge: unresolved conflict markers remain in: ${markerFiles.join(', ')}`,
+    );
+  }
+
+  if (!isMergeInProgress(workspaceDir)) {
+    // The merge was already committed or aborted (e.g. the app restarted, or a
+    // prior operation finalized it). Nothing to finalize — treat as success so
+    // a stale 'conflict' status can recover and the caller can still push.
+    return;
+  }
+
   await git(safeArgs(workspaceDir, ['commit', '--no-edit']), {
     cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
     env: {
       GIT_AUTHOR_NAME: 'AI Pilot',
       GIT_AUTHOR_EMAIL: 'ai-pilot@noreply',
@@ -514,9 +587,15 @@ export async function completeMerge(workspaceDir: string): Promise<void> {
 
 /**
  * Aborts a conflicted merge and restores the working tree to pre-merge state.
+ * A no-op when no merge is in progress, so a stale 'conflict' status can be
+ * cleared without erroring on "there is no merge to abort".
  */
 export async function abortMerge(workspaceDir: string): Promise<void> {
-  await git(safeArgs(workspaceDir, ['merge', '--abort']), { cwd: workspaceDir });
+  if (!isMergeInProgress(workspaceDir)) return;
+  await git(safeArgs(workspaceDir, ['merge', '--abort']), {
+    cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
+  });
 }
 
 /**

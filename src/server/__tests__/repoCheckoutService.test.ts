@@ -56,6 +56,11 @@ import {
   checkoutNewBranch,
   checkoutFeatureBranch,
   excludeAiPilotFromGit,
+  computeDiff,
+  completeMerge,
+  abortMerge,
+  hasConflictMarkers,
+  isMergeInProgress,
 } from '../services/repoCheckoutService';
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -404,6 +409,135 @@ describe('repoCheckoutService', () => {
         expect.arrayContaining(['merge', '--abort']),
         expect.objectContaining({ cwd: '/tmp/workspace' }),
       );
+    });
+  });
+
+  describe('hasConflictMarkers', () => {
+    it('detects start/end markers but ignores legitimate ======= dividers', () => {
+      expect(hasConflictMarkers('a\n<<<<<<< HEAD\nb')).toBe(true);
+      expect(hasConflictMarkers('a\n>>>>>>> origin/dev\nb')).toBe(true);
+      expect(hasConflictMarkers('# Title\n=======\nbody')).toBe(false);
+      expect(hasConflictMarkers('clean file\nno markers')).toBe(false);
+    });
+  });
+
+  describe('computeDiff', () => {
+    it('is read-only: never runs `git add -A`, diffs against HEAD, and uses the worktree timeout', async () => {
+      mockFs.existsSync.mockReturnValue(false); // no MERGE_HEAD
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('--name-only')) return 'src/a.ts\nsrc/new.ts\n';
+        return 'diff-body';
+      });
+
+      const result = await computeDiff('/tmp/workspace');
+
+      const calls = mockGit.mock.calls.map(([a]) => a as string[]);
+      expect(calls.some((a) => a.includes('add') && a.includes('-A'))).toBe(false);
+      expect(calls.some((a) => a.includes('add') && a.includes('-N'))).toBe(true);
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'diff', 'HEAD'],
+        expect.objectContaining({ cwd: '/tmp/workspace', timeout: 5 * 60 * 1000 }),
+      );
+      expect(result.changedFiles).toEqual(['src/a.ts', 'src/new.ts']);
+    });
+
+    it('does not touch the index (`add -N`) while a merge is in progress', async () => {
+      mockFs.existsSync.mockReturnValue(true); // MERGE_HEAD present
+      mockGit.mockResolvedValue('');
+
+      await computeDiff('/tmp/workspace');
+
+      const calls = mockGit.mock.calls.map(([a]) => a as string[]);
+      expect(calls.some((a) => a.includes('add'))).toBe(false);
+      expect(mockGit).toHaveBeenCalledWith(
+        ['-c', 'safe.directory=/tmp/workspace', 'diff', 'HEAD'],
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+    });
+  });
+
+  describe('completeMerge', () => {
+    it('refuses to commit when a changed file still has conflict markers', async () => {
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('--diff-filter=U')) return '';           // no unmerged
+        if (args.includes('--name-only')) return 'src/a.ts\n';     // changed vs HEAD
+        return '';
+      });
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> dev\n' as never);
+
+      await expect(completeMerge('/tmp/workspace')).rejects.toThrow(/unresolved conflict markers/i);
+      expect(mockGit).not.toHaveBeenCalledWith(
+        expect.arrayContaining(['commit', '--no-edit']),
+        expect.anything(),
+      );
+    });
+
+    it('returns without committing when no merge is in progress (self-heal)', async () => {
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('--diff-filter=U')) return '';
+        if (args.includes('--name-only')) return '';
+        return '';
+      });
+      // U check empty, no changed files, and no MERGE_HEAD.
+      mockFs.existsSync.mockReturnValue(false);
+
+      await expect(completeMerge('/tmp/workspace')).resolves.toBeUndefined();
+      expect(mockGit).not.toHaveBeenCalledWith(
+        expect.arrayContaining(['commit', '--no-edit']),
+        expect.anything(),
+      );
+    });
+
+    it('commits the merge when in progress and fully resolved', async () => {
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('--diff-filter=U')) return '';
+        if (args.includes('--name-only')) return 'src/a.ts\n';
+        return '';
+      });
+      mockFs.readFileSync.mockReturnValue('clean resolved content' as never);
+      // No unmerged; file has no markers; MERGE_HEAD present.
+      mockFs.existsSync.mockImplementation((p) => String(p).endsWith('MERGE_HEAD') || true);
+
+      await completeMerge('/tmp/workspace');
+
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['commit', '--no-edit']),
+        expect.objectContaining({ cwd: '/tmp/workspace', timeout: 5 * 60 * 1000 }),
+      );
+    });
+  });
+
+  describe('abortMerge', () => {
+    it('is a no-op when there is no merge in progress', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+
+      await abortMerge('/tmp/workspace');
+
+      expect(mockGit).not.toHaveBeenCalledWith(
+        expect.arrayContaining(['merge', '--abort']),
+        expect.anything(),
+      );
+    });
+
+    it('aborts when a merge is in progress', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+
+      await abortMerge('/tmp/workspace');
+
+      expect(mockGit).toHaveBeenCalledWith(
+        expect.arrayContaining(['merge', '--abort']),
+        expect.objectContaining({ cwd: '/tmp/workspace' }),
+      );
+    });
+  });
+
+  describe('isMergeInProgress', () => {
+    it('reflects the presence of .git/MERGE_HEAD', () => {
+      mockFs.existsSync.mockReturnValue(true);
+      expect(isMergeInProgress('/tmp/workspace')).toBe(true);
+      mockFs.existsSync.mockReturnValue(false);
+      expect(isMergeInProgress('/tmp/workspace')).toBe(false);
     });
   });
 });
