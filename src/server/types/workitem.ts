@@ -301,6 +301,63 @@ export interface EslintBurnDownResponse {
   };
 }
 
+/** Known MaxView nightly E2E Playwright artifact suites. */
+export type E2eSuiteKey = 'quick_smoke' | 'timecard_validation' | 'long_workflow' | 'long_running';
+
+export interface E2eSuiteDefinition {
+  key: E2eSuiteKey;
+  artifactName: string;
+  label: string;
+}
+
+export interface E2eBuildSnapshot {
+  capturedAt: string;
+  buildId: string;
+  buildNumber: string;
+  definitionName: string;
+  suiteKey: E2eSuiteKey;
+  suiteLabel: string;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  flaky: number;
+  skipped: number;
+  passRate: number;
+}
+
+export type E2eBurnDownGranularity = 'weekly' | 'monthly' | 'quarterly';
+
+export interface E2eBurnDownPoint {
+  periodKey: string;
+  periodLabel: string;
+  capturedAt: string;
+  buildId: string;
+  buildNumber: string;
+  suiteKey: E2eSuiteKey;
+  suiteLabel: string;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  flaky: number;
+  skipped: number;
+  passRate: number;
+}
+
+export interface E2eBurnDownResponse {
+  from: string;
+  to: string;
+  definitionName: string;
+  suites: E2eSuiteDefinition[];
+  snapshots: E2eBuildSnapshot[];
+  latestBySuite: Partial<Record<E2eSuiteKey, E2eBuildSnapshot>>;
+  summary: {
+    definitionId?: number;
+    buildsScanned: number;
+    buildsWithArtifacts: number;
+    hint?: string;
+  };
+}
+
 export interface QACycleTimeStats {
   qaAssignee: string;
   totalItems: number;

@@ -1,4 +1,4 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, numeric, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
   PageManifestEntry,
@@ -872,6 +872,28 @@ export const documentOwnerApprovalsRelations = relations(documentOwnerApprovals,
     fields: [documentOwnerApprovals.ownerUserId],
     references: [appUsers.oid],
   }),
+}));
+
+// ── E2E burn-down snapshots (persisted from nightly Playwright pipeline artifacts) ─
+
+export const e2eBurnDownSnapshots = pgTable('e2e_burn_down_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  pipelineBuildId: integer('pipeline_build_id').notNull(),
+  suiteKey: text('suite_key').notNull(),
+  buildNumber: text('build_number').notNull(),
+  definitionName: text('definition_name').notNull(),
+  capturedAt: timestamp('captured_at', { withTimezone: true, mode: 'string' }).notNull(),
+  totalTests: integer('total_tests').notNull().default(0),
+  passed: integer('passed').notNull().default(0),
+  failed: integer('failed').notNull().default(0),
+  flaky: integer('flaky').notNull().default(0),
+  skipped: integer('skipped').notNull().default(0),
+  passRate: numeric('pass_rate', { precision: 5, scale: 2 }).notNull().default('0'),
+  syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  buildSuiteUnique: unique('e2e_burn_down_snapshots_build_suite_unique').on(t.pipelineBuildId, t.suiteKey),
+  capturedAtIdx: index('idx_e2e_burn_down_snapshots_captured_at').on(t.capturedAt),
+  suiteCapturedAtIdx: index('idx_e2e_burn_down_snapshots_suite_captured_at').on(t.suiteKey, t.capturedAt),
 }));
 
 // ── ESLint burn-down snapshots (persisted from nightly pipeline artifacts) ────
