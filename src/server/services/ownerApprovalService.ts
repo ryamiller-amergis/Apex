@@ -1,6 +1,6 @@
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { documentOwnerApprovals, interviews, prds, designDocs } from '../db/schema';
+import { documentOwnerApprovals, interviews, prds, designDocs, designPrototypes } from '../db/schema';
 import type { DocumentOwnerApproval, OwnerApprovalDocumentType, OwnerApprovalStatus } from '../../shared/types/approvals';
 
 export async function getOwnerApproval(
@@ -110,8 +110,14 @@ export async function resolveDocumentOwnerId(
       return interviewRow?.testCaseOwnerId ?? null;
     }
     case 'design_prototype': {
+      // documentId is a prototypeId — resolve through prototype → prd → interview
+      const protoRow = await db.query.designPrototypes.findFirst({
+        where: eq(designPrototypes.id, documentId),
+        columns: { prdId: true },
+      });
+      if (!protoRow?.prdId) return null;
       const prdRow = await db.query.prds.findFirst({
-        where: eq(prds.id, documentId),
+        where: eq(prds.id, protoRow.prdId),
         columns: { interviewId: true },
       });
       if (!prdRow?.interviewId) return null;

@@ -1380,10 +1380,20 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   // Check if this thread belongs to a design doc (generation thread)
   const ddGenRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.chatThreadId, threadId),
+    columns: { id: true, prdId: true, project: true, authorId: true, designPrototypeId: true },
   });
   if (ddGenRow) {
-    await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
-    console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
+    if (ddGenRow.designPrototypeId) {
+      // Prototype-linked single-feature doc — update the existing row. The watcher
+      // may have already handled this; finalizeSingleFeatureDoc is idempotent.
+      const { finalizeSingleFeatureDoc } = await import('./designDocService');
+      await finalizeSingleFeatureDoc(ddGenRow.id, threadId, ddGenRow.project);
+      console.log(`[chat] post-run: finalised prototype-linked design doc (designDocId=${ddGenRow.id})`);
+    } else {
+      // Legacy multi-feature or direct-from-PRD seed doc — fan out to child rows.
+      await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
+      console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
+    }
     return;
   }
 
@@ -1430,18 +1440,20 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
         console.error(`[chat] post-run: failed to parse validation scorecard`, err);
       }
     } else {
-      // Agent completed (success path) but wrote no scorecard file.
-      // Reset the doc from 'validating' → 'draft' so the user can re-run.
-      // The WHERE status='validating' guard prevents overwriting an already-scored doc.
+      // Agent completed but wrote no scorecard file.
+      // Keep the generated content accessible by moving to pending_review (matching the
+      // watcher's own idle-without-scorecard path). The approval gate will still require a
+      // valid validation score if a skill is configured — this just unblocks the author
+      // from seeing and reviewing the content rather than hiding it in a Draft state.
       const freshDoc = await db.query.designDocs.findFirst({
         where: eq(designDocs.id, ddValRow.id),
         columns: { validationThreadId: true, status: true },
       });
       if (freshDoc?.validationThreadId === threadId && freshDoc?.status === 'validating') {
         await db.update(designDocs)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
           .where(eq(designDocs.id, ddValRow.id));
-        console.warn(`[chat] post-run: validation agent wrote no scorecard, reset to draft (designDocId=${ddValRow.id})`);
+        console.warn(`[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`);
       }
       fullySynced = true; // workspace can be cleaned
     }
@@ -1549,12 +1561,12 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
   }
 
   const [ddResult] = await db.update(designDocs)
-    .set({ status: 'draft', updatedAt: new Date().toISOString() })
+    .set({ status: 'generation_failed', generationError: 'Agent run failed before output was written', updatedAt: new Date().toISOString() })
     .where(and(eq(designDocs.chatThreadId, threadId), eq(designDocs.status, 'generating')))
     .returning({ id: designDocs.id });
 
   if (ddResult) {
-    console.warn(`[chat] failGeneratingDocuments: reset design doc to draft (designDocId=${ddResult.id}, threadId=${threadId})`);
+    console.warn(`[chat] failGeneratingDocuments: marked design doc generation_failed (designDocId=${ddResult.id}, threadId=${threadId})`);
   }
 
   const [testCaseResult] = await db.update(testCases)

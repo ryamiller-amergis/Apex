@@ -373,6 +373,7 @@ export const designDocs = pgTable('design_docs', {
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
   skillSettingsId: uuid('skill_settings_id'),
+  generationError: text('generation_error'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),

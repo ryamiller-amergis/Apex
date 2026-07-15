@@ -47,6 +47,7 @@ const PRD_FILTERS: { label: string; value: PrdStatus | undefined }[] = [
 const DESIGN_DOC_FILTERS: { label: string; value: DesignDocStatus | undefined }[] = [
   { label: 'All', value: undefined },
   { label: 'Generating', value: 'generating' },
+  { label: 'Failed', value: 'generation_failed' },
   { label: 'Draft', value: 'draft' },
   { label: 'Pending Review', value: 'pending_review' },
   { label: 'Approved', value: 'approved' },
@@ -94,6 +95,7 @@ function prdReadinessBadgeClass(severity: PrdReadinessSeverity): string {
 function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return styles.badgeGenerating;
+    case 'generation_failed': return styles.badgeRevisionRequested;
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
@@ -106,6 +108,7 @@ function designDocBadgeClass(status: DesignDocStatus): string {
 function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return 'Generating…';
+    case 'generation_failed': return 'Failed';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';

@@ -51,4 +51,6 @@ export interface DocumentOwnerApproval {
 export interface OwnerApproveRequest {
   status: 'approved' | 'revision_requested';
   comment?: string;
+  /** For design_prototype type: the specific prototype to approve. Required when type is design_prototype. */
+  prototypeId?: string;
 }

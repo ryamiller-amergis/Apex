@@ -18,7 +18,7 @@ import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 
-const VALID_STATUSES: DesignDocStatus[] = ['generating', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
+const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -633,6 +633,76 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
 }
 
 /**
+ * Shared finalizer for single-feature design doc generation.
+ *
+ * Persists content + moves the row to the next status (validating or pending_review).
+ * Safe to call from both the watcher and the post-run syncOutputToDb path — the
+ * `chatThreadId` column acts as a completion guard: once this function nulls it,
+ * any concurrent caller sees the null and skips.
+ *
+ * Returns true when content was persisted, false when the row was already finalised
+ * by another caller (guard triggered).
+ */
+export async function finalizeSingleFeatureDoc(
+  designDocId: string,
+  chatThreadId: string,
+  project: string,
+): Promise<boolean> {
+  // Thread guard: skip if the row no longer owns this thread (already completed/retried).
+  const guard = await db.query.designDocs.findFirst({
+    where: and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)),
+    columns: { id: true, skillSettingsId: true },
+  });
+  if (!guard) {
+    console.log(`[finalizeSingleFeatureDoc] Skipped — row already finalised or thread replaced (designDocId=${designDocId})`);
+    return false;
+  }
+
+  const design = readOutputDesignDoc(chatThreadId);
+  const techSpec = readOutputTechSpec(chatThreadId);
+  const assumptions = readOutputAssumptions(chatThreadId);
+
+  if (!design || !techSpec || !assumptions) {
+    const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
+    console.warn(`[finalizeSingleFeatureDoc] Missing output files [${missing}] — marking generation_failed (designDocId=${designDocId})`);
+    await db.update(designDocs)
+      .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, chatThreadId: null, updatedAt: new Date().toISOString() })
+      .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+    await cleanupWorkspace(chatThreadId);
+    return false;
+  }
+
+  const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
+  const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+
+  await db.update(designDocs)
+    .set({
+      designContent: design,
+      techSpecContent: techSpec,
+      assumptionsContent: assumptions,
+      status: finalStatus,
+      generationError: null,
+      chatThreadId: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+
+  await cleanupWorkspace(chatThreadId);
+  console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
+
+  notifyAiCompletion('design_doc_generated', designDocId, { title: 'Design doc' }).catch(err =>
+    console.error(`[finalizeSingleFeatureDoc] AI notification failed (designDocId=${designDocId}):`, err),
+  );
+
+  if (finalStatus === 'validating') {
+    autoStartValidation(designDocId).catch((err) => {
+      console.error(`[finalizeSingleFeatureDoc] autoStartValidation failed (designDocId=${designDocId})`, err);
+    });
+  }
+  return true;
+}
+
+/**
  * Watcher for single-feature design docs (triggered by prototype approval).
  * Unlike the multi-feature watcher, this updates the existing doc row directly
  * instead of spawning child rows.
@@ -654,9 +724,9 @@ export function startSingleFeatureDocWatcher(
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
-      console.warn(`[singleFeatureDocWatcher] Timed out — marking failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
+      console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
       await db.update(designDocs)
-        .set({ status: 'draft', chatThreadId: null, updatedAt: new Date().toISOString() })
+        .set({ status: 'generation_failed', generationError: 'Generation timed out', chatThreadId: null, updatedAt: new Date().toISOString() })
         .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
       return;
     }
@@ -672,44 +742,15 @@ export function startSingleFeatureDocWatcher(
     if (design && techSpec && assumptions) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
-
-      const docRow = await db.query.designDocs.findFirst({ where: eq(designDocs.id, designDocId), columns: { skillSettingsId: true } });
-      const skillConfig = await resolveSkillConfig({ project, settingsId: docRow?.skillSettingsId ?? undefined });
-      const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
-
-      await db.update(designDocs)
-        .set({
-          designContent: design,
-          techSpecContent: techSpec,
-          assumptionsContent: assumptions,
-          status: finalStatus,
-          chatThreadId: null,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(designDocs.id, designDocId));
-
-      await cleanupWorkspace(chatThreadId);
-      console.log(`[singleFeatureDocWatcher] Done — content synced, status=${finalStatus} (designDocId=${designDocId})`);
-
-      notifyAiCompletion('design_doc_generated', designDocId, { title: 'Design doc' }).catch(err =>
-        console.error(`[singleFeatureDocWatcher] AI notification failed (designDocId=${designDocId}):`, err),
-      );
-
-      if (finalStatus === 'validating') {
-        autoStartValidation(designDocId).catch((err) => {
-          console.error(`[singleFeatureDocWatcher] autoStartValidation failed (designDocId=${designDocId})`, err);
-        });
-      }
+      await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
       return;
     }
 
     if (isThreadIdle(chatThreadId)) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
-      console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — resetting to draft (designDocId=${designDocId})`);
-      await db.update(designDocs)
-        .set({ status: 'draft', chatThreadId: null, updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
+      console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
+      await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
       await cleanupWorkspace(chatThreadId);
     }
   }, WATCHER_INTERVAL_MS);
@@ -735,10 +776,17 @@ export async function startSingleFeatureDesignDocWatcher(
       eq(designDocs.designPrototypeId, prototypeId),
       eq(designDocs.featureIndex, featureIndex),
     ),
-    columns: { id: true },
+    columns: { id: true, status: true },
   });
-  if (existingDoc) {
-    console.log(`[designDoc] startSingleFeatureDesignDocWatcher: doc already exists (docId=${existingDoc.id}, prototypeId=${prototypeId}, featureIndex=${featureIndex})`);
+  if (existingDoc && existingDoc.status !== 'generation_failed') {
+    // Active, in-progress, or completed row — do not create a duplicate.
+    console.log(`[designDoc] startSingleFeatureDesignDocWatcher: doc already exists and is not failed (docId=${existingDoc.id}, status=${existingDoc.status})`);
+    return;
+  }
+  if (existingDoc && existingDoc.status === 'generation_failed') {
+    // Failed row can be retried in-place — see POST /design-docs/:id/retry-generate.
+    // Log and return here; the retry route handles the reset.
+    console.log(`[designDoc] startSingleFeatureDesignDocWatcher: existing generation_failed doc found, retry via route (docId=${existingDoc.id})`);
     return;
   }
 
@@ -842,6 +890,10 @@ export async function startSingleFeatureDesignDocWatcher(
     '3. `.ai-pilot/output/design-doc-assumptions.md` — assumptions, risks, and open questions. This file MUST include a `## Questions for Developer (sign-off needed)` section that lists one explicit go/no-go decision per `[impacts-existing]` item from the UI Changes checklist, phrased so the developer can confirm or defer each individually before implementation starts. It MUST also include a `## Risk to Existing Functionality` section summarizing any regression risk introduced by the UI changes.',
   ].join('\n');
 
+  // Create the thread with auto-kickoff disabled so the DB row and watcher are
+  // fully attached before the agent starts. This prevents the race where the
+  // agent completes before the row exists and post-run sync cannot find it.
+  const { sendMessage } = await import('./chatAgentService');
   const thread = await createThread(
     prd.authorId,
     {
@@ -853,9 +905,7 @@ export async function startSingleFeatureDesignDocWatcher(
       freeformContext,
       model,
     },
-    {
-      kickoffMessage: `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
-    },
+    { skipAutoKickoff: true },
   );
 
   const { designDocId } = await createDesignDoc({
@@ -876,7 +926,14 @@ export async function startSingleFeatureDesignDocWatcher(
   const updatedBacklog = stampFeatureLinkId(prd.backlogJson, featureIndex, 'designDocId', designDocId);
   await db.update(prds).set({ backlogJson: updatedBacklog as any, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdId));
 
+  // Watcher must be started before the kickoff message fires.
   startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+
+  // Now safe to start the agent — the row and watcher are in place.
+  const kickoffMessage = `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`;
+  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
+    console.error(`[designDoc] Failed to kick off generation agent (designDocId=${designDocId}, threadId=${thread.id}):`, err.message);
+  });
 
   const { propagateDesignDocApprovers } = await import('./documentApprovalService');
   propagateDesignDocApprovers(prdId, designDocId, prd.authorId).catch((err) => {
@@ -929,6 +986,7 @@ function rowToSummary(
     model: row.model ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: skillSettingsName ?? null,
+    generationError: row.generationError ?? null,
     status: row.status as DesignDocStatus,
     reviewerId: row.reviewerId ?? undefined,
     reviewerName: reviewerName ?? undefined,
