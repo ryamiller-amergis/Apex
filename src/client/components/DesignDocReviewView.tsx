@@ -50,6 +50,7 @@ import {
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../utils/apexFixSession';
+import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   useReviewComments,
   useUnresolvedCommentCount,
@@ -1233,6 +1234,16 @@ export const DesignDocReviewView: React.FC = () => {
   );
   const isGenerationFailed = !!doc && doc.status === 'generation_failed';
 
+  const handleDownload = useCallback(() => {
+    if (!doc) return;
+    const exportName = sanitizeArtifactName(doc.title, 'design-doc');
+    downloadArtifactZip(`${exportName}-design-doc.zip`, [
+      { name: 'design.md', content: doc.designContent ?? '' },
+      { name: 'tech-spec.md', content: doc.techSpecContent ?? '' },
+      { name: 'assumptions.md', content: doc.assumptionsContent ?? '' },
+    ]);
+  }, [doc]);
+
   const handleEditToggle = useCallback((tab: TabId) => {
     if (!doc) return;
     if (editingTab === tab) {
@@ -1969,6 +1980,20 @@ export const DesignDocReviewView: React.FC = () => {
           {doc.status === 'approved' && (
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
+
+          <button
+            className={styles.actionBtn}
+            onClick={handleDownload}
+            disabled={!hasAnyContent}
+            type="button"
+            title="Download design doc, tech spec, and assumptions"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M8 2v8M5 7l3 3 3-3" />
+              <path d="M3 13h10" />
+            </svg>
+            Download
+          </button>
 
           {canUseAssistant && (
             <button

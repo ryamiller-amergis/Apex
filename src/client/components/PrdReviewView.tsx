@@ -69,6 +69,7 @@ import {
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../utils/apexFixSession';
+import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   derivePrdReadiness,
   type PrdReadiness,
@@ -674,6 +675,18 @@ export const PrdReviewView: React.FC = () => {
   ]);
 
   /* ── Other handlers ──────────────────────────────────────────────────────── */
+
+  const handleDownload = useCallback(() => {
+    if (!prd) return;
+    const exportName = sanitizeArtifactName(prd.title, 'prd');
+    downloadArtifactZip(`${exportName}-prd.zip`, [
+      { name: 'prd.md', content: prd.content ?? '' },
+      {
+        name: 'backlog.json',
+        content: JSON.stringify(prd.backlogJson ?? null, null, 2),
+      },
+    ]);
+  }, [prd]);
 
   const handleSubmit = useCallback(async () => {
     if (!id || !readiness?.readyForReviewActions) return;
@@ -1361,6 +1374,28 @@ export const PrdReviewView: React.FC = () => {
           {prd.status === 'approved' && !canManage && (
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
+
+          <button
+            className={styles.actionBtn}
+            onClick={handleDownload}
+            disabled={!prd.content && !prd.backlogJson}
+            type="button"
+            title="Download PRD Markdown and backlog JSON"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M8 2v8M5 7l3 3 3-3" />
+              <path d="M3 13h10" />
+            </svg>
+            Download
+          </button>
 
           {canGenerateTestCasesAction && (
             <button
