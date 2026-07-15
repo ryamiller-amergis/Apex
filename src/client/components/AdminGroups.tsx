@@ -198,12 +198,13 @@ function getMemberInitial(displayName: string | null, email: string | null): str
 
 interface GroupMembersModalProps {
   group: AppGroup;
+  project: string;
   onClose: () => void;
 }
 
-const GroupMembersModal: React.FC<GroupMembersModalProps> = ({ group, onClose }) => {
+const GroupMembersModal: React.FC<GroupMembersModalProps> = ({ group, project, onClose }) => {
   const { data: groupWithMembers, isLoading: isLoadingGroup } = useGroupWithMembers(group.id);
-  const { data: users = [], isLoading: isLoadingUsers } = useUsers();
+  const { data: users = [], isLoading: isLoadingUsers } = useUsers(project);
   const setMembers = useSetGroupMembers();
 
   const [memberSearch, setMemberSearch] = useState('');
@@ -495,6 +496,7 @@ export const AdminGroups: React.FC<AdminGroupsProps> = ({ selectedProject, avail
       {managingMembersGroup && (
         <GroupMembersModal
           group={managingMembersGroup}
+          project={activeProject}
           onClose={() => setManagingMembersGroup(null)}
         />
       )}

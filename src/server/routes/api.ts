@@ -3991,8 +3991,9 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
     const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
-      getUserPermissions(userId),
+      getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       getChangelogPrefs(userId),

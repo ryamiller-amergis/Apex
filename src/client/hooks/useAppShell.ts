@@ -117,7 +117,10 @@ export function useAppShell() {
   useEffect(() => {
     if (!isAuthenticated) return;
     setPermissionsLoaded(false);
-    fetch('/api/me/permissions', { credentials: 'include' })
+    const url = selectedProject
+      ? `/api/me/permissions?project=${encodeURIComponent(selectedProject)}`
+      : '/api/me/permissions';
+    fetch(url, { credentials: 'include' })
       .then(r => r.ok ? (r.json() as Promise<MyPermissionsResponse>) : null)
       .then(d => {
         if (d) {
@@ -136,7 +139,7 @@ export function useAppShell() {
       })
       .catch(() => { /* ignore */ })
       .finally(() => setPermissionsLoaded(true));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, selectedProject]);
 
   const { workItems, loading, error, updateDueDate, refetch } = useWorkItems(
     startDate, endDate, selectedProject, selectedAreaPath, isAuthenticated === true

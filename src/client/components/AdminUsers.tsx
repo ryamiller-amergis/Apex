@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useUsers, useRoles, useAssignRole, useRemoveRole } from '../hooks/useRbac';
+import { useUsers, useRoles, useAssignRole, useRemoveRole, useAssignProjectRole, useRemoveProjectRole } from '../hooks/useRbac';
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import styles from './AdminUsers.module.css';
 
@@ -29,12 +29,17 @@ interface AdminUsersProps {
 export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) => {
   const [search, setSearch] = useState('');
   const [pendingAssign, setPendingAssign] = useState<Record<string, string>>({});
+  const [pendingProjectAssign, setPendingProjectAssign] = useState<Record<string, string>>({});
 
   const { data: users = [], isLoading: usersLoading, error: usersError } = useUsers(selectedProject);
   const { data: roles = [], isLoading: rolesLoading } = useRoles();
 
   const assignRole = useAssignRole();
   const removeRole = useRemoveRole();
+  const assignProjectRole = useAssignProjectRole();
+  const removeProjectRole = useRemoveProjectRole();
+
+  const hasProject = Boolean(selectedProject);
 
   const rolesByName = useMemo<Record<string, RoleWithPermissions>>(() => {
     const map: Record<string, RoleWithPermissions> = {};
@@ -64,6 +69,21 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
     const role = rolesByName[roleName];
     if (!role) return;
     removeRole.mutate({ oid, roleId: role.id });
+  };
+
+  const handleAssignProjectRole = (oid: string) => {
+    const roleId = pendingProjectAssign[oid];
+    if (!roleId || !selectedProject) return;
+    assignProjectRole.mutate(
+      { oid, project: selectedProject, roleId },
+      { onSuccess: () => setPendingProjectAssign(prev => { const n = { ...prev }; delete n[oid]; return n; }) },
+    );
+  };
+
+  const handleRemoveProjectRole = (oid: string, roleName: string) => {
+    const role = rolesByName[roleName];
+    if (!role || !selectedProject) return;
+    removeProjectRole.mutate({ oid, project: selectedProject, roleId: role.id });
   };
 
   if (usersLoading || rolesLoading) {
@@ -156,6 +176,12 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                 <th className={styles.th}>Last Seen</th>
                 <th className={styles.th}>Assigned Roles</th>
                 <th className={styles.th}>Add Role</th>
+                {hasProject && (
+                  <th className={styles.th}>Project Roles ({selectedProject})</th>
+                )}
+                {hasProject && (
+                  <th className={styles.th}>Add Project Role</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -164,6 +190,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                 const isRemoving = removeRole.isPending;
                 const selectedRoleId = pendingAssign[user.oid] ?? '';
                 const availableRoles = roles.filter(r => !user.roles.includes(r.name));
+                const projectRoles = user.projectRoles ?? [];
+                const selectedProjectRoleId = pendingProjectAssign[user.oid] ?? '';
+                const availableProjectRoles = roles.filter(r => !projectRoles.includes(r.name));
+                const isAssigningProject = assignProjectRole.isPending;
+                const isRemovingProject = removeProjectRole.isPending;
 
                 return (
                   <tr key={user.oid} className={styles.tr}>
@@ -245,6 +276,68 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                         </button>
                       </div>
                     </td>
+
+                    {hasProject && (
+                      <td className={styles.td}>
+                        <div
+                          className={styles.badges}
+                          data-testid={`project-roles-${user.oid}`}
+                        >
+                          {projectRoles.length === 0 ? (
+                            <span className={styles['no-roles']}>None</span>
+                          ) : (
+                            projectRoles.map(roleName => (
+                              <span
+                                key={roleName}
+                                className={`${styles['badge-project']} ${styles[`badge--${roleName}`] ?? styles['badge--default']}`}
+                              >
+                                {roleName}
+                                <button
+                                  className={styles['badge-remove']}
+                                  onClick={() => handleRemoveProjectRole(user.oid, roleName)}
+                                  disabled={isRemovingProject || !rolesByName[roleName]}
+                                  title={`Remove project role "${roleName}"`}
+                                  aria-label={`Remove project role ${roleName} from ${user.displayName ?? user.email}`}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </td>
+                    )}
+
+                    {hasProject && (
+                      <td className={styles.td}>
+                        <div className={styles['action-row']}>
+                          <select
+                            className={styles['role-select']}
+                            value={selectedProjectRoleId}
+                            onChange={e =>
+                              setPendingProjectAssign(prev => ({ ...prev, [user.oid]: e.target.value }))
+                            }
+                            disabled={isAssigningProject || availableProjectRoles.length === 0}
+                            aria-label={`Select project role to assign to ${user.displayName ?? user.email}`}
+                          >
+                            <option value="">
+                              {availableProjectRoles.length === 0 ? 'All roles assigned' : 'Select role…'}
+                            </option>
+                            {availableProjectRoles.map(r => (
+                              <option key={r.id} value={r.id}>{r.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            className={styles['assign-btn']}
+                            onClick={() => handleAssignProjectRole(user.oid)}
+                            disabled={!selectedProjectRoleId || isAssigningProject}
+                            aria-label={`Assign project role to ${user.displayName ?? user.email}`}
+                          >
+                            {isAssigningProject ? '…' : 'Assign'}
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}

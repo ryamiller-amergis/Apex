@@ -173,10 +173,23 @@ export const appUserRoles = pgTable('app_user_roles', {
   pk: primaryKey({ columns: [t.userId, t.roleId] }),
 }));
 
+export const appUserProjectRoles = pgTable('app_user_project_roles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'cascade' }),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userProjectRoleUniq: unique('app_user_project_roles_user_project_role_key').on(t.userId, t.project, t.roleId),
+  userProjectIdx: index('idx_app_user_project_roles_user_project').on(t.userId, t.project),
+}));
+
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
@@ -185,6 +198,7 @@ export const appUsersRelations = relations(appUsers, ({ many }) => ({
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   rolePermissions: many(appRolePermissions),
 }));
 
@@ -200,6 +214,11 @@ export const appRolePermissionsRelations = relations(appRolePermissions, ({ one 
 export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   user: one(appUsers, { fields: [appUserRoles.userId], references: [appUsers.oid] }),
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
+}));
+
+export const appUserProjectRolesRelations = relations(appUserProjectRoles, ({ one }) => ({
+  user: one(appUsers, { fields: [appUserProjectRoles.userId], references: [appUsers.oid] }),
+  role: one(appRoles, { fields: [appUserProjectRoles.roleId], references: [appRoles.id] }),
 }));
 
 // ── User Project Assignments ──────────────────────────────────────────────────

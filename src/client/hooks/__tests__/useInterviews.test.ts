@@ -356,6 +356,20 @@ describe('useActiveUsers', () => {
 
     expect(result.current.data).toEqual([]);
   });
+
+  it('requests active users for the selected project', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers('Project A/B'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/active-users?project=Project%20A%2FB',
+      expect.any(Object),
+    );
+  });
 });
 
 // ── useCreateInterview ─────────────────────────────────────────────────────────

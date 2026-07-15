@@ -1,32 +1,28 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type {
   AppPermission,
+  AssignProjectRoleRequest,
   CreateRoleRequest,
   MyPermissionsResponse,
+  RemoveProjectRoleRequest,
   RoleWithPermissions,
   UpdateRolePermissionsRequest,
   UpdateRoleRequest,
   UserWithRoles,
 } from '../../shared/types/rbac';
-
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', ...options });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-  }
-  if (res.status === 204 || res.headers?.get('content-length') === '0') {
-    return undefined as unknown as T;
-  }
-  return res.json() as Promise<T>;
-}
+import { apiFetch } from '../utils/apiFetch';
 
 // ── Current-user hooks ────────────────────────────────────────────────────────
 
-export function useMyPermissions() {
+export function useMyPermissions(project?: string) {
   const query = useQuery<MyPermissionsResponse>({
-    queryKey: ['me', 'permissions'],
-    queryFn: () => apiFetch<MyPermissionsResponse>('/api/me/permissions'),
+    queryKey: ['me', 'permissions', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/me/permissions?project=${encodeURIComponent(project)}`
+        : '/api/me/permissions';
+      return apiFetch<MyPermissionsResponse>(url);
+    },
     staleTime: 60_000,
   });
   const permissions = query.data?.permissions ?? [];
@@ -139,6 +135,31 @@ export function useRemoveRole() {
   return useMutation<void, Error, { oid: string; roleId: string }>({
     mutationFn: ({ oid, roleId }) =>
       apiFetch<void>(`/api/admin/users/${oid}/roles/${roleId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  });
+}
+
+export function useAssignProjectRole() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: true }, Error, { oid: string } & AssignProjectRoleRequest>({
+    mutationFn: ({ oid, project, roleId }) =>
+      apiFetch<{ ok: true }>(`/api/admin/users/${oid}/project-roles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, roleId }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  });
+}
+
+export function useRemoveProjectRole() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: true }, Error, { oid: string } & RemoveProjectRoleRequest>({
+    mutationFn: ({ oid, project, roleId }) =>
+      apiFetch<{ ok: true }>(
+        `/api/admin/users/${oid}/project-roles/${roleId}?project=${encodeURIComponent(project)}`,
+        { method: 'DELETE' },
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }

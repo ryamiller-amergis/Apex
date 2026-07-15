@@ -629,7 +629,7 @@ function App() {
                   ) : location.pathname === '/admin/notifications' ? (
                     <AdminNotifications />
                   ) : (
-                    <AdminRoles />
+                    <AdminRoles selectedProject={selectedProject} />
                   )}
                 </div>
               </Suspense>

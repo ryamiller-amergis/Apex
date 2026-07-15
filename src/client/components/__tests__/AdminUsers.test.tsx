@@ -8,6 +8,8 @@ jest.mock('../../hooks/useRbac', () => ({
   useRoles: jest.fn(),
   useAssignRole: jest.fn(),
   useRemoveRole: jest.fn(),
+  useAssignProjectRole: jest.fn(),
+  useRemoveProjectRole: jest.fn(),
 }));
 
 import {
@@ -15,6 +17,8 @@ import {
   useRoles,
   useAssignRole,
   useRemoveRole,
+  useAssignProjectRole,
+  useRemoveProjectRole,
 } from '../../hooks/useRbac';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -62,6 +66,8 @@ function setupDefaultMocks() {
   (useRoles as jest.Mock).mockReturnValue({ data: [adminRole, memberRole], isLoading: false });
   (useAssignRole as jest.Mock).mockReturnValue(noop);
   (useRemoveRole as jest.Mock).mockReturnValue(noop);
+  (useAssignProjectRole as jest.Mock).mockReturnValue(noop);
+  (useRemoveProjectRole as jest.Mock).mockReturnValue(noop);
 
   return { mutate, mutateAsync };
 }
@@ -345,5 +351,145 @@ describe('AdminUsers — avatar initials', () => {
 
     // 'frank@test.com' → initial 'F'
     expect(screen.getByText('F', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();
+  });
+});
+
+// ── Project roles ───────────────────────────────────────────────────────────
+
+describe('AdminUsers — project roles', () => {
+  const aliceWithProjectRoles = {
+    ...alice,
+    projectRoles: ['member'],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  it('does not show a project roles section when no project is selected', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [aliceWithProjectRoles],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="" />);
+
+    expect(screen.queryByText(/project roles/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a project roles section when a project is selected', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [aliceWithProjectRoles],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    expect(screen.getByText(/project roles.*apex/i)).toBeInTheDocument();
+  });
+
+  it('renders project role badges for a user who has project roles', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [aliceWithProjectRoles],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    const aliceRow = screen.getByText('Alice').closest('tr')!;
+    const projectSection = aliceRow.querySelector('[data-testid="project-roles-user-alice"]')!;
+    expect(projectSection).toBeInTheDocument();
+    expect(projectSection.textContent).toContain('member');
+  });
+
+  it('shows "None" in the project roles section when user has no project roles', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [{ ...alice, projectRoles: [] }],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    const aliceRow = screen.getByText('Alice').closest('tr')!;
+    const projectSection = aliceRow.querySelector('[data-testid="project-roles-user-alice"]')!;
+    expect(projectSection.textContent).toContain('None');
+  });
+
+  it('calls useAssignProjectRole when assigning a project role', async () => {
+    const projectAssignMutate = jest.fn();
+    (useAssignProjectRole as jest.Mock).mockReturnValue({
+      mutate: projectAssignMutate,
+      isPending: false,
+      error: null,
+    });
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [{ ...alice, projectRoles: [] }],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    const select = screen.getByLabelText(/select project role to assign to alice/i);
+    fireEvent.change(select, { target: { value: 'role-member' } });
+
+    const assignBtn = screen.getByLabelText(/assign project role to alice/i);
+    fireEvent.click(assignBtn);
+
+    await waitFor(() => {
+      expect(projectAssignMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ oid: 'user-alice', project: 'Apex', roleId: 'role-member' }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  it('calls useRemoveProjectRole when removing a project role', async () => {
+    const projectRemoveMutate = jest.fn();
+    (useRemoveProjectRole as jest.Mock).mockReturnValue({
+      mutate: projectRemoveMutate,
+      isPending: false,
+      error: null,
+    });
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [aliceWithProjectRoles],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    const removeBtn = screen.getByLabelText(/remove project role member from alice/i);
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(projectRemoveMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          oid: 'user-alice',
+          project: 'Apex',
+          roleId: 'role-member',
+        }),
+      );
+    });
+  });
+
+  it('excludes already-assigned project roles from the project role dropdown', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [aliceWithProjectRoles],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<AdminUsers selectedProject="Apex" />);
+
+    const select = screen.getByLabelText(/select project role to assign to alice/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map(o => o.textContent);
+    expect(optionTexts).not.toContain('member');
+    expect(optionTexts).toContain('admin');
   });
 });

@@ -11,6 +11,7 @@ import type {
   UpdateRoleRequest,
   UpdateRolePermissionsRequest,
   AssignRoleRequest,
+  AssignProjectRoleRequest,
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
@@ -140,6 +141,39 @@ router.delete('/users/:oid/roles/:roleId', async (req: Request, res: Response): 
     const { oid, roleId } = req.params;
     await rbacService.removeRole(oid, roleId);
     res.status(204).send();
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Project Roles ─────────────────────────────────────────────────────────────
+
+router.post('/users/:oid/project-roles', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { oid } = req.params;
+    const { project, roleId } = req.body as AssignProjectRoleRequest;
+    if (!project || !roleId) {
+      res.status(400).json({ error: 'project and roleId are required' });
+      return;
+    }
+    const assignedBy = (req.user as any)?.profile?.oid ?? 'unknown';
+    await rbacService.assignProjectRole(oid, project, roleId, assignedBy);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/users/:oid/project-roles/:roleId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { oid, roleId } = req.params;
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    await rbacService.removeProjectRole(oid, project, roleId);
+    res.json({ ok: true });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -198,7 +198,7 @@ A developer-focused view for managing personal work items and development sessio
 - **Centralized platform** — everything lives in one place with consistent navigation and search
 - **Consistent UI** — all views share the same design language, theming (Light/Dark/Amergis), and interaction patterns
 - **Real-time updates** — SSE-powered notifications, live chat streaming, and polling-based ADO sync keep everything current
-- **Role-based access** — RBAC ensures users see exactly what they need and nothing they don't
+- **Role-based access** — admins can assign global roles or project-specific roles; project roles override global roles when present so access and navigation can differ by project
 - **AI assistance everywhere** — from interviews to PRD generation to design doc validation to standup facilitation, AI agents reduce manual effort at every step
 - **Mobile responsive** — hamburger menu and responsive layouts work on mobile devices
 - **Accessible** — keyboard navigation, ARIA labels, and focus management throughout
@@ -251,7 +251,7 @@ A developer-focused view for managing personal work items and development sessio
 | Platform Admin | `/platform-admin` | Super admin only | Access & Users, Menu Visibility, Feature Flags |
 
 Navigation is controlled by three layers:
-1. **RBAC permissions** — determines if the user has the right to access the module
+1. **RBAC permissions** — determined from project-specific roles when assigned, otherwise from global roles; permissions refresh when the user switches projects
 2. **Menu visibility** — per-project menu settings configured in Platform Admin control which modules appear
 3. **Group membership** — some modules (My Work, Standup) require membership in specific groups
 
@@ -259,8 +259,8 @@ Navigation is controlled by three layers:
 
 ### Project Admin (`/admin`)
 - **Roles** — create, edit, delete roles; manage permission assignments per role
-- **Users** — view all users, assign/revoke roles, search by name or email
-- **Groups** — manage project groups (Developer, BA, QA, etc.) that gate certain features
+- **Users** — view project users and assign/revoke global or project-specific roles; project assignments override global roles for that project
+- **Groups** — manage project groups (Developer, BA, QA, etc.) that gate certain features; member selection is limited to users assigned to the active project
 - **Project Settings** — per-project configuration for AI skills, models, approval mode, designated approvers
 - **Notifications** — admin notification management
 

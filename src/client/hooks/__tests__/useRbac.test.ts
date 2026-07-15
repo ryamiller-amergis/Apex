@@ -12,6 +12,8 @@ import {
   useUpdateRolePermissions,
   useAssignRole,
   useRemoveRole,
+  useAssignProjectRole,
+  useRemoveProjectRole,
 } from '../useRbac';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -380,6 +382,100 @@ describe('useRemoveRole', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/admin/users/user-1/roles/role-admin',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+});
+
+// ── useMyPermissions with project param ─────────────────────────────────────
+
+describe('useMyPermissions (project-aware)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('appends ?project= to the URL when project is provided', async () => {
+    mockFetchOk(myPermsResponse);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useMyPermissions('MyProject'), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/me/permissions?project=MyProject',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('encodes special characters in the project param', async () => {
+    mockFetchOk(myPermsResponse);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useMyPermissions('Project A/B'), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/me/permissions?project=Project%20A%2FB',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('fetches without ?project when project is undefined', async () => {
+    mockFetchOk(myPermsResponse);
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useMyPermissions(), { wrapper });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/me/permissions',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+});
+
+// ── useAssignProjectRole ────────────────────────────────────────────────────
+
+describe('useAssignProjectRole', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POSTs to /api/admin/users/:oid/project-roles with project + roleId body', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useAssignProjectRole(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ oid: 'user-1', project: 'ProjectX', roleId: 'role-dev' });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/users/user-1/project-roles',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(body).toEqual({ project: 'ProjectX', roleId: 'role-dev' });
+  });
+});
+
+// ── useRemoveProjectRole ────────────────────────────────────────────────────
+
+describe('useRemoveProjectRole', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('DELETEs /api/admin/users/:oid/project-roles/:roleId?project=<project>', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRemoveProjectRole(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ oid: 'user-1', project: 'Project A/B', roleId: 'role-dev' });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/users/user-1/project-roles/role-dev?project=Project%20A%2FB',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });

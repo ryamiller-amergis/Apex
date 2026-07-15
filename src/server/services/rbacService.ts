@@ -4,6 +4,7 @@ import {
   appPermissions,
   appRolePermissions,
   appRoles,
+  appUserProjectRoles,
   appUserRoles,
   appUsers,
   userProjectAssignments,
@@ -13,7 +14,34 @@ import type { ActiveUser } from '../../shared/types/interview';
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
-export async function getUserPermissions(userId: string): Promise<Set<string>> {
+export async function getUserPermissions(userId: string, project?: string): Promise<Set<string>> {
+  // Project-scoped resolution: if a project is provided, check for project-specific roles first
+  if (project) {
+    const projectRoleRows = await db.query.appUserProjectRoles.findMany({
+      where: and(eq(appUserProjectRoles.userId, userId), eq(appUserProjectRoles.project, project)),
+      with: {
+        role: {
+          with: {
+            rolePermissions: {
+              with: { permission: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (projectRoleRows.length > 0) {
+      const keys = new Set<string>();
+      for (const ur of projectRoleRows) {
+        for (const rp of ur.role.rolePermissions) {
+          keys.add(rp.permission.key);
+        }
+      }
+      return keys;
+    }
+  }
+
+  // Global role resolution (original behavior)
   const userRoleRows = await db.query.appUserRoles.findMany({
     where: eq(appUserRoles.userId, userId),
     with: {
@@ -208,14 +236,32 @@ export async function listUsersForProject(project: string): Promise<UserWithRole
 
   if (assignments.length === 0) return [];
 
-  const rows = await db.query.appUsers.findMany({
-    where: inArray(appUsers.oid, assignments.map((assignment) => assignment.userId)),
-    with: {
-      userRoles: {
-        with: { role: true },
+  const userIds = assignments.map((assignment) => assignment.userId);
+
+  const [rows, projectRoleRows] = await Promise.all([
+    db.query.appUsers.findMany({
+      where: inArray(appUsers.oid, userIds),
+      with: {
+        userRoles: {
+          with: { role: true },
+        },
       },
-    },
-  });
+    }),
+    db.query.appUserProjectRoles.findMany({
+      where: and(
+        inArray(appUserProjectRoles.userId, userIds),
+        eq(appUserProjectRoles.project, project),
+      ),
+      with: { role: true },
+    }),
+  ]);
+
+  const projectRolesByUser = new Map<string, string[]>();
+  for (const pr of projectRoleRows) {
+    const list = projectRolesByUser.get(pr.userId) ?? [];
+    list.push(pr.role.name);
+    projectRolesByUser.set(pr.userId, list);
+  }
 
   return rows.map((u) => ({
     oid: u.oid,
@@ -223,6 +269,7 @@ export async function listUsersForProject(project: string): Promise<UserWithRole
     email: u.email,
     lastSeenAt: u.lastSeenAt,
     roles: u.userRoles.map((ur) => ur.role.name),
+    projectRoles: projectRolesByUser.get(u.oid) ?? [],
   }));
 }
 
@@ -245,6 +292,48 @@ export async function removeRole(userId: string, roleId: string): Promise<void> 
   await db
     .delete(appUserRoles)
     .where(and(eq(appUserRoles.userId, userId), eq(appUserRoles.roleId, roleId)));
+}
+
+// ── getUserProjectRoles ────────────────────────────────────────────────────────
+
+export async function getUserProjectRoles(userId: string, project: string): Promise<string[]> {
+  const rows = await db.query.appUserProjectRoles.findMany({
+    where: and(eq(appUserProjectRoles.userId, userId), eq(appUserProjectRoles.project, project)),
+    with: { role: true },
+  });
+  return rows.map((r) => r.role.name);
+}
+
+// ── assignProjectRole ─────────────────────────────────────────────────────────
+
+export async function assignProjectRole(
+  userId: string,
+  project: string,
+  roleId: string,
+  assignedBy: string,
+): Promise<void> {
+  await db
+    .insert(appUserProjectRoles)
+    .values({ userId, project, roleId, assignedBy })
+    .onConflictDoNothing();
+}
+
+// ── removeProjectRole ─────────────────────────────────────────────────────────
+
+export async function removeProjectRole(
+  userId: string,
+  project: string,
+  roleId: string,
+): Promise<void> {
+  await db
+    .delete(appUserProjectRoles)
+    .where(
+      and(
+        eq(appUserProjectRoles.userId, userId),
+        eq(appUserProjectRoles.project, project),
+        eq(appUserProjectRoles.roleId, roleId),
+      ),
+    );
 }
 
 // ── getUserRoleNames ───────────────────────────────────────────────────────────
@@ -310,7 +399,18 @@ export async function upsertAppUser(
 
 // ── getActiveUsers ─────────────────────────────────────────────────────────────
 
-export async function getActiveUsers(): Promise<ActiveUser[]> {
+export async function getActiveUsers(project?: string): Promise<ActiveUser[]> {
+  let projectUserIds: string[] | undefined;
+  if (project) {
+    const assignments = await db
+      .select({ userId: userProjectAssignments.userId })
+      .from(userProjectAssignments)
+      .where(eq(userProjectAssignments.project, project));
+
+    projectUserIds = assignments.map((assignment) => assignment.userId);
+    if (projectUserIds.length === 0) return [];
+  }
+
   const rows = await db
     .select({
       oid: appUsers.oid,
@@ -318,7 +418,11 @@ export async function getActiveUsers(): Promise<ActiveUser[]> {
       email: appUsers.email,
     })
     .from(appUsers)
-    .where(isNotNull(appUsers.lastSeenAt))
+    .where(
+      projectUserIds
+        ? and(isNotNull(appUsers.lastSeenAt), inArray(appUsers.oid, projectUserIds))
+        : isNotNull(appUsers.lastSeenAt),
+    )
     .orderBy(asc(appUsers.displayName));
 
   return rows;
