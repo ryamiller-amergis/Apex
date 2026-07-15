@@ -316,6 +316,19 @@ describe('GET /api/admin/users', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({ oid: 'user-1', roles: ['admin'] });
+    expect(mockService.listUsers).toHaveBeenCalledTimes(1);
+    expect(mockService.listUsersForProject).not.toHaveBeenCalled();
+  });
+
+  it('returns only users assigned to the requested project', async () => {
+    mockService.listUsersForProject.mockResolvedValue([userWithRoles]);
+
+    const res = await request(buildApp()).get('/api/admin/users?project=Apex');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([userWithRoles]);
+    expect(mockService.listUsersForProject).toHaveBeenCalledWith('Apex');
+    expect(mockService.listUsers).not.toHaveBeenCalled();
   });
 
   it('returns 500 when listUsers throws', async () => {
@@ -936,6 +949,111 @@ describe('POST /api/admin/groups/seed/:project', () => {
     mockGroupService.seedDefaultGroupsForProject.mockRejectedValue(new Error('DB error'));
 
     const res = await request(buildApp()).post('/api/admin/groups/seed/MyProject');
+
+    expect(res.status).toBe(500);
+  });
+});
+
+// ── POST /api/admin/users/:oid/project-roles ──────────────────────────────────
+
+describe('POST /api/admin/users/:oid/project-roles', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with { ok: true } on successful assignment', async () => {
+    mockService.assignProjectRole.mockResolvedValue(undefined);
+
+    const res = await request(buildApp('admin-oid'))
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ project: 'MyProject', roleId: 'role-admin' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockService.assignProjectRole).toHaveBeenCalledWith(
+      'user-1',
+      'MyProject',
+      'role-admin',
+      'admin-oid',
+    );
+  });
+
+  it('returns 400 when project is missing', async () => {
+    const res = await request(buildApp('admin-oid'))
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ roleId: 'role-admin' });
+
+    expect(res.status).toBe(400);
+    expect(mockService.assignProjectRole).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when roleId is missing', async () => {
+    const res = await request(buildApp('admin-oid'))
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ project: 'MyProject' });
+
+    expect(res.status).toBe(400);
+    expect(mockService.assignProjectRole).not.toHaveBeenCalled();
+  });
+
+  it('uses "unknown" as assignedBy when no user is authenticated', async () => {
+    mockService.assignProjectRole.mockResolvedValue(undefined);
+
+    await request(buildApp())
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ project: 'MyProject', roleId: 'role-member' });
+
+    expect(mockService.assignProjectRole).toHaveBeenCalledWith(
+      'user-1',
+      'MyProject',
+      'role-member',
+      'unknown',
+    );
+  });
+
+  it('returns 500 when assignProjectRole throws', async () => {
+    mockService.assignProjectRole.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp('admin-oid'))
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ project: 'MyProject', roleId: 'role-admin' });
+
+    expect(res.status).toBe(500);
+  });
+});
+
+// ── DELETE /api/admin/users/:oid/project-roles/:roleId ────────────────────────
+
+describe('DELETE /api/admin/users/:oid/project-roles/:roleId', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 200 with { ok: true } on successful removal', async () => {
+    mockService.removeProjectRole.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .delete('/api/admin/users/user-1/project-roles/role-admin?project=MyProject');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockService.removeProjectRole).toHaveBeenCalledWith(
+      'user-1',
+      'MyProject',
+      'role-admin',
+    );
+  });
+
+  it('returns 400 when project query param is missing', async () => {
+    const res = await request(buildApp())
+      .delete('/api/admin/users/user-1/project-roles/role-admin');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'project query parameter is required' });
+    expect(mockService.removeProjectRole).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when removeProjectRole throws', async () => {
+    mockService.removeProjectRole.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp())
+      .delete('/api/admin/users/user-1/project-roles/role-admin?project=MyProject');
 
     expect(res.status).toBe(500);
   });

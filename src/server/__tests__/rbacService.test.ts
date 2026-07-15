@@ -32,6 +32,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         appUserRoles: { findMany: jest.fn() },
+        appUserProjectRoles: { findMany: jest.fn() },
         appRoles: { findFirst: jest.fn(), findMany: jest.fn() },
         appUsers: { findMany: jest.fn() },
       },
@@ -58,6 +59,9 @@ import {
   assignRole,
   removeRole,
   upsertAppUser,
+  getUserProjectRoles,
+  assignProjectRole,
+  removeProjectRole,
 } from '../services/rbacService';
 
 // Grab a reference to the mocked db so individual tests can configure return values
@@ -499,5 +503,125 @@ describe('upsertAppUser', () => {
       expect.objectContaining({ oid: 'oid-1', displayName: 'Bob Smith', email: 'bob@example.com' }),
     );
     expect(onConflictMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── getUserPermissions (project-aware) ─────────────────────────────────────────
+
+describe('getUserPermissions (project-aware)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('uses project roles when project is provided and project roles exist', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      { role: viewerRole },
+    ]);
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms).toBeInstanceOf(Set);
+    expect(perms.has('cost:view')).toBe(true);
+    expect(perms.has('admin:roles')).toBe(false);
+    expect(mockDb.query.appUserRoles.findMany).not.toHaveBeenCalled();
+  });
+
+  it('falls back to global roles when project is provided but no project roles exist', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([]);
+    mockDb.query.appUserRoles.findMany.mockResolvedValue([
+      { role: adminRole },
+    ]);
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms.has('admin:roles')).toBe(true);
+    expect(perms.has('admin:users')).toBe(true);
+  });
+
+  it('falls back to default role when project provided, no project roles, no global roles', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([]);
+    mockDb.query.appUserRoles.findMany.mockResolvedValue([]);
+    mockDb.query.appRoles.findFirst.mockResolvedValue(memberRole);
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms.has('chat:create')).toBe(true);
+    expect(perms.has('workitems:write')).toBe(true);
+  });
+
+  it('skips project role lookup when project is not provided (original behavior)', async () => {
+    mockDb.query.appUserRoles.findMany.mockResolvedValue([
+      { role: adminRole },
+    ]);
+
+    const perms = await getUserPermissions('user-1');
+
+    expect(perms.has('admin:roles')).toBe(true);
+    expect(mockDb.query.appUserProjectRoles.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ── getUserProjectRoles ────────────────────────────────────────────────────────
+
+describe('getUserProjectRoles', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns role names for the user on the given project', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      { role: { name: 'admin' } },
+      { role: { name: 'viewer' } },
+    ]);
+
+    const names = await getUserProjectRoles('user-1', 'ProjectX');
+
+    expect(names).toEqual(['admin', 'viewer']);
+    expect(mockDb.query.appUserProjectRoles.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an empty array when the user has no project roles', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([]);
+
+    const names = await getUserProjectRoles('user-1', 'ProjectX');
+
+    expect(names).toEqual([]);
+  });
+});
+
+// ── assignProjectRole ──────────────────────────────────────────────────────────
+
+describe('assignProjectRole', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('inserts a project-role record and ignores conflicts', async () => {
+    const onConflictMock = jest.fn().mockResolvedValue(undefined);
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await assignProjectRole('user-1', 'ProjectX', 'role-admin', 'admin-user');
+
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        project: 'ProjectX',
+        roleId: 'role-admin',
+        assignedBy: 'admin-user',
+      }),
+    );
+    expect(onConflictMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── removeProjectRole ──────────────────────────────────────────────────────────
+
+describe('removeProjectRole', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('deletes the project-role record', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: whereMock });
+
+    await removeProjectRole('user-1', 'ProjectX', 'role-admin');
+
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(whereMock).toHaveBeenCalledTimes(1);
   });
 });

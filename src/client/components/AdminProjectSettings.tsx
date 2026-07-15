@@ -519,7 +519,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
   const { data: bedrockModels = [] } = useAvailableBedrockModels();
-  const { data: allUsers = [] } = useUsers();
+  const { data: allUsers = [] } = useUsers(selectedProject);
 
   // ── Derived: filter to current project ────────────────────────────────
   const projectConfigs = configs.filter((c) => c.project === selectedProject);
@@ -565,7 +565,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   );
   const { data: approversData } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
-  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers();
+  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers(selectedProject);
 
   // ── Effects ────────────────────────────────────────────────────────────
 

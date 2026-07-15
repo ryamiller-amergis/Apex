@@ -18,7 +18,7 @@ Apex is an internal product-building and project-management platform. It central
 | In-App Notifications | `design-docs/in-app-notifications.md`, `design-docs/ai-completion-notifications.md` | `.cursor/skills/in-app-notifications/SKILL.md` | `notificationService.ts`, `aiCompletionNotifier.ts` | `NotificationBell.tsx`, `NotificationCenter.tsx`, `ToastContainer.tsx` |
 | Feature Flags | `design-docs/feature_flags_system_84747609.plan.md` | `.cursor/skills/feature-flags/SKILL.md` | `featureFlagService.ts` | `PlatformAdmin.tsx`, `FeatureFlagDemo.tsx` |
 | Feature Requests | `design-docs/feature-requests.md` | `.cursor/skills/feature-request-analysis/SKILL.md` | `featureRequestService.ts`, `featureRequestAnalysisService.ts` | `FeatureRequestsView.tsx`, `FeatureRequestModal.tsx`, `FeatureRequestFab.tsx` |
-| RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
+| RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md`, `design-docs/per-user-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
 | Calendar & Work Items | — | — | `azureDevOps.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx` |
 | Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
@@ -43,7 +43,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Skill Pill** | A clickable shortcut button on the Agent Home page that routes messages through a specific skill and model |
 | **PBI** | Product Backlog Item (Azure DevOps work item type) |
 | **TBI** | Technical Backlog Item (Azure DevOps work item type) |
-| **RBAC** | Role-Based Access Control — permissions assigned to roles, roles assigned to users |
+| **RBAC** | Role-Based Access Control — permissions assigned to roles; users may have global roles or project-specific roles that override global roles for that project |
 | **Super Admin** | A platform-level administrator who bypasses all menu visibility and most permission checks |
 | **Platform Admin** | The admin panel for cross-project settings: access management, menu visibility, feature flags |
 | **Project Admin** | Per-project admin panel for roles, users, groups, project settings, and notifications |

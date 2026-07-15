@@ -267,7 +267,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   const [designPrototypeApproverIds, setDesignPrototypeApproverIds] = useState<string[]>([]);
   const [testCaseApproverIds, setTestCaseApproverIds] = useState<string[]>([]);
 
-  const { data: users = [], isLoading } = useActiveUsers();
+  const { data: users = [], isLoading } = useActiveUsers(project);
   const { data: groupsWithMembers = [], isLoading: groupsLoading } = useInterviewGroupsWithMembers(project);
   const { data: prdPool, isLoading: prdPoolLoading } = useAvailableApproverPool(project, 'prd', false);
   const { data: ddPool, isLoading: ddPoolLoading } = useAvailableApproverPool(project, 'design_doc', false);
