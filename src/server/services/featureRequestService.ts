@@ -14,6 +14,7 @@ import type {
   FeatureRequestStatus,
   FeatureRequestPriority,
   FeatureRequestRisk,
+  WorkItemType,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
 import { getSuperAdminEmails } from '../utils/superAdmin';
@@ -22,9 +23,10 @@ import { getSuperAdminEmails } from '../utils/superAdmin';
 
 interface FeatureRequestRow {
   id: string;
+  type: string;
   title: string;
   request: string;
-  advantage: string;
+  advantage: string | null;
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
@@ -46,6 +48,7 @@ interface FeatureRequestRow {
 function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
   return {
     id: row.id,
+    type: row.type as WorkItemType,
     title: row.title,
     request: row.request,
     advantage: row.advantage,
@@ -73,14 +76,15 @@ function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
 export async function createFeatureRequest(
   userId: string,
   project: string,
-  data: { title: string; request: string; advantage: string },
+  data: { type: WorkItemType; title: string; request: string; advantage?: string | null },
 ): Promise<FeatureRequest> {
   const [row] = await db
     .insert(featureRequests)
     .values({
+      type: data.type,
       title: data.title,
       request: data.request,
-      advantage: data.advantage,
+      advantage: data.advantage ?? null,
       submittedBy: userId,
       sourceProject: project,
       status: 'new',
@@ -97,6 +101,7 @@ export async function listFeatureRequests(): Promise<FeatureRequest[]> {
   const rows = await db
     .select({
       id: featureRequests.id,
+      type: featureRequests.type,
       title: featureRequests.title,
       request: featureRequests.request,
       advantage: featureRequests.advantage,
@@ -130,6 +135,7 @@ export async function getFeatureRequest(id: string): Promise<FeatureRequest | nu
   const rows = await db
     .select({
       id: featureRequests.id,
+      type: featureRequests.type,
       title: featureRequests.title,
       request: featureRequests.request,
       advantage: featureRequests.advantage,

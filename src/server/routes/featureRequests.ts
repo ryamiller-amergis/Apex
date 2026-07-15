@@ -9,7 +9,11 @@ import {
   linkInterview,
   resolveApexReviewers,
 } from '../services/featureRequestService';
-import type { UpdateFeatureRequestDTO } from '../../shared/types/featureRequest';
+import {
+  WORK_ITEM_TYPES,
+  type UpdateFeatureRequestDTO,
+  type WorkItemType,
+} from '../../shared/types/featureRequest';
 import {
   autoStartFeatureRequestAnalysis,
   reanalyzeFeatureRequest,
@@ -22,25 +26,38 @@ const router = Router();
 router.post('/', requirePermission('feature-requests:submit'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { title, request, advantage, project } = req.body as {
+    const { type, title, request, advantage, project } = req.body as {
+      type?: WorkItemType;
       title?: string;
       request?: string;
       advantage?: string;
       project?: string;
     };
 
-    if (!title?.trim() || !request?.trim() || !advantage?.trim() || !project?.trim()) {
-      return res.status(400).json({ error: 'title, request, advantage, and project are required' });
+    if (!type || !WORK_ITEM_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'type must be feature, technical, or issue' });
+    }
+    if (!title?.trim() || !request?.trim() || !project?.trim()) {
+      return res.status(400).json({ error: 'title, request, and project are required' });
     }
 
-    const created = await createFeatureRequest(userId, project, { title, request, advantage });
+    const created = await createFeatureRequest(userId, project, {
+      type,
+      title: title.trim(),
+      request: request.trim(),
+      advantage: advantage?.trim() || null,
+    });
 
     // Notify Apex reviewers
     const reviewers = await resolveApexReviewers();
     for (const reviewerId of reviewers) {
       await createNotification(reviewerId, {
         type: 'user-action',
-        title: 'New feature request',
+        title: {
+          feature: 'New feature request',
+          technical: 'New technical item',
+          issue: 'New issue reported',
+        }[type],
         body: created.title,
         link: '/feature-requests',
       });

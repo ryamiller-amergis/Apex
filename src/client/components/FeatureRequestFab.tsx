@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { AskApexChat } from './AskApexChat';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 import styles from './FeatureRequestFab.module.css';
 
 const FAB_SIZE = 48;
@@ -9,7 +10,7 @@ const FAB_MARGIN = 24;
 const FAB_STORAGE_KEY = 'apex-fab-position';
 const DRAG_THRESHOLD = 6;
 const MENU_MIN_WIDTH = 220;
-const MENU_ESTIMATED_HEIGHT = 96;
+const MENU_ESTIMATED_HEIGHT = 144;
 const VIEWPORT_MARGIN = 8;
 const MENU_GAP = 8;
 
@@ -24,7 +25,7 @@ interface ViewportSize {
 }
 
 interface FeatureRequestFabProps {
-  onRequestFeature: () => void;
+  onSubmit: (type: WorkItemType) => void;
 }
 
 function clampPosition(pos: Position): Position {
@@ -115,7 +116,7 @@ function computeMenuStyle(
   return { left, top };
 }
 
-export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestFeature }) => {
+export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(() => {
@@ -169,8 +170,13 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestF
 
   const handleRequestFeature = useCallback(() => {
     setMenuOpen(false);
-    onRequestFeature();
-  }, [onRequestFeature]);
+    onSubmit('feature');
+  }, [onSubmit]);
+
+  const handleReportIssue = useCallback(() => {
+    setMenuOpen(false);
+    onSubmit('issue');
+  }, [onSubmit]);
 
   const handleAskApex = useCallback(() => {
     setMenuOpen(false);
@@ -338,6 +344,17 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onRequestF
                   <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
                 </svg>
                 Ask Apex
+              </button>
+              <button
+                className={styles['menu-item']}
+                onClick={handleReportIssue}
+                type="button"
+                role="menuitem"
+              >
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M12 2 1 21h22L12 2zm0 4 7.5 13h-15L12 6zm-1 4v5h2v-5h-2zm0 7v2h2v-2h-2z" />
+                </svg>
+                Report an Issue
               </button>
             </div>
           </>

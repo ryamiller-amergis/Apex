@@ -24,6 +24,7 @@ import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/appro
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -539,6 +540,10 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   standupModel: text('standup_model'),
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
+  technicalSkillPath: text('technical_skill_path'),
+  technicalModel: text('technical_model'),
+  issueSkillPath: text('issue_skill_path'),
+  issueModel: text('issue_model'),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -1107,9 +1112,10 @@ export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
 
 export const featureRequests = pgTable('feature_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
+  type: text('type').$type<WorkItemType>().notNull().default('feature'),
   title: text('title').notNull(),
   request: text('request').notNull(),
-  advantage: text('advantage').notNull(),
+  advantage: text('advantage'),
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
@@ -1127,6 +1133,7 @@ export const featureRequests = pgTable('feature_requests', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
+  typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
 }));
 
