@@ -28,6 +28,7 @@ import {
   useFixDesignDocCommentWithAi,
   useDesignDocOwnerApproval,
   useDesignDocOwnerApprove,
+  useRetryGenerateDesignDoc,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useChatStream } from '../hooks/useChatStream';
@@ -132,6 +133,7 @@ function fixFlowReducer(state: FixFlowState, action: FixFlowAction): FixFlowStat
 function statusBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return styles.badgeGenerating;
+    case 'generation_failed': return styles.badgeRevisionRequested;
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
@@ -144,6 +146,7 @@ function statusBadgeClass(status: DesignDocStatus): string {
 function statusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return 'Generating';
+    case 'generation_failed': return 'Failed';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
@@ -1223,9 +1226,12 @@ export const DesignDocReviewView: React.FC = () => {
   useDesignDocOwnerApproval(id);
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
+  const retryGenerate = useRetryGenerateDesignDoc();
+
   const isGenerating = !!doc && doc.status === 'generating' && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
   );
+  const isGenerationFailed = !!doc && doc.status === 'generation_failed';
 
   const handleEditToggle = useCallback((tab: TabId) => {
     if (!doc) return;
@@ -2120,6 +2126,26 @@ export const DesignDocReviewView: React.FC = () => {
           title={apexFixRunningBanner.title}
           subtitle={apexFixRunningBanner.subtitle}
         />
+      )}
+
+      {isGenerationFailed && (
+        /* ── Generation failed banner ────────────────────────────────── */
+        <div className={styles.generatingBanner} style={{ borderColor: 'var(--error-color)' }}>
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--error-color)' }}>Generation failed</div>
+            <div style={{ marginTop: 4, color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+              {doc?.generationError ?? 'The AI agent did not produce the required output files.'}
+            </div>
+          </div>
+          <button
+            className={styles.btnApprove}
+            onClick={() => id && retryGenerate.mutate(id)}
+            disabled={retryGenerate.isPending}
+            type="button"
+          >
+            {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
+          </button>
+        </div>
       )}
 
       {isGenerating ? (

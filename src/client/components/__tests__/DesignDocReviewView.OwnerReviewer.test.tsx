@@ -56,6 +56,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDocumentAssignments: (...args: unknown[]) => mockUseDocumentAssignments(...args),
   useDesignDocOwnerApproval: jest.fn(() => ({ data: null })),
   useDesignDocOwnerApprove: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useRetryGenerateDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
 jest.mock('../../hooks/useChatStream', () => ({

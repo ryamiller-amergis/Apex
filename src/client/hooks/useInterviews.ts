@@ -151,6 +151,8 @@ export function useGenerateTestCases() {
 
 // ── Design Doc queries ────────────────────────────────────────────────────────
 
+const TRANSIENT_DOC_STATUSES: DesignDocStatus[] = ['generating', 'validating'];
+
 export function useDesignDocList(filters?: {
   status?: DesignDocStatus;
   project?: string;
@@ -165,6 +167,11 @@ export function useDesignDocList(filters?: {
     queryKey: ['design-docs', filters],
     queryFn: () => apiFetch(`/api/interviews/design-docs${qs}`),
     staleTime: 30_000,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      return data.some((d) => TRANSIENT_DOC_STATUSES.includes(d.status)) ? 5_000 : false;
+    },
   });
 }
 
@@ -174,6 +181,11 @@ export function useDesignDocsByPrd(prdId: string | null | undefined) {
     queryFn: () => apiFetch(`/api/interviews/design-docs?prdId=${prdId}`),
     enabled: !!prdId,
     staleTime: 30_000,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      return data.some((d) => TRANSIENT_DOC_STATUSES.includes(d.status)) ? 5_000 : false;
+    },
   });
 }
 
@@ -708,6 +720,20 @@ export function useSyncDesignDoc() {
   });
 }
 
+export function useRetryGenerateDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; threadId: string }, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/retry-generate`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, designDocId) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
 export function useDesignDocValidation(docId: string | null) {
   return useQuery({
     queryKey: ['design-doc-validation', docId],
@@ -1184,11 +1210,19 @@ export function useOwnerApprove(prdId: string | null, documentType: OwnerApprova
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['owner-approval', prdId, documentType] });
       if (documentType === 'design_prototype') {
-        qc.invalidateQueries({ queryKey: ['prototypes'] });
+        // Invalidate the specific prototype, the PRD's prototype list, and design doc lists.
+        if (variables.prototypeId) {
+          qc.invalidateQueries({ queryKey: ['design-prototype', variables.prototypeId] });
+        }
+        qc.invalidateQueries({ queryKey: ['design-prototypes', 'prd', prdId] });
+        qc.invalidateQueries({ queryKey: ['design-prototypes'] });
+        // Design docs are created async after owner approve — invalidate to pick them up.
+        qc.invalidateQueries({ queryKey: ['design-docs', { prdId }] });
+        qc.invalidateQueries({ queryKey: ['design-docs'] });
       }
     },
   });

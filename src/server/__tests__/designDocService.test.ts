@@ -54,8 +54,8 @@ jest.mock('../services/chatAgentService', () => ({
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
   isThreadIdle: jest.fn().mockReturnValue(false),
   createThread: jest.fn(),
-  sendMessage: jest.fn(),
-  cancelRun: jest.fn(),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
+  cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -104,6 +104,7 @@ import {
   markValidationReady,
   startDesignDocWatcher,
   startSingleFeatureDesignDocWatcher,
+  finalizeSingleFeatureDoc,
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -1297,11 +1298,80 @@ describe('startSingleFeatureDesignDocWatcher — routing context injection', () 
     expect(freeformContext).toContain('Target route: N/A');
   });
 
-  it('does not call createThread when the doc already exists (idempotency guard)', async () => {
-    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-existing' });
+  it('does not call createThread when the doc already exists and is not generation_failed', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-existing', status: 'generating' });
 
     await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
 
     expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('does not call createThread when the doc exists with generation_failed (retry via route)', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-failed', status: 'generation_failed' });
+
+    await startSingleFeatureDesignDocWatcher('proto-1', 0, 'prd-1', null);
+
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+});
+
+// ── finalizeSingleFeatureDoc — idempotency guard ───────────────────────────────
+
+describe('finalizeSingleFeatureDoc — idempotency guard', () => {
+  const { finalizeSingleFeatureDoc } = require('../services/designDocService');
+  const { readOutputDesignDoc: mockDesign, readOutputTechSpec: mockTech, readOutputAssumptions: mockAssumptions } =
+    jest.requireMock('../services/chatAgentService') as {
+      readOutputDesignDoc: jest.Mock;
+      readOutputTechSpec: jest.Mock;
+      readOutputAssumptions: jest.Mock;
+    };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+  });
+
+  it('returns false without updating when thread guard fails (already finalized)', async () => {
+    // Row no longer owns the thread — guard fails
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await finalizeSingleFeatureDoc('doc-1', 'thread-old', 'proj-alpha');
+
+    expect(result).toBe(false);
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it('returns true and writes content when all three output files are present', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await finalizeSingleFeatureDoc('doc-1', 'thread-1', 'proj-alpha');
+
+    expect(result).toBe(true);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ designContent: '# Design', techSpecContent: '# Tech', assumptionsContent: '# Assumptions' }),
+    );
+  });
+
+  it('returns false and marks generation_failed when output files are missing', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDesign.mockReturnValue(null);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await finalizeSingleFeatureDoc('doc-1', 'thread-1', 'proj-alpha');
+
+    expect(result).toBe(false);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
   });
 });

@@ -242,7 +242,7 @@ export interface PrdValidationBaseline {
   fixThreadId?: string;
 }
 
-export type DesignDocStatus = 'generating' | 'validating' | 'draft' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
+export type DesignDocStatus = 'generating' | 'generation_failed' | 'validating' | 'draft' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
 
 export interface DesignDocSummary {
   id: string;
@@ -252,6 +252,7 @@ export interface DesignDocSummary {
   chatThreadId: string | null;
   designPrototypeId?: string | null;
   featureIndex?: number | null;
+  generationError?: string | null;
   docAssistantThreadId?: string | null;
   validationThreadId?: string | null;
   validationScore?: number | null;
@@ -295,6 +296,7 @@ export interface ReviewDesignDocRequest {
 export function designDocStatusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return 'Generating';
+    case 'generation_failed': return 'Failed';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
@@ -307,6 +309,7 @@ export function designDocStatusLabel(status: DesignDocStatus): string {
 export function designDocBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return 'generating';
+    case 'generation_failed': return 'generation-failed';
     case 'validating': return 'validating';
     case 'draft': return 'draft';
     case 'pending_review': return 'pending-review';

@@ -1181,14 +1181,14 @@ router.post('/design-docs/:id/sync', requirePermission('interviews:manage'), asy
   }
 });
 
-// POST /design-docs/:id/retry-generate — re-trigger generation for a stuck seed doc
+// POST /design-docs/:id/retry-generate — re-trigger generation for a stuck or failed doc
 router.post('/design-docs/:id/retry-generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const doc = await getDesignDoc(req.params.id);
     if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
-    if (doc.status !== 'generating') {
-      res.status(409).json({ error: `Design doc is not in generating status (current: ${doc.status})` });
+    if (doc.status !== 'generating' && doc.status !== 'generation_failed') {
+      res.status(409).json({ error: `Design doc cannot be retried from status '${doc.status}' — must be generating or generation_failed` });
       return;
     }
 
@@ -1287,6 +1287,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
     const globalModel = await getDefaultModel();
     const model = skillConfig?.designDocModel ?? globalModel;
 
+    // Create with auto-kickoff disabled — persist DB state first, then fire the agent.
     const thread = await createThread(userId, {
       project: doc.project,
       repo: skillConfig?.skillRepo ?? doc.project,
@@ -1295,14 +1296,21 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
-    });
+    }, { skipAutoKickoff: true });
 
+    // Reset the row: clear error, attach new thread, set back to generating.
     await db
       .update(designDocsTable)
-      .set({ chatThreadId: thread.id, model, updatedAt: new Date().toISOString() })
+      .set({ chatThreadId: thread.id, model, generationError: null, status: 'generating', updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
     startSingleFeatureDocWatcher(req.params.id, thread.id, doc.prdId, doc.project);
+
+    // Start agent now that row and watcher are in place.
+    const { sendMessage: sendRetryMsg } = await import('../services/chatAgentService');
+    sendRetryMsg(thread.id, `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`, undefined, [], { hidden: true }).catch((err: Error) => {
+      console.error(`[interviews] retry-generate kickoff failed (designDocId=${req.params.id}):`, err.message);
+    });
 
     res.json({ ok: true, threadId: thread.id });
   } catch (err) {
@@ -2172,42 +2180,55 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
   try {
     const userId = getUserId(req);
     const { prdId } = req.params;
-    const { status, comment } = req.body as OwnerApproveRequest;
+    const { status, comment, prototypeId } = req.body as OwnerApproveRequest;
 
+    if (!prototypeId) {
+      res.status(400).json({ error: 'prototypeId is required' });
+      return;
+    }
+
+    // Fetch the named prototype and validate it belongs to this PRD.
+    const proto = await db.query.designPrototypes.findFirst({
+      where: and(eq(designPrototypesTable.id, prototypeId), eq(designPrototypesTable.prdId, prdId)),
+      columns: { id: true, featureIndex: true, status: true },
+    });
+
+    if (!proto) {
+      res.status(404).json({ error: 'Design prototype not found for this PRD' });
+      return;
+    }
+
+    if (proto.status !== 'reviewer_approved') {
+      res.status(409).json({ error: `Cannot owner-approve a prototype in status '${proto.status}' — must be reviewer_approved` });
+      return;
+    }
+
+    // Ownership check — resolves through prototype → PRD → interview.
     const admin = await isAdminUser(userId);
-    const isOwner = await isDocumentOwner(prdId, 'design_prototype', userId);
+    const isOwner = await isDocumentOwner(prototypeId, 'design_prototype', userId);
     if (!isOwner && !admin) {
       res.status(403).json({ error: 'Only the document owner can give final approval' });
       return;
     }
 
-    const proto = await db.query.designPrototypes.findFirst({
-      where: and(eq(designPrototypesTable.prdId, prdId), eq(designPrototypesTable.status, 'reviewer_approved')),
-      columns: { id: true, featureIndex: true },
-    });
-
-    if (!proto) {
-      res.status(409).json({ error: 'No design prototype awaiting owner approval' });
-      return;
-    }
-
-    await recordOwnerApproval(prdId, 'design_prototype', userId, status, comment);
+    // Record the approval keyed to this specific prototype.
+    await recordOwnerApproval(prototypeId, 'design_prototype', userId, status, comment);
 
     if (status === 'approved') {
       await db.update(designPrototypesTable).set({
         status: 'approved',
         updatedAt: new Date().toISOString(),
-      }).where(eq(designPrototypesTable.id, proto.id));
+      }).where(eq(designPrototypesTable.id, prototypeId));
 
-      triggerDesignDocForPrototype(proto.id, proto.featureIndex).catch(err => {
-        console.error(`[ownerApproval] triggerDesignDocForPrototype failed (prototypeId=${proto.id})`, err);
+      triggerDesignDocForPrototype(prototypeId, proto.featureIndex).catch(err => {
+        console.error(`[ownerApproval] triggerDesignDocForPrototype failed (prototypeId=${prototypeId})`, err);
       });
     } else {
       await db.update(designPrototypesTable).set({
         status: 'revision_requested',
         reviewComment: comment ?? null,
         updatedAt: new Date().toISOString(),
-      }).where(eq(designPrototypesTable.id, proto.id));
+      }).where(eq(designPrototypesTable.id, prototypeId));
     }
 
     res.json({ ok: true });
