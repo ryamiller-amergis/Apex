@@ -1,6 +1,13 @@
 import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { appPermissions, appRolePermissions, appRoles, appUserRoles, appUsers } from '../db/schema';
+import {
+  appPermissions,
+  appRolePermissions,
+  appRoles,
+  appUserRoles,
+  appUsers,
+  userProjectAssignments,
+} from '../db/schema';
 import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
 import type { ActiveUser } from '../../shared/types/interview';
 
@@ -175,6 +182,34 @@ export async function listPermissions(): Promise<AppPermission[]> {
 
 export async function listUsers(): Promise<UserWithRoles[]> {
   const rows = await db.query.appUsers.findMany({
+    with: {
+      userRoles: {
+        with: { role: true },
+      },
+    },
+  });
+
+  return rows.map((u) => ({
+    oid: u.oid,
+    displayName: u.displayName,
+    email: u.email,
+    lastSeenAt: u.lastSeenAt,
+    roles: u.userRoles.map((ur) => ur.role.name),
+  }));
+}
+
+// ── listUsersForProject ────────────────────────────────────────────────────────
+
+export async function listUsersForProject(project: string): Promise<UserWithRoles[]> {
+  const assignments = await db
+    .select({ userId: userProjectAssignments.userId })
+    .from(userProjectAssignments)
+    .where(eq(userProjectAssignments.project, project));
+
+  if (assignments.length === 0) return [];
+
+  const rows = await db.query.appUsers.findMany({
+    where: inArray(appUsers.oid, assignments.map((assignment) => assignment.userId)),
     with: {
       userRoles: {
         with: { role: true },

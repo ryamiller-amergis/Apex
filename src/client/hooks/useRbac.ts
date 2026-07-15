@@ -58,10 +58,15 @@ export function usePermissions() {
   });
 }
 
-export function useUsers() {
+export function useUsers(project?: string) {
   return useQuery<UserWithRoles[]>({
-    queryKey: ['admin', 'users'],
-    queryFn: () => apiFetch<UserWithRoles[]>('/api/admin/users'),
+    queryKey: ['admin', 'users', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/admin/users?project=${encodeURIComponent(project)}`
+        : '/api/admin/users';
+      return apiFetch<UserWithRoles[]>(url);
+    },
     staleTime: 30_000,
   });
 }

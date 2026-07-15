@@ -80,6 +80,12 @@ describe('AdminUsers — rendering', () => {
     expect(screen.getByText('User Management')).toBeInTheDocument();
   });
 
+  it('loads users for the selected project', () => {
+    render(<AdminUsers selectedProject="Apex" />);
+
+    expect(useUsers).toHaveBeenCalledWith('Apex');
+  });
+
   it('renders a row for each user', () => {
     render(<AdminUsers />);
 

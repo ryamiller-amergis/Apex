@@ -316,6 +316,19 @@ describe('GET /api/admin/users', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({ oid: 'user-1', roles: ['admin'] });
+    expect(mockService.listUsers).toHaveBeenCalledTimes(1);
+    expect(mockService.listUsersForProject).not.toHaveBeenCalled();
+  });
+
+  it('returns only users assigned to the requested project', async () => {
+    mockService.listUsersForProject.mockResolvedValue([userWithRoles]);
+
+    const res = await request(buildApp()).get('/api/admin/users?project=Apex');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([userWithRoles]);
+    expect(mockService.listUsersForProject).toHaveBeenCalledWith('Apex');
+    expect(mockService.listUsers).not.toHaveBeenCalled();
   });
 
   it('returns 500 when listUsers throws', async () => {

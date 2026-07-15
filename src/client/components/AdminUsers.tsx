@@ -22,11 +22,15 @@ function getInitial(displayName: string | null, email: string | null): string {
   return source[0].toUpperCase();
 }
 
-export const AdminUsers: React.FC = () => {
+interface AdminUsersProps {
+  selectedProject?: string;
+}
+
+export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) => {
   const [search, setSearch] = useState('');
   const [pendingAssign, setPendingAssign] = useState<Record<string, string>>({});
 
-  const { data: users = [], isLoading: usersLoading, error: usersError } = useUsers();
+  const { data: users = [], isLoading: usersLoading, error: usersError } = useUsers(selectedProject);
   const { data: roles = [], isLoading: rolesLoading } = useRoles();
 
   const assignRole = useAssignRole();

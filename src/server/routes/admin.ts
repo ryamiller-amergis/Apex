@@ -107,9 +107,12 @@ router.get('/permissions', async (_req: Request, res: Response): Promise<void> =
 
 // ── Users ──────────────────────────────────────────────────────────────────────
 
-router.get('/users', async (_req: Request, res: Response): Promise<void> => {
+router.get('/users', async (req: Request, res: Response): Promise<void> => {
   try {
-    const users = await rbacService.listUsers();
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+    const users = project
+      ? await rbacService.listUsersForProject(project)
+      : await rbacService.listUsers();
     res.json(users);
   } catch {
     res.status(500).json({ error: 'Internal server error' });

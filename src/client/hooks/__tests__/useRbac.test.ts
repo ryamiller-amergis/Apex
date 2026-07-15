@@ -205,6 +205,20 @@ describe('useUsers', () => {
     expect(result.current.data).toHaveLength(1);
     expect(result.current.data![0]).toMatchObject({ oid: 'user-1', roles: ['admin'] });
   });
+
+  it('includes an encoded project when project scoping is requested', async () => {
+    mockFetchOk(users);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useUsers('Project A/B'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/users?project=Project%20A%2FB',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
 });
 
 // ── useCreateRole ──────────────────────────────────────────────────────────────
