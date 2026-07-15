@@ -155,16 +155,18 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
 
         <div className={styles['body']}>
           <section className={styles['section']}>
-            <h3 className={styles['sectionTitle']}>Request</h3>
+            <h3 className={styles['sectionTitle']}>Description</h3>
             <div className={styles['prose']}>{formatBody(fr.request)}</div>
           </section>
 
-          <section className={styles['section']}>
-            <h3 className={styles['sectionTitle']}>Advantage</h3>
-            <div className={styles['prose']}>{formatBody(fr.advantage)}</div>
-          </section>
+          {fr.type === 'feature' && fr.advantage && (
+            <section className={styles['section']}>
+              <h3 className={styles['sectionTitle']}>Advantage</h3>
+              <div className={styles['prose']}>{formatBody(fr.advantage)}</div>
+            </section>
+          )}
 
-          {fr.interviewId && (
+          {fr.type === 'feature' && fr.interviewId && (
             <section className={styles['section']}>
               <h3 className={styles['sectionTitle']}>Interview</h3>
               <button
@@ -273,7 +275,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
           )}
         </div>
 
-        {(canManage || (canKickOff && !fr.interviewId)) && (
+        {(canManage || (fr.type === 'feature' && canKickOff && !fr.interviewId)) && (
           <footer className={styles['footer']}>
             {canManage && (
               <button
@@ -285,7 +287,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
               </button>
             )}
-            {canKickOff && !fr.interviewId && (
+            {fr.type === 'feature' && canKickOff && !fr.interviewId && (
               <button
                 className={styles['primaryAction']}
                 type="button"
@@ -295,7 +297,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                       id: fr.id,
                       title: fr.title,
                       request: fr.request,
-                      advantage: fr.advantage,
+                      advantage: fr.advantage ?? '',
                     },
                   },
                 })}

@@ -4,6 +4,7 @@ import { reorderWithSequentialRanks, sortFeatureRequestsByRank } from '../featur
 function makeRequest(id: string, rank: number | null, createdAt: string): FeatureRequest {
   return {
     id,
+    type: 'feature',
     title: `Request ${id}`,
     request: 'details',
     advantage: 'benefit',

@@ -167,7 +167,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-    { label: 'Feature Requests', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
   ];
 

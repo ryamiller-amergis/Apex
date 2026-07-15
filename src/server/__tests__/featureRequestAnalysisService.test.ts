@@ -61,6 +61,7 @@ afterEach(() => {
 
 const FAKE_REQUEST = {
   id: 'req-1',
+  type: 'feature',
   title: 'Add dark mode',
   request: 'Users want a dark mode toggle',
   advantage: 'Improves accessibility and user satisfaction',
@@ -84,6 +85,10 @@ const FAKE_SKILL_CONFIG = {
   isDefault: true,
   featureRequestSkillPath: 'src/server/skills/feature-request-analysis/SKILL.md',
   featureRequestModel: 'claude-sonnet-4',
+  technicalSkillPath: 'src/server/skills/technical-analysis/SKILL.md',
+  technicalModel: 'composer-2',
+  issueSkillPath: 'src/server/skills/issue-analysis/SKILL.md',
+  issueModel: 'claude-opus-4',
   defaultModel: 'claude-sonnet-4',
 };
 
@@ -150,6 +155,37 @@ describe('autoStartFeatureRequestAnalysis', () => {
 
     expect(mockedDb.update).toHaveBeenCalled();
     expect(isWatcherActive('req-1')).toBe(true);
+  });
+
+  it('uses the technical skill, model, and tailored context for technical items', async () => {
+    mockedDb.query.featureRequests.findFirst.mockResolvedValue({
+      ...FAKE_REQUEST,
+      type: 'technical',
+      advantage: null,
+    });
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG);
+    mockedCreateThread.mockResolvedValue({
+      id: 'thread-technical',
+      userId: 'system',
+      kickoff: {} as any,
+      messages: [],
+      status: 'idle',
+      workspaceDir: '/tmp/ws/thread-technical',
+      flagged: false,
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+    });
+
+    await autoStartFeatureRequestAnalysis('req-1');
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'system',
+      expect.objectContaining({
+        skillPath: FAKE_SKILL_CONFIG.technicalSkillPath,
+        model: FAKE_SKILL_CONFIG.technicalModel,
+        freeformContext: expect.stringContaining('architecture impact'),
+      }),
+    );
   });
 });
 

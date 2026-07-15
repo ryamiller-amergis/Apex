@@ -52,6 +52,7 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'fr-1',
+    type: 'feature',
     title: 'Dark mode',
     request: 'Add dark mode support',
     advantage: 'Better UX at night',
@@ -87,6 +88,7 @@ describe('createFeatureRequest', () => {
     mockDb.insert.mockReturnValue({ values: valuesMock });
 
     const result = await createFeatureRequest('user-1', 'Apex', {
+      type: 'feature',
       title: 'Dark mode',
       request: 'Add dark mode support',
       advantage: 'Better UX at night',
@@ -96,6 +98,7 @@ describe('createFeatureRequest', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: 'Dark mode',
+        type: 'feature',
         request: 'Add dark mode support',
         advantage: 'Better UX at night',
         submittedBy: 'user-1',
@@ -115,18 +118,20 @@ describe('createFeatureRequest', () => {
   });
 
   it('maps null submitterName to undefined', async () => {
-    const row = makeRow({ submitterName: null });
+    const row = makeRow({ type: 'technical', advantage: null, submitterName: null });
     const returningMock = jest.fn().mockResolvedValue([row]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
     mockDb.insert.mockReturnValue({ values: valuesMock });
 
     const result = await createFeatureRequest('user-1', 'Apex', {
+      type: 'technical',
       title: 'Test',
       request: 'req',
-      advantage: 'adv',
+      advantage: null,
     });
 
     expect(result.submitterName).toBeUndefined();
+    expect(result.type).toBe('technical');
   });
 });
 
