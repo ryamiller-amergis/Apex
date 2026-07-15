@@ -19,42 +19,11 @@ import type { ConflictedFile } from '../../shared/types/devWorkbench';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import { parseAgentTodos } from '../utils/parseAgentTodos';
 import { AgentChecklist } from './AgentChecklist';
-import { ThinkingIcon, ReasoningIcon } from './icons/AgentIcons';
+import { AgentActivityTimeline } from './AgentActivityTimeline';
 import styles from './DevSessionView.module.css';
-
-/** An "agent turn" groups all activity between a user message and the final agent response */
-interface AgentTurn {
-  reasoning: ChatMessage[];
-  tools: ChatMessage[];
-  finalOutput: ChatMessage | null;
-}
 
 function isActivityMsg(m: ChatMessage): boolean {
   return m.role === 'tool' || m.toolName === '_reasoning' || m.toolName === '_thinking';
-}
-
-function buildTurns(messages: ChatMessage[]): AgentTurn[] {
-  const turns: AgentTurn[] = [];
-  let current: AgentTurn | null = null;
-
-  for (const msg of messages) {
-    if (msg.role === 'user') {
-      if (current) turns.push(current);
-      current = { reasoning: [], tools: [], finalOutput: null };
-      continue;
-    }
-    if (!current) current = { reasoning: [], tools: [], finalOutput: null };
-
-    if (msg.toolName === '_reasoning' || msg.toolName === '_thinking') {
-      current.reasoning.push(msg);
-    } else if (msg.role === 'tool') {
-      current.tools.push(msg);
-    } else if (msg.role === 'agent') {
-      current.finalOutput = msg;
-    }
-  }
-  if (current) turns.push(current);
-  return turns;
 }
 
 interface DiffLine {
@@ -182,222 +151,6 @@ const DiffViewer: React.FC<{ diffText: string }> = ({ diffText }) => {
           )}
         </div>
       ))}
-    </div>
-  );
-};
-
-function describeToolCall(toolName?: string, toolInput?: Record<string, unknown>): { icon: string; label: string } {
-  const name = toolName ?? '';
-  const input = toolInput ?? {};
-  const filePath = (input.path ?? input.filePath ?? input.file ?? input.target_file ?? '') as string;
-  const shortPath = filePath ? filePath.split('/').slice(-2).join('/') : '';
-
-  switch (name) {
-    case 'file_edit':
-    case 'edit_file':
-    case 'str_replace_editor':
-      return { icon: '✏️', label: shortPath ? `Editing ${shortPath}` : 'Editing file' };
-    case 'file_read':
-    case 'read_file':
-      return { icon: '📄', label: shortPath ? `Reading ${shortPath}` : 'Reading file' };
-    case 'file_write':
-    case 'write_file':
-    case 'create_file':
-      return { icon: '📝', label: shortPath ? `Creating ${shortPath}` : 'Writing file' };
-    case 'search':
-    case 'grep':
-    case 'file_search':
-      return { icon: '🔍', label: input.query ? `Searching for "${input.query}"` : 'Searching codebase' };
-    case 'terminal':
-    case 'run_terminal_cmd':
-    case 'execute_command':
-      return { icon: '⚡', label: input.command ? `Running \`${(input.command as string).slice(0, 60)}\`` : 'Running command' };
-    case 'list_dir':
-    case 'list_directory':
-      return { icon: '📁', label: shortPath ? `Listing ${shortPath}` : 'Listing directory' };
-    case 'delete_file':
-      return { icon: '🗑️', label: shortPath ? `Deleting ${shortPath}` : 'Deleting file' };
-    case 'codebase_search':
-      return { icon: '🔍', label: input.query ? `Searching: "${input.query}"` : 'Searching codebase' };
-    default:
-      return { icon: '⚙️', label: name.replace(/_/g, ' ') };
-  }
-}
-
-function useElapsed(ts: number | null, active: boolean): string {
-  const [, forceUpdate] = useState(0);
-  useEffect(() => {
-    if (!active || !ts) return;
-    const id = window.setInterval(() => forceUpdate((n) => n + 1), 5_000);
-    return () => window.clearInterval(id);
-  }, [active, ts]);
-  if (!ts) return '';
-  const secs = Math.floor((Date.now() - ts) / 1000);
-  if (secs < 10) return 'just now';
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  return `${mins}m ${secs % 60}s ago`;
-}
-
-const WORKING_WORDS = [
-  'Working', 'Shimmering', 'Thinking', 'Crunching',
-  'Compacting', 'Wrangling', 'Conjuring', 'Noodling',
-];
-
-function useRotatingWord(active: boolean): string {
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const id = window.setInterval(() => setI((n) => (n + 1) % WORKING_WORDS.length), 3_000);
-    return () => window.clearInterval(id);
-  }, [active]);
-  return WORKING_WORDS[i];
-}
-
-const AgentTurnBlock: React.FC<{
-  turn: AgentTurn;
-  isLive?: boolean;
-  streamingText?: string;
-  onSend?: (text: string) => void;
-  isRunning?: boolean;
-  interactive?: boolean;
-}> = ({ turn, isLive, streamingText, onSend, isRunning, interactive }) => {
-  const [expanded, setExpanded] = useState(isLive ? true : false);
-  const logEndRef = useRef<HTMLDivElement | null>(null);
-  const word = useRotatingWord(!!isLive);
-
-  const stepCount = turn.reasoning.length + turn.tools.length;
-  const hasActivity = stepCount > 0 || (isLive && streamingText);
-
-  const lastActivityTs = useMemo(() => {
-    const allMsgs = [...turn.reasoning, ...turn.tools];
-    if (allMsgs.length === 0) return null;
-    return Math.max(...allMsgs.map((m) => new Date(m.ts).getTime()));
-  }, [turn]);
-
-  const elapsed = useElapsed(lastActivityTs, !!isLive);
-
-  useEffect(() => {
-    if (isLive) setExpanded(true);
-  }, [isLive]);
-
-  useEffect(() => {
-    if (isLive && expanded) logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [turn, streamingText, isLive, expanded]);
-
-  const totalLiveEntries = turn.reasoning.length + turn.tools.length + (isLive && streamingText ? 1 : 0);
-
-  return (
-    <div className={styles['turn-block']}>
-      {hasActivity && (
-        <div className={`${styles['turn-activity']} ${isLive ? styles['turn-activity-live'] : ''}`}>
-          <button
-            type="button"
-            className={styles['turn-activity-toggle']}
-            onClick={() => setExpanded((p) => !p)}
-          >
-            <span className={styles['turn-toggle-arrow']}>{expanded ? '▼' : '▶'}</span>
-            {isLive ? (
-              <>
-                <span className={styles.shimmer}>{word}…</span>
-                <span className={styles['elapsed-hint']}>
-                  · {stepCount} step{stepCount !== 1 ? 's' : ''}{elapsed ? ` · ${elapsed}` : ''}
-                </span>
-              </>
-            ) : (
-              <span>{`Agent activity — ${stepCount} step${stepCount !== 1 ? 's' : ''}`}</span>
-            )}
-          </button>
-
-          {expanded && (
-            <div className={styles['activity-log']}>
-              {turn.reasoning.map((msg, i) => {
-                const entryIdx = i;
-                const isActiveEntry = isLive && entryIdx === totalLiveEntries - 1;
-                const isPastEntry = isLive && entryIdx < totalLiveEntries - 1;
-                const isThinking = msg.toolName === '_thinking';
-                return (
-                  <div
-                    key={msg.id}
-                    className={[
-                      styles['log-entry'],
-                      isActiveEntry ? styles['log-entry-active'] : '',
-                    ].filter(Boolean).join(' ')}
-                  >
-                    <span className={styles['log-icon']} role="img" aria-label={isThinking ? 'Thinking' : 'Reasoning'}>
-                      {isThinking ? <ThinkingIcon /> : <ReasoningIcon />}
-                    </span>
-                    <div className={styles['log-content']}>
-                      <div className={styles['log-label']}>{isThinking ? 'Thinking' : 'Reasoning'}</div>
-                      <div className={styles['log-text']}>{msg.text}</div>
-                    </div>
-                    {isLive && (
-                      <span className={[
-                        styles['log-status'],
-                        isPastEntry ? styles['log-status-completed'] : isActiveEntry ? styles['log-status-running'] : '',
-                      ].filter(Boolean).join(' ')}>
-                        {isPastEntry ? '✓' : isActiveEntry ? '●' : ''}
-                      </span>
-                    )}
-                    <span className={styles['log-time']}>{new Date(msg.ts).toLocaleTimeString()}</span>
-                  </div>
-                );
-              })}
-              {turn.tools.map((msg, i) => {
-                const { icon, label } = describeToolCall(msg.toolName, msg.toolInput);
-                const entryIdx = turn.reasoning.length + i;
-                const isActiveEntry = isLive && entryIdx === totalLiveEntries - 1 && !streamingText;
-                const isPastEntry = isLive && (entryIdx < totalLiveEntries - 1 || !!streamingText);
-                return (
-                  <div
-                    key={msg.id}
-                    className={[
-                      styles['log-entry'],
-                      isActiveEntry ? styles['log-entry-active'] : '',
-                    ].filter(Boolean).join(' ')}
-                  >
-                    <span className={styles['log-icon']}>{icon}</span>
-                    <div className={styles['log-content']}>
-                      <span className={styles['log-label']}>{label}</span>
-                    </div>
-                    {isLive && (
-                      <span className={[
-                        styles['log-status'],
-                        isPastEntry ? styles['log-status-completed'] : isActiveEntry ? styles['log-status-running'] : '',
-                      ].filter(Boolean).join(' ')}>
-                        {isPastEntry ? '✓' : isActiveEntry ? '●' : ''}
-                      </span>
-                    )}
-                    <span className={styles['log-time']}>{new Date(msg.ts).toLocaleTimeString()}</span>
-                  </div>
-                );
-              })}
-              {isLive && streamingText && (
-                <div className={`${styles['log-entry']} ${styles['log-entry-active']}`}>
-                  <span className={styles['log-icon']} role="img" aria-label="Reasoning">
-                    <ReasoningIcon />
-                  </span>
-                  <div className={styles['log-content']}>
-                    <div className={styles['log-label']}>Reasoning</div>
-                    <div className={styles['log-text']}>{streamingText}</div>
-                  </div>
-                  <span className={`${styles['log-status']} ${styles['log-status-running']}`}>●</span>
-                </div>
-              )}
-              <div ref={logEndRef} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {turn.finalOutput && (
-        <AgentBubble
-          msg={turn.finalOutput}
-          onSend={onSend}
-          isRunning={isRunning}
-          interactive={interactive}
-        />
-      )}
     </div>
   );
 };
@@ -581,7 +334,11 @@ const AgentBubble: React.FC<{
   );
 };
 
-const SetupProgress: React.FC<{ status: string; error: string | null }> = ({ status, error }) => (
+const SetupProgress: React.FC<{
+  status: string;
+  error: string | null;
+  detail?: string | null;
+}> = ({ status, error, detail }) => (
   <div className={styles['setup-overlay']}>
     <div className={styles['setup-card']}>
       {status === 'failed' ? (
@@ -594,7 +351,9 @@ const SetupProgress: React.FC<{ status: string; error: string | null }> = ({ sta
         <>
           <div className={styles['setup-spinner']} />
           <h2 className={styles['setup-title']}>Setting up workspace</h2>
-          <p className={styles['setup-detail']}>Cloning repository and preparing your development environment…</p>
+          <p className={styles['setup-detail']}>
+            {detail ?? 'Cloning repository and preparing your development environment…'}
+          </p>
         </>
       )}
     </div>
@@ -740,6 +499,20 @@ interface FileEditorState {
   resolved: boolean;
 }
 
+/** Number of conflict-start markers left in a file's content. */
+function countConflictMarkers(content: string): number {
+  return (content.match(/^<<<<<<< /gm) ?? []).length;
+}
+
+/**
+ * True while a file still contains git conflict markers. Checks the start/end
+ * markers (which effectively never appear in real source) so legitimate
+ * `=======` dividers in markdown/SQL do not count as unresolved.
+ */
+function hasConflictMarkers(content: string): boolean {
+  return /^<<<<<<< /m.test(content) || /^>>>>>>> /m.test(content);
+}
+
 const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const { data: conflictsData, isLoading } = useSessionConflicts(sessionId);
   const resolveConflict = useResolveConflict(sessionId);
@@ -764,6 +537,8 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const handleMarkResolved = useCallback(async (filePath: string) => {
     const editor = editors[filePath];
     if (!editor) return;
+    // Guard: never let a file with leftover conflict markers be marked resolved.
+    if (hasConflictMarkers(editor.content)) return;
     try {
       await resolveConflict.mutateAsync({ path: filePath, content: editor.content });
       setEditors((prev) => ({ ...prev, [filePath]: { ...prev[filePath], resolved: true } }));
@@ -798,22 +573,31 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
         <span className={styles['merge-resolver-title']}>Merge Conflicts</span>
       </div>
       <p className={styles['merge-resolver-desc']}>
-        The base branch has diverged. Resolve each conflict below, then complete the merge to push.
+        The base branch has diverged. These {files.length} file{files.length === 1 ? '' : 's'} conflict —
+        remove the <code>{'<<<<<<<'}</code> / <code>{'======='}</code> / <code>{'>>>>>>>'}</code> markers in each,
+        mark it resolved, then complete the merge to push.
       </p>
 
       {files.map((f) => {
         const editor = editors[f.path];
+        const content = editor?.content ?? f.content;
+        const markersRemaining = countConflictMarkers(content);
+        const stillConflicted = hasConflictMarkers(content);
         return (
           <div key={f.path} className={styles['conflict-file']}>
             <div className={styles['conflict-file-header']}>
               <code className={styles['conflict-file-path']}>{f.path}</code>
-              {editor?.resolved && (
+              {editor?.resolved ? (
                 <span className={styles['conflict-resolved-badge']}>Resolved</span>
-              )}
+              ) : stillConflicted ? (
+                <span className={styles['conflict-marker-hint']}>
+                  {markersRemaining} conflict{markersRemaining === 1 ? '' : 's'} to resolve
+                </span>
+              ) : null}
             </div>
             <textarea
               className={styles['conflict-editor']}
-              value={editor?.content ?? f.content}
+              value={content}
               onChange={(e) =>
                 setEditors((prev) => ({
                   ...prev,
@@ -828,7 +612,8 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
                 type="button"
                 className={styles['resolve-btn']}
                 onClick={() => void handleMarkResolved(f.path)}
-                disabled={resolveConflict.isPending || editor?.resolved}
+                disabled={resolveConflict.isPending || editor?.resolved || stillConflicted}
+                title={stillConflicted ? 'Remove all conflict markers first' : undefined}
               >
                 {resolveConflict.isPending ? 'Saving…' : editor?.resolved ? 'Saved' : 'Mark as Resolved'}
               </button>
@@ -880,7 +665,19 @@ export const DevSessionView: React.FC = () => {
 
   const { data: thread } = useChatThread(threadId);
 
-  const { messages, streamingText, status } = useChatStream(
+  const {
+    messages,
+    streamingText,
+    thinkingText,
+    toolProgress,
+    status,
+    isConnected,
+    lastProgressAt,
+    phaseEvents,
+    runHealth,
+    isRetrying,
+    retryReason,
+  } = useChatStream(
     threadId,
     { initialMessages: thread?.messages, initialStatus: thread?.status },
   );
@@ -923,11 +720,14 @@ export const DevSessionView: React.FC = () => {
 
   const isRunning = status === 'running';
   const visibleMessages = useMemo(
-    () => messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.')),
+    () => messages.filter((m) => !m.hidden && !(m.role === 'user' && m.text === 'Begin.')),
     [messages],
   );
 
-  const turns = useMemo(() => buildTurns(visibleMessages), [visibleMessages]);
+  const lastAgentMessageId = useMemo(
+    () => [...visibleMessages].reverse().find((message) => message.role === 'agent')?.id,
+    [visibleMessages],
+  );
 
   const checklist = useMemo(
     () => parseAgentTodos(visibleMessages),
@@ -982,7 +782,11 @@ export const DevSessionView: React.FC = () => {
   return (
     <div className={styles.container}>
       {(isSettingUp || isFailed) && (
-        <SetupProgress status={session?.status ?? 'setting_up'} error={session?.setupError ?? null} />
+        <SetupProgress
+          status={session?.status ?? 'setting_up'}
+          error={session?.setupError ?? null}
+          detail={session?.setupDetail}
+        />
       )}
 
       <div className={styles['chat-pane']}>
@@ -1001,9 +805,25 @@ export const DevSessionView: React.FC = () => {
         )}
 
         <div className={styles.messages}>
+          <AgentActivityTimeline
+            messages={visibleMessages}
+            toolProgress={toolProgress}
+            status={status}
+            isConnected={isConnected}
+            startedAt={session?.createdAt}
+            lastProgressAt={lastProgressAt}
+            phaseEvents={phaseEvents}
+            runHealth={runHealth}
+            thinkingText={thinkingText}
+            isRetrying={isRetrying}
+            retryReason={retryReason}
+            setupPhase={session?.setupPhase}
+            setupDetail={session?.setupDetail}
+            setupProgressAt={session?.setupProgressAt}
+          />
+
           {(() => {
             const elements: React.ReactNode[] = [];
-            let turnIdx = 0;
 
             for (const msg of visibleMessages) {
               if (isActivityMsg(msg)) continue;
@@ -1018,57 +838,15 @@ export const DevSessionView: React.FC = () => {
                 continue;
               }
               if (msg.role === 'agent') {
-                const turn = turns[turnIdx];
-                if (turn) {
-                  const isLastTurn = turnIdx === turns.length - 1;
-                  elements.push(
-                    <AgentTurnBlock
-                      key={`turn-${turnIdx}`}
-                      turn={turn}
-                      onSend={doSend}
-                      isRunning={isRunning}
-                      interactive={isLastTurn && !isRunning}
-                    />,
-                  );
-                  turnIdx++;
-                } else {
-                  elements.push(
-                    <AgentBubble
-                      key={msg.id}
-                      msg={msg}
-                      onSend={doSend}
-                      isRunning={isRunning}
-                      interactive={!isRunning}
-                    />,
-                  );
-                }
-              }
-            }
-
-            if (isRunning) {
-              const liveTurn = turns[turnIdx] ?? { reasoning: [], tools: [], finalOutput: null };
-              elements.push(
-                <AgentTurnBlock
-                  key="live-turn"
-                  turn={liveTurn}
-                  isLive
-                  streamingText={streamingText}
-                />,
-              );
-            }
-
-            {/* Show remaining turns that had no final output (e.g. agent was stopped) */}
-            if (!isRunning && turnIdx < turns.length) {
-              for (let t = turnIdx; t < turns.length; t++) {
-                const orphanedTurn = turns[t];
-                if (orphanedTurn.reasoning.length > 0 || orphanedTurn.tools.length > 0) {
-                  elements.push(
-                    <AgentTurnBlock
-                      key={`orphan-turn-${t}`}
-                      turn={orphanedTurn}
-                    />,
-                  );
-                }
+                elements.push(
+                  <AgentBubble
+                    key={msg.id}
+                    msg={msg}
+                    onSend={doSend}
+                    isRunning={isRunning}
+                    interactive={msg.id === lastAgentMessageId && !isRunning}
+                  />,
+                );
               }
             }
 
@@ -1084,6 +862,37 @@ export const DevSessionView: React.FC = () => {
 
             return elements;
           })()}
+
+          {isRunning && !streamingText && (
+            <div className={`${styles.message} ${styles['role-agent']}`}>
+              <div className={styles['agent-header']}>
+                <span className={styles['agent-avatar']}>AI</span>
+                <span>Agent</span>
+              </div>
+              <div className={styles['agent-bubble']}>
+                <div className={styles['typing-indicator']} aria-label="Agent is working">
+                  <span className={styles['typing-dot']} />
+                  <span className={styles['typing-dot']} />
+                  <span className={styles['typing-dot']} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {streamingText && (
+            <div className={`${styles.message} ${styles['role-agent']}`}>
+              <div className={styles['agent-header']}>
+                <span className={styles['agent-avatar']}>AI</span>
+                <span>Agent</span>
+              </div>
+              <div className={styles['agent-bubble']}>
+                <div className={styles['streaming-body']}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                  <span className={styles.cursor} />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div ref={messagesEndRef} />
         </div>

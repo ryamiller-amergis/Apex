@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { WorkItem, ReleaseMetrics, Deployment, DeploymentEnvironment } from '../types/workitem';
 import { useDeploymentOutcomes } from '../hooks/useDeploymentOutcomes';
 import type { DeploymentResult } from '../../shared/types/deploymentOutcome';
 import { DeploymentOutcomeModal } from './DeploymentOutcomeModal';
 import { DeploymentOutcomeReport } from './DeploymentOutcomeReport';
+import { useAppShell } from '../hooks/useAppShell';
+import { reorderReleases } from '../utils/releaseOrder';
 import './ReleaseView.css';
+
+const RENAMABLE_STATUSES = ['New', 'In Design', 'In Progress'] as const;
 
 const RESULT_CONFIG: Record<DeploymentResult, { className: string; label: string; icon: string }> = {
   success:  { className: 'result-success',  label: 'Success',  icon: '✓' },
@@ -90,6 +94,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   areaPath,
   onSelectItem,
 }) => {
+  const { isInAnyGroup, permissionsLoaded } = useAppShell();
+  const canManageReleases = permissionsLoaded && isInAnyGroup(['BA']);
+
   const [, setReleases] = useState<string[]>([]);
   const [selectedRelease, setSelectedRelease] = useState<string | null>(null);
   const [releaseWorkItems, setReleaseWorkItems] = useState<WorkItem[]>([]);
@@ -141,6 +148,17 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [outcomeReleaseVersion, setOutcomeReleaseVersion] = useState<string>('');
   const [outcomeDeployedAt, setOutcomeDeployedAt] = useState<string | undefined>(undefined);
   const [showReport, setShowReport] = useState(false);
+
+  // Inline rename state
+  const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
+  const [inlineEditValue, setInlineEditValue] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isSavingRename, setIsSavingRename] = useState(false);
+
+  // Drag-to-reorder state
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+  const dragIndexRef = useRef<number | null>(null);
 
   // Fetch all release versions on mount
   useEffect(() => {
@@ -715,6 +733,77 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     }
   };
 
+  // ── Inline rename ──────────────────────────────────────────────────────────
+
+  const startInlineEdit = useCallback((epic: any) => {
+    setInlineEditEpicId(epic.id);
+    setInlineEditValue(epic.version);
+    setRenameError(null);
+  }, []);
+
+  const cancelInlineEdit = useCallback(() => {
+    setInlineEditEpicId(null);
+    setInlineEditValue('');
+    setRenameError(null);
+  }, []);
+
+  const commitRename = useCallback(async (epicId: number) => {
+    if (!inlineEditValue.trim()) {
+      setRenameError('Release name cannot be blank');
+      return;
+    }
+    setIsSavingRename(true);
+    setRenameError(null);
+    try {
+      const response = await fetch(`/api/releases/${epicId}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName: inlineEditValue.trim(), project, areaPath }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        setRenameError(data.error ?? 'Failed to rename release');
+        return;
+      }
+      setInlineEditEpicId(null);
+      setInlineEditValue('');
+      // Refresh both epic list and tag-based release list
+      fetchReleases();
+      fetchReleaseEpics();
+    } catch {
+      setRenameError('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsSavingRename(false);
+    }
+  }, [inlineEditValue, project, areaPath]);
+
+  // ── Drag-to-reorder ────────────────────────────────────────────────────────
+
+  const persistOrder = useCallback(async (orderedEpics: any[]) => {
+    try {
+      await fetch('/api/releases/order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project,
+          areaPath: areaPath ?? '',
+          epicIds: orderedEpics.map((e: any) => e.id),
+        }),
+      });
+    } catch (err) {
+      console.error('[ReleaseView] Failed to persist release order:', err);
+    }
+  }, [project, areaPath]);
+
+  const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
+    const reordered = reorderReleases(releaseEpics, fromIndex, toIndex);
+    if (!reordered) return;
+    setReleaseEpics(reordered);
+    // Clear manual column sort so manual order is shown
+    setSortColumn(null);
+    void persistOrder(reordered);
+  }, [releaseEpics, persistOrder]);
+
   const sortedEpics = React.useMemo(() => {
     if (!sortColumn) return releaseEpics;
     return [...releaseEpics].sort((a, b) => {
@@ -823,6 +912,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
           <table className="epics-table">
             <thead>
               <tr>
+                {canManageReleases && <th style={{width: '32px'}} title="Drag to reorder"></th>}
                 <th style={{width: '40px'}}></th>
                 <th className="sortable-th" onClick={() => handleSort('version')}>
                   Version <span className="sort-indicator">{sortColumn === 'version' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
@@ -847,9 +937,50 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               </tr>
             </thead>
             <tbody>
-              {sortedEpics.map((epic) => (
+              {sortedEpics.map((epic, epicIndex) => (
                 <React.Fragment key={epic.id}>
-                  <tr>
+                  <tr
+                    draggable={canManageReleases && sortColumn === null}
+                    onDragStart={canManageReleases && sortColumn === null ? () => {
+                      dragIndexRef.current = epicIndex;
+                      setDragIndex(epicIndex);
+                    } : undefined}
+                    onDragEnd={canManageReleases && sortColumn === null ? () => {
+                      dragIndexRef.current = null;
+                      setDragIndex(null);
+                      setDropTargetIndex(null);
+                    } : undefined}
+                    onDragOver={canManageReleases && sortColumn === null ? (e) => {
+                      e.preventDefault();
+                      setDropTargetIndex(epicIndex);
+                    } : undefined}
+                    onDrop={canManageReleases && sortColumn === null ? (e) => {
+                      e.preventDefault();
+                      const from = dragIndexRef.current;
+                      if (from !== null && from !== epicIndex) {
+                        handleReorder(from, epicIndex);
+                      }
+                      dragIndexRef.current = null;
+                      setDragIndex(null);
+                      setDropTargetIndex(null);
+                    } : undefined}
+                    className={[
+                      dragIndex === epicIndex ? 'row-dragging' : '',
+                      dropTargetIndex === epicIndex && dragIndex !== null && dragIndex !== epicIndex ? 'row-drop-target' : '',
+                    ].filter(Boolean).join(' ') || undefined}
+                  >
+                    {canManageReleases && (
+                      <td className="drag-handle-cell">
+                        {sortColumn === null ? (
+                          <span className="drag-handle" title="Drag to reorder">⠿</span>
+                        ) : (
+                          <span
+                            className="drag-handle drag-handle-disabled"
+                            title="Clear column sort to enable drag ordering"
+                          >⠿</span>
+                        )}
+                      </td>
+                    )}
                     <td>
                       <button
                         className="btn-expand"
@@ -859,7 +990,36 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                         {expandedRows.has(epic.id) ? '▼' : '▶'}
                       </button>
                     </td>
-                    <td className="version-cell">{epic.version}</td>
+                    <td className="version-cell">
+                      {inlineEditEpicId === epic.id ? (
+                        <span className="inline-rename-wrapper">
+                          <input
+                            className="inline-rename-input"
+                            value={inlineEditValue}
+                            autoFocus
+                            onChange={(e) => setInlineEditValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { void commitRename(epic.id); }
+                              if (e.key === 'Escape') { cancelInlineEdit(); }
+                            }}
+                            onBlur={() => { void commitRename(epic.id); }}
+                            disabled={isSavingRename}
+                          />
+                          {renameError && <span className="rename-error">{renameError}</span>}
+                        </span>
+                      ) : (
+                        <span
+                          className={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'version-editable' : undefined}
+                          title={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'Click to rename' : undefined}
+                          onClick={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? () => startInlineEdit(epic) : undefined}
+                        >
+                          {epic.version}
+                          {canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) && (
+                            <span className="edit-pencil" aria-hidden>✎</span>
+                          )}
+                        </span>
+                      )}
+                    </td>
                   <td>
                     <span className={`status-badge status-${epic.status.toLowerCase().replace(/\s+/g, '-')}`}>
                       {epic.status}
@@ -967,7 +1127,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 </tr>
                 {expandedRows.has(epic.id) && (
                   <tr className="expanded-row">
-                      <td colSpan={9}>
+                      <td colSpan={canManageReleases ? 10 : 9}>
                         <div className="expanded-content">
                           <div className="expanded-header">
                             <div className="expanded-title">

@@ -54,6 +54,16 @@ jest.mock('../services/projectSettingsService', () => {
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-1' }),
 }));
+jest.mock('../services/dependencyBootstrapService', () => ({
+  bootstrapDevelopmentDependencies: jest.fn().mockResolvedValue({
+    cacheKey: 'node-v24-lock-hash',
+    cacheDir: '/tmp/dependency-cache/node-v24-lock-hash',
+    cacheHit: false,
+  }),
+}));
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(true),
+}));
 jest.mock('../services/repoCacheService', () => ({
   resolveGitRemote: (provider: string, project: string, repo: string) =>
     mockResolveGitRemote(provider, project, repo),
@@ -91,6 +101,7 @@ jest.mock('fs', () => {
   };
 });
 jest.mock('../utils/requestUser', () => ({
+  ...jest.requireActual('../utils/requestUser'),
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
 jest.mock('uuid', () => ({
@@ -101,13 +112,12 @@ const mockFindFirst = jest.fn();
 const mockSelectWhere = jest.fn();
 const mockInsertValues = jest.fn().mockResolvedValue(undefined);
 const mockUpdateWhere = jest.fn().mockResolvedValue(undefined);
+const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 
 jest.mock('../db/drizzle', () => ({
   db: {
     insert: jest.fn(() => ({ values: mockInsertValues })),
-    update: jest.fn(() => ({
-      set: jest.fn(() => ({ where: mockUpdateWhere })),
-    })),
+    update: jest.fn(() => ({ set: mockUpdateSet })),
     select: jest.fn(() => ({
       from: jest.fn(() => ({ where: jest.fn().mockReturnValue({ orderBy: mockSelectWhere }) })),
     })),
@@ -217,10 +227,21 @@ describe('GET /api/dev-workbench/workitems', () => {
 });
 
 describe('POST /api/dev-workbench/start', () => {
+  const { bootstrapDevelopmentDependencies } = jest.requireMock('../services/dependencyBootstrapService') as {
+    bootstrapDevelopmentDependencies: jest.Mock;
+  };
+  const { createThread } = jest.requireMock('../services/chatAgentService') as {
+    createThread: jest.Mock;
+  };
+  const { isFeatureEnabled } = jest.requireMock('../services/featureFlagService') as {
+    isFeatureEnabled: jest.Mock;
+  };
+
   beforeEach(() => {
     mockPermissionGranted = true;
     mockGroupMembershipGranted = true;
     jest.clearAllMocks();
+    isFeatureEnabled.mockResolvedValue(true);
     MockAzureDevOpsService.mockImplementation(() => ({}) as unknown as AzureDevOpsService);
   });
 
@@ -242,6 +263,104 @@ describe('POST /api/dev-workbench/start', () => {
     );
   });
 
+  it('prepares locked dev dependencies after checkout and before creating the thread', async () => {
+    const mockAdo = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({ items: [] }),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+    expect(res.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(bootstrapDevelopmentDependencies).toHaveBeenCalledWith('/tmp/workspace', expect.any(Object));
+    expect(createThread).toHaveBeenCalled();
+    expect(bootstrapDevelopmentDependencies.mock.invocationCallOrder[0])
+      .toBeLessThan(createThread.mock.invocationCallOrder[0]);
+    expect(isFeatureEnabled).toHaveBeenCalledTimes(1);
+    expect(isFeatureEnabled).toHaveBeenCalledWith('dev-dependency-bootstrap', {
+      userId: 'user-1',
+      project: 'MaxView',
+    });
+    expect(createThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ mode: 'development' }),
+      expect.objectContaining({
+        workspaceDirOverride: '/tmp/workspace',
+        dependenciesPrepared: true,
+      }),
+    );
+  });
+
+  it('skips bootstrap when the rollout flag is absent or disabled and keeps installs allowed', async () => {
+    isFeatureEnabled.mockResolvedValue(false);
+    const mockAdo = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({ items: [] }),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(isFeatureEnabled).toHaveBeenCalledTimes(1);
+    expect(bootstrapDevelopmentDependencies).not.toHaveBeenCalled();
+    expect(createThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ mode: 'development' }),
+      expect.objectContaining({
+        workspaceDirOverride: '/tmp/workspace',
+        dependenciesPrepared: false,
+      }),
+    );
+    expect(mockActivateDevSession).toHaveBeenCalledWith(
+      'session-abc',
+      expect.objectContaining({
+        chatThreadId: 'thread-1',
+        setupPhase: 'dependencies_skipped',
+        setupDetail: expect.stringMatching(/bootstrap.*disabled/i),
+      }),
+    );
+  });
+
+  it('persists dependency setup phase and safe detail for polling clients', async () => {
+    const mockAdo = {
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({ items: [] }),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
+    bootstrapDevelopmentDependencies.mockImplementationOnce(async (_workspace: string, options: any) => {
+      await options.onPhase('dependencies_preparing', 'Preparing locked dependencies');
+      await options.onPhase('dependencies_ready', 'Dependencies are ready');
+      return { cacheKey: 'cache', cacheDir: '/tmp/cache', cacheHit: false };
+    });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      setupPhase: 'dependencies_preparing',
+      setupDetail: 'Preparing locked dependencies',
+    }));
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      setupPhase: 'dependencies_ready',
+      setupDetail: 'Dependencies are ready',
+    }));
+  });
+
   it('returns 400 when workItemId or project is missing', async () => {
     const res = await request(buildApp())
       .post('/api/dev-workbench/start')
@@ -249,6 +368,86 @@ describe('POST /api/dev-workbench/start', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
+  });
+
+  it('rejects Start Development when the work item is not in an allowed state', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'In Pull Request', 'System.WorkItemType': 'Feature', 'System.Tags': 'apex' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/only available for/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-admin starting a Feature without the apex tag', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Feature', 'System.Tags': 'wave-1' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/APEX-generated Features/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-admin starting a PBI even when tagged apex and startable', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Product Backlog Item', 'System.Tags': 'apex' } }],
+      }),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/only available on Features/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('allows a non-admin to start an APEX Feature in an allowed state (Committed)', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Committed', 'System.WorkItemType': 'Feature', 'System.Tags': 'apex; wave-2' } }],
+      }),
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionId: 'session-abc' });
+  });
+
+  it('allows a super admin to start any type (Bug) regardless of APEX origin', async () => {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ id: 99, fields: { 'System.State': 'Active', 'System.WorkItemType': 'Bug', 'System.Tags': '' } }],
+      }),
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+    }) as unknown as AzureDevOpsService);
+
+    const res = await request(buildApp({ displayName: 'Platform Admin', upn: 'anedunur@amergis.com' }))
+      .post('/api/dev-workbench/start')
+      .send({ workItemId: 99, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionId: 'session-abc' });
   });
 
   it('returns 500 when the session insert fails', async () => {
@@ -313,13 +512,22 @@ describe('GET /api/dev-workbench/sessions/:id', () => {
       branchName: 'feature/10',
       status: 'in_progress',
       setupError: null,
+      setupPhase: 'dependencies_ready',
+      setupDetail: 'Dependencies are ready',
+      setupProgressAt: '2026-06-01T00:00:05Z',
       createdAt: '2026-06-01T00:00:00Z',
     });
 
     const res = await request(buildApp()).get('/api/dev-workbench/sessions/session-1');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 'session-1', status: 'in_progress' });
+    expect(res.body).toMatchObject({
+      id: 'session-1',
+      status: 'in_progress',
+      setupPhase: 'dependencies_ready',
+      setupDetail: 'Dependencies are ready',
+      setupProgressAt: '2026-06-01T00:00:05Z',
+    });
   });
 
   it('returns 404 when session is not found', async () => {
@@ -555,6 +763,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
               'System.Id': 42,
               'System.Title': 'Implement login',
               'System.WorkItemType': 'Feature',
+              'System.State': 'In Progress',
+              'System.Tags': 'apex; wave-1',
             },
             relations: [
               {
@@ -616,6 +826,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
             'System.Id': 42,
             'System.Title': 'Blackout Date Rule Administration',
             'System.WorkItemType': 'Feature',
+            'System.State': 'In Progress',
+            'System.Tags': 'apex; wave-1',
           },
           relations: [
             // singular / typo variant
@@ -667,6 +879,8 @@ describe('POST /api/dev-workbench/start — ADO attachment injection', () => {
             'System.Id': 42,
             'System.Title': 'Implement login',
             'System.WorkItemType': 'Feature',
+            'System.State': 'In Progress',
+            'System.Tags': 'apex; wave-1',
           },
           relations: [
             {

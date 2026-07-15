@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
   PageManifestEntry,
@@ -6,10 +6,18 @@ import type {
   PdfFileMetadata,
   PdfSessionStatus,
 } from '../../shared/types/pdf';
-import type { ChatThreadKickoff } from '../../shared/types/chat';
+import type {
+  AgentRunCancelEvent,
+  AgentRunEventStatus,
+  AgentRunEventType,
+  AgentRunPhase,
+  ChatThreadKickoff,
+  SseEvent,
+} from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
+import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
@@ -94,6 +102,9 @@ export const devSessions = pgTable('dev_sessions', {
   // status values: setting_up | in_progress | conflict | closed | failed
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
+  setupPhase: text('setup_phase').$type<DevSessionSetupPhase>(),
+  setupDetail: text('setup_detail'),
+  setupProgressAt: timestamp('setup_progress_at', { withTimezone: true, mode: 'string' }),
   prUrl: text('pr_url'),
   cachedDiffText: text('cached_diff_text'),
   cachedChangedFiles: jsonb('cached_changed_files').$type<string[]>().default([]),
@@ -722,6 +733,25 @@ export const deploymentOutcomes = pgTable('deployment_outcomes', {
   deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }),
 });
 
+// ── Release Epic Orders ───────────────────────────────────────────────────────
+
+export const releaseEpicOrders = pgTable(
+  'release_epic_orders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    areaPath: text('area_path').notNull(),
+    adoEpicId: integer('ado_epic_id').notNull(),
+    sortRank: integer('sort_rank').notNull(),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_release_epic_orders_scope_epic').on(t.project, t.areaPath, t.adoEpicId),
+    index('idx_release_epic_orders_scope').on(t.project, t.areaPath, t.sortRank),
+  ],
+);
+
 // ── Project Menu Settings ─────────────────────────────────────────────────────
 
 export const projectMenuSettings = pgTable('project_menu_settings', {
@@ -1153,6 +1183,9 @@ export const agentRuns = pgTable('agent_runs', {
   status: text('status').notNull().default('queued'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  progressAt: timestamp('progress_at', { withTimezone: true, mode: 'string' }),
+  progressLabel: text('progress_label'),
+  progressPhase: text('progress_phase').$type<AgentRunPhase>(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
   lastError: text('last_error'),
@@ -1160,6 +1193,26 @@ export const agentRuns = pgTable('agent_runs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+export const agentRunEvents = pgTable('agent_run_events', {
+  eventId: uuid('event_id').primaryKey(),
+  ordinal: bigserial('ordinal', { mode: 'number' }).notNull().unique(),
+  threadId: text('thread_id').notNull(),
+  runId: text('run_id').notNull(),
+  sourceInstance: text('source_instance').notNull(),
+  sequence: integer('sequence').notNull(),
+  eventTimestamp: timestamp('event_timestamp', { withTimezone: true, mode: 'string' }).notNull(),
+  eventType: text('event_type').$type<AgentRunEventType>().notNull(),
+  phase: text('phase').$type<AgentRunPhase>().notNull(),
+  status: text('status').$type<AgentRunEventStatus>().notNull(),
+  detail: text('detail'),
+  event: jsonb('event').$type<SseEvent | AgentRunCancelEvent>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sourceSequenceUniq: unique('agent_run_events_source_sequence_key').on(t.runId, t.sourceInstance, t.sequence),
+  threadOrdinalIdx: index('idx_agent_run_events_thread_ordinal').on(t.threadId, t.ordinal),
+  runSequenceIdx: index('idx_agent_run_events_run_sequence').on(t.runId, t.sequence),
 }));
 
 // ── AI Cost Analytics ─────────────────────────────────────────────────────────

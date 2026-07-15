@@ -125,4 +125,30 @@ export class DeploymentTrackingService {
     const deployments = await this.getAllDeployments();
     return deployments.slice(0, limit);
   }
+
+  /**
+   * Rename all deployment records that reference `oldVersion` to `newVersion`.
+   * Returns the number of records updated.
+   */
+  async renameReleaseVersion(oldVersion: string, newVersion: string): Promise<number> {
+    const data = await this.loadDeployments();
+    let count = 0;
+    for (const d of data.deployments) {
+      if (d.releaseVersion === oldVersion) {
+        d.releaseVersion = newVersion;
+        count++;
+      }
+    }
+    if (count > 0) {
+      await this.saveDeployments(data);
+    }
+    return count;
+  }
+
+  /**
+   * Rollback: undo a previous rename from `renamedVersion` back to `originalVersion`.
+   */
+  async rollbackRenameReleaseVersion(renamedVersion: string, originalVersion: string): Promise<void> {
+    await this.renameReleaseVersion(renamedVersion, originalVersion);
+  }
 }

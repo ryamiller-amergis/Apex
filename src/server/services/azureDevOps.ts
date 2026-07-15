@@ -4,6 +4,18 @@ import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackin
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
+import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+
+/**
+ * Ensures the canonical APEX origin tag is present in a tag list without
+ * duplicating it (case-insensitive). Applied only to Features APEX creates so
+ * Start Development can identify Features that carry APEX-generated design docs.
+ */
+function withApexOriginTag(tags?: string[]): string[] {
+  const base = tags ?? [];
+  const hasApex = base.some((t) => t.trim().toLowerCase() === APEX_ORIGIN_TAG);
+  return hasApex ? base : [...base, APEX_ORIGIN_TAG];
+}
 
 export class AzureDevOpsService {
   private connection: azdev.WebApi;
@@ -1975,6 +1987,94 @@ export class AzureDevOpsService {
         uatReadyForTestFeatures,
         deploymentHistory: [],
       };
+    });
+  }
+
+  /**
+   * Fetch a release Epic by ID and return its current title, state, and tags.
+   * Used during rename preflight.
+   */
+  async getReleaseEpicById(epicId: number): Promise<{ id: number; title: string; state: string; tags: string } | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(
+        epicId,
+        ['System.Title', 'System.State', 'System.Tags'],
+        undefined,
+        undefined,
+        this.project,
+      );
+      if (!wi?.fields) return null;
+      return {
+        id: epicId,
+        title: (wi.fields['System.Title'] as string) || '',
+        state: (wi.fields['System.State'] as string) || '',
+        tags: (wi.fields['System.Tags'] as string) || '',
+      };
+    });
+  }
+
+  /**
+   * Find all work-item IDs that carry the given release tag (Release:<version>).
+   * Searches across Features and Epics (and falls through to all types).
+   */
+  async findWorkItemsWithReleaseTag(releaseVersion: string): Promise<number[]> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.Tags] CONTAINS 'Release:${releaseVersion}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      return (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+    });
+  }
+
+  /**
+   * Replace Release:<oldName> with Release:<newName> on a single work item,
+   * preserving all other tags.
+   */
+  async renameReleaseTagOnWorkItem(workItemId: number, oldVersion: string, newVersion: string): Promise<void> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(workItemId, ['System.Tags'], undefined, undefined, this.project);
+      const currentTags = (wi?.fields?.['System.Tags'] as string) || '';
+
+      const oldTag = `Release:${oldVersion}`;
+      const newTag = `Release:${newVersion}`;
+
+      if (!currentTags.includes(oldTag)) return; // nothing to change
+
+      const updatedTags = currentTags
+        .split(';')
+        .map((t) => t.trim())
+        .map((t) => (t === oldTag ? newTag : t))
+        .join('; ');
+
+      await witApi.updateWorkItem(
+        {},
+        [{ op: 'add', path: '/fields/System.Tags', value: updatedTags }],
+        workItemId,
+        this.project,
+      );
+    });
+  }
+
+  /**
+   * Check whether any other release Epic (excluding `excludeEpicId`) has the given title.
+   * Returns true if a duplicate exists.
+   */
+  async releaseNameExists(name: string, excludeEpicId: number): Promise<boolean> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const escapedName = name.replace(/'/g, "''");
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion' AND [System.Title] = '${escapedName}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      const ids = (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+      return ids.some((id) => id !== excludeEpicId);
     });
   }
 
@@ -4993,7 +5093,7 @@ export class AzureDevOpsService {
         const num = priorityMap[feature.priority];
         if (num) featureFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
       }
-      if (feature.tags && feature.tags.length > 0) featureFields.push({ op: 'add', path: '/fields/System.Tags', value: feature.tags.join('; ') });
+      featureFields.push({ op: 'add', path: '/fields/System.Tags', value: withApexOriginTag(feature.tags).join('; ') });
       if (this.areaPath) featureFields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
       if (parentEpicAdoId) featureFields.push(buildParentRelation(parentEpicAdoId));
 
@@ -5152,7 +5252,7 @@ export class AzureDevOpsService {
       const featureMap: Record<string, number> = {};
       for (const feature of acceptedFeatures) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           buildParentRelation(epicAdoId),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5275,7 +5375,7 @@ export class AzureDevOpsService {
       let featureAdoUrl: string | undefined;
       if (!featureAdoId) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           ...(parentEpicAdoId ? [buildParentRelation(parentEpicAdoId)] : []),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5360,8 +5460,9 @@ export class AzureDevOpsService {
           }
         }
 
-        if (spec.tags && spec.tags.length > 0) {
-          patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
+        const effectiveTags = spec.type === 'Feature' ? withApexOriginTag(spec.tags) : (spec.tags ?? []);
+        if (effectiveTags.length > 0) {
+          patch.push({ op: 'add', path: '/fields/System.Tags', value: effectiveTags.join('; ') });
         }
 
         if (includeAssignedTo && spec.assignedTo) {
@@ -5607,6 +5708,7 @@ export class AzureDevOpsService {
           'System.AssignedTo',
           'System.AreaPath',
           'System.IterationPath',
+          'System.Tags',
         ],
         maxResults: 200,
       });
@@ -5620,6 +5722,7 @@ export class AzureDevOpsService {
         project,
         areaPath: (wi.fields['System.AreaPath'] ?? undefined) as string | undefined,
         iterationPath: (wi.fields['System.IterationPath'] ?? undefined) as string | undefined,
+        tags: (wi.fields['System.Tags'] ?? '') as string,
       }));
 
       console.log(`=== getWorkItemsAssignedToUser END === found ${items.length} items`);

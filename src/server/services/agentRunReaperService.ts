@@ -1,86 +1,296 @@
 /**
  * Agent Run Reaper Service
  *
- * Marks orphaned agent runs as failed when their heartbeat expires.
- * Handles two cases:
- *   1. Heartbeat expiry: status='running' AND heartbeat_at < now() - 5 minutes
- *   2. Hard timeout: status='running' AND now() > timeout_at
- *
- * ## Wiring into server startup
- *
- * In `src/server/index.ts`, after the existing `startRecoveryLoop()` call, add:
- *
- *   import { startReaper } from './services/agentRunReaperService';
- *   startReaper();
+ * Marks orphaned agent runs as failed and surfaces progress SLA warnings.
+ * Worker heartbeat and meaningful progress are deliberately evaluated as
+ * separate clocks: an alive worker can be stale, and a recently productive
+ * run can still be abandoned when its worker heartbeat stops.
  */
 import { db } from '../db/drizzle';
-import { agentRuns } from '../db/schema';
-import { sql, and, eq, lt } from 'drizzle-orm';
+import { agentRuns, chatThreads } from '../db/schema';
+import { and, eq, inArray } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
+import type {
+  AgentRunEventStatus,
+  AgentRunHealth,
+  AgentRunPhase,
+  SseHealthEvent,
+} from '../../shared/types/chat';
+import {
+  nextRunEventSequence,
+  notifyRunEvent,
+  RUN_EVENT_SOURCE_INSTANCE,
+} from './pgNotifyService';
+import { getMyWorkSessionContext, logMyWorkSession } from './myWorkSessionLogger';
 
 const REAP_INTERVAL_MS = 60_000;
+const LONG_RUNNING_PREFIX = 'Long-running agent run';
+const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
 
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
 
+export interface AgentRunHealthConfig {
+  heartbeatTimeoutMs: number;
+  queuedTimeoutMs: number;
+  progressStaleMs: number;
+  longRunMs: number;
+  hardLimitMs: number;
+}
+
+export interface AgentRunHealthSnapshot {
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  progressAt?: string | null;
+  timeoutAt: string | null;
+}
+
+export interface ReaperOptions {
+  now?: () => number;
+  config?: AgentRunHealthConfig;
+}
+
+function positiveDuration(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
+  return {
+    heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
+    queuedTimeoutMs: positiveDuration(process.env.AGENT_QUEUE_TIMEOUT_MS, 90_000),
+    progressStaleMs: positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000),
+    longRunMs: positiveDuration(process.env.AGENT_LONG_RUN_MS, 30 * 60_000),
+    hardLimitMs: positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000),
+  };
+}
+
+async function publishHealthEvent(input: {
+  runId: string;
+  threadId: string;
+  health: AgentRunHealth;
+  detail: string;
+  timestamp: string;
+  phase?: AgentRunPhase | null;
+  status: AgentRunEventStatus;
+}): Promise<void> {
+  const event: SseHealthEvent = {
+    type: 'health',
+    health: input.health,
+    detail: input.detail.replace(/\s+/g, ' ').trim().slice(0, 500),
+    runId: input.runId,
+    eventTimestamp: input.timestamp,
+  };
+  await notifyRunEvent({
+    eventId: randomUUID(),
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(input.runId, WATCHDOG_SOURCE_INSTANCE),
+    timestamp: input.timestamp,
+    type: 'health',
+    phase: input.phase ?? 'completion',
+    status: input.status,
+    detail: event.detail,
+    event,
+  }, { persist: true });
+}
+
+function ageMs(timestamp: string | null | undefined, nowMs: number): number {
+  if (!timestamp) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? nowMs - parsed : Number.POSITIVE_INFINITY;
+}
+
+export function assessAgentRunHealth(
+  run: AgentRunHealthSnapshot,
+  nowMs: number,
+  config: AgentRunHealthConfig,
+): AgentRunHealth {
+  if (run.status === 'queued') {
+    return ageMs(run.createdAt, nowMs) >= config.queuedTimeoutMs ? 'never_claimed' : 'healthy';
+  }
+  if (run.status !== 'running') return 'healthy';
+
+  const runStartedAt = run.startedAt ?? run.createdAt;
+  const configuredTimeoutReached = ageMs(runStartedAt, nowMs) >= config.hardLimitMs;
+  const rowTimeoutReached = Boolean(run.timeoutAt && Date.parse(run.timeoutAt) <= nowMs);
+  if (configuredTimeoutReached || rowTimeoutReached) return 'hard_timeout';
+  if (ageMs(run.heartbeatAt, nowMs) >= config.heartbeatTimeoutMs) return 'worker_lost';
+
+  // progressAt is intentionally independent of heartbeatAt. The fallback keeps
+  // pre-migration rows bounded until the progress_at column is populated.
+  const meaningfulProgressAt = run.progressAt ?? run.startedAt ?? run.createdAt;
+  if (ageMs(meaningfulProgressAt, nowMs) >= config.progressStaleMs) return 'progress_stale';
+  if (ageMs(runStartedAt, nowMs) >= config.longRunMs) return 'long_running';
+  return 'healthy';
+}
+
+function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {
+  if (health === 'progress_stale') {
+    return `No meaningful progress for more than ${Math.round(config.progressStaleMs / 60_000)} minutes`;
+  }
+  if (health === 'long_running') {
+    return `${LONG_RUNNING_PREFIX} (${Math.round(config.longRunMs / 60_000)}+ minutes); recent progress is still being received`;
+  }
+  return null;
+}
+
+function isWatchdogWarning(lastError: string | null | undefined): boolean {
+  return Boolean(
+    lastError
+    && (lastError.startsWith('No meaningful progress for more than ') || lastError.startsWith(LONG_RUNNING_PREFIX)),
+  );
+}
+
+async function logMyWorkHealth(
+  threadId: string,
+  runId: string,
+  health: AgentRunHealth,
+  detail: string,
+  level: 'info' | 'warn' | 'error',
+): Promise<void> {
+  const context = await getMyWorkSessionContext(threadId).catch(() => null);
+  if (!context) return;
+  logMyWorkSession('run.health_changed', {
+    ...context,
+    runId,
+    health,
+    detail,
+  }, level);
+}
+
+async function failRun(
+  id: string,
+  threadId: string,
+  message: string,
+  updatedAt: string,
+): Promise<void> {
+  await db
+    .update(agentRuns)
+    .set({ status: 'failed', lastError: message, updatedAt })
+    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, 'running')));
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle', activeRunId: null, lastError: message, lastActivityAt: updatedAt })
+    .where(and(
+      eq(chatThreads.id, threadId),
+      eq(chatThreads.activeRunId, id),
+      eq(chatThreads.status, 'running'),
+    ));
+}
+
 /**
- * Reap runs where the worker died (heartbeat expired) or the run timed out.
+ * Reap failed runs and persist non-terminal progress warnings.
  */
-async function reapOrphanedRuns(): Promise<void> {
+export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<void> {
   try {
-    // 1. Heartbeat-expired runs
-    const heartbeatResult = await db.update(agentRuns)
-      .set({
-        status: 'failed',
-        lastError: 'Worker lost (heartbeat expired)',
-        updatedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(agentRuns.status, 'running'),
-          lt(agentRuns.heartbeatAt, sql`now() - interval '5 minutes'`),
-        ),
-      )
-      .returning({ id: agentRuns.id, threadId: agentRuns.threadId });
+    const config = options.config ?? resolveAgentRunHealthConfig();
+    const nowMs = options.now?.() ?? Date.now();
+    const updatedAt = new Date(nowMs).toISOString();
+    const rows = await db.query.agentRuns.findMany({
+      where: inArray(agentRuns.status, ['queued', 'running']),
+    });
 
-    for (const row of heartbeatResult) {
-      console.log(`[reaper] Reaped orphaned run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`);
-    }
+    for (const row of rows) {
+      const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
+      const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
 
-    // 2. Hard-timeout runs
-    const timeoutResult = await db.update(agentRuns)
-      .set({
-        status: 'failed',
-        lastError: 'Run timed out',
-        updatedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(agentRuns.status, 'running'),
-          lt(agentRuns.timeoutAt, sql`now()`),
-        ),
-      )
-      .returning({ id: agentRuns.id, threadId: agentRuns.threadId });
+      if (health === 'worker_lost') {
+        const detail = 'Worker lost (heartbeat expired)';
+        await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail,
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'failed',
+        }).catch((err) => console.error('[reaper] Failed to publish worker-loss event:', err));
+        console.log(`[reaper] Reaped orphaned run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`);
+        continue;
+      }
+      if (health === 'hard_timeout') {
+        const detail = 'Run exceeded configured hard limit';
+        await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail,
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'failed',
+        }).catch((err) => console.error('[reaper] Failed to publish timeout event:', err));
+        console.log(`[reaper] Reaped timed-out run (id=${row.id}, threadId=${row.threadId})`);
+        continue;
+      }
+      if (health === 'never_claimed') {
+        await db
+          .update(agentRuns)
+          .set({
+            status: 'failed',
+            lastError: 'Never claimed (worker lost before lease)',
+            updatedAt,
+          })
+          .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'queued')));
+        await logMyWorkHealth(
+          row.threadId,
+          row.id,
+          health,
+          'Never claimed (worker lost before lease)',
+          'error',
+        );
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail: 'Never claimed (worker lost before lease)',
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'failed',
+        }).catch((err) => console.error('[reaper] Failed to publish unclaimed-run event:', err));
+        console.log(`[reaper] Reaped stale queued run (id=${row.id}, threadId=${row.threadId})`);
+        continue;
+      }
 
-    for (const row of timeoutResult) {
-      console.log(`[reaper] Reaped timed-out run (id=${row.id}, threadId=${row.threadId})`);
-    }
-
-    // 3. Stale queued runs — inserted but never claimed (worker crashed before claim)
-    const staleQueuedResult = await db.update(agentRuns)
-      .set({
-        status: 'failed',
-        lastError: 'Never claimed (worker lost before lease)',
-        updatedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(agentRuns.status, 'queued'),
-          lt(agentRuns.createdAt, sql`now() - interval '90 seconds'`),
-        ),
-      )
-      .returning({ id: agentRuns.id, threadId: agentRuns.threadId });
-
-    for (const row of staleQueuedResult) {
-      console.log(`[reaper] Reaped stale queued run (id=${row.id}, threadId=${row.threadId})`);
+      const warning = warningFor(health, config);
+      if (warning && row.lastError !== warning) {
+        await db
+          .update(agentRuns)
+          .set({ lastError: warning, updatedAt })
+          .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        await logMyWorkHealth(row.threadId, row.id, health, warning, 'warn');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail: warning,
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'running',
+        }).catch((err) => console.error('[reaper] Failed to publish watchdog warning:', err));
+        console.warn(`[reaper] ${warning} (id=${row.id}, threadId=${row.threadId})`);
+      } else if (!warning && isWatchdogWarning(row.lastError)) {
+        await db
+          .update(agentRuns)
+          .set({ lastError: null, updatedAt })
+          .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        await logMyWorkHealth(row.threadId, row.id, 'healthy', 'Meaningful progress resumed', 'info');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health: 'healthy',
+          detail: 'Meaningful progress resumed',
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'running',
+        }).catch((err) => console.error('[reaper] Failed to publish recovery event:', err));
+      }
     }
   } catch (err) {
     console.error('[reaper] Failed to reap orphaned runs:', err);

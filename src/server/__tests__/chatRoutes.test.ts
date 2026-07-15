@@ -49,6 +49,12 @@ jest.mock('../services/chatThreadRepository', () => ({
   toggleFlag: jest.fn(),
 }));
 
+jest.mock('../services/pgNotifyService', () => ({
+  RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
+  replayRunEvents: jest.fn().mockResolvedValue([]),
+  subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
+}));
+
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
@@ -61,8 +67,14 @@ jest.mock('../services/threadAccessService', () => ({
   canWriteThread: (...args: unknown[]) => mockCanWriteThread(...args),
 }));
 
-import chatRouter from '../routes/chat';
+import chatRouter, {
+  buildRunStatusResponse,
+  formatRunEventSse,
+  shouldAssignRunEventSseId,
+  shouldForwardPgRunEvent,
+} from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
+import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 
 const mockChatService = chatAgentService as jest.Mocked<typeof chatAgentService>;
 
@@ -78,6 +90,78 @@ function buildApp() {
   app.use('/api/chat', chatRouter);
   return app;
 }
+
+describe('chat run-event SSE transport', () => {
+  const envelope = {
+    eventId: 'event-1',
+    threadId: 'thread-1',
+    runId: 'run-1',
+    sourceInstance: 'worker-a',
+    sequence: 1,
+    timestamp: '2026-07-14T12:00:00.000Z',
+    type: 'status',
+    phase: 'implementation',
+    status: 'running',
+    detail: 'Implementing',
+    event: { type: 'status', status: 'running' },
+  } as AgentRunEventEnvelope;
+
+  it('writes the durable event id as the SSE id', () => {
+    expect(formatRunEventSse(envelope)).toBe(
+      `id: event-1\ndata: ${JSON.stringify({
+        ...envelope.event,
+        runId: 'run-1',
+        eventTimestamp: envelope.timestamp,
+        semanticPhase: 'implementation',
+        semanticStatus: 'running',
+        semanticDetail: 'Implementing',
+      })}\n\n`,
+    );
+  });
+
+  it('suppresses the owner worker PostgreSQL echo', () => {
+    expect(shouldForwardPgRunEvent(envelope, 'worker-a')).toBe(false);
+    expect(shouldForwardPgRunEvent({ ...envelope, sourceInstance: 'worker-b' }, 'worker-a')).toBe(true);
+  });
+
+  it('assigns reconnect cursors only to persisted run events', () => {
+    expect(shouldAssignRunEventSseId(envelope)).toBe(true);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: { type: 'token', text: 'ephemeral' },
+    })).toBe(false);
+  });
+
+  it('exposes watchdog health and persisted progress without using heartbeat as progress', () => {
+    const now = Date.parse('2026-07-14T12:10:00.000Z');
+    expect(buildRunStatusResponse({
+      id: 'run-1',
+      status: 'running',
+      lastError: 'No meaningful progress for more than 2 minutes',
+      createdAt: '2026-07-14T12:00:00.000Z',
+      startedAt: '2026-07-14T12:00:00.000Z',
+      heartbeatAt: '2026-07-14T12:09:59.000Z',
+      progressAt: '2026-07-14T12:05:00.000Z',
+      progressLabel: 'Running focused tests',
+      progressPhase: 'testing',
+      timeoutAt: '2026-07-14T14:00:00.000Z',
+    }, now, {
+      heartbeatTimeoutMs: 5 * 60_000,
+      queuedTimeoutMs: 90_000,
+      progressStaleMs: 2 * 60_000,
+      longRunMs: 30 * 60_000,
+      hardLimitMs: 2 * 60 * 60_000,
+    })).toMatchObject({
+      runId: 'run-1',
+      health: 'progress_stale',
+      progressAt: '2026-07-14T12:05:00.000Z',
+      progressLabel: 'Running focused tests',
+      progressPhase: 'testing',
+      elapsedMs: 10 * 60_000,
+    });
+  });
+});
 
 // ── Permission gate: chat:view ─────────────────────────────────────────────────
 
