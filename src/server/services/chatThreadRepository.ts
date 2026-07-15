@@ -4,6 +4,7 @@ import { chatMessageAttachments, chatMessages, chatThreads, interviews, prds } f
 import type {
   ChatMessage,
   ChatThread,
+  ChatThreadSearchResult,
   ChatThreadSummary,
 } from '../../shared/types/chat';
 import {
@@ -149,6 +150,162 @@ export async function listThreadsByUser(
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   }));
+}
+
+// ── searchThreads ─────────────────────────────────────────────────────────────
+
+export interface SearchThreadsOptions {
+  term: string;
+  limit?: number;
+  offset?: number;
+  project?: string;
+  flaggedOnly?: boolean;
+}
+
+interface SearchThreadRow extends Record<string, unknown> {
+  id: string;
+  user_id: string;
+  title: string | null;
+  status: string;
+  kickoff: ChatThread['kickoff'];
+  flagged: boolean;
+  flagged_at: string | null;
+  created_at: string;
+  last_activity_at: string;
+  first_user_message: string | null;
+  message_id: string | null;
+  message_role: string | null;
+  message_text: string | null;
+  matched_at: string | null;
+  title_only: boolean;
+}
+
+/**
+ * Search the caller's own history. The SQL selects only the newest visible
+ * matching message per thread and ranks title-only matches by thread activity.
+ */
+export async function searchThreads(
+  userId: string,
+  opts: SearchThreadsOptions,
+): Promise<ChatThreadSearchResult[]> {
+  const term = opts.term.trim();
+  const pattern = `%${term.replace(/[!%_]/g, '!$&')}%`;
+  const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
+
+  const result = await db.execute<SearchThreadRow>(sql`
+    WITH eligible_threads AS (
+      SELECT t.*
+      FROM chat_threads t
+      WHERE t.user_id = ${userId}
+        AND NOT EXISTS (
+          SELECT 1 FROM interviews i WHERE i.chat_thread_id = t.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM prds p WHERE p.chat_thread_id = t.id
+        )
+        ${opts.project ? sql`AND t.kickoff->>'project' = ${opts.project}` : sql``}
+        ${opts.flaggedOnly ? sql`AND t.flagged = true` : sql``}
+    ),
+    message_matches AS (
+      SELECT DISTINCT ON (m.thread_id)
+        m.thread_id,
+        m.id AS message_id,
+        m.role AS message_role,
+        m.text AS message_text,
+        m.ts AS matched_at
+      FROM chat_messages m
+      INNER JOIN eligible_threads et ON et.id = m.thread_id
+      WHERE m.role IN ('user', 'agent')
+        AND m.hidden = false
+        AND m.text ILIKE ${pattern} ESCAPE '!'
+      ORDER BY m.thread_id, m.ts DESC, m.id DESC
+    )
+    SELECT
+      et.id,
+      et.user_id,
+      et.title,
+      et.status,
+      et.kickoff,
+      et.flagged,
+      et.flagged_at,
+      et.created_at,
+      et.last_activity_at,
+      (
+        SELECT m.text
+        FROM chat_messages m
+        WHERE m.thread_id = et.id
+          AND m.role = 'user'
+          AND m.text <> 'Begin.'
+        ORDER BY m.ts ASC
+        LIMIT 1
+      ) AS first_user_message,
+      mm.message_id,
+      mm.message_role,
+      mm.message_text,
+      mm.matched_at,
+      (mm.message_id IS NULL) AS title_only
+    FROM eligible_threads et
+    LEFT JOIN message_matches mm ON mm.thread_id = et.id
+    WHERE et.title ILIKE ${pattern} ESCAPE '!'
+       OR mm.message_id IS NOT NULL
+    ORDER BY COALESCE(mm.matched_at, et.last_activity_at) DESC, et.id DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
+
+  return result.rows.map((row): ChatThreadSearchResult => {
+    const summary: ChatThreadSummary = {
+      id: row.id,
+      userId: row.user_id,
+      title: row.title ?? 'Untitled',
+      status: row.status as ChatThreadSummary['status'],
+      kickoff: {
+        project: row.kickoff?.project ?? '',
+        repo: row.kickoff?.repo ?? '',
+        skillPath: row.kickoff?.skillPath,
+        pillLabel: row.kickoff?.pillLabel,
+        pillDescription: row.kickoff?.pillDescription,
+      },
+      messagePreview: normalizeMessagePreview(row.first_user_message) ?? undefined,
+      flagged: row.flagged,
+      flaggedAt: row.flagged_at ?? undefined,
+      createdAt: row.created_at,
+      lastActivityAt: row.last_activity_at,
+    };
+
+    if (
+      row.message_id
+      && row.message_text
+      && row.matched_at
+      && (row.message_role === 'user' || row.message_role === 'agent')
+    ) {
+      return {
+        ...summary,
+        match: {
+          messageId: row.message_id,
+          role: row.message_role,
+          snippet: buildSearchSnippet(row.message_text, term),
+          matchedAt: row.matched_at,
+        },
+        titleOnly: false,
+      };
+    }
+
+    return { ...summary, titleOnly: true };
+  });
+}
+
+export function buildSearchSnippet(text: string, term: string, targetLength = 120): string {
+  if (text.length <= targetLength) return text;
+
+  const matchIndex = text.toLocaleLowerCase().indexOf(term.toLocaleLowerCase());
+  const centeredStart = matchIndex >= 0
+    ? matchIndex - Math.floor((targetLength - term.length) / 2)
+    : 0;
+  const start = Math.max(0, centeredStart);
+  const end = Math.min(text.length, start + targetLength);
+  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
 }
 
 // ── loadFullThread ────────────────────────────────────────────────────────────

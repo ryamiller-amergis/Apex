@@ -32,6 +32,7 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn(),
   getThreadAsync: jest.fn(),
   listThreadSummaries: jest.fn().mockResolvedValue([]),
+  searchThreadSummaries: jest.fn().mockResolvedValue([]),
   sendMessage: jest.fn(),
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
@@ -179,13 +180,14 @@ describe('chat routes — chat:view permission gate', () => {
     expect(res.body).toEqual([]);
   });
 
-  it('returns 403 when the user lacks chat:view', async () => {
+  it('AC-3 security NFR returns 403 and no snippets when search lacks chat:view', async () => {
     mockPermissionGranted = false;
 
-    const res = await request(buildApp()).get('/api/chat/threads');
+    const res = await request(buildApp()).get('/api/chat/threads?q=notif');
 
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: 'Forbidden', missing: ['chat:view'] });
+    expect(mockChatService.searchThreadSummaries).not.toHaveBeenCalled();
   });
 
   it('gates every sub-route — POST /threads also returns 403 without permission', async () => {
@@ -205,6 +207,8 @@ describe('GET /api/chat/threads', () => {
   beforeEach(() => {
     mockPermissionGranted = true;
     jest.clearAllMocks();
+    mockChatService.listThreadSummaries.mockResolvedValue([]);
+    mockChatService.searchThreadSummaries.mockResolvedValue([]);
   });
 
   it('returns 200 with an empty thread list', async () => {
@@ -222,6 +226,63 @@ describe('GET /api/chat/threads', () => {
     const res = await request(buildApp()).get('/api/chat/threads');
 
     expect(res.status).toBe(500);
+  });
+
+  it('AC-0 calls search for a trimmed query of at least two characters', async () => {
+    mockChatService.searchThreadSummaries.mockResolvedValue([
+      {
+        id: 'thread-1',
+        userId: 'user-1',
+        title: 'Notifications',
+        status: 'idle',
+        kickoff: { project: 'Apex', repo: 'Apex' },
+        flagged: true,
+        createdAt: '2026-07-14T00:00:00.000Z',
+        lastActivityAt: '2026-07-14T01:00:00.000Z',
+        match: {
+          messageId: 'message-1',
+          role: 'agent',
+          snippet: 'Configure notifications here.',
+          matchedAt: '2026-07-14T00:30:00.000Z',
+        },
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get('/api/chat/threads?q=%20notif%20&project=Apex&flaggedOnly=true');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].match.messageId).toBe('message-1');
+    expect(mockChatService.searchThreadSummaries).toHaveBeenCalledWith('user-1', {
+      term: 'notif',
+      limit: 50,
+      offset: 0,
+      project: 'Apex',
+      flaggedOnly: true,
+    });
+    expect(mockChatService.listThreadSummaries).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'a', '%20'])(
+    'AC-2 uses the unchanged summary path for an absent or short query (%s)',
+    async (query) => {
+      const suffix = query ? `?q=${query}` : '';
+      const res = await request(buildApp()).get(`/api/chat/threads${suffix}`);
+
+      expect(res.status).toBe(200);
+      expect(mockChatService.listThreadSummaries).toHaveBeenCalledTimes(1);
+      expect(mockChatService.searchThreadSummaries).not.toHaveBeenCalled();
+    },
+  );
+
+  it('AC-1 returns an error without partial results when search fails', async () => {
+    mockChatService.searchThreadSummaries.mockRejectedValue(new Error('search unavailable'));
+
+    const res = await request(buildApp()).get('/api/chat/threads?q=notif');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'search unavailable' });
+    expect(Array.isArray(res.body)).toBe(false);
   });
 });
 

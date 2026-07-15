@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import {
   createThread,
   listThreadSummaries,
+  searchThreadSummaries,
   sendMessage,
   subscribeToThread,
   cancelRun,
@@ -230,17 +231,28 @@ function readAttachments(raw: unknown): ChatAttachment[] {
 /**
  * GET /api/chat/threads
  * List thread summaries for the current user.
- * Query params: limit (default 50), offset (default 0)
+ * Query params: limit, offset, project, flaggedOnly, and optional search term q.
  */
 router.get('/threads', async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
   const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+  const term = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const flaggedOnly = req.query.flaggedOnly === 'true';
   try {
-    const summaries = await listThreadSummaries(getUserId(req), { limit, offset, project });
+    const userId = getUserId(req);
+    const summaries = term.length >= 2
+      ? await searchThreadSummaries(userId, {
+          term,
+          limit,
+          offset,
+          project,
+          flaggedOnly,
+        })
+      : await listThreadSummaries(userId, { limit, offset, project });
     res.json(summaries);
   } catch (err: any) {
-    console.error('[chat] listThreadSummaries error:', err.message);
+    console.error('[chat] thread list error:', err.message);
     res.status(500).json({ error: err.message ?? 'Failed to list threads' });
   }
 });

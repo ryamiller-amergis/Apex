@@ -25,8 +25,10 @@ import {
   upsertThread as pgUpsertThread,
   insertMessage as pgInsertMessage,
   listThreadsByUser as pgListThreadsByUser,
+  searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
   deleteThread as pgDeleteThread,
+  type SearchThreadsOptions,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
@@ -36,7 +38,7 @@ import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import type { ChatThreadSummary } from '../../shared/types/chat';
+import type { ChatThreadSearchResult, ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import {
@@ -1429,6 +1431,13 @@ export async function listThreadSummaries(
   opts?: { limit?: number; offset?: number; project?: string },
 ): Promise<ChatThreadSummary[]> {
   return pgListThreadsByUser(userId, opts);
+}
+
+export async function searchThreadSummaries(
+  userId: string,
+  opts: SearchThreadsOptions,
+): Promise<ChatThreadSearchResult[]> {
+  return pgSearchThreads(userId, opts);
 }
 
 export function listThreads(userId: string): ChatThread[] {

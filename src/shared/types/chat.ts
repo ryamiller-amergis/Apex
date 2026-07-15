@@ -310,6 +310,20 @@ export interface ChatThreadSummary {
   lastActivityAt: string;
 }
 
+/** Owner-visible context for the most recent visible message matching a thread search. */
+export interface ChatThreadMatch {
+  messageId: string;
+  role: Extract<ChatMessageRole, 'user' | 'agent'>;
+  snippet: string;
+  matchedAt: string;
+}
+
+/** A thread summary enriched with either message-match context or a title-only marker. */
+export type ChatThreadSearchResult = ChatThreadSummary & (
+  | { match: ChatThreadMatch; titleOnly?: false }
+  | { match?: undefined; titleOnly: true }
+);
+
 // ── REST request/response shapes ──────────────────────────────────────────────
 
 export interface StartChatRequest {
