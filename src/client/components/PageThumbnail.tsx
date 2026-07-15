@@ -9,6 +9,8 @@ const THUMBNAIL_WIDTH = 200;
 const THUMBNAIL_HEIGHT = Math.round(THUMBNAIL_WIDTH * (22 / 17));
 
 type DropEdge = 'before' | 'after' | null;
+const ASSEMBLY_PAGE_DRAG_TYPE = 'application/x-pdf-assembly-page';
+const SOURCE_PAGE_DRAG_TYPE = 'application/x-pdf-page';
 
 export interface PageThumbnailProps {
   pageId: string;
@@ -103,6 +105,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const handleDragStart = useCallback(
     (e: React.DragEvent) => {
       e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData(ASSEMBLY_PAGE_DRAG_TYPE, pageId);
       e.dataTransfer.setData('text/plain', pageId);
       onDragStart?.(pageId);
     },
@@ -111,6 +114,8 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
 
   const handleDragOver = useCallback(
     (e: React.DragEvent) => {
+      // Source-browser drags are handled by the assembly grid cell.
+      if (Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       const rect = cardRef.current?.getBoundingClientRect();
@@ -127,7 +132,10 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
+      // Let source-browser drops bubble to the assembly grid cell.
+      if (Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)) return;
       e.preventDefault();
+      e.stopPropagation();
       onDrop?.(pageId);
     },
     [pageId, onDrop],
