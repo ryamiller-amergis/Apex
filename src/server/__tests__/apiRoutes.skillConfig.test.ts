@@ -91,6 +91,8 @@ jest.mock('../middleware/rbac', () => ({
     (_req: any, _res: any, next: any) => next(),
   requireGroupMembership: (..._groups: string[]) =>
     (_req: any, _res: any, next: any) => next(),
+  requireProjectAccess: (_resolver: any) =>
+    (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
 }));
 

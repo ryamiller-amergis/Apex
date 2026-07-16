@@ -5,6 +5,7 @@ import { RichTextField } from './RichTextField';
 import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { TERMINAL_WORK_ITEM_STATES } from '../../shared/types/calendarWorkItemAssistant';
+import { env } from '../config/env';
 import './DetailsPanel.css';
 
 interface DetailsPanelProps {
@@ -80,8 +81,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   if (!workItem) return null;
 
-  const adoOrg = import.meta.env.VITE_ADO_ORG || 'amergis';
-  const adoProject = import.meta.env.VITE_ADO_PROJECT || 'MaxView';
+  const adoOrg = env.VITE_ADO_ORG;
+  const adoProject = env.VITE_ADO_PROJECT;
   const adoUrl = `https://dev.azure.com/${adoOrg}/${adoProject}/_workitems/edit/${workItem.id}`;
 
   // Fetch related items when workItem changes and is PBI, TBI, or Feature

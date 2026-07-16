@@ -1,10 +1,3 @@
-export type DevSessionSetupPhase =
-  | 'dependencies_preparing'
-  | 'dependencies_waiting'
-  | 'dependencies_ready'
-  | 'dependencies_skipped'
-  | 'dependencies_failed';
-
 export interface AssignedWorkItem {
   id: number;
   title: string;

@@ -1,7 +1,3 @@
-export type WorkItemType = 'feature' | 'technical' | 'issue';
-
-export const WORK_ITEM_TYPES: WorkItemType[] = ['feature', 'technical', 'issue'];
-
 export type FeatureRequestStatus =
   | 'new'
   | 'under-review'

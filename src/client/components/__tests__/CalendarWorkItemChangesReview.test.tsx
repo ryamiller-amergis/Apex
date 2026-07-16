@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 jest.mock('../../hooks/useCalendarWorkItemAssistant', () => ({
   useApplyProposal: jest.fn(),
   useRejectProposal: jest.fn(),
+  useUpdateProposalField: jest.fn(),
 }));
 
 jest.mock('../DiffView', () => ({
@@ -23,10 +24,11 @@ jest.mock('../DiffView', () => ({
 }));
 
 import { CalendarWorkItemChangesReview } from '../CalendarWorkItemChangesReview';
-import { useApplyProposal, useRejectProposal } from '../../hooks/useCalendarWorkItemAssistant';
+import { useApplyProposal, useRejectProposal, useUpdateProposalField } from '../../hooks/useCalendarWorkItemAssistant';
 
 const mockUseApply = useApplyProposal as jest.Mock;
 const mockUseReject = useRejectProposal as jest.Mock;
+const mockUseUpdateField = useUpdateProposalField as jest.Mock;
 
 function makeProposal(overrides?: object) {
   return {
@@ -132,6 +134,11 @@ beforeEach(() => {
   mockUseReject.mockReturnValue({
     mutateAsync: jest.fn(),
     isPending: false,
+  });
+  mockUseUpdateField.mockReturnValue({
+    mutateAsync: jest.fn(),
+    isPending: false,
+    error: null,
   });
 });
 
