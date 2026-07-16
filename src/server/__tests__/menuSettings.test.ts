@@ -7,8 +7,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 10 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(10);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 11 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(11);
   });
 
   it('contains the expected keys in order', () => {
@@ -24,6 +24,7 @@ describe('menuSettings shared types', () => {
       'feature-requests',
       'pdf-tools',
       'ai-cost',
+      'design-module',
     ]);
   });
 
@@ -40,6 +41,7 @@ describe('menuSettings shared types', () => {
       'Apex Backlog',
       'PDF Assembly Tool',
       'AI Cost Analytics',
+      'Design Module',
     ]);
   });
 

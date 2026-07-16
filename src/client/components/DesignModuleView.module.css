@@ -1,0 +1,295 @@
+.layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-secondary);
+}
+
+.rail {
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border-color);
+}
+
+.railHeader {
+  display: grid;
+  gap: 16px;
+  padding: 24px 16px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.railHeader h1,
+.railHeader p,
+.contentHeader h2,
+.contentHeader p {
+  margin: 0;
+}
+
+.railHeader h1 {
+  font-size: 20px;
+}
+
+.railHeader p,
+.contentHeader p,
+.meta,
+.generationBar span {
+  color: var(--text-secondary);
+}
+
+.addButton,
+.primary,
+.secondary,
+.danger {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.addButton,
+.primary {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  border-color: var(--accent-color);
+}
+
+.secondary {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.danger {
+  background: var(--bg-primary);
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.primary:disabled,
+.danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.moduleList {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.moduleButton {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.moduleButton:hover {
+  background: var(--bg-secondary);
+}
+
+.moduleButton.active {
+  background: var(--bg-secondary);
+  border-color: var(--accent-color);
+}
+
+.moduleButton strong,
+.moduleButton small {
+  display: block;
+}
+
+.moduleButton small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moduleIcon {
+  display: grid;
+  place-items: center;
+  color: var(--accent-color);
+}
+
+.staleDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error-color);
+}
+
+.content {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px 32px 48px;
+}
+
+.contentHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: 1100px;
+  margin: 0 auto 16px;
+}
+
+.titleRow,
+.headerActions,
+.generationBar,
+.force {
+  display: flex;
+  align-items: center;
+}
+
+.titleRow {
+  gap: 12px;
+}
+
+.contentHeader h2 {
+  font-size: 28px;
+}
+
+.contentHeader p {
+  margin-top: 4px;
+}
+
+.meta {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.headerActions {
+  gap: 8px;
+}
+
+.staleBadge {
+  padding: 4px 8px;
+  border: 1px solid var(--error-color);
+  border-radius: 999px;
+  color: var(--error-color);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.generationBar {
+  gap: 16px;
+  max-width: 1100px;
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.generationBar > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.force {
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.document {
+  max-width: 1100px;
+  min-height: 360px;
+  margin: 0 auto;
+  padding: 32px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.notice,
+.error {
+  max-width: 1100px;
+  margin: 0 auto 16px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--accent-color);
+  color: var(--text-primary);
+}
+
+.error {
+  border-left-color: var(--error-color);
+  color: var(--error-color);
+}
+
+.empty,
+.railMessage,
+.emptyDocument {
+  padding: 32px 16px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.emptyDocument {
+  padding: 80px 16px;
+}
+
+.emptyDocument h3,
+.emptyDocument p {
+  margin: 0;
+}
+
+.emptyDocument p {
+  margin-top: 8px;
+}
+
+@media (max-width: 800px) {
+  .layout {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .rail {
+    flex: none;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .moduleList {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .moduleButton {
+    min-width: 220px;
+  }
+
+  .content {
+    overflow: visible;
+    padding: 16px;
+  }
+
+  .contentHeader,
+  .generationBar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions {
+    align-self: flex-start;
+  }
+
+  .document {
+    padding: 20px;
+  }
+}

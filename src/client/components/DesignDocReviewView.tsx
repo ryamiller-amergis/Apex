@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import mermaid from 'mermaid';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useDesignDoc,
@@ -59,22 +58,12 @@ import {
   useReopenComment as useReopenReviewComment,
   useDeleteComment,
 } from '../hooks/useReviewComments';
-import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
+import { normalizeMermaidBlocks } from '../utils/mermaidMarkdown';
+import { MarkdownWithMermaid, MermaidDiagram } from './MarkdownWithMermaid';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
 
 type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
-
-mermaid.initialize({
-  startOnLoad: false,
-  // Prevent Mermaid from appending orphan "Syntax error in text" SVGs to <body>
-  // on parse/render failure (they survive SPA navigations and show up on other pages).
-  suppressErrorRendering: true,
-  securityLevel: 'strict',
-  theme: 'base',
-});
-
-let mermaidDiagramCounter = 0;
 
 // ── Fix Validation Flow state machine ─────────────────────────────────────────
 
@@ -229,122 +218,6 @@ const MIN_SPLIT_PERCENT = 0.20; // right pane minimum 20 % of center
 const MAX_SPLIT_PERCENT = 0.75; // right pane maximum 75 % of center
 const DEFAULT_SPLIT_PERCENT = 0.50; // 50 / 50
 
-function buildMermaidThemeVariables(source: HTMLElement | null): Record<string, string> {
-  const styles = window.getComputedStyle(source ?? document.body);
-  const token = (name: string, fallback: string): string => styles.getPropertyValue(name).trim() || fallback;
-
-  const bgPrimary = token('--bg-primary', '#ffffff');
-  const bgSecondary = token('--bg-secondary', '#f5f5f5');
-  const bgTertiary = token('--bg-tertiary', '#e8e8e8');
-  const textPrimary = token('--text-primary', '#1a1a1a');
-  const textSecondary = token('--text-secondary', '#555555');
-  const borderColor = token('--border-color', '#e0e0e0');
-  const accentColor = token('--accent-color', '#142A67');
-
-  return {
-    background: bgSecondary,
-    mainBkg: bgSecondary,
-    primaryColor: bgTertiary,
-    primaryBorderColor: accentColor,
-    primaryTextColor: textPrimary,
-    secondaryColor: bgPrimary,
-    secondaryBorderColor: borderColor,
-    secondaryTextColor: textPrimary,
-    tertiaryColor: bgTertiary,
-    tertiaryBorderColor: borderColor,
-    tertiaryTextColor: textPrimary,
-    lineColor: accentColor,
-    textColor: textPrimary,
-    titleColor: textPrimary,
-    nodeTextColor: textPrimary,
-    edgeLabelBackground: bgPrimary,
-    clusterBkg: bgSecondary,
-    clusterBorder: borderColor,
-    actorBkg: bgTertiary,
-    actorBorder: accentColor,
-    actorTextColor: textPrimary,
-    actorLineColor: accentColor,
-    signalColor: accentColor,
-    signalTextColor: textPrimary,
-    labelBoxBkgColor: bgPrimary,
-    labelBoxBorderColor: borderColor,
-    labelTextColor: textPrimary,
-    loopTextColor: textPrimary,
-    noteBkgColor: bgTertiary,
-    noteTextColor: textPrimary,
-    noteBorderColor: borderColor,
-    activationBkgColor: bgTertiary,
-    activationBorderColor: accentColor,
-    sequenceNumberColor: textSecondary,
-  };
-}
-
-interface MermaidDiagramProps {
-  chart: string;
-}
-
-const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const renderIdRef = useRef(`design-doc-mermaid-${mermaidDiagramCounter++}`);
-  const renderChart = normalizeMermaidChart(chart);
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [themeRevision, setThemeRevision] = useState(0);
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => setThemeRevision((revision) => revision + 1));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
-
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    setSvg(null);
-    setError(null);
-    mermaid.initialize({
-      startOnLoad: false,
-      suppressErrorRendering: true,
-      securityLevel: 'strict',
-      theme: 'base',
-      themeVariables: buildMermaidThemeVariables(containerRef.current),
-    });
-
-    mermaid.render(renderIdRef.current, renderChart)
-      .then(({ svg: renderedSvg }) => {
-        if (!isCancelled) setSvg(renderedSvg);
-      })
-      .catch((err: unknown) => {
-        // Mermaid may still leave a temp/error node with this id; remove it.
-        document.getElementById(renderIdRef.current)?.remove();
-        document.getElementById(`d${renderIdRef.current}`)?.remove();
-        if (!isCancelled) setError(err instanceof Error ? err.message : 'Unable to render Mermaid diagram.');
-      });
-
-    return () => {
-      isCancelled = true;
-      document.getElementById(renderIdRef.current)?.remove();
-      document.getElementById(`d${renderIdRef.current}`)?.remove();
-    };
-  }, [renderChart, themeRevision]);
-
-  if (error) {
-    return (
-      <div ref={containerRef} className={styles.mermaidError}>
-        <div className={styles.mermaidErrorTitle}>Unable to render Mermaid diagram.</div>
-        {error && <div className={styles.mermaidErrorMessage}>{error}</div>}
-        <pre>{chart}</pre>
-      </div>
-    );
-  }
-
-  if (!svg) return <div ref={containerRef} className={styles.mermaidLoading}>Rendering diagram…</div>;
-
-  return <div ref={containerRef} className={styles.mermaidDiagram} dangerouslySetInnerHTML={{ __html: svg }} />;
-};
-
 interface ContentPaneProps {
   content: string;
   isEditing: boolean;
@@ -402,13 +275,11 @@ const ContentPane: React.FC<ContentPaneProps> = ({
     );
   }
 
-  const previewContent = normalizeMermaidBlocks(content);
-
   return (
     <div className={styles.previewWrapper}>
       <div className={styles.preview}>
         {content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{previewContent}</ReactMarkdown>
+          <MarkdownWithMermaid content={content} components={markdownComponents} />
         ) : (
           <div className={styles.emptyPreview}>
             No content yet.{canEdit ? ' Click Edit to write this section.' : ''}

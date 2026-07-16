@@ -30,6 +30,7 @@ interface AppSidebarProps {
   onNavigateFeatureRequests?: () => void;
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
+  onNavigateDesignModule?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -108,6 +109,15 @@ const IconPdfTools: React.FC = () => (
   </svg>
 );
 
+const IconDesignModule: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="5" height="5" rx="1" />
+    <rect x="12" y="3" width="5" height="5" rx="1" />
+    <rect x="7.5" y="12" width="5" height="5" rx="1" />
+    <path d="M5.5 8v2h9V8M10 10v2" />
+  </svg>
+);
+
 const IconAdmin: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -147,6 +157,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateFeatureRequests,
   onNavigatePdfTools,
   onNavigateAiCost,
+  onNavigateDesignModule,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -169,6 +180,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
+    { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
   ];
 
   const visibleModuleItems = moduleItems.filter((item) => {

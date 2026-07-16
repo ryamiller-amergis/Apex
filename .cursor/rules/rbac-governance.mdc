@@ -41,6 +41,9 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `deployments:create` | deployments | admin, member |
 | `deployments:manage` | deployments | admin |
 | `design-docs:review` | design-docs | admin, member |
+| `design-module:manage` | design-module | admin |
+| `design-module:regenerate` | design-module | admin |
+| `design-module:view` | design-module | admin, member, viewer |
 | `planning:view` | planning | admin, member, viewer |
 | `planning:devstats` | planning | admin, member |
 | `planning:qa` | planning | admin, member |
