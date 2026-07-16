@@ -251,21 +251,7 @@ type SseEventPayload =
 
 export type SseEvent = SseEventPayload & SseDurableEventMetadata;
 
-// ── Agent run phases and durable event transport ──────────────────────────────
-
-export type AgentRunPhase =
-  | 'setup'
-  | 'planning'
-  | 'approval'
-  | 'dependencies'
-  | 'analysis'
-  | 'implementation'
-  | 'testing'
-  | 'typecheck'
-  | 'push'
-  | 'completion';
-
-export type AgentRunEventStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+// ── Durable run-event transport ───────────────────────────────────────────────
 
 export type AgentRunEventType =
   | 'token'
