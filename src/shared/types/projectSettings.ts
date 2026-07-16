@@ -79,6 +79,7 @@ export interface ProjectSkillConfig {
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;
   adrFinalizeSkillPath?: string | null;
+  adrAssistantSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -147,6 +148,7 @@ export interface UpsertProjectSkillConfigRequest {
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;
   adrFinalizeSkillPath?: string | null;
+  adrAssistantSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -243,6 +245,7 @@ export interface ProjectSkillConfigResponse {
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;
   adrFinalizeSkillPath?: string | null;
+  adrAssistantSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;

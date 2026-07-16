@@ -88,3 +88,22 @@ export function useDeleteAdr() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['adrs'] }),
   });
 }
+
+export function useApplyProposedAdr(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () => apiFetch(`/api/adr/${id}/apply-proposed`, { method: 'POST' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adr', id] });
+      void queryClient.invalidateQueries({ queryKey: ['adrs'] });
+    },
+  });
+}
+
+export function useRejectProposedAdr(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error>({
+    mutationFn: () => apiFetch(`/api/adr/${id}/reject-proposed`, { method: 'POST' }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['adr', id] }),
+  });
+}

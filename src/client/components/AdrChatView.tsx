@@ -9,7 +9,16 @@ import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from
 import { useAdr, useCreateAdr, useGenerateAdr, useUpdateAdr } from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
+import { AdrAssistantPanel } from './AdrAssistantPanel';
+import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import styles from './InterviewChatView.module.css';
+
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds.toString().padStart(2, '0')}s` : `${seconds}s`;
+}
 
 const NewAdrCompose: React.FC = () => {
   const [title, setTitle] = useState('');
@@ -127,6 +136,8 @@ const NewAdrCompose: React.FC = () => {
 const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [generationNow, setGenerationNow] = useState(Date.now());
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
@@ -145,6 +156,13 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
+
+  useEffect(() => {
+    if (adr?.status !== 'generating') return;
+    setGenerationNow(Date.now());
+    const intervalId = window.setInterval(() => setGenerationNow(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
     if (!adr || !text.trim() || isRunning || chatLocked) return;
@@ -170,6 +188,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   visibleMessages.forEach((message, index) => {
     if (message.role === 'user') lastUserIndex = index;
   });
+  const generationStartedAt = Date.parse(adr.updatedAt);
+  const generationElapsed = Number.isFinite(generationStartedAt)
+    ? formatElapsed(generationNow - generationStartedAt)
+    : null;
 
   return (
     <div className={styles.container}>
@@ -193,9 +215,25 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             </button>
           )}
           {isAuthor && adr.status === 'proposed' && can('adr:edit') && (
-            <button className={styles.actionBtn} type="button" onClick={() => updateAdr.mutate({ id, changes: { status: 'accepted' } })}>
-              Accept
-            </button>
+            <>
+              <button
+                className={styles.actionBtn}
+                type="button"
+                aria-expanded={assistantOpen}
+                onClick={() => setAssistantOpen((open) => !open)}
+              >
+                ADR Apex Assistant
+              </button>
+              <button
+                className={styles.actionBtn}
+                type="button"
+                disabled={adr.proposedContent != null}
+                title={adr.proposedContent != null ? 'Apply or reject the proposed edits before accepting the ADR' : undefined}
+                onClick={() => updateAdr.mutate({ id, changes: { status: 'accepted' } })}
+              >
+                Accept ADR
+              </button>
+            </>
           )}
           {isAuthor && adr.status === 'accepted' && can('adr:edit') && (
             <button className={styles.actionBtnDanger} type="button" onClick={() => updateAdr.mutate({ id, changes: { status: 'superseded' } })}>
@@ -205,6 +243,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
       {error && <div className={styles.sendError}>{error}</div>}
+      <ProposedAdrChangesReview
+        adrId={adr.id}
+        currentContent={adr.content}
+        proposedContent={adr.proposedContent}
+      />
       {adr.content && (
         <div className={styles.messages}>
           <div className={styles.messageList}>
@@ -214,7 +257,27 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           </div>
         </div>
       )}
-      {!adr.content && (
+      {!adr.content && adr.status === 'generating' && (
+        <div className={styles.generationStage} role="status" aria-live="polite">
+          <div className={styles.generationCard}>
+            <div className={styles.generationSpinner} aria-hidden="true" />
+            <div className={styles.generationTitle}>Generating your ADR</div>
+            <p className={styles.generationDescription}>
+              The architect is reviewing the interview, evaluating the trade-offs, and writing the MADR document.
+            </p>
+            <div className={styles.generationSteps} aria-label="Generation progress">
+              <span className={`${styles.generationStep} ${styles.generationStepComplete}`}>Interview captured</span>
+              <span className={`${styles.generationStep} ${styles.generationStepActive}`}>Drafting decision record</span>
+              <span className={styles.generationStep}>Preparing preview</span>
+            </div>
+            <div className={styles.generationMeta}>
+              {generationElapsed && <span>Elapsed {generationElapsed}</span>}
+              <span>This page checks for the result every 5 seconds.</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {!adr.content && adr.status !== 'generating' && (
         <div className={styles.messages}>
           <div className={styles.messageList}>
             {visibleMessages.map((message, index) => {
@@ -244,7 +307,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           </div>
         </div>
       )}
-      {!adr.content && (chatLocked ? (
+      {!adr.content && adr.status === 'generating' ? (
+        <div className={styles.generationNotice}>
+          You can leave this page safely. Return to the ADR dashboard to check its status.
+        </div>
+      ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
         <div className={styles.inputArea}>
@@ -266,6 +333,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           </div>
         </div>
       ))}
+      <AdrAssistantPanel
+        adrId={adr.id}
+        open={assistantOpen && isAuthor && adr.status === 'proposed' && can('adr:edit')}
+        onClose={() => setAssistantOpen(false)}
+        existingThreadId={adr.adrAssistantThreadId}
+      />
     </div>
   );
 };

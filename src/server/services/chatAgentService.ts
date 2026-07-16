@@ -468,7 +468,28 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    if (kickoff.assistantType === 'prd') {
+    if (kickoff.assistantType === 'adr') {
+      const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
+      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# ADR session identifiers`,
+        `Use these exact values when calling MCP tools:`,
+        `  adr_id:    ${adrId}`,
+        `  thread_id: ${threadId}`,
+        ``,
+        `# ADR context and repository grounding`,
+        `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
+        `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
+        `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
+        `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
+      );
+    } else if (kickoff.assistantType === 'prd') {
       // Extract prd_id and thread_id from the freeform context so the agent
       // has them directly in the system prompt — no file-read required.
       const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);

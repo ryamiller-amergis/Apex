@@ -8,6 +8,7 @@ export type AdrStatus =
 export interface Adr {
   id: string;
   chatThreadId: string;
+  adrAssistantThreadId?: string | null;
   authorId: string;
   title: string;
   project: string;
@@ -17,6 +18,7 @@ export interface Adr {
   skillSettingsName?: string | null;
   status: AdrStatus;
   content: string;
+  proposedContent?: string | null;
   slug?: string | null;
   createdAt: string;
   updatedAt: string;

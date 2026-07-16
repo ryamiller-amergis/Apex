@@ -338,6 +338,7 @@ export const interviews = pgTable('interviews', {
 export const adrs = pgTable('adrs', {
   id: uuid('id').primaryKey().defaultRandom(),
   chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  adrAssistantThreadId: uuid('adr_assistant_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   title: text('title').notNull().default('Untitled ADR'),
   project: text('project').notNull(),
@@ -346,6 +347,7 @@ export const adrs = pgTable('adrs', {
   skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
   status: text('status').notNull().default('in_progress'),
   content: text('content').notNull().default(''),
+  proposedContent: text('proposed_content'),
   slug: text('slug'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -465,6 +467,11 @@ export const adrsRelations = relations(adrs, ({ one }) => ({
     fields: [adrs.chatThreadId],
     references: [chatThreads.id],
   }),
+  assistantThread: one(chatThreads, {
+    relationName: 'adrAssistantThread',
+    fields: [adrs.adrAssistantThreadId],
+    references: [chatThreads.id],
+  }),
   author: one(appUsers, {
     fields: [adrs.authorId],
     references: [appUsers.oid],
@@ -535,6 +542,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   prdSkillPath: text('prd_skill_path'),
   adrInterviewSkillPath: text('adr_interview_skill_path'),
   adrFinalizeSkillPath: text('adr_finalize_skill_path'),
+  adrAssistantSkillPath: text('adr_assistant_skill_path'),
   designDocSkillPath: text('design_doc_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   designPrototypeSkillPath: text('design_prototype_skill_path'),

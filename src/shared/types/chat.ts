@@ -52,7 +52,7 @@ export interface ChatThreadKickoff {
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
   /** Identifies the type of assistant thread — controls system prompt behavior */
-  assistantType?: 'design-doc' | 'prd';
+  assistantType?: 'design-doc' | 'prd' | 'adr';
   /** Human-readable label from the QuickSkillPill or QuickMcpPill selected on the home page */
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */

@@ -4096,6 +4096,7 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prdSkillPath: config.prdSkillPath ?? null,
       adrInterviewSkillPath: config.adrInterviewSkillPath ?? null,
       adrFinalizeSkillPath: config.adrFinalizeSkillPath ?? null,
+      adrAssistantSkillPath: config.adrAssistantSkillPath ?? null,
       designDocSkillPath: config.designDocSkillPath ?? null,
       testCaseSkillPath: config.testCaseSkillPath ?? null,
       interviewModel: config.interviewModel ?? null,

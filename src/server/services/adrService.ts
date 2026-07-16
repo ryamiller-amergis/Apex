@@ -35,6 +35,16 @@ function parseFrontmatter(content: string): { status: AdrStatus; slug: string | 
   return { status, slug };
 }
 
+function forceProposedStatus(content: string): string {
+  const frontmatter = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  if (!frontmatter) return content;
+  const block = frontmatter[1];
+  const nextBlock = /^status:\s*.+$/im.test(block)
+    ? block.replace(/^status:\s*.+$/im, 'status: Proposed')
+    : `${block}\nstatus: Proposed`;
+  return content.replace(frontmatter[0], `---\n${nextBlock}\n---`);
+}
+
 async function withSettingsName(row: typeof adrs.$inferSelect): Promise<Adr> {
   return {
     ...row,
@@ -104,13 +114,64 @@ async function requireAuthor(id: string, userId: string): Promise<typeof adrs.$i
 
 export async function updateAdrStatus(id: string, userId: string, status: AdrStatus): Promise<void> {
   if (!EDITABLE_STATUSES.includes(status)) throw httpError(`Invalid ADR status: ${status}`, 400);
-  await requireAuthor(id, userId);
+  const row = await requireAuthor(id, userId);
+  if (status === 'accepted' && row.proposedContent != null) {
+    throw httpError('Apply or reject the proposed ADR edits before accepting the ADR', 409);
+  }
   await db.update(adrs).set({ status, updatedAt: new Date().toISOString() }).where(eq(adrs.id, id));
 }
 
 export async function updateAdrTitle(id: string, userId: string, title: string): Promise<void> {
   await requireAuthor(id, userId);
   await db.update(adrs).set({ title, updatedAt: new Date().toISOString() }).where(eq(adrs.id, id));
+}
+
+export async function setAdrAssistantThread(id: string, userId: string, threadId: string): Promise<void> {
+  const row = await requireAuthor(id, userId);
+  if (row.status !== 'proposed') throw httpError('ADR Assistant is available only for proposed ADRs', 409);
+  await db.update(adrs).set({
+    adrAssistantThreadId: threadId,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
+}
+
+export async function stageAdrProposedContent(
+  id: string,
+  userId: string,
+  threadId: string,
+  content: string,
+): Promise<void> {
+  const row = await requireAuthor(id, userId);
+  if (row.status !== 'proposed') throw httpError('ADR edits can be proposed only while the ADR is proposed', 409);
+  if (row.adrAssistantThreadId !== threadId) throw httpError('Thread is not linked to this ADR assistant', 403);
+  await db.update(adrs).set({
+    proposedContent: forceProposedStatus(content),
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
+}
+
+export async function applyAdrProposedContent(id: string, userId: string): Promise<void> {
+  const row = await requireAuthor(id, userId);
+  if (row.status !== 'proposed') throw httpError('Proposed edits can be applied only while the ADR is proposed', 409);
+  if (row.proposedContent == null) throw httpError('No proposed ADR edits to apply', 409);
+  const content = forceProposedStatus(row.proposedContent);
+  const metadata = parseFrontmatter(content);
+  await db.update(adrs).set({
+    content,
+    slug: metadata.slug,
+    status: 'proposed',
+    proposedContent: null,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
+}
+
+export async function rejectAdrProposedContent(id: string, userId: string): Promise<void> {
+  const row = await requireAuthor(id, userId);
+  if (row.status !== 'proposed') throw httpError('Proposed edits can be rejected only while the ADR is proposed', 409);
+  await db.update(adrs).set({
+    proposedContent: null,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
 }
 
 export async function deleteAdr(id: string, userId: string): Promise<void> {

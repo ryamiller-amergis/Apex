@@ -72,6 +72,7 @@ export interface UpsertSkillConfigOptions {
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;
   adrFinalizeSkillPath?: string | null;
+  adrAssistantSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -138,6 +139,7 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     prdSkillPath: opts.prdSkillPath ?? null,
     adrInterviewSkillPath: opts.adrInterviewSkillPath ?? null,
     adrFinalizeSkillPath: opts.adrFinalizeSkillPath ?? null,
+    adrAssistantSkillPath: opts.adrAssistantSkillPath ?? null,
     designDocSkillPath: opts.designDocSkillPath ?? null,
     designDocAssistantSkillPath: opts.designDocAssistantSkillPath ?? null,
     designPrototypeSkillPath: opts.designPrototypeSkillPath ?? null,

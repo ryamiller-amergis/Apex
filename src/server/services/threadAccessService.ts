@@ -1,6 +1,6 @@
 import { eq, or } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designDocs, interviews, prds } from '../db/schema';
+import { adrs, designDocs, interviews, prds } from '../db/schema';
 import type { ChatThread } from '../../shared/types/chat';
 import { loadFullThread } from './chatThreadRepository';
 import { getThread } from './chatAgentService';
@@ -17,6 +17,8 @@ export interface ThreadAccessResult {
 
 type ThreadLinkKind =
   | 'interview'
+  | 'adr'
+  | 'adr_assistant'
   | 'prd'
   | 'design_doc'
   | 'design_doc_qa'
@@ -40,6 +42,16 @@ async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
     columns: { id: true },
   });
   if (prd) return { kind: 'prd', documentId: prd.id };
+
+  const adr = await db.query.adrs.findFirst({
+    where: or(
+      eq(adrs.chatThreadId, threadId),
+      eq(adrs.adrAssistantThreadId, threadId),
+    ),
+    columns: { id: true, chatThreadId: true, adrAssistantThreadId: true },
+  });
+  if (adr?.chatThreadId === threadId) return { kind: 'adr', documentId: adr.id };
+  if (adr?.adrAssistantThreadId === threadId) return { kind: 'adr_assistant', documentId: adr.id };
 
   const doc = await db.query.designDocs.findFirst({
     where: or(
@@ -92,6 +104,10 @@ export async function resolveThreadAccess(
 
   const link = await findThreadLink(threadId);
   if (!link) return null;
+
+  if ((link.kind === 'adr' || link.kind === 'adr_assistant') && perms.has('adr:view')) {
+    return { access: 'read', thread };
+  }
 
   if (perms.has('interviews:view')) {
     return { access: 'read', thread };
