@@ -310,9 +310,20 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
 function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
-  options?: { maxviewEnabled?: boolean },
+  options?: { maxviewEnabled?: boolean; calendarSessionId?: string },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
+
+  const port = process.env.PORT ?? '3001';
+
+  // Calendar assistant threads use a restricted MCP that only exposes the
+  // propose_work_item_changes tool — never the general ado-skills MCP.
+  if (kickoff.assistantType === 'calendar-work-item' && options?.calendarSessionId) {
+    servers['calendar-assistant'] = {
+      url: `http://localhost:${port}/mcp/calendar-assistant/${options.calendarSessionId}`,
+    };
+    return servers;
+  }
 
   // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
   if (kickoff.skillProvider !== 'github') {
@@ -677,7 +688,71 @@ function buildStandupFollowupPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
+function buildCalendarWorkItemAssistantPrompt(kickoff: ChatThreadKickoff): string {
+  const sessionId = kickoff.calendarAssistantSessionId ?? '(unknown)';
+  const threadId = '(read from .ai-pilot/session.json)';
+  const anchorId = kickoff.calendarAnchorWorkItemId ?? '(unknown)';
+  const selectedIds = (kickoff.calendarSelectedWorkItemIds ?? []).join(', ') || '(none)';
+
+  return [
+    `# Calendar Work-Item Assistant`,
+    ``,
+    `You are an expert technical writer helping to improve Azure DevOps work items.`,
+    `Your role is to propose changes to Description and/or Acceptance Criteria for the`,
+    `selected work items below. You MUST use the \`propose_work_item_changes\` MCP tool`,
+    `to stage your proposals — chat-only descriptions are NOT proposals and will not be applied.`,
+    ``,
+    `# Session identifiers — use these exact values when calling MCP tools`,
+    `  session_id: ${sessionId}`,
+    `  thread_id:  ${threadId}`,
+    `  anchor_work_item_id: ${anchorId}`,
+    `  selected_work_item_ids: [${selectedIds}]`,
+    ``,
+    `# Work-item context`,
+    `The current content of all selected work items has been written to \`.ai-pilot/kickoff-context.md\`.`,
+    `Read this file first to understand the current state before proposing any changes.`,
+    ``,
+    `# Editable fields`,
+    `- **Description** — supported for Epic, Feature, PBI, and TBI`,
+    `- **Acceptance Criteria** — supported for Epic, Feature, and PBI only`,
+    ``,
+    `# What you may propose`,
+    `- Improve clarity, completeness, or consistency of Description and/or Acceptance Criteria`,
+    `- Add missing Given/When/Then acceptance criteria for PBIs/Features`,
+    `- Align child items with the parent Epic's updated description`,
+    `- Only propose for work items in the selected_work_item_ids list above`,
+    ``,
+    `# What you must NOT do`,
+    `- Do NOT claim that changes have been applied — they have not been written to ADO until the user reviews and confirms`,
+    `- Do NOT propose changes to fields other than Description and Acceptance Criteria`,
+    `- Do NOT call \`update_work_item\` — that tool is not available in this assistant`,
+    `- Do NOT propose for work items outside the selected_work_item_ids list`,
+    ``,
+    `# Applying your proposals — MANDATORY tool use`,
+    `When you have decided on changes for one or more items:`,
+    `1. Read \`.ai-pilot/kickoff-context.md\` to confirm the current content.`,
+    `2. Compose the full replacement text for each changed field (Markdown).`,
+    `3. Call \`propose_work_item_changes\` with session_id and thread_id from above.`,
+    `   Each item entry must include the work_item_id and an array of field changes.`,
+    `4. After the tool succeeds, briefly tell the user which items were staged and`,
+    `   that they will see a diff review panel to approve or reject each change.`,
+    ``,
+    `# Available MCP tool`,
+    `- \`propose_work_item_changes\` — stage Description/AC proposals for review (no ADO writes)`,
+    ``,
+    `# Content constraints`,
+    `- Write in clear, professional language suitable for an engineering team`,
+    `- Use Markdown: bold (**text**), unordered lists (- item), inline code (\`text\`)`,
+    `- For Acceptance Criteria use Given/When/Then format where appropriate`,
+    `- Keep each field under 64 KB`,
+    ...buildScopePolicyLines(kickoff),
+  ].join('\n');
+}
+
 function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
+  if (kickoff.assistantType === 'calendar-work-item') {
+    return buildCalendarWorkItemAssistantPrompt(kickoff);
+  }
   if (kickoff.mode === 'standup-participant') {
     return buildStandupParticipantPrompt(kickoff);
   }
@@ -1680,7 +1755,10 @@ export async function sendMessage(
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled });
+  const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
+    ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
+    : undefined;
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled, calendarSessionId });
   console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),

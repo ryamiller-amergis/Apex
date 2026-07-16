@@ -22,6 +22,7 @@ export type AiFeature =
   | 'backlog-generate'
   | 'home-chat'
   | 'ai-cost-insights'
+  | 'calendar-work-item-assistant'
   | 'other';
 
 export interface RecordUsageInput {
