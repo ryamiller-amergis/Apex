@@ -1,0 +1,170 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--text-primary) 35%, transparent);
+}
+
+.modal {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header h2,
+.header p {
+  margin: 0;
+}
+
+.header p,
+.form fieldset p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.close {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.form {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.form label,
+.form fieldset {
+  display: grid;
+  gap: 6px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.form input,
+.form textarea,
+.form select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.form fieldset {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.form legend {
+  padding: 0 4px;
+}
+
+.globs {
+  display: grid;
+  gap: 8px;
+}
+
+.globRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.globRow .error {
+  grid-column: 1 / -1;
+}
+
+.remove,
+.addGlob,
+.secondary,
+.primary {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.remove,
+.addGlob,
+.secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.addGlob {
+  justify-self: start;
+}
+
+.primary {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  border-color: var(--accent-color);
+}
+
+.primary:disabled,
+.remove:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error,
+.submitError {
+  color: var(--error-color);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.submitError {
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--error-color);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    padding: 8px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 16px);
+  }
+
+  .header,
+  .form {
+    padding: 16px;
+  }
+}

@@ -8,7 +8,8 @@ export type MenuItemKey =
   | 'ui-lab'
   | 'feature-requests'
   | 'pdf-tools'
-  | 'ai-cost';
+  | 'ai-cost'
+  | 'design-module';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -21,6 +22,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'feature-requests', label: 'Apex Backlog' },
   { key: 'pdf-tools', label: 'PDF Assembly Tool' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
+  { key: 'design-module', label: 'Design Module' },
 ];
 
 /** Default enabled views when a project has no explicit menu config row. */

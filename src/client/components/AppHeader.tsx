@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -45,6 +45,7 @@ interface AppHeaderProps {
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
+  onNavigateDesignModule?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -76,6 +77,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
+  onNavigateDesignModule,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -113,6 +115,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 

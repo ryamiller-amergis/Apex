@@ -58,6 +58,7 @@ type FileStoreFactory = (
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
+import designModuleRoutes from './routes/designModule';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -190,6 +191,7 @@ app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
+app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
