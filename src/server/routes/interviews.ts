@@ -126,7 +126,8 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
 
 router.get('/active-users', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    const users = await getActiveUsers();
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+    const users = await getActiveUsers(project);
     res.json(users);
   } catch (err) {
     next(err);

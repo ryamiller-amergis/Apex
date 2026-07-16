@@ -37,7 +37,7 @@ describe('menuSettings shared types', () => {
       'My Work',
       'Standup',
       'UI Lab',
-      'Feature Requests',
+      'Apex Backlog',
       'PDF Assembly Tool',
       'AI Cost Analytics',
     ]);

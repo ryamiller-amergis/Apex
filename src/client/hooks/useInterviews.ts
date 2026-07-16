@@ -222,10 +222,15 @@ export function useDesignDoc(id: string | null) {
 
 // ── Active users query ─────────────────────────────────────────────────────────
 
-export function useActiveUsers() {
+export function useActiveUsers(project?: string) {
   return useQuery<ActiveUser[]>({
-    queryKey: ['active-users'],
-    queryFn: () => apiFetch('/api/interviews/active-users'),
+    queryKey: ['active-users', project],
+    queryFn: () => {
+      const url = project
+        ? `/api/interviews/active-users?project=${encodeURIComponent(project)}`
+        : '/api/interviews/active-users';
+      return apiFetch(url);
+    },
     staleTime: 60_000,
   });
 }

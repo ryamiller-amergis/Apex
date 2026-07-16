@@ -4032,8 +4032,9 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
     const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
-      getUserPermissions(userId),
+      getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       getChangelogPrefs(userId),
@@ -4142,6 +4143,10 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       testCaseModel: config.testCaseModel ?? null,
       featureRequestSkillPath: config.featureRequestSkillPath ?? null,
       featureRequestModel: config.featureRequestModel ?? null,
+      technicalSkillPath: config.technicalSkillPath ?? null,
+      technicalModel: config.technicalModel ?? null,
+      issueSkillPath: config.issueSkillPath ?? null,
+      issueModel: config.issueModel ?? null,
       interviewSkillOptions: config.interviewSkillOptions ?? null,
       prototypeStageEnabled: config.prototypeStageEnabled ?? true,
       quickSkillPills: config.quickSkillPills ?? null,

@@ -262,6 +262,8 @@ const SKILL_FIELDS = [
   { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
   { key: 'standupSkillPath' as const, label: 'Standup Skill', desc: 'Custom standup procedure for participant conversations', emptyLabel: 'None (use built-in default)' },
   { key: 'featureRequestSkillPath' as const, label: 'Feature Request Analysis Skill', desc: 'Analyzes feature requests for feasibility and impact', emptyLabel: 'None (use default)' },
+  { key: 'technicalSkillPath' as const, label: 'Technical Analysis Skill', desc: 'Analyzes technical backlog items for approach and engineering risk', emptyLabel: 'None (analysis unavailable)' },
+  { key: 'issueSkillPath' as const, label: 'Issue Analysis Skill', desc: 'Analyzes reported issues for impact, severity, and urgency', emptyLabel: 'None (analysis unavailable)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -275,6 +277,8 @@ const MODEL_FIELDS = [
   { key: 'developmentModel' as const, label: 'Development Model' },
   { key: 'standupModel' as const, label: 'Standup Model' },
   { key: 'featureRequestModel' as const, label: 'Feature Request Analysis Model' },
+  { key: 'technicalModel' as const, label: 'Technical Analysis Model' },
+  { key: 'issueModel' as const, label: 'Issue Analysis Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -444,6 +448,8 @@ interface EditState {
   developmentSkillPath: string;
   standupSkillPath: string;
   featureRequestSkillPath: string;
+  technicalSkillPath: string;
+  issueSkillPath: string;
   interviewModel: string;
   prdModel: string;
   designDocModel: string;
@@ -455,6 +461,8 @@ interface EditState {
   developmentModel: string;
   standupModel: string;
   featureRequestModel: string;
+  technicalModel: string;
+  issueModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -486,9 +494,11 @@ const emptyEdit = (): EditState => ({
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
+  technicalSkillPath: '', issueSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
+  technicalModel: '', issueModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -519,7 +529,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
   const { data: bedrockModels = [] } = useAvailableBedrockModels();
-  const { data: allUsers = [] } = useUsers();
+  const { data: allUsers = [] } = useUsers(selectedProject);
 
   // ── Derived: filter to current project ────────────────────────────────
   const projectConfigs = configs.filter((c) => c.project === selectedProject);
@@ -565,7 +575,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   );
   const { data: approversData } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
-  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers();
+  const { data: allGroupsWithMembers = [] } = useGroupsWithMembers(selectedProject);
 
   // ── Effects ────────────────────────────────────────────────────────────
 
@@ -644,6 +654,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       developmentSkillPath: config.developmentSkillPath ?? '',
       standupSkillPath: config.standupSkillPath ?? '',
       featureRequestSkillPath: config.featureRequestSkillPath ?? '',
+      technicalSkillPath: config.technicalSkillPath ?? '',
+      issueSkillPath: config.issueSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       designDocModel: config.designDocModel ?? '',
@@ -655,6 +667,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       developmentModel: config.developmentModel ?? '',
       standupModel: config.standupModel ?? '',
       featureRequestModel: config.featureRequestModel ?? '',
+      technicalModel: config.technicalModel ?? '',
+      issueModel: config.issueModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -720,6 +734,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         developmentSkillPath: edit.developmentSkillPath || null,
         standupSkillPath: edit.standupSkillPath || null,
         featureRequestSkillPath: edit.featureRequestSkillPath || null,
+        technicalSkillPath: edit.technicalSkillPath || null,
+        issueSkillPath: edit.issueSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         designDocModel: edit.designDocModel || null,
@@ -731,6 +747,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         developmentModel: edit.developmentModel || null,
         standupModel: edit.standupModel || null,
         featureRequestModel: edit.featureRequestModel || null,
+        technicalModel: edit.technicalModel || null,
+        issueModel: edit.issueModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

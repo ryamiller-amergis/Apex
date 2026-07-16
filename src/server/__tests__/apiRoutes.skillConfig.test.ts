@@ -216,6 +216,28 @@ describe('GET /api/skill-config', () => {
     });
   });
 
+  it('returns technical and issue analysis skill settings', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'Apex',
+      skillRepo: 'org/Apex',
+      skillBranch: 'main',
+      technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+      technicalModel: 'composer-2',
+      issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      issueModel: 'claude-opus-4-6',
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=Apex');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+      technicalModel: 'composer-2',
+      issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      issueModel: 'claude-opus-4-6',
+    });
+  });
+
   it('calls getSkillConfig with the project name from the query', async () => {
     mockGetSkillConfig.mockResolvedValue(null);
 

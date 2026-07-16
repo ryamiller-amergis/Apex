@@ -33,12 +33,18 @@ describe('devSessionSetupService', () => {
     await expect(activateDevSession('session-1', {
       chatThreadId: 'thread-1',
       branchName: 'feature/apex-42-work',
+      setupPhase: 'dependencies_ready',
+      setupDetail: 'Dependencies are ready',
+      setupProgressAt: '2026-07-14T12:00:00.000Z',
     })).resolves.toBe(true);
 
     expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({
       chatThreadId: 'thread-1',
       branchName: 'feature/apex-42-work',
       status: 'in_progress',
+      setupPhase: 'dependencies_ready',
+      setupDetail: 'Dependencies are ready',
+      setupProgressAt: '2026-07-14T12:00:00.000Z',
     }));
   });
 

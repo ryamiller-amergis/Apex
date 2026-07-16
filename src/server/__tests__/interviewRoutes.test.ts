@@ -1773,7 +1773,19 @@ describe('GET /api/interviews/active-users', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
-    expect(mockGetActiveUsers).toHaveBeenCalledTimes(1);
+    expect(mockGetActiveUsers).toHaveBeenCalledWith(undefined);
+  });
+
+  it('scopes active users to the requested project', async () => {
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+    ]);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users?project=Project%20Alpha');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockGetActiveUsers).toHaveBeenCalledWith('Project Alpha');
   });
 
   it('returns an empty array when there are no active users', async () => {

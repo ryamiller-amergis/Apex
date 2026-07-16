@@ -29,6 +29,15 @@ export interface AppUserRole {
   assignedAt: string; // ISO string
 }
 
+export interface AppUserProjectRole {
+  id: string;
+  userId: string;
+  project: string;
+  roleId: string;
+  assignedBy: string | null;
+  assignedAt: string; // ISO string
+}
+
 // ── Aggregate types — used in API responses ───────────────────────────────────
 
 export interface RoleWithPermissions extends AppRole {
@@ -39,11 +48,23 @@ export interface RoleWithPermissions extends AppRole {
 export interface UserWithRoles extends AppUser {
   /** Role names, e.g. ['admin', 'member'] */
   roles: string[];
+  /** Role names assigned for the requested project, when project-scoped. */
+  projectRoles?: string[];
 }
 
 // ── Request/response DTOs ─────────────────────────────────────────────────────
 
 export interface AssignRoleRequest {
+  roleId: string;
+}
+
+export interface AssignProjectRoleRequest {
+  project: string;
+  roleId: string;
+}
+
+export interface RemoveProjectRoleRequest {
+  project: string;
   roleId: string;
 }
 

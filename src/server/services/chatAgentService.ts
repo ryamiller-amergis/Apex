@@ -11,8 +11,13 @@ import type {
   ChatThread,
   ChatMessage,
   ChatThreadKickoff,
+  AgentRunEventEnvelope,
+  AgentRunEventStatus,
+  AgentRunEventType,
+  AgentRunPhase,
   SseEvent,
   SseErrorCode,
+  SsePhaseEvent,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import { recordAiUsage, estimateTokens, resolveFeatureFromKickoff } from './aiUsageService';
@@ -34,9 +39,20 @@ import type { ValidationScorecard } from '../../shared/types/interview';
 import type { ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
-import { notifyRunEvent } from './pgNotifyService';
+import {
+  clearRunEventSequence,
+  nextRunEventSequence,
+  notifyRunEvent,
+  RUN_EVENT_SOURCE_INSTANCE,
+} from './pgNotifyService';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import { isFeatureEnabled } from './featureFlagService';
+import {
+  getMyWorkSessionContext,
+  logMyWorkSession,
+  type MyWorkLogContext,
+  type MyWorkLogLevel,
+} from './myWorkSessionLogger';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -54,7 +70,7 @@ const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 interface ThreadState {
   thread: ChatThread;
   /** SSE subscriber callbacks for this thread */
-  subscribers: Set<(event: SseEvent) => void>;
+  subscribers: Set<(event: SseEvent, envelope?: AgentRunEventEnvelope) => void>;
   /** Live Cursor SDK agent — null between turns */
   agent: SDKAgent | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -65,6 +81,7 @@ interface ThreadState {
 }
 
 const threads = new Map<string, ThreadState>();
+const lastTokenProgressWriteAt = new Map<string, number>();
 
 // ── Output file helpers ───────────────────────────────────────────────────────
 
@@ -859,7 +876,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
-function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
+export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
   const hasApexPath = !!(kickoff as any).prdId; // Apex PRD-sourced session
@@ -874,7 +891,21 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     `  provider: "${kickoff.skillProvider ?? 'ado'}"`,
     `  work item: ${kickoff.workItemId ?? '(none)'}`,
     ``,
+    `# Dependency readiness`,
   ];
+  if (kickoff.dependenciesPrepared) {
+    parts.push(
+      `Package-manager-aware development dependencies were prepared from each supported repository lockfile and attached to the corresponding install folder before the agent started.`,
+      `Do not run npm install, npm ci, pnpm install, or yarn install unless package.json, package-lock.json, or the project's equivalent manifest/lockfile changes during this session.`,
+      ``,
+    );
+  } else {
+    parts.push(
+      `Server-side dependency bootstrap was skipped for this session.`,
+      `Inspect the repository's manifests and lockfiles, then install dependencies with the project's package manager if the project workflow requires them.`,
+      ``,
+    );
+  }
 
   if (isGitHub) {
     parts.push(
@@ -985,9 +1016,228 @@ function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
 
 // ── SSE broadcast ─────────────────────────────────────────────────────────────
 
-function broadcast(state: ThreadState, event: SseEvent) {
+function broadcast(state: ThreadState, event: SseEvent, envelope?: AgentRunEventEnvelope) {
   for (const cb of state.subscribers) {
-    try { cb(event); } catch { /* subscriber gone */ }
+    try { cb(event, envelope); } catch { /* subscriber gone */ }
+  }
+}
+
+function inferRunEventType(event: SseEvent): AgentRunEventType {
+  if (event.type === 'tool_call' || event.type === 'tool_status') return 'tool';
+  if (event.type === 'thinking') return 'phase';
+  return event.type;
+}
+
+function inferRunEventPhase(event: SseEvent): AgentRunPhase {
+  if (event.type === 'phase') return event.phase;
+  if (event.type === 'health') return 'completion';
+  if (event.type === 'done') return 'completion';
+  if (event.type === 'tool_call' || event.type === 'tool_status') {
+    const toolName = event.toolName.toLowerCase();
+    if (/test|jest|vitest|playwright/.test(toolName)) return 'testing';
+    if (/type.?check|tsc/.test(toolName)) return 'typecheck';
+    if (/push|git/.test(toolName)) return 'push';
+  }
+  if (event.type === 'thinking') return 'analysis';
+  return 'implementation';
+}
+
+function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
+  if (event.type === 'phase') return event.status;
+  if (event.type === 'health') {
+    return event.health === 'worker_lost'
+      || event.health === 'hard_timeout'
+      || event.health === 'never_claimed'
+      ? 'failed'
+      : 'running';
+  }
+  if (event.type === 'error') return 'failed';
+  if (event.type === 'done') return 'completed';
+  if (event.type === 'status') return event.status === 'running' ? 'running' : 'completed';
+  if (event.type === 'tool_status') {
+    return event.status === 'error' ? 'failed' : event.status === 'completed' ? 'completed' : 'running';
+  }
+  return 'running';
+}
+
+function inferRunEventDetail(event: SseEvent): string | undefined {
+  let detail: string | undefined;
+  if (event.type === 'phase') detail = event.detail;
+  else if (event.type === 'health') detail = event.detail;
+  else if (event.type === 'tool_call' || event.type === 'tool_status') detail = `${event.toolName} ${event.type === 'tool_status' ? event.status : 'started'}`;
+  else if (event.type === 'error') detail = event.error;
+  else if (event.type === 'retrying') detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
+  else if (event.type === 'done') detail = 'Run completed';
+  if (!detail) return undefined;
+  return detail.replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
+function summarizeToolInput(input: unknown): unknown {
+  if (input === null || input === undefined) return undefined;
+  if (Array.isArray(input)) return { itemCount: input.length };
+  if (typeof input === 'object') {
+    return { keys: Object.keys(input as Record<string, unknown>).slice(0, 20) };
+  }
+  return { type: typeof input };
+}
+
+function summarizeToolResult(result: unknown): string | undefined {
+  if (typeof result !== 'string') return undefined;
+  return result.length === 0 ? 'Completed with no output' : `Completed with ${result.length} characters of output`;
+}
+
+function inferToolPhase(toolName: string, input: unknown): AgentRunPhase {
+  const diagnostic = `${toolName} ${JSON.stringify(input ?? '')}`.toLowerCase();
+  if (/\b(npm ci|npm install|pnpm install|yarn install)\b/.test(diagnostic)) return 'dependencies';
+  if (/\b(jest|vitest|playwright|pytest|dotnet test|npm test)\b/.test(diagnostic)) return 'testing';
+  if (/\b(tsc|typecheck|type-check)\b/.test(diagnostic)) return 'typecheck';
+  if (/\bgit\s+push\b/.test(diagnostic)) return 'push';
+  return 'implementation';
+}
+
+export function createRunEventEnvelope(input: {
+  eventId?: string;
+  threadId: string;
+  runId: string;
+  sequence: number;
+  timestamp?: string;
+  event: SseEvent;
+  phase?: AgentRunPhase;
+}): AgentRunEventEnvelope {
+  return {
+    eventId: input.eventId ?? uuidv4(),
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sequence: input.sequence,
+    timestamp: input.timestamp ?? new Date().toISOString(),
+    type: inferRunEventType(input.event),
+    phase: input.phase ?? inferRunEventPhase(input.event),
+    status: inferRunEventStatus(input.event),
+    detail: inferRunEventDetail(input.event),
+    event: input.event,
+  };
+}
+
+function shouldPersistRunEvent(event: SseEvent): boolean {
+  return event.type === 'phase'
+    || event.type === 'health'
+    || event.type === 'tool_call'
+    || event.type === 'tool_status'
+    || event.type === 'status'
+    || event.type === 'retrying'
+    || event.type === 'error'
+    || event.type === 'done';
+}
+
+function isMeaningfulProgressEvent(event: SseEvent): boolean {
+  return event.type === 'token'
+    || event.type === 'message'
+    || event.type === 'phase'
+    || event.type === 'tool_call'
+    || event.type === 'tool_status';
+}
+
+async function persistMeaningfulProgress(
+  runId: string,
+  envelope: AgentRunEventEnvelope,
+): Promise<void> {
+  if (envelope.event.type === 'cancel' || !isMeaningfulProgressEvent(envelope.event)) return;
+  if (envelope.event.type === 'token') {
+    const nowMs = Date.parse(envelope.timestamp);
+    const previous = lastTokenProgressWriteAt.get(runId) ?? 0;
+    if (nowMs - previous < 5_000) return;
+    lastTokenProgressWriteAt.set(runId, nowMs);
+  }
+  await db.update(agentRuns)
+    .set({
+      progressAt: envelope.timestamp,
+      progressLabel: envelope.detail
+        ?? (envelope.event.type === 'token' ? 'Generating response' : envelope.phase),
+      progressPhase: envelope.phase,
+      updatedAt: envelope.timestamp,
+    })
+    .where(eq(agentRuns.id, runId))
+    .execute()
+    .catch(() => {});
+}
+
+async function publishRunEvent(
+  state: ThreadState,
+  runId: string,
+  event: SseEvent,
+  metadata?: { phase?: AgentRunPhase },
+): Promise<AgentRunEventEnvelope> {
+  const envelope = createRunEventEnvelope({
+    threadId: state.thread.id,
+    runId,
+    sequence: nextRunEventSequence(runId),
+    event,
+    phase: metadata?.phase,
+  });
+  const persist = shouldPersistRunEvent(event);
+  if (!persist) {
+    broadcast(state, event, envelope);
+    void notifyRunEvent(envelope, { persist: false }).catch((err) => {
+      console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
+    });
+    void persistMeaningfulProgress(runId, envelope);
+    return envelope;
+  }
+  try {
+    await notifyRunEvent(envelope, { persist });
+  } catch (err) {
+    console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
+  }
+  await persistMeaningfulProgress(runId, envelope);
+  broadcast(state, event, envelope);
+  return envelope;
+}
+
+async function publishRunCancellation(threadId: string, runId: string): Promise<void> {
+  const envelope: AgentRunEventEnvelope = {
+    eventId: uuidv4(),
+    threadId,
+    runId,
+    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(runId),
+    timestamp: new Date().toISOString(),
+    type: 'cancel',
+    phase: 'completion',
+    status: 'cancelled',
+    detail: 'Run cancelled',
+    event: { type: 'cancel' },
+  };
+  await notifyRunEvent(envelope, { persist: true });
+}
+
+export class ThinkingPhaseCoalescer {
+  private startedAt: number | null = null;
+  private reportedDurationMs = 0;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  observe(fragment: { text?: string; durationMs?: number }): boolean {
+    const isFirstFragment = this.startedAt === null;
+    if (isFirstFragment) this.startedAt = this.now();
+    if (typeof fragment.durationMs === 'number') {
+      this.reportedDurationMs = Math.max(this.reportedDurationMs, fragment.durationMs);
+    }
+    return isFirstFragment;
+  }
+
+  flush(at = this.now()): SsePhaseEvent | null {
+    if (this.startedAt === null) return null;
+    const durationMs = Math.max(0, at - this.startedAt, this.reportedDurationMs);
+    this.startedAt = null;
+    this.reportedDurationMs = 0;
+    return {
+      type: 'phase',
+      phase: 'analysis',
+      status: 'completed',
+      detail: 'Analysis completed',
+      durationMs,
+    };
   }
 }
 
@@ -1147,7 +1397,12 @@ export function getAgentHealthStats(): AgentHealthStats {
 export async function createThread(
   userId: string,
   kickoff: ChatThreadKickoff,
-  options?: { skipAutoKickoff?: boolean; kickoffMessage?: string; workspaceDirOverride?: string },
+  options?: {
+    skipAutoKickoff?: boolean;
+    kickoffMessage?: string;
+    workspaceDirOverride?: string;
+    dependenciesPrepared?: boolean;
+  },
 ): Promise<ChatThread> {
   ensureDirs();
 
@@ -1156,7 +1411,12 @@ export async function createThread(
 
   // Resolve branch
   const branch = kickoff.branch ?? 'main';
-  const resolvedKickoff = { ...kickoff, branch };
+  const resolvedKickoff = {
+    ...kickoff,
+    branch,
+    dependenciesPrepared:
+      options?.dependenciesPrepared ?? kickoff.dependenciesPrepared,
+  };
 
   if (!options?.workspaceDirOverride) {
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -1255,7 +1515,7 @@ export function listThreads(userId: string): ChatThread[] {
 
 export function subscribeToThread(
   threadId: string,
-  callback: (event: SseEvent) => void,
+  callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void,
 ): () => void {
   // Only check the in-memory map (sync). The thread is guaranteed to be
   // loaded by requireThreadOwner middleware before this is called.
@@ -1718,7 +1978,24 @@ export async function sendMessage(
 ): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
+  const myWorkContext = state.isDevSession
+    ? await getMyWorkSessionContext(threadId).catch(() => null)
+    : null;
+  const logMyWork = (
+    event: string,
+    context: MyWorkLogContext = {},
+    level: MyWorkLogLevel = 'info',
+  ): void => {
+    if (myWorkContext) logMyWorkSession(event, { ...myWorkContext, ...context }, level);
+  };
+  const runStartedAtMs = Date.now();
   console.log('[chat] sendMessage', { threadId, status: state.thread.status });
+  logMyWork('message.received', {
+    threadStatus: state.thread.status,
+    messageLength: text.length,
+    attachmentCount: attachments.length,
+    hidden: Boolean(options?.hidden),
+  });
   if (state.thread.status === 'running') throw new Error('Agent is already running');
 
   const baseApiKey = process.env.CURSOR_API_KEY;
@@ -1781,6 +2058,11 @@ export async function sendMessage(
   state.thread.lastActivityAt = userMsg.ts;
   broadcast(state, { type: 'message', message: userMsg });
   await pgInsertMessage(threadId, userMsg);
+  logMyWork('message.persisted', {
+    turnId,
+    messageLength: userMsg.text.length,
+    attachmentCount: attachmentMeta.length,
+  });
 
   // Update status
   state.thread.status = 'running';
@@ -1847,6 +2129,10 @@ export async function sendMessage(
 
     if (!state.agent) {
       if (state.thread.cursorAgentId) {
+        logMyWork('agent.resume_started', {
+          cursorAgentId: state.thread.cursorAgentId,
+          model: resolvedModel,
+        });
         // Agent.resume accepts Partial<AgentOptions>, which includes agents.
         state.agent = await retryWithBackoff(
           () => Agent.resume(state.thread.cursorAgentId!, {
@@ -1859,6 +2145,7 @@ export async function sendMessage(
           sdkRetryOpts,
         );
       } else {
+        logMyWork('agent.create_started', { model: resolvedModel });
         state.agent = await retryWithBackoff(
           () => Agent.create({
             apiKey,
@@ -1894,6 +2181,12 @@ export async function sendMessage(
     const runTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
     const runTimeoutAt = new Date(Date.now() + runTimeoutMs).toISOString();
     agentRunId = state.thread.activeRunId ?? threadId;
+    logMyWork('run.started', {
+      runId: agentRunId,
+      cursorAgentId: state.thread.cursorAgentId,
+      model: resolvedModel,
+      resumedAgent: !isFirstTurn,
+    });
     await db.insert(agentRuns).values({
       id: agentRunId,
       threadId,
@@ -1905,8 +2198,11 @@ export async function sendMessage(
     const [claimed] = await db.update(agentRuns)
       .set({
         status: 'running',
-        ownerInstance: os.hostname(),
+        ownerInstance: RUN_EVENT_SOURCE_INSTANCE,
         heartbeatAt: new Date().toISOString(),
+        progressAt: new Date().toISOString(),
+        progressLabel: 'Agent run started',
+        progressPhase: 'implementation',
         updatedAt: new Date().toISOString(),
       })
       .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'queued')))
@@ -1919,6 +2215,10 @@ export async function sendMessage(
       state.thread.status = 'running';
       state.thread.activeRunId = agentRunId;
       persistThread(state.thread);
+      logMyWork('run.claim_skipped', {
+        runId: agentRunId,
+        reason: 'claimed_by_another_worker',
+      }, 'warn');
       return;
     }
 
@@ -1927,6 +2227,12 @@ export async function sendMessage(
     let agentTextBuffer = '';
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
+    const thinkingPhase = new ThinkingPhaseCoalescer();
+    const flushThinkingPhase = async (): Promise<void> => {
+      const phaseEvent = thinkingPhase.flush();
+      if (!phaseEvent) return;
+      await publishRunEvent(state, agentRunId!, phaseEvent);
+    };
 
     // Shared heartbeat helper — call from any event handler that can run > 90s
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
@@ -1968,12 +2274,15 @@ export async function sendMessage(
             if (event.type === 'assistant') {
               for (const block of event.message.content) {
                 if (block.type === 'text') {
+                  await flushThinkingPhase();
                   agentTextBuffer += block.text;
-                  broadcast(state, { type: 'token', text: block.text });
-                  notifyRunEvent(threadId, { type: 'token', data: block.text }).catch(() => {});
+                  for (const textChunk of block.text.match(/[\s\S]{1,3000}/g) ?? []) {
+                    void publishRunEvent(state, agentRunId!, { type: 'token', text: textChunk });
+                  }
                   await bumpHeartbeat();
                 }
                 if (block.type === 'tool_use') {
+                  await flushThinkingPhase();
                   // Snapshot reasoning text accumulated before this tool call
                   if (agentTextBuffer.trim()) {
                     const reasoningMsg: ChatMessage = {
@@ -1998,49 +2307,56 @@ export async function sendMessage(
                     ts: new Date().toISOString(),
                   };
                   state.thread.messages.push(toolMsg);
-                  broadcast(state, { type: 'tool_call', toolName: block.name, input: block.input });
+                  logMyWork('run.tool_started', {
+                    runId: agentRunId,
+                    toolName: block.name,
+                    phase: inferToolPhase(block.name, block.input),
+                  });
+                  await publishRunEvent(state, agentRunId!, {
+                    type: 'tool_call',
+                    toolName: block.name,
+                    input: summarizeToolInput(block.input),
+                  }, { phase: inferToolPhase(block.name, block.input) });
                   broadcast(state, { type: 'message', message: toolMsg });
                   pgInsertMessage(threadId, toolMsg).catch(() => {});
-                  notifyRunEvent(threadId, { type: 'tool_call', data: { toolName: block.name } }).catch(() => {});
                   await bumpHeartbeat();
                 }
               }
             } else if (event.type === 'thinking') {
-              const thinkingText = (event as any).text ?? '';
-              if (thinkingText) {
-                const thinkingMsg: ChatMessage = {
-                  id: uuidv4(),
-                  role: 'agent',
-                  text: thinkingText,
-                  ts: new Date().toISOString(),
-                  toolName: '_thinking',
-                };
-                state.thread.messages.push(thinkingMsg);
-                broadcast(state, { type: 'message', message: thinkingMsg });
-                pgInsertMessage(threadId, thinkingMsg).catch(() => {});
-              }
-              broadcast(state, {
-                type: 'thinking',
-                text: thinkingText,
+              const firstFragment = thinkingPhase.observe({
                 durationMs: (event as any).thinking_duration_ms,
               });
+              if (firstFragment) {
+                void publishRunEvent(state, agentRunId!, {
+                  type: 'thinking',
+                  text: 'Analyzing',
+                });
+              }
               await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
+              await flushThinkingPhase();
               const tc = event as any;
-              broadcast(state, {
+              logMyWork('run.tool_status', {
+                runId: agentRunId,
+                toolName: tc.name ?? 'unknown',
+                toolCallId: tc.call_id ?? null,
+                toolStatus: tc.status ?? 'running',
+                phase: inferToolPhase(tc.name ?? '', tc.args),
+              }, tc.status === 'error' ? 'warn' : 'info');
+              await publishRunEvent(state, agentRunId!, {
                 type: 'tool_status',
                 toolName: tc.name ?? '',
                 callId: tc.call_id ?? '',
                 status: tc.status ?? 'running',
-                args: tc.args,
-                result: typeof tc.result === 'string' ? tc.result?.slice(0, 500) : undefined,
-              });
+                args: summarizeToolInput(tc.args),
+                result: summarizeToolResult(tc.result),
+              }, { phase: inferToolPhase(tc.name ?? '', tc.args) });
             }
           }
         } catch (streamErr) {
           if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
             console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
-            broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+            await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
 
             if (state.agent) {
               await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -2065,6 +2381,7 @@ export async function sendMessage(
         }
       }
 
+      await flushThinkingPhase();
       const result = await currentRun.wait();
 
       if (result.status === 'error') {
@@ -2072,7 +2389,7 @@ export async function sendMessage(
 
         if (attempt < MAX_RUN_RETRIES && !isFatalRunError(reason)) {
           console.warn(`[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, reason);
-          broadcast(state, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+          await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
 
           if (state.agent) {
             await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -2103,7 +2420,7 @@ export async function sendMessage(
           .where(eq(agentRuns.id, agentRunId))
           .execute()
           .catch((e) => console.error('[chat] Failed to mark agent run failed (in-loop):', e));
-        broadcast(state, { type: 'error', error: reason });
+        await publishRunEvent(state, agentRunId!, { type: 'error', error: reason });
         if (state.agent) {
           await state.agent[Symbol.asyncDispose]().catch(() => {});
           state.agent = null;
@@ -2113,7 +2430,7 @@ export async function sendMessage(
         }
         state.thread.activeRunId = undefined;
         state.thread.status = 'idle';
-        broadcast(state, { type: 'status', status: 'idle' });
+        await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
         break;
       }
 
@@ -2141,7 +2458,7 @@ export async function sendMessage(
       }
 
       state.thread.status = 'idle';
-      broadcast(state, { type: 'status', status: 'idle' });
+      await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
 
       // Record usage event (fire-and-forget, never blocks)
@@ -2197,8 +2514,22 @@ export async function sendMessage(
       .execute()
       .catch((e) => console.error('[chat] Failed to mark agent run completed:', e));
 
-    broadcast(state, { type: 'done', runId: state.thread.activeRunId, prdReady, backlogReady });
-    notifyRunEvent(threadId, { type: 'done', data: { status: 'completed', prdReady, backlogReady } }).catch(() => {});
+    logMyWork('run.completed', {
+      runId: agentRunId,
+      model: resolvedModel,
+      durationMs: Date.now() - runStartedAtMs,
+      responseLength: agentTextBuffer.length,
+      prdReady,
+      backlogReady,
+    });
+    await publishRunEvent(state, agentRunId!, {
+      type: 'done',
+      runId: state.thread.activeRunId,
+      prdReady,
+      backlogReady,
+    });
+    clearRunEventSequence(agentRunId!);
+    lastTokenProgressWriteAt.delete(agentRunId!);
     state.thread.activeRunId = undefined;
   } catch (err: any) {
     // Handle cross-worker cancellation without treating it as an error
@@ -2209,8 +2540,20 @@ export async function sendMessage(
       }
       state.thread.status = 'idle';
       state.thread.activeRunId = undefined;
-      broadcast(state, { type: 'status', status: 'idle' });
-      broadcast(state, { type: 'done' });
+      if (agentRunId) {
+        await publishRunEvent(state, agentRunId, { type: 'status', status: 'idle' });
+        await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+        clearRunEventSequence(agentRunId);
+        lastTokenProgressWriteAt.delete(agentRunId);
+      } else {
+        broadcast(state, { type: 'status', status: 'idle' });
+        broadcast(state, { type: 'done' });
+      }
+      logMyWork('run.cancelled', {
+        runId: agentRunId,
+        durationMs: Date.now() - runStartedAtMs,
+        reason: 'cross_worker_cancellation',
+      }, 'warn');
       persistThread(state.thread);
       return;
     }
@@ -2220,6 +2563,13 @@ export async function sendMessage(
     const tier = classifyError(err);
     const rawMsg = describeError(err);
     console.error(`[chat] Error tier=${tier} for thread ${threadId}:`, rawMsg);
+    logMyWork('run.failed', {
+      runId: agentRunId,
+      durationMs: Date.now() - runStartedAtMs,
+      errorTier: tier,
+      error: rawMsg,
+      cursorAgentId: state.thread.cursorAgentId,
+    }, 'error');
     trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
 
     if (state.agent) {
@@ -2292,9 +2642,19 @@ export async function sendMessage(
         .catch((e) => console.error('[chat] Failed to mark agent run failed:', e));
     }
 
-    broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
-    broadcast(state, { type: 'done' });
-    notifyRunEvent(threadId, { type: 'done', data: { status: 'failed', error: state.thread.lastError } }).catch(() => {});
+    if (agentRunId) {
+      await publishRunEvent(state, agentRunId, {
+        type: 'error',
+        error: state.thread.lastError ?? 'Unknown error',
+        errorCode,
+      });
+      await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+      clearRunEventSequence(agentRunId);
+      lastTokenProgressWriteAt.delete(agentRunId);
+    } else {
+      broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
+      broadcast(state, { type: 'done' });
+    }
 
     try {
       await failGeneratingDocuments(threadId);
@@ -2318,6 +2678,15 @@ export async function cancelRun(threadId: string): Promise<void> {
 
   const activeRunId = state.thread.activeRunId;
   if (!activeRunId) return;
+  const myWorkContext = state.isDevSession
+    ? await getMyWorkSessionContext(threadId).catch(() => null)
+    : null;
+  if (myWorkContext) {
+    logMyWorkSession('run.cancel_requested', {
+      ...myWorkContext,
+      runId: activeRunId,
+    });
+  }
 
   // Mark cancelled in Postgres — works from any worker
   await db.update(agentRuns)
@@ -2327,7 +2696,9 @@ export async function cancelRun(threadId: string): Promise<void> {
     .catch((e) => console.error('[chat] Failed to mark agent run cancelled:', e));
 
   // NOTIFY all workers (the owner will check for cancel and abort its loop)
-  notifyRunEvent(threadId, { type: 'cancel' }).catch(() => {});
+  await publishRunCancellation(threadId, activeRunId).catch((err) => {
+    console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
+  });
 
   // If this IS the owner worker, cancel the SDK run directly
   if (state.agent) {
@@ -2343,7 +2714,16 @@ export async function cancelRun(threadId: string): Promise<void> {
   state.thread.activeRunId = undefined;
   broadcast(state, { type: 'status', status: 'idle' });
   broadcast(state, { type: 'done' });
+  clearRunEventSequence(activeRunId);
+  lastTokenProgressWriteAt.delete(activeRunId);
   persistThread(state.thread);
+  if (myWorkContext) {
+    logMyWorkSession('run.cancelled', {
+      ...myWorkContext,
+      runId: activeRunId,
+      reason: 'user_requested',
+    }, 'warn');
+  }
 }
 
 export async function closeThread(threadId: string): Promise<void> {

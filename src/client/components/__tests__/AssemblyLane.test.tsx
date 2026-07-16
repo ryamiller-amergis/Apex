@@ -367,6 +367,64 @@ describe('AssemblyLane', () => {
     expect(gridBefore.scrollLeft).toBe(12);
   });
 
+  it('reorders when dropped on the padding around a thumbnail', () => {
+    const onReorder = jest.fn();
+    render(<AssemblyLane {...defaultProps} onReorder={onReorder} />);
+
+    const source = screen.getByTestId('pdf-thumbnail-1');
+    const targetCell = screen
+      .getByTestId('pdf-thumbnail-3')
+      .closest('[class*="gridCell"]') as HTMLElement;
+    jest.spyOn(targetCell, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 216,
+      bottom: 304,
+      width: 216,
+      height: 304,
+      toJSON: () => ({}),
+    });
+
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      types: ['application/x-pdf-assembly-page', 'text/plain'],
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? '',
+    };
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(targetCell, { dataTransfer, clientX: 200 });
+    fireEvent.drop(targetCell, { dataTransfer, clientX: 200 });
+
+    expect(onReorder).toHaveBeenCalledWith(0, 2);
+  });
+
+  it('shows auto-scroll guidance while dragging a thumbnail', () => {
+    render(<AssemblyLane {...defaultProps} />);
+    const source = screen.getByTestId('pdf-thumbnail-1');
+    const dataTransfer = {
+      types: ['application/x-pdf-assembly-page', 'text/plain'],
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData: jest.fn(),
+    };
+
+    expect(screen.queryByTestId('assembly-auto-scroll-overlay')).not.toBeInTheDocument();
+
+    fireEvent.dragStart(source, { dataTransfer });
+
+    expect(screen.getByTestId('assembly-auto-scroll-overlay')).toBeInTheDocument();
+    expect(screen.getByText('Hold here to scroll up')).toBeInTheDocument();
+    expect(screen.getByText('Hold here to scroll down')).toBeInTheDocument();
+
+    fireEvent.dragEnd(source);
+    expect(screen.queryByTestId('assembly-auto-scroll-overlay')).not.toBeInTheDocument();
+  });
+
   describe('cross-panel drag from SourceBrowser', () => {
     it('calls onAddFromSource with correct pageId and insertIndex on external drop', () => {
       const onAddFromSource = jest.fn();
@@ -390,6 +448,26 @@ describe('AssemblyLane', () => {
           getData: () => 'external-page-1',
         },
       });
+
+      expect(onAddFromSource).toHaveBeenCalledWith('external-page-1', expect.any(Number));
+    });
+
+    it('accepts an external drop directly on a thumbnail', () => {
+      const onAddFromSource = jest.fn();
+      render(
+        <AssemblyLane {...defaultProps} onAddFromSource={onAddFromSource} />,
+      );
+
+      const firstThumbnail = screen.getByTestId('pdf-thumbnail-1');
+      const dataTransfer = {
+        types: ['application/x-pdf-page', 'text/plain'],
+        dropEffect: 'copy',
+        getData: (type: string) =>
+          type === 'application/x-pdf-page' ? 'external-page-1' : '',
+      };
+
+      fireEvent.dragOver(firstThumbnail, { dataTransfer });
+      fireEvent.drop(firstThumbnail, { dataTransfer });
 
       expect(onAddFromSource).toHaveBeenCalledWith('external-page-1', expect.any(Number));
     });

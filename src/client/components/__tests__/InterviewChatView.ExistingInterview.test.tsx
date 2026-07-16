@@ -43,6 +43,7 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
     data: [
       { id: 'composer-2', displayName: 'Composer 2' },
       { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { id: 'grok-4.5', displayName: 'Grok 4.5' },
     ],
     isLoading: false,
   })),
@@ -105,8 +106,8 @@ jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 import { within } from '@testing-library/react';
 import { useAppShell } from '../../hooks/useAppShell';
 import { useInterview, useUpdateInterviewStatus, useCreatePrd } from '../../hooks/useInterviews';
-import { useStartChat } from '../../hooks/useChatThreads';
-import { useProjectSkillConfig, useGlobalDefaultModel } from '../../hooks/useProjectSkillConfig';
+import { useStartChat, useChatThread } from '../../hooks/useChatThreads';
+import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../../hooks/useProjectSkillConfig';
 
 // ── Factories ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   HTMLElement.prototype.scrollIntoView = jest.fn();
   mockUseChatStream.mockReturnValue(idleStream);
+  (useChatThread as jest.Mock).mockReturnValue({ data: null });
   (useInterview as jest.Mock).mockReturnValue({
     data: makeInterview(),
     isLoading: false,
@@ -734,5 +736,58 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
     fireEvent.click(btn);
 
     expect(mockCreatePrdMutate).not.toHaveBeenCalled();
+  });
+});
+
+// ── Model hydration from kickoff ───────────────────────────────────────────────
+
+describe('ExistingInterviewView — model select reflects kickoff model', () => {
+  it('shows the kickoff model in the session dropdown (not the hardcoded Composer 2 default)', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'grok-4.5' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        kickoff: { project: 'MaxView', repo: 'MaxView', model: 'grok-4.5' },
+        messages: [],
+        status: 'idle',
+      },
+    });
+    (useAvailableModels as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'grok-4.5', displayName: 'Grok 4.5' },
+      ],
+      isLoading: false,
+    });
+
+    renderExistingInterview();
+
+    const modelSelect = await screen.findByLabelText('Model');
+    expect(modelSelect).toHaveValue('grok-4.5');
+  });
+
+  it('falls back to interview.model when kickoff.model is missing', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'claude-opus-4-6' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        kickoff: { project: 'MaxView', repo: 'MaxView' },
+        messages: [],
+        status: 'idle',
+      },
+    });
+
+    renderExistingInterview();
+
+    const modelSelect = await screen.findByLabelText('Model');
+    expect(modelSelect).toHaveValue('claude-opus-4-6');
   });
 });

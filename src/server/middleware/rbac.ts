@@ -12,11 +12,28 @@ declare global {
   }
 }
 
+export function resolveRequestProject(req: Request): string | undefined {
+  const fromQuery = req.query?.project;
+  if (typeof fromQuery === 'string' && fromQuery) return fromQuery;
+
+  const fromParams = req.params?.project;
+  if (typeof fromParams === 'string' && fromParams) return fromParams;
+
+  const fromBody = (req.body as Record<string, unknown> | undefined)?.project;
+  if (typeof fromBody === 'string' && fromBody) return fromBody;
+
+  const fromHeader = req.get?.('x-apex-project') ?? req.headers?.['x-apex-project'];
+  if (typeof fromHeader === 'string' && fromHeader) return fromHeader;
+
+  return undefined;
+}
+
 async function loadPermissions(req: Request): Promise<Set<string>> {
   if (req._permissions) return req._permissions;
   const userId = (req.user as any)?.profile?.oid;
   if (!userId) return new Set();
-  const perms = await getUserPermissions(userId);
+  const project = resolveRequestProject(req);
+  const perms = await getUserPermissions(userId, project);
   req._permissions = perms;
   return perms;
 }

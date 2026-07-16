@@ -6,18 +6,7 @@ import type {
   CreateGroupRequest,
   UpdateGroupRequest,
 } from '../../shared/types/groups';
-
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', ...options });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-  }
-  if (res.status === 204 || res.headers?.get('content-length') === '0') {
-    return undefined as unknown as T;
-  }
-  return res.json() as Promise<T>;
-}
+import { apiFetch } from '../utils/apiFetch';
 
 export function useGroups(project?: string) {
   return useQuery<AppGroup[]>({

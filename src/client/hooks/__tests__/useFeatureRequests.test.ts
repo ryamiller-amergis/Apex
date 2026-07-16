@@ -43,6 +43,7 @@ function mockFetchError(status: number, body: unknown = { error: `HTTP ${status}
 
 const featureRequest = {
   id: 'fr-1',
+  type: 'feature',
   title: 'Dark mode',
   request: 'Add dark mode support',
   advantage: 'Reduced eye strain',
@@ -117,6 +118,7 @@ describe('useSubmitFeatureRequest', () => {
 
     await act(async () => {
       result.current.mutate({
+        type: 'feature',
         title: 'Dark mode',
         request: 'Add dark mode support',
         advantage: 'Reduced eye strain',
@@ -141,6 +143,7 @@ describe('useSubmitFeatureRequest', () => {
 
     await act(async () => {
       result.current.mutate({
+        type: 'feature',
         title: 'Dark mode',
         request: 'Add dark mode support',
         advantage: 'Reduced eye strain',
@@ -153,6 +156,7 @@ describe('useSubmitFeatureRequest', () => {
     const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     expect(callBody).toMatchObject({
       title: 'Dark mode',
+      type: 'feature',
       request: 'Add dark mode support',
       advantage: 'Reduced eye strain',
       project: 'Apex',
@@ -167,6 +171,7 @@ describe('useSubmitFeatureRequest', () => {
 
     await act(async () => {
       result.current.mutate({
+        type: 'feature',
         title: '',
         request: 'Add dark mode support',
         advantage: 'Reduced eye strain',

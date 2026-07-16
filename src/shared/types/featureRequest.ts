@@ -12,6 +12,9 @@ export type FeatureRequestStatus =
 export type FeatureRequestAiStatus = 'pending' | 'analyzing' | 'complete' | 'failed';
 export type FeatureRequestPriority = 'low' | 'medium' | 'high' | 'critical';
 export type FeatureRequestRisk = 'low' | 'medium' | 'high';
+export type WorkItemType = 'feature' | 'technical' | 'issue';
+
+export const WORK_ITEM_TYPES: WorkItemType[] = ['feature', 'technical', 'issue'];
 
 export const FEATURE_REQUEST_STATUSES: FeatureRequestStatus[] = [
   'new', 'under-review', 'in-interview', 'planned', 'declined', 'done',
@@ -31,6 +34,7 @@ export const FEATURE_REQUEST_RISKS: FeatureRequestRisk[] = [
 
 export interface FeatureRequest {
   id: string;
+  type: WorkItemType;
   title: string;
   request: string;
   advantage: string | null;
@@ -54,9 +58,10 @@ export interface FeatureRequest {
 }
 
 export interface CreateFeatureRequestDTO {
+  type: WorkItemType;
   title: string;
   request: string;
-  advantage: string;
+  advantage?: string | null;
   project: string;
 }
 

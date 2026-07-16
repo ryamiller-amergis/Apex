@@ -8,6 +8,7 @@ import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -83,7 +84,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenAgentChat: _onOpenAgentChat,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
+  const [workItemType, setWorkItemType] = useState<WorkItemType | null>(null);
   const { isMobile } = useBreakpoint();
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -111,7 +112,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-    { label: 'Feature Requests', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -249,13 +250,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
 
       {can('feature-requests:submit') && selectedProject && (
-        <FeatureRequestFab onRequestFeature={() => setFeatureRequestOpen(true)} />
+        <FeatureRequestFab onSubmit={setWorkItemType} />
       )}
 
-      {featureRequestOpen && selectedProject && (
+      {workItemType && selectedProject && (
         <FeatureRequestModal
           selectedProject={selectedProject}
-          onClose={() => setFeatureRequestOpen(false)}
+          type={workItemType}
+          onClose={() => setWorkItemType(null)}
         />
       )}
     </div>

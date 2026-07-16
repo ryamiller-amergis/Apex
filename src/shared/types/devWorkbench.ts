@@ -140,6 +140,12 @@ export interface StartDevSessionRequest {
 }
 
 export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed' | 'completed';
+export type DevSessionSetupPhase =
+  | 'dependencies_preparing'
+  | 'dependencies_waiting'
+  | 'dependencies_ready'
+  | 'dependencies_skipped'
+  | 'dependencies_failed';
 
 export interface StartDevSessionResponse {
   sessionId: string;
@@ -152,6 +158,9 @@ export interface DevSessionDetail {
   branchName: string | null;
   status: DevSessionStatus;
   setupError: string | null;
+  setupPhase: DevSessionSetupPhase | null;
+  setupDetail: string | null;
+  setupProgressAt: string | null;
   prUrl: string | null;
   branchPushed: boolean;
   createdAt: string;

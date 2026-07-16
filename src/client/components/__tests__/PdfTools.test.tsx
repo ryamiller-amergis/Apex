@@ -187,6 +187,7 @@ describe('PdfToolsRouteGuard', () => {
 
     expect(screen.getByTestId('pdf-tools-route-guard')).toBeInTheDocument();
     expect(screen.getByTestId('protected-content')).toBeInTheDocument();
+    expect(mockedUseMyPermissions).toHaveBeenCalledWith('TestProject');
   });
 
   it('renders nothing when user lacks pdf-assembly:use permission', () => {

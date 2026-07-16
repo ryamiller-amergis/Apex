@@ -10,7 +10,7 @@ import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttach
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
-import { AGENT_MODELS, DEFAULT_MODEL_ID } from '../config/models';
+import { DEFAULT_MODEL_ID } from '../config/models';
 import {
   useInterview,
   useUpdateInterviewStatus,
@@ -681,6 +681,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
+  const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -746,10 +747,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   );
 
   useEffect(() => {
-    if (chatThread) {
-      setModel(chatThread.kickoff.model ?? DEFAULT_MODEL_ID);
+    const resolved = chatThread?.kickoff.model ?? interview?.model;
+    if (resolved) {
+      setModel(resolved);
     }
-  }, [chatThread?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatThread?.id, interview?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1391,10 +1393,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={isRunning}
+                aria-label="Model"
               >
-                {AGENT_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
+                {modelsLoading || !availableModels?.length ? (
+                  <option value={model}>{model || 'Loading models…'}</option>
+                ) : (
+                  <>
+                    {!availableModels.some((m) => m.id === model) && model && (
+                      <option value={model}>{model}</option>
+                    )}
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </>
+                )}
               </select>
               {isRunning ? (
                 <button

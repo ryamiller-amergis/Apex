@@ -12,6 +12,8 @@ import {
   useUsers,
   useAssignRole,
   useRemoveRole,
+  useAssignProjectRole,
+  useRemoveProjectRole,
 } from '../hooks/useRbac';
 import type { AppPermission, RoleWithPermissions } from '../../shared/types/rbac';
 import styles from './AdminRoles.module.css';
@@ -321,25 +323,32 @@ function getMemberInitial(displayName: string | null, email: string | null): str
 
 interface RoleMembersModalProps {
   role: RoleWithPermissions;
+  project?: string;
   onClose: () => void;
 }
 
-const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) => {
-  const { data: users = [], isLoading } = useUsers();
+const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onClose }) => {
+  const { data: users = [], isLoading } = useUsers(project);
   const assignRole = useAssignRole();
   const removeRole = useRemoveRole();
+  const assignProjectRole = useAssignProjectRole();
+  const removeProjectRole = useRemoveProjectRole();
 
   const [selectedOid, setSelectedOid] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
 
   const members = useMemo(
-    () => users.filter((u) => u.roles.includes(role.name)),
-    [users, role.name],
+    () => users.filter((u) =>
+      (project ? u.projectRoles ?? [] : u.roles).includes(role.name),
+    ),
+    [users, role.name, project],
   );
 
   const nonMembers = useMemo(
-    () => users.filter((u) => !u.roles.includes(role.name)),
-    [users, role.name],
+    () => users.filter((u) =>
+      !(project ? u.projectRoles ?? [] : u.roles).includes(role.name),
+    ),
+    [users, role.name, project],
   );
 
   const filteredMembers = useMemo(() => {
@@ -354,15 +363,32 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) =>
 
   const handleAdd = () => {
     if (!selectedOid) return;
-    assignRole.mutate(
-      { oid: selectedOid, roleId: role.id },
-      { onSuccess: () => setSelectedOid('') },
-    );
+    const onSuccess = () => setSelectedOid('');
+    if (project) {
+      assignProjectRole.mutate(
+        { oid: selectedOid, project, roleId: role.id },
+        { onSuccess },
+      );
+    } else {
+      assignRole.mutate(
+        { oid: selectedOid, roleId: role.id },
+        { onSuccess },
+      );
+    }
   };
 
   const handleRemove = (oid: string) => {
-    removeRole.mutate({ oid, roleId: role.id });
+    if (project) {
+      removeProjectRole.mutate({ oid, project, roleId: role.id });
+    } else {
+      removeRole.mutate({ oid, roleId: role.id });
+    }
   };
+
+  const isAssigning = project ? assignProjectRole.isPending : assignRole.isPending;
+  const isRemoving = project ? removeProjectRole.isPending : removeRole.isPending;
+  const assignError = project ? assignProjectRole.error : assignRole.error;
+  const removeError = project ? removeProjectRole.error : removeRole.error;
 
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="members-modal-title">
@@ -388,7 +414,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) =>
               className={styles.memberSelect}
               value={selectedOid}
               onChange={(e) => setSelectedOid(e.target.value)}
-              disabled={isLoading || assignRole.isPending || nonMembers.length === 0}
+              disabled={isLoading || isAssigning || nonMembers.length === 0}
               aria-label="Select user to add"
             >
               <option value="">
@@ -407,15 +433,15 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) =>
             <button
               className={styles.btnPrimary}
               onClick={handleAdd}
-              disabled={!selectedOid || isLoading || assignRole.isPending}
+              disabled={!selectedOid || isLoading || isAssigning}
               aria-label="Add selected user to role"
             >
-              {assignRole.isPending ? 'Adding…' : 'Add'}
+              {isAssigning ? 'Adding…' : 'Add'}
             </button>
           </div>
 
-          {assignRole.error && <div className={styles.error}>{assignRole.error.message}</div>}
-          {removeRole.error && <div className={styles.error}>{removeRole.error.message}</div>}
+          {assignError && <div className={styles.error}>{assignError.message}</div>}
+          {removeError && <div className={styles.error}>{removeError.message}</div>}
 
           {/* Member search */}
           {members.length > 5 && (
@@ -452,7 +478,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) =>
                   <button
                     className={`${styles.btnAction} ${styles.btnActionDanger}`}
                     onClick={() => handleRemove(u.oid)}
-                    disabled={removeRole.isPending}
+                    disabled={isRemoving}
                     title={`Remove ${u.displayName ?? u.email} from role`}
                     aria-label={`Remove ${u.displayName ?? u.email} from ${role.name}`}
                   >
@@ -476,7 +502,11 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, onClose }) =>
 
 // ── AdminRoles (main) ─────────────────────────────────────────────────────
 
-export const AdminRoles: React.FC = () => {
+interface AdminRolesProps {
+  selectedProject?: string;
+}
+
+export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
   const { data: roles = [], isLoading } = useRoles();
   const { data: allPermissions = [] } = usePermissions();
 
@@ -590,6 +620,7 @@ export const AdminRoles: React.FC = () => {
       {managingMembersRole && (
         <RoleMembersModal
           role={managingMembersRole}
+          project={selectedProject}
           onClose={() => setManagingMembersRole(null)}
         />
       )}

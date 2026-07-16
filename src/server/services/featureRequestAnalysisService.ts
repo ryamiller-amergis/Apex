@@ -9,10 +9,34 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 720;
-const OUTPUT_FILE = 'feature-request-analysis.json';
+const TYPE_CONFIG: Record<
+  WorkItemType,
+  {
+    skillPathKey: 'featureRequestSkillPath' | 'technicalSkillPath' | 'issueSkillPath';
+    modelKey: 'featureRequestModel' | 'technicalModel' | 'issueModel';
+    outputFile: string;
+  }
+> = {
+  feature: {
+    skillPathKey: 'featureRequestSkillPath',
+    modelKey: 'featureRequestModel',
+    outputFile: 'feature-request-analysis.json',
+  },
+  technical: {
+    skillPathKey: 'technicalSkillPath',
+    modelKey: 'technicalModel',
+    outputFile: 'technical-analysis.json',
+  },
+  issue: {
+    skillPathKey: 'issueSkillPath',
+    modelKey: 'issueModel',
+    outputFile: 'issue-analysis.json',
+  },
+};
 
 export interface FeatureRequestAnalysisResult {
   priority: string;
@@ -35,12 +59,12 @@ export function isWatcherActive(requestId: string): boolean {
   return activeWatchers.has(requestId);
 }
 
-function resolveOutputPath(workspaceDir: string): string {
-  return path.join(workspaceDir, '.ai-pilot', 'output', OUTPUT_FILE);
+function resolveOutputPath(workspaceDir: string, type: WorkItemType): string {
+  return path.join(workspaceDir, '.ai-pilot', 'output', TYPE_CONFIG[type].outputFile);
 }
 
-function readOutputFromWorkspace(workspaceDir: string): string | null {
-  const outputPath = resolveOutputPath(workspaceDir);
+function readOutputFromWorkspace(workspaceDir: string, type: WorkItemType): string | null {
+  const outputPath = resolveOutputPath(workspaceDir, type);
   if (!fs.existsSync(outputPath)) return null;
   try {
     return fs.readFileSync(outputPath, 'utf-8');
@@ -99,21 +123,28 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
     return;
   }
 
-  const skillPath = skillConfig.featureRequestSkillPath;
+  const requestedType = request.type as WorkItemType;
+  const type: WorkItemType = TYPE_CONFIG[requestedType] ? requestedType : 'feature';
+  const config = TYPE_CONFIG[type];
+  const skillPath = skillConfig[config.skillPathKey];
   if (!skillPath) {
     await updateAiFields(requestId, { aiStatus: 'failed' });
-    console.warn(`[featureRequestAnalysis] No featureRequestSkillPath configured — marking failed`);
+    console.warn(`[featureRequestAnalysis] No ${config.skillPathKey} configured — marking failed`);
     return;
   }
 
   const globalModel = await getDefaultModel();
-  const model = skillConfig.featureRequestModel ?? skillConfig.defaultModel ?? globalModel;
+  const model = skillConfig[config.modelKey] ?? skillConfig.defaultModel ?? globalModel;
 
-  const freeformContext = [
-    `Title: ${request.title}`,
-    `Request: ${request.request}`,
-    `Advantage: ${request.advantage}`,
-  ].join('\n');
+  const contextLines = [`Type: ${type}`, `Title: ${request.title}`, `Description: ${request.request}`];
+  if (type === 'feature' && request.advantage) {
+    contextLines.push(`Advantage: ${request.advantage}`);
+  } else if (type === 'technical') {
+    contextLines.push('Analysis focus: technical approach, architecture impact, dependencies, and implementation risk.');
+  } else if (type === 'issue') {
+    contextLines.push('Analysis focus: user impact, likely severity, reproducibility clues, operational risk, and urgency.');
+  }
+  const freeformContext = contextLines.join('\n');
 
   const thread = await createChatThread('system', {
     project,
@@ -127,10 +158,14 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
 
   stopWatcher(requestId);
   await updateAiFields(requestId, { aiStatus: 'analyzing', aiThreadId: thread.id });
-  startWatcher(requestId, thread.id);
+  startWatcher(requestId, thread.id, type);
 }
 
-export function startWatcher(requestId: string, threadId: string): void {
+export function startWatcher(
+  requestId: string,
+  threadId: string,
+  type: WorkItemType = 'feature',
+): void {
   stopWatcher(requestId);
   let attempts = 0;
   let workspaceDir: string | null = null;
@@ -153,7 +188,7 @@ export function startWatcher(requestId: string, threadId: string): void {
       if (!workspaceDir) return;
     }
 
-    const raw = readOutputFromWorkspace(workspaceDir);
+    const raw = readOutputFromWorkspace(workspaceDir, type);
 
     if (!raw) {
       if (isThreadIdle(threadId)) {

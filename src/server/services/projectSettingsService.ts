@@ -100,6 +100,10 @@ export interface UpsertSkillConfigOptions {
   developmentModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  technicalSkillPath?: string | null;
+  technicalModel?: string | null;
+  issueSkillPath?: string | null;
+  issueModel?: string | null;
   prdValidationScoreThreshold?: number | null;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
@@ -160,6 +164,10 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     developmentModel: opts.developmentModel ?? null,
     featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
     featureRequestModel: opts.featureRequestModel ?? null,
+    technicalSkillPath: opts.technicalSkillPath ?? null,
+    technicalModel: opts.technicalModel ?? null,
+    issueSkillPath: opts.issueSkillPath ?? null,
+    issueModel: opts.issueModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
     uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
     uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,

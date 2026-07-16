@@ -110,6 +110,10 @@ export interface ProjectSkillConfig {
   standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  technicalSkillPath?: string | null;
+  technicalModel?: string | null;
+  issueSkillPath?: string | null;
+  issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
@@ -173,6 +177,10 @@ export interface UpsertProjectSkillConfigRequest {
   standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  technicalSkillPath?: string | null;
+  technicalModel?: string | null;
+  issueSkillPath?: string | null;
+  issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
@@ -252,6 +260,10 @@ export interface ProjectSkillConfigResponse {
   developmentModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  technicalSkillPath?: string | null;
+  technicalModel?: string | null;
+  issueSkillPath?: string | null;
+  issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;

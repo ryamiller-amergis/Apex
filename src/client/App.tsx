@@ -647,7 +647,7 @@ function App() {
                     </button>
                   </div>
                   {location.pathname === '/admin/users' ? (
-                    <AdminUsers />
+                    <AdminUsers selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/groups' ? (
                     <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
@@ -655,7 +655,7 @@ function App() {
                   ) : location.pathname === '/admin/notifications' ? (
                     <AdminNotifications />
                   ) : (
-                    <AdminRoles />
+                    <AdminRoles selectedProject={selectedProject} />
                   )}
                 </div>
               </Suspense>
