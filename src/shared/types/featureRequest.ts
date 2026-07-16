@@ -1,3 +1,7 @@
+export type WorkItemType = 'feature' | 'technical' | 'issue';
+
+export const WORK_ITEM_TYPES: WorkItemType[] = ['feature', 'technical', 'issue'];
+
 export type FeatureRequestStatus =
   | 'new'
   | 'under-review'
@@ -29,7 +33,7 @@ export interface FeatureRequest {
   id: string;
   title: string;
   request: string;
-  advantage: string;
+  advantage: string | null;
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;

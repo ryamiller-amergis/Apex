@@ -24,7 +24,7 @@ interface FeatureRequestRow {
   id: string;
   title: string;
   request: string;
-  advantage: string;
+  advantage: string | null;
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;

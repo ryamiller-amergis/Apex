@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
   PageManifestEntry,
@@ -13,16 +13,25 @@ import type {
   WorkItemAssistantSessionStatus,
   WorkItemApplyItemResult,
 } from '../../shared/types/calendarWorkItemAssistant';
-import type { ChatThreadKickoff } from '../../shared/types/chat';
+import type {
+  AgentRunCancelEvent,
+  AgentRunEventStatus,
+  AgentRunEventType,
+  AgentRunPhase,
+  ChatThreadKickoff,
+  SseEvent,
+} from '../../shared/types/chat';
 import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
+import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +110,9 @@ export const devSessions = pgTable('dev_sessions', {
   // status values: setting_up | in_progress | conflict | closed | failed
   status: text('status').notNull().default('setting_up'),
   setupError: text('setup_error'),
+  setupPhase: text('setup_phase').$type<DevSessionSetupPhase>(),
+  setupDetail: text('setup_detail'),
+  setupProgressAt: timestamp('setup_progress_at', { withTimezone: true, mode: 'string' }),
   prUrl: text('pr_url'),
   cachedDiffText: text('cached_diff_text'),
   cachedChangedFiles: jsonb('cached_changed_files').$type<string[]>().default([]),
@@ -169,10 +181,23 @@ export const appUserRoles = pgTable('app_user_roles', {
   pk: primaryKey({ columns: [t.userId, t.roleId] }),
 }));
 
+export const appUserProjectRoles = pgTable('app_user_project_roles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'cascade' }),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userProjectRoleUniq: unique('app_user_project_roles_user_project_role_key').on(t.userId, t.project, t.roleId),
+  userProjectIdx: index('idx_app_user_project_roles_user_project').on(t.userId, t.project),
+}));
+
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
@@ -181,6 +206,7 @@ export const appUsersRelations = relations(appUsers, ({ many }) => ({
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   rolePermissions: many(appRolePermissions),
 }));
 
@@ -196,6 +222,11 @@ export const appRolePermissionsRelations = relations(appRolePermissions, ({ one 
 export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   user: one(appUsers, { fields: [appUserRoles.userId], references: [appUsers.oid] }),
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
+}));
+
+export const appUserProjectRolesRelations = relations(appUserProjectRoles, ({ one }) => ({
+  user: one(appUsers, { fields: [appUserProjectRoles.userId], references: [appUsers.oid] }),
+  role: one(appRoles, { fields: [appUserProjectRoles.roleId], references: [appRoles.id] }),
 }));
 
 // ── User Project Assignments ──────────────────────────────────────────────────
@@ -517,6 +548,10 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   standupModel: text('standup_model'),
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
+  technicalSkillPath: text('technical_skill_path'),
+  technicalModel: text('technical_model'),
+  issueSkillPath: text('issue_skill_path'),
+  issueModel: text('issue_model'),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -1087,9 +1122,10 @@ export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
 
 export const featureRequests = pgTable('feature_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
+  type: text('type').$type<WorkItemType>().notNull().default('feature'),
   title: text('title').notNull(),
   request: text('request').notNull(),
-  advantage: text('advantage').notNull(),
+  advantage: text('advantage'),
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
@@ -1107,6 +1143,7 @@ export const featureRequests = pgTable('feature_requests', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
+  typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
 }));
 
@@ -1182,6 +1219,9 @@ export const agentRuns = pgTable('agent_runs', {
   status: text('status').notNull().default('queued'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  progressAt: timestamp('progress_at', { withTimezone: true, mode: 'string' }),
+  progressLabel: text('progress_label'),
+  progressPhase: text('progress_phase').$type<AgentRunPhase>(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
   lastError: text('last_error'),
@@ -1189,6 +1229,26 @@ export const agentRuns = pgTable('agent_runs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+export const agentRunEvents = pgTable('agent_run_events', {
+  eventId: uuid('event_id').primaryKey(),
+  ordinal: bigserial('ordinal', { mode: 'number' }).notNull().unique(),
+  threadId: text('thread_id').notNull(),
+  runId: text('run_id').notNull(),
+  sourceInstance: text('source_instance').notNull(),
+  sequence: integer('sequence').notNull(),
+  eventTimestamp: timestamp('event_timestamp', { withTimezone: true, mode: 'string' }).notNull(),
+  eventType: text('event_type').$type<AgentRunEventType>().notNull(),
+  phase: text('phase').$type<AgentRunPhase>().notNull(),
+  status: text('status').$type<AgentRunEventStatus>().notNull(),
+  detail: text('detail'),
+  event: jsonb('event').$type<SseEvent | AgentRunCancelEvent>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sourceSequenceUniq: unique('agent_run_events_source_sequence_key').on(t.runId, t.sourceInstance, t.sequence),
+  threadOrdinalIdx: index('idx_agent_run_events_thread_ordinal').on(t.threadId, t.ordinal),
+  runSequenceIdx: index('idx_agent_run_events_run_sequence').on(t.runId, t.sequence),
 }));
 
 // ── AI Cost Analytics ─────────────────────────────────────────────────────────

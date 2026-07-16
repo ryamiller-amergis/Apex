@@ -193,6 +193,38 @@ export type SseEvent =
   | SseRetryingEvent
   | SseDoneEvent;
 
+// ── Agent run phases and durable event transport ──────────────────────────────
+
+export type AgentRunPhase =
+  | 'setup'
+  | 'planning'
+  | 'approval'
+  | 'dependencies'
+  | 'analysis'
+  | 'implementation'
+  | 'testing'
+  | 'typecheck'
+  | 'push'
+  | 'completion';
+
+export type AgentRunEventStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type AgentRunEventType =
+  | 'token'
+  | 'message'
+  | 'phase'
+  | 'health'
+  | 'tool'
+  | 'status'
+  | 'retrying'
+  | 'error'
+  | 'done'
+  | 'cancel';
+
+export interface AgentRunCancelEvent {
+  type: 'cancel';
+}
+
 // ── Thread summary (lightweight, no messages) ─────────────────────────────────
 
 export interface ChatThreadSummary {
