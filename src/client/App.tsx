@@ -67,6 +67,7 @@ const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -93,6 +94,18 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
+  const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
+  const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
+    id: number;
+    title: string;
+  } | null>(null);
+
+  const handleOpenCalendarAssistant = useCallback((anchorId: number, anchorTitle: string) => {
+    // Close the global chat panel to avoid two competing drawers
+    setChatOpen(false);
+    setCalendarAssistantAnchor({ id: anchorId, title: anchorTitle });
+    setCalendarAssistantOpen(true);
+  }, []);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -529,7 +542,20 @@ function App() {
                         project={selectedProject}
                         areaPath={selectedAreaPath}
                         onSelectItem={setSelectedItem}
+                        onOpenAssistant={handleOpenCalendarAssistant}
                       />
+                    )}
+                    {calendarAssistantOpen && calendarAssistantAnchor && (
+                      <Suspense fallback={null}>
+                        <CalendarWorkItemAssistantPanel
+                          anchorWorkItemId={calendarAssistantAnchor.id}
+                          anchorTitle={calendarAssistantAnchor.title}
+                          project={selectedProject}
+                          areaPath={selectedAreaPath}
+                          open={calendarAssistantOpen}
+                          onClose={() => setCalendarAssistantOpen(false)}
+                        />
+                      </Suspense>
                     )}
                     {pendingDueDateChange && (
                       <DueDateReasonModal

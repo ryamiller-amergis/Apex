@@ -34,6 +34,7 @@ export function resolveFeatureFromKickoff(kickoff: {
 
   if (assistantType === 'prd') return 'prd';
   if (assistantType === 'design-doc') return 'design-doc';
+  if (assistantType === 'calendar-work-item') return 'calendar-work-item-assistant';
 
   if (skillPath) {
     const lower = skillPath.toLowerCase();
