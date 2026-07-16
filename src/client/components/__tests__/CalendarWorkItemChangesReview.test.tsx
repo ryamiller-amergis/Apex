@@ -15,6 +15,7 @@ jest.mock('../../hooks/useCalendarWorkItemAssistant', () => ({
 }));
 
 jest.mock('../DiffView', () => ({
+  __esModule: true,
   default: ({ oldText, newText }: { oldText: string; newText: string }) => (
     <div data-testid="diff-view">
       <span data-testid="old">{oldText}</span>

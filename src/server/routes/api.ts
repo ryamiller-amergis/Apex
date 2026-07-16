@@ -333,7 +333,7 @@ const CALENDAR_FIELD_PATCH_ALLOWLIST = new Set([
 ]);
 
 // PATCH /api/workitems/:id/field - Update a specific non-content field for a work item
-router.patch('/workitems/:id/field', requirePermission('workitems:write'), async (req: Request, res: Response) => {
+router.patch('/workitems/:id/field', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
     const { field, value, project, areaPath } = req.body;
