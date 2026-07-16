@@ -13,6 +13,15 @@ import { DetailsPanel } from '../DetailsPanel';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
+jest.mock('../../config/env', () => ({
+  env: {
+    VITE_TEAMS: 'MaxView|MaxView',
+    VITE_ADO_ORG: 'amergis',
+    VITE_ADO_PROJECT: 'MaxView',
+    VITE_POLL_INTERVAL: 60,
+  },
+}));
+
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(),
 }));
