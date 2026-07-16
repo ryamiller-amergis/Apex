@@ -25,6 +25,7 @@ import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import type { DesignModuleIconKey } from '../../shared/types/designModule';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -677,6 +678,29 @@ export const appSettings = pgTable('app_settings', {
   updatedBy: text('updated_by'),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+// ── Design Module Architecture Explorer ──────────────────────────────────────
+
+export const designModules = pgTable('design_modules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  label: text('label').notNull(),
+  description: text('description'),
+  iconKey: text('icon_key').$type<DesignModuleIconKey>().notNull().default('default'),
+  sourceGlobs: jsonb('source_globs').$type<string[]>().notNull().default([]),
+  content: text('content'),
+  sourceFingerprint: text('source_fingerprint'),
+  sourceCommit: text('source_commit'),
+  lastGeneratedAt: timestamp('last_generated_at', { withTimezone: true, mode: 'string' }),
+  generatedByModel: text('generated_by_model'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdBy: text('created_by'),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
+}));
 
 export const teamsConversationReferences = pgTable('teams_conversation_references', {
   userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),

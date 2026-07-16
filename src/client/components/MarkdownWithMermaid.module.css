@@ -1,0 +1,63 @@
+.markdown {
+  color: var(--text-primary);
+  line-height: 1.65;
+}
+
+.markdown :global(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+}
+
+.markdown :global(th),
+.markdown :global(td) {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown :global(th) {
+  background: var(--bg-secondary);
+}
+
+.markdown :global(pre) {
+  max-width: 100%;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.diagram {
+  overflow-x: auto;
+  margin: 16px 0;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.diagram :global(svg) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.loading,
+.error {
+  margin: 16px 0;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.error {
+  display: grid;
+  gap: 8px;
+  border-color: var(--error-color);
+}
