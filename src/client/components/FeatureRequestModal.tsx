@@ -2,7 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useSubmitFeatureRequest } from '../hooks/useFeatureRequests';
+import {
+  useAvailableFeatureRequestAdrs,
+  useSubmitFeatureRequest,
+} from '../hooks/useFeatureRequests';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import styles from './FeatureRequestModal.module.css';
 
@@ -47,7 +50,14 @@ export const FeatureRequestModal: React.FC<FeatureRequestModalProps> = ({
   onClose,
 }) => {
   const [showSuccess, setShowSuccess] = useState(false);
+  const [selectedAdrIds, setSelectedAdrIds] = useState<string[]>([]);
   const submitMutation = useSubmitFeatureRequest();
+  const showAdrPicker = type === 'feature' || type === 'technical';
+  const {
+    data: acceptedAdrs = [],
+    isLoading: adrsLoading,
+    isError: adrsError,
+  } = useAvailableFeatureRequestAdrs(selectedProject, showAdrPicker);
 
   const {
     register,
@@ -82,11 +92,13 @@ export const FeatureRequestModal: React.FC<FeatureRequestModalProps> = ({
         request: values.request,
         advantage: type === 'feature' ? values.advantage : null,
         project: selectedProject,
+        ...(showAdrPicker && selectedAdrIds.length > 0 ? { adrIds: selectedAdrIds } : {}),
       },
       {
         onSuccess: () => {
           setShowSuccess(true);
           reset();
+          setSelectedAdrIds([]);
           window.setTimeout(() => onClose(), 1500);
         },
       },
@@ -151,6 +163,41 @@ export const FeatureRequestModal: React.FC<FeatureRequestModalProps> = ({
                   <span className={styles.errorMsg}>{errors.advantage.message}</span>
                 )}
               </div>
+            )}
+
+            {showAdrPicker && (
+              <fieldset className={styles.adrPicker}>
+                <legend className={styles.label}>Related accepted ADRs (optional)</legend>
+                <p className={styles.fieldHint}>
+                  Link architectural decisions as context for this request.
+                </p>
+                {adrsLoading ? (
+                  <span className={styles.fieldHint} role="status">Loading accepted ADRs…</span>
+                ) : adrsError ? (
+                  <span className={styles.errorMsg}>Accepted ADRs could not be loaded.</span>
+                ) : acceptedAdrs.length === 0 ? (
+                  <span className={styles.fieldHint}>No accepted ADRs are available for this project.</span>
+                ) : (
+                  <div className={styles.adrOptions}>
+                    {acceptedAdrs.map((adr) => (
+                      <label className={styles.adrOption} key={adr.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedAdrIds.includes(adr.id)}
+                          onChange={(event) => setSelectedAdrIds((current) =>
+                            event.target.checked
+                              ? [...current, adr.id]
+                              : current.filter((id) => id !== adr.id))}
+                        />
+                        <span>
+                          <strong>{adr.title}</strong>
+                          <small>{adr.repo} / {adr.slug ?? adr.id.slice(0, 8)}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
             )}
 
             {submitMutation.isError && (

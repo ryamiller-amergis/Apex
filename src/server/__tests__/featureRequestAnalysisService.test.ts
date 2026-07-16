@@ -2,13 +2,19 @@ import fs from 'fs';
 
 jest.mock('fs');
 const mockFs = fs as jest.Mocked<typeof fs>;
+const mockLinkedAdrWhere = jest.fn().mockResolvedValue([]);
 
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
-      featureRequests: { findFirst: jest.fn() },
+      featureRequests: { findFirst: jest.fn(), findMany: jest.fn() },
       chatThreads: { findFirst: jest.fn() },
     },
+    select: jest.fn().mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        innerJoin: jest.fn().mockReturnValue({ where: mockLinkedAdrWhere }),
+      }),
+    }),
     update: jest.fn().mockReturnValue({
       set: jest.fn().mockReturnValue({
         where: jest.fn().mockResolvedValue(undefined),
@@ -19,6 +25,7 @@ jest.mock('../db/drizzle', () => ({
 
 jest.mock('../services/chatAgentService', () => ({
   isThreadIdle: jest.fn(),
+  hydrateThread: jest.fn(),
   createThread: jest.fn(),
 }));
 
@@ -33,17 +40,19 @@ jest.mock('../services/appSettingsService', () => ({
 import { db } from '../db/drizzle';
 import {
   autoStartFeatureRequestAnalysis,
+  recoverAnalyzingFeatureRequests,
   reanalyzeFeatureRequest,
   stopWatcher,
   isWatcherActive,
   startWatcher,
 } from '../services/featureRequestAnalysisService';
-import { createThread, isThreadIdle } from '../services/chatAgentService';
+import { createThread, hydrateThread, isThreadIdle } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 
 const mockedDb = db as any;
 const mockedCreateThread = createThread as jest.MockedFunction<typeof createThread>;
+const mockedHydrateThread = hydrateThread as jest.MockedFunction<typeof hydrateThread>;
 const mockedIsThreadIdle = isThreadIdle as jest.MockedFunction<typeof isThreadIdle>;
 const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<typeof resolveSkillConfig>;
 const mockedGetDefaultModel = getDefaultModel as jest.MockedFunction<typeof getDefaultModel>;
@@ -52,6 +61,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers();
   mockedGetDefaultModel.mockResolvedValue('claude-sonnet-4');
+  mockLinkedAdrWhere.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -187,6 +197,40 @@ describe('autoStartFeatureRequestAnalysis', () => {
       }),
     );
   });
+
+  it('includes bounded accepted ADR source context in analysis kickoff', async () => {
+    mockedDb.query.featureRequests.findFirst.mockResolvedValue(FAKE_REQUEST);
+    mockLinkedAdrWhere.mockResolvedValue([{
+      id: 'adr-1',
+      title: 'Use an event bus',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      slug: 'use-event-bus',
+      content: '# Decision\nUse the internal event bus.',
+    }]);
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG);
+    mockedCreateThread.mockResolvedValue({
+      id: 'thread-adr',
+      userId: 'system',
+      kickoff: {} as any,
+      messages: [],
+      status: 'idle',
+      workspaceDir: '/tmp/ws/thread-adr',
+      flagged: false,
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+    });
+
+    await autoStartFeatureRequestAnalysis('req-1');
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'system',
+      expect.objectContaining({
+        freeformContext: expect.stringContaining('## Linked accepted ADRs'),
+      }),
+    );
+    expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain('Use the internal event bus.');
+  });
 });
 
 describe('startWatcher', () => {
@@ -307,6 +351,78 @@ describe('reanalyzeFeatureRequest', () => {
     expect(mockedDb.update).toHaveBeenCalled();
     expect(mockedCreateThread).toHaveBeenCalled();
     expect(isWatcherActive('req-1')).toBe(true);
+  });
+});
+
+describe('recoverAnalyzingFeatureRequests', () => {
+  it('re-kicks analysis when the agent is idle with no output', async () => {
+    mockedDb.query.featureRequests.findMany.mockResolvedValue([
+      { id: 'req-1', type: 'technical', aiThreadId: 'thread-dead' },
+    ]);
+    mockedHydrateThread.mockResolvedValue(true);
+    mockedIsThreadIdle.mockReturnValue(true);
+    mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+      workspaceDir: '/tmp/ws/thread-dead',
+    });
+    mockFs.existsSync.mockReturnValue(false);
+    mockedDb.query.featureRequests.findFirst.mockResolvedValue({
+      ...FAKE_REQUEST,
+      type: 'technical',
+      aiStatus: 'analyzing',
+      aiThreadId: 'thread-dead',
+    });
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG);
+    mockedCreateThread.mockResolvedValue({
+      id: 'thread-fresh',
+      userId: 'system',
+      kickoff: {} as any,
+      messages: [],
+      status: 'idle',
+      workspaceDir: '/tmp/ws/thread-fresh',
+      flagged: false,
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+    });
+
+    const recovered = await recoverAnalyzingFeatureRequests();
+
+    expect(recovered).toBe(1);
+    expect(mockedCreateThread).toHaveBeenCalled();
+    expect(isWatcherActive('req-1')).toBe(true);
+  });
+
+  it('restarts the watcher when output already exists', async () => {
+    mockedDb.query.featureRequests.findMany.mockResolvedValue([
+      { id: 'req-1', type: 'feature', aiThreadId: 'thread-1' },
+    ]);
+    mockedHydrateThread.mockResolvedValue(true);
+    mockedIsThreadIdle.mockReturnValue(true);
+    mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+      workspaceDir: '/tmp/ws/thread-1',
+    });
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({ priority: 'high', risk: 'low', rationale: 'Ready' }),
+    );
+
+    const recovered = await recoverAnalyzingFeatureRequests();
+
+    expect(recovered).toBe(1);
+    expect(mockedCreateThread).not.toHaveBeenCalled();
+    expect(isWatcherActive('req-1')).toBe(true);
+  });
+
+  it('marks failed when the analysis thread cannot be hydrated', async () => {
+    mockedDb.query.featureRequests.findMany.mockResolvedValue([
+      { id: 'req-1', type: 'feature', aiThreadId: 'thread-missing' },
+    ]);
+    mockedHydrateThread.mockResolvedValue(false);
+
+    const recovered = await recoverAnalyzingFeatureRequests();
+
+    expect(recovered).toBe(1);
+    expect(mockedDb.update).toHaveBeenCalled();
+    expect(mockedCreateThread).not.toHaveBeenCalled();
   });
 });
 

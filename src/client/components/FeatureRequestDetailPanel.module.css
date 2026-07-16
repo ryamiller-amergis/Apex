@@ -143,6 +143,29 @@
   color: var(--text-muted);
 }
 
+.adrChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.adrChip {
+  border: 1px solid var(--accent-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.adrChip:hover,
+.adrChip:focus-visible {
+  background: color-mix(in srgb, var(--accent-color) 18%, transparent);
+  outline: none;
+}
+
 .rankValue {
   font-size: 0.9rem;
   font-weight: 600;

@@ -111,11 +111,13 @@ jest.mock('uuid', () => ({
 const mockFindFirst = jest.fn();
 const mockSelectWhere = jest.fn();
 const mockInsertValues = jest.fn().mockResolvedValue(undefined);
-const mockUpdateWhere = jest.fn().mockResolvedValue(undefined);
+const mockUpdateReturning = jest.fn().mockResolvedValue([{ id: 'technical-1' }]);
+const mockUpdateWhere = jest.fn(() => ({ returning: mockUpdateReturning }));
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 
 jest.mock('../db/drizzle', () => ({
-  db: {
+  db: (() => {
+    const mockedDb = {
     insert: jest.fn(() => ({ values: mockInsertValues })),
     update: jest.fn(() => ({ set: mockUpdateSet })),
     select: jest.fn(() => ({
@@ -124,7 +126,11 @@ jest.mock('../db/drizzle', () => ({
     query: {
       devSessions: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
     },
-  },
+    transaction: jest.fn(),
+    };
+    mockedDb.transaction.mockImplementation((callback: (tx: typeof mockedDb) => unknown) => callback(mockedDb));
+    return mockedDb;
+  })(),
 }));
 
 const MockAzureDevOpsService = AzureDevOpsService as jest.MockedClass<typeof AzureDevOpsService>;
@@ -450,6 +456,15 @@ describe('POST /api/dev-workbench/start', () => {
     expect(res.body).toEqual({ sessionId: 'session-abc' });
   });
 
+  it('rejects the removed technical backlog source path', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/start')
+      .send({ technicalBacklogItemId: 'technical-1', project: 'Apex' });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
   it('returns 500 when the session insert fails', async () => {
     mockInsertValues.mockRejectedValueOnce(new Error('DB insert failed'));
 
@@ -494,6 +509,20 @@ describe('GET /api/dev-workbench/sessions', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/failed to fetch sessions/i);
+  });
+});
+
+describe('removed technical backlog endpoint', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('does not expose the internal technical backlog', async () => {
+    const res = await request(buildApp()).get('/api/dev-workbench/technical-backlog?project=Apex');
+
+    expect(res.status).toBe(404);
   });
 });
 

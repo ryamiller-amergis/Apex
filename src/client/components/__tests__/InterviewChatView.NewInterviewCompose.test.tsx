@@ -78,6 +78,7 @@ jest.mock('../../hooks/useChatAttachments', () => ({
     attachments: [],
     attachmentError: null,
     addFiles: jest.fn(),
+    addTextAttachments: jest.fn(),
     removeAttachment: jest.fn(),
     clearAttachments: jest.fn(),
   })),
@@ -119,7 +120,10 @@ function renderCompose() {
   );
 }
 
-function renderFeatureRequestCompose() {
+function renderFeatureRequestCompose(overrides?: {
+  type?: 'feature' | 'technical' | 'issue';
+  linkedAdrs?: Array<{ id: string; title: string; slug: string | null }>;
+}) {
   return render(
     <MemoryRouter
       initialEntries={[{
@@ -127,9 +131,11 @@ function renderFeatureRequestCompose() {
         state: {
           featureRequest: {
             id: 'fr-1',
+            type: overrides?.type ?? 'feature',
             title: 'Dark mode',
             request: 'Add dark mode support',
             advantage: 'Better UX at night',
+            linkedAdrs: overrides?.linkedAdrs ?? [],
           },
         },
       }]}
@@ -192,6 +198,59 @@ describe('NewInterviewCompose — title required', () => {
         'Better UX at night',
       ].join('\n'),
     );
+  });
+
+  it('prefills technical work items without an advantage section', () => {
+    renderFeatureRequestCompose({ type: 'technical' });
+
+    expect(screen.getByPlaceholderText(/describe what you'd like/i)).toHaveValue(
+      [
+        'This interview originated from a technical work item.',
+        '',
+        'Add dark mode support',
+      ].join('\n'),
+    );
+  });
+
+  it('seeds linked ADR markdown attachments when kicking off from a work item', async () => {
+    const { useChatAttachments } = jest.requireMock('../../hooks/useChatAttachments') as {
+      useChatAttachments: jest.Mock;
+    };
+    const addTextAttachments = jest.fn();
+    useChatAttachments.mockReturnValue({
+      attachments: [],
+      attachmentError: null,
+      addFiles: jest.fn(),
+      addTextAttachments,
+      removeAttachment: jest.fn(),
+      clearAttachments: jest.fn(),
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        id: 'adr-1',
+        content: '# Scale PDF\n\nUse a broker and workers.',
+      }),
+    }) as jest.Mock;
+
+    renderFeatureRequestCompose({
+      type: 'technical',
+      linkedAdrs: [{ id: 'adr-1', title: 'Scale PDF', slug: 'scale-pdf' }],
+    });
+
+    await waitFor(() => {
+      expect(addTextAttachments).toHaveBeenCalledWith([
+        {
+          name: 'scale-pdf.md',
+          content: '# Scale PDF\n\nUse a broker and workers.',
+          type: 'text/markdown',
+        },
+      ]);
+    });
+    expect(
+      (screen.getByPlaceholderText(/describe what you'd like/i) as HTMLTextAreaElement).value,
+    ).toContain('Linked accepted ADRs are attached');
   });
 
   it('links the feature request after creating the interview', async () => {

@@ -15,6 +15,7 @@ jest.mock('../services/featureRequestService', () => ({
   createFeatureRequest: jest.fn(),
   listFeatureRequests: jest.fn(),
   getFeatureRequest: jest.fn(),
+  listAcceptedAdrsForProject: jest.fn(),
   updateFeatureRequest: jest.fn(),
   linkInterview: jest.fn(),
   resolveApexReviewers: jest.fn(),
@@ -100,6 +101,7 @@ describe('feature request work item submission', () => {
         title: 'Save fails',
         request: 'Saving a PRD returns an error',
         advantage: null,
+        adrIds: undefined,
       }
     );
     expect(notificationService.createNotification).toHaveBeenCalledWith(
@@ -109,5 +111,31 @@ describe('feature request work item submission', () => {
     expect(
       analysisService.autoStartFeatureRequestAnalysis
     ).toHaveBeenCalledWith('issue-1');
+  });
+
+  it('passes ADR associations through for technical requests', async () => {
+    featureRequestService.createFeatureRequest.mockResolvedValue({
+      id: 'technical-1',
+      type: 'technical',
+      title: 'Refactor queue',
+    });
+    const adrId = '11111111-1111-4111-8111-111111111111';
+
+    const response = await request(buildApp())
+      .post('/api/feature-requests')
+      .send({
+        type: 'technical',
+        title: 'Refactor queue',
+        request: 'Replace direct dispatch',
+        project: 'Apex',
+        adrIds: [adrId],
+      });
+
+    expect(response.status).toBe(201);
+    expect(featureRequestService.createFeatureRequest).toHaveBeenCalledWith(
+      'user-1',
+      'Apex',
+      expect.objectContaining({ type: 'technical', adrIds: [adrId] }),
+    );
   });
 });

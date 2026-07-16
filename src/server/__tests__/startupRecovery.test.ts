@@ -39,6 +39,9 @@ jest.mock('../services/chatThreadRepository', () => ({
 jest.mock('../services/pdfAssemblyService', () => ({
   expireOldSessions: jest.fn(),
 }));
+jest.mock('../services/featureRequestAnalysisService', () => ({
+  recoverAnalyzingFeatureRequests: jest.fn(),
+}));
 
 import { recoverStaleDevSessionSetups } from '../services/startupRecovery';
 

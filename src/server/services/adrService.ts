@@ -45,7 +45,9 @@ function forceProposedStatus(content: string): string {
   return content.replace(frontmatter[0], `---\n${nextBlock}\n---`);
 }
 
-async function withSettingsName(row: typeof adrs.$inferSelect): Promise<Adr> {
+async function withSettingsName(
+  row: typeof adrs.$inferSelect,
+): Promise<Adr> {
   return {
     ...row,
     model: row.model ?? undefined,
@@ -101,7 +103,9 @@ export async function listAdrs(filters?: {
 }
 
 export async function getAdr(id: string): Promise<Adr | null> {
-  const row = await db.query.adrs.findFirst({ where: eq(adrs.id, id) });
+  const row = await db.query.adrs.findFirst({
+    where: eq(adrs.id, id),
+  });
   return row ? withSettingsName(row) : null;
 }
 

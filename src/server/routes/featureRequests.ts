@@ -5,6 +5,7 @@ import {
   createFeatureRequest,
   listFeatureRequests,
   getFeatureRequest,
+  listAcceptedAdrsForProject,
   updateFeatureRequest,
   linkInterview,
   resolveApexReviewers,
@@ -26,12 +27,13 @@ const router = Router();
 router.post('/', requirePermission('feature-requests:submit'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { type, title, request, advantage, project } = req.body as {
+    const { type, title, request, advantage, project, adrIds } = req.body as {
       type?: WorkItemType;
       title?: string;
       request?: string;
       advantage?: string;
       project?: string;
+      adrIds?: unknown;
     };
 
     if (!type || !WORK_ITEM_TYPES.includes(type)) {
@@ -40,12 +42,16 @@ router.post('/', requirePermission('feature-requests:submit'), async (req, res, 
     if (!title?.trim() || !request?.trim() || !project?.trim()) {
       return res.status(400).json({ error: 'title, request, and project are required' });
     }
+    if (adrIds !== undefined && (!Array.isArray(adrIds) || adrIds.some((id) => typeof id !== 'string'))) {
+      return res.status(400).json({ error: 'adrIds must be an array of UUID strings' });
+    }
 
     const created = await createFeatureRequest(userId, project, {
       type,
       title: title.trim(),
       request: request.trim(),
       advantage: advantage?.trim() || null,
+      adrIds: adrIds as string[] | undefined,
     });
 
     // Notify Apex reviewers
@@ -84,6 +90,18 @@ router.get('/', requirePermission('feature-requests:view'), async (req, res, nex
 
     const requests = await listFeatureRequests();
     return res.json(requests);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/available-adrs', requirePermission('feature-requests:submit'), async (req, res, next) => {
+  try {
+    const project = (req.query.project as string | undefined)?.trim();
+    if (!project) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+    return res.json(await listAcceptedAdrsForProject(project));
   } catch (err) {
     next(err);
   }

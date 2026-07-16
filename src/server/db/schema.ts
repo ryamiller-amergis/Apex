@@ -462,7 +462,7 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
 }));
 
-export const adrsRelations = relations(adrs, ({ one }) => ({
+export const adrsRelations = relations(adrs, ({ one, many }) => ({
   chatThread: one(chatThreads, {
     fields: [adrs.chatThreadId],
     references: [chatThreads.id],
@@ -480,6 +480,7 @@ export const adrsRelations = relations(adrs, ({ one }) => ({
     fields: [adrs.skillSettingsId],
     references: [projectSkillSettings.id],
   }),
+  featureRequestLinks: many(featureRequestAdrs),
 }));
 
 export const prdsRelations = relations(prds, ({ one, many }) => ({
@@ -1204,7 +1205,18 @@ export const featureRequests = pgTable('feature_requests', {
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
 }));
 
-export const featureRequestsRelations = relations(featureRequests, ({ one }) => ({
+export const featureRequestAdrs = pgTable('feature_request_adrs', {
+  featureRequestId: uuid('feature_request_id').notNull()
+    .references(() => featureRequests.id, { onDelete: 'cascade' }),
+  adrId: uuid('adr_id').notNull()
+    .references(() => adrs.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.featureRequestId, t.adrId] }),
+  adrIdx: index('idx_feature_request_adrs_adr_id').on(t.adrId),
+}));
+
+export const featureRequestsRelations = relations(featureRequests, ({ one, many }) => ({
   interview: one(interviews, {
     fields: [featureRequests.interviewId],
     references: [interviews.id],
@@ -1212,6 +1224,18 @@ export const featureRequestsRelations = relations(featureRequests, ({ one }) => 
   submitter: one(appUsers, {
     fields: [featureRequests.submittedBy],
     references: [appUsers.oid],
+  }),
+  adrLinks: many(featureRequestAdrs),
+}));
+
+export const featureRequestAdrsRelations = relations(featureRequestAdrs, ({ one }) => ({
+  featureRequest: one(featureRequests, {
+    fields: [featureRequestAdrs.featureRequestId],
+    references: [featureRequests.id],
+  }),
+  adr: one(adrs, {
+    fields: [featureRequestAdrs.adrId],
+    references: [adrs.id],
   }),
 }));
 

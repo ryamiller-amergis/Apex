@@ -949,6 +949,12 @@
   max-width: 75%;
 }
 
+.assistantBubble.assistantBubbleFullWidth,
+.messageBubble.assistantBubbleFullWidth {
+  width: 100%;
+  max-width: 100%;
+}
+
 .choiceBlock {
   margin-top: 10px;
   border: 1px solid var(--border-color);

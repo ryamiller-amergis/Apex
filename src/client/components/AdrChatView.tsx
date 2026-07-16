@@ -6,7 +6,12 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
-import { useAdr, useCreateAdr, useGenerateAdr, useUpdateAdr } from '../hooks/useAdrs';
+import {
+  useAdr,
+  useCreateAdr,
+  useGenerateAdr,
+  useUpdateAdr,
+} from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
 import { AdrAssistantPanel } from './AdrAssistantPanel';

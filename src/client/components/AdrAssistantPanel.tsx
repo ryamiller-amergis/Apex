@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useChatStream } from '../hooks/useChatStream';
+import { InterviewAgentMessage } from './InterviewChatView';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface AdrAssistantPanelProps {
@@ -11,6 +12,10 @@ export interface AdrAssistantPanelProps {
   onClose: () => void;
   existingThreadId?: string | null;
 }
+
+const MIN_PANEL_WIDTH = 320;
+const MAX_PANEL_WIDTH = 900;
+const DEFAULT_PANEL_WIDTH = 480;
 
 export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   adrId,
@@ -24,8 +29,12 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const [createError, setCreateError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [showNewConfirm, setShowNewConfirm] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
   const queryClient = useQueryClient();
   const { messages, streamingText, status } = useChatStream(threadId);
   const isRunning = status === 'running';
@@ -73,10 +82,31 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const handleResizeMouseDown = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    dragStartXRef.current = event.clientX;
+    dragStartWidthRef.current = panelWidth;
+    setIsDragging(true);
+  }, [panelWidth]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const handleMouseMove = (event: MouseEvent) => {
+      const delta = dragStartXRef.current - event.clientX;
+      setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, dragStartWidthRef.current + delta)));
+    };
+    const handleMouseUp = () => setIsDragging(false);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
+
+  const sendText = useCallback(async (messageText: string) => {
+    const text = messageText.trim();
     if (!text || !threadId || isRunning || isSending) return;
-    setInput('');
     setIsSending(true);
     try {
       const response = await fetch(`/api/chat/threads/${threadId}/messages`, {
@@ -89,11 +119,22 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     } finally {
       setIsSending(false);
     }
-  }, [input, threadId, isRunning, isSending]);
+  }, [threadId, isRunning, isSending]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    await sendText(text);
+  }, [input, sendText]);
 
   if (!open) return null;
   const visibleMessages = messages.filter((message) =>
     message.role !== 'tool' && !message.hidden && message.toolName !== '_reasoning' && message.toolName !== '_thinking');
+  let lastUserMessageIndex = -1;
+  visibleMessages.forEach((message, index) => {
+    if (message.role === 'user') lastUserMessageIndex = index;
+  });
 
   return (
     <>
@@ -112,7 +153,15 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
           </div>
         </div>
       )}
-      <div className={styles.panel}>
+      <div className={styles.panel} style={{ width: panelWidth }}>
+        <div
+          className={`${styles.resizeHandle} ${isDragging ? styles.resizeHandleDragging : ''}`}
+          onMouseDown={handleResizeMouseDown}
+          role="separator"
+          aria-label="Resize ADR Assistant panel"
+          aria-orientation="vertical"
+          title="Drag to resize"
+        />
         <div className={styles.header}>
           <div className={styles.headerLeft}>
             <span className={styles.title}>ADR Apex Assistant</span>
@@ -126,17 +175,27 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
           <div className={styles.messageList}>
             {isCreating && <div className={styles.initializing}>Starting assistant…</div>}
             {createError && <div className={styles.messageBubbleSystem}>{createError}</div>}
-            {visibleMessages.map((message) => (
-              <div key={message.id} className={`${styles.messageBubble} ${
-                message.role === 'user' ? styles.messageBubbleUser :
-                message.role === 'system' ? styles.messageBubbleSystem :
-                styles.messageBubbleAssistant
-              }`}>
-                {message.role === 'agent'
-                  ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
-                  : message.text}
-              </div>
-            ))}
+            {visibleMessages.map((message, index) => {
+              if (message.role === 'agent') {
+                return (
+                  <InterviewAgentMessage
+                    key={message.id}
+                    text={message.text}
+                    onSend={(text) => void sendText(text)}
+                    isRunning={isRunning}
+                    alreadyAnswered={index < lastUserMessageIndex}
+                    fullWidth
+                  />
+                );
+              }
+              return (
+                <div key={message.id} className={`${styles.messageBubble} ${
+                  message.role === 'user' ? styles.messageBubbleUser : styles.messageBubbleSystem
+                }`}>
+                  {message.text}
+                </div>
+              );
+            })}
             {isRunning && !streamingText && <div className={styles.typingIndicator}><span /><span /><span /></div>}
             {streamingText && (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>

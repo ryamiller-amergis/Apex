@@ -69,6 +69,7 @@ jest.mock('../../hooks/useChatAttachments', () => ({
     attachments: [],
     attachmentError: null,
     addFiles: jest.fn(),
+    addTextAttachments: jest.fn(),
     removeAttachment: jest.fn(),
     clearAttachments: jest.fn(),
   })),

@@ -68,6 +68,7 @@ function makeRequest(
     interviewId,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    linkedAdrs: [],
     status: 'new',
     aiStatus: 'complete',
     aiPriority: 'medium',
@@ -184,9 +185,11 @@ describe('FeatureRequestsView action menu', () => {
       state: {
         featureRequest: {
           id: 'a',
+          type: 'feature',
           title: 'Alpha',
           request: 'details',
           advantage: 'benefit',
+          linkedAdrs: [],
         },
       },
     });
@@ -236,5 +239,28 @@ describe('FeatureRequestsView work item tabs', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'New issue' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('New issue item for Apex');
+  });
+
+  it('allows kicking off an interview from a technical item', () => {
+    renderView(
+      [makeRequest('t', 'Technical Beta', 1, null, 'technical')],
+      '/feature-requests?tab=technical',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Technical Beta' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Kick Off Interview' }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
+      state: {
+        featureRequest: {
+          id: 't',
+          type: 'technical',
+          title: 'Technical Beta',
+          request: 'details',
+          advantage: 'benefit',
+          linkedAdrs: [],
+        },
+      },
+    });
   });
 });

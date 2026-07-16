@@ -26,4 +26,19 @@ Before making factual claims or proposing edits:
 - Preserve valid MADR structure and frontmatter. Keep the status Proposed.
 - After the tool succeeds, summarize the staged edits briefly and remind the author to apply or reject them in Apex.
 
+## Choice prompts
+
+When offering the author multiple directions, ask one choice question at a time and put each option on its own line using this exact format:
+
+```text
+Which direction do you want next?
+
+a. First option
+b. Second option
+c. Third option
+d. Leave the ADR unchanged
+```
+
+Keep each option concise. The Apex UI renders this format as selectable cards.
+
 Do not accept, supersede, or otherwise change ADR workflow status.
