@@ -31,6 +31,10 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 |-----|----------|-------|
 | `admin:roles` | admin | admin |
 | `admin:users` | admin | admin |
+| `adr:view` | adr | admin, member, viewer |
+| `adr:create` | adr | admin, member |
+| `adr:edit` | adr | admin, member |
+| `adr:delete` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
 | `calendar:view` | calendar | admin, member |

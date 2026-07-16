@@ -335,6 +335,22 @@ export const interviews = pgTable('interviews', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const adrs = pgTable('adrs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  title: text('title').notNull().default('Untitled ADR'),
+  project: text('project').notNull(),
+  repo: text('repo').notNull(),
+  model: text('model'),
+  skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
+  status: text('status').notNull().default('in_progress'),
+  content: text('content').notNull().default(''),
+  slug: text('slug'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 export const prds = pgTable('prds', {
   id: uuid('id').primaryKey().defaultRandom(),
   interviewId: uuid('interview_id'),
@@ -444,6 +460,21 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
 }));
 
+export const adrsRelations = relations(adrs, ({ one }) => ({
+  chatThread: one(chatThreads, {
+    fields: [adrs.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  author: one(appUsers, {
+    fields: [adrs.authorId],
+    references: [appUsers.oid],
+  }),
+  skillSettings: one(projectSkillSettings, {
+    fields: [adrs.skillSettingsId],
+    references: [projectSkillSettings.id],
+  }),
+}));
+
 export const prdsRelations = relations(prds, ({ one, many }) => ({
   interview: one(interviews, {
     fields: [prds.interviewId],
@@ -502,12 +533,15 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   updatedBy: text('updated_by'),
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
+  adrInterviewSkillPath: text('adr_interview_skill_path'),
+  adrFinalizeSkillPath: text('adr_finalize_skill_path'),
   designDocSkillPath: text('design_doc_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   designPrototypeSkillPath: text('design_prototype_skill_path'),
   testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
+  adrModel: text('adr_model'),
   designDocModel: text('design_doc_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
   designPrototypeModel: text('design_prototype_model'),

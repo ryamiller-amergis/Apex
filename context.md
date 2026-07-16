@@ -17,6 +17,14 @@ Apex provides a structured interview workflow where a BA, Product Owner, or Mana
 - **Mark complete** when the conversation has captured sufficient requirements
 - **Generate a PRD** with one click from a completed interview — the AI uses the `/to-prd` skill to produce a structured PRD with epics, features, PBIs, and TBIs organized into delivery waves
 
+### Architecture Decision Records
+
+Apex provides repository-grounded architecture decision interviews for developers. A senior-principal-engineer agent challenges constraints and alternatives, then generates a consistent MADR-style record that can be accepted or superseded.
+
+- **Structured decision interview** — one question at a time, grounded in the selected project repository
+- **Explicit trade-offs** — captures decision drivers, considered options, and positive and negative consequences
+- **Durable ADR artifact** — generated markdown is stored in PostgreSQL and remains available after the agent workspace is cleaned up
+
 ### 2. PRD Generation & Review
 
 PRDs are automatically generated from interview transcripts by an AI agent. The output includes a structured markdown document and a `backlog.json` with a full work item hierarchy.
@@ -244,6 +252,7 @@ A developer-focused view for managing personal work items and development sessio
 | Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |
 | Interview | `/backlog` | `interviews:view` + menu enabled | Interview dashboard, PRD review, design docs, prototypes |
+| ADR | `/adr` | `adr:view` + menu enabled | Architecture decision interviews and MADR records |
 | My Work | `/my-work` | `dev-workbench:view` + Developer group + menu enabled | Developer workbench and sessions |
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
 | Feature Requests | `/feature-requests` | `feature-requests:view` + Apex project only + menu enabled | Feature request review and triage (Apex admins) |
@@ -274,6 +283,7 @@ Navigation is controlled by three layers:
 | Capability | Skill | What it Does |
 |-----------|-------|-------------|
 | Design Interview | `/grill-with-docs` | Structured interview that challenges design decisions using project context |
+| ADR Interview and Generation | `/adr-interview`, `/adr-finalize` | Challenges an architecture decision against repository evidence and writes a MADR record |
 | PRD Generation | `/to-prd` | Generates structured PRD + backlog hierarchy from interview transcript |
 | Design Doc Generation | (project-configured) | Auto-generates design docs from approved prototypes |
 | Design Doc Validation | (project-configured) | Scores design docs against a validation rubric; blocks approval below 90% |

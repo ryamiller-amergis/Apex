@@ -24,6 +24,7 @@ interface AppSidebarProps {
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
+  onNavigateAdr?: () => void;
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
@@ -67,6 +68,13 @@ const IconInterview: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 5a2 2 0 012-2h8a2 2 0 012 2v7a2 2 0 01-2 2H8l-3 3v-3H6a2 2 0 01-2-2V5z" />
     <path d="M7 7h6M7 10h4" />
+  </svg>
+);
+
+const IconAdr: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 2.5h7l3 3V17.5H5z" />
+    <path d="M12 2.5v3h3M8 9h4M8 12h4" />
   </svg>
 );
 
@@ -151,6 +159,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePlanning,
   onNavigateCloudCost,
   onNavigateBacklog,
+  onNavigateAdr = () => {},
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
@@ -175,6 +184,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </svg>
       ), permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
+    { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },

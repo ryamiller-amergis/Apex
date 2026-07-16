@@ -30,7 +30,7 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -1180,11 +1180,16 @@ function resetIdleTimer(state: ThreadState) {
 }
 
 async function checkIsInterviewThread(threadId: string): Promise<boolean> {
-  const row = await db.query.interviews.findFirst({
+  const interviewRow = await db.query.interviews.findFirst({
     where: eq(interviews.chatThreadId, threadId),
     columns: { id: true },
   });
-  return row !== undefined;
+  if (interviewRow) return true;
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  return adrRow !== undefined;
 }
 
 /**
@@ -1195,6 +1200,12 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
  * ON DELETE CASCADE FK would silently destroy the parent document.
  */
 async function threadBacksDocument(threadId: string): Promise<string | null> {
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  if (adrRow) return 'adr';
+
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
     columns: { id: true },
@@ -2731,6 +2742,14 @@ export function readOutputPrd(threadId: string): string | null {
   if (named) return fs.readFileSync(named, 'utf-8');
   const legacy = path.join(outputDir, 'PRD.md');
   return fs.existsSync(legacy) ? fs.readFileSync(legacy, 'utf-8') : null;
+}
+
+/** Read a generated MADR document from the ephemeral workspace. */
+export function readOutputAdr(threadId: string): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const file = findOutputFile(outputDir, /\.adr\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**

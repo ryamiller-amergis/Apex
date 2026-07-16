@@ -47,6 +47,8 @@ const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ def
 const AiCostAnalytics = lazy(() => import('./components/AiCostAnalytics').then(m => ({ default: m.AiCostAnalytics })));
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
+const AdrsDashboard = lazy(() => import('./components/AdrsDashboard'));
+const AdrChatView = lazy(() => import('./components/AdrChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
 const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
 const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototypeReviewView'));
@@ -110,7 +112,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -126,6 +128,8 @@ function App() {
                 ? 'cloudcost'
                 : location.pathname.startsWith('/backlog')
                   ? 'backlog'
+                  : location.pathname.startsWith('/adr')
+                    ? 'adr'
                   : location.pathname === '/notifications'
                     ? 'notifications'
                     : location.pathname.startsWith('/admin')
@@ -258,6 +262,7 @@ function App() {
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
     if (currentView === 'ai-cost'       && !isSuperAdmin && (!enabledViews.includes('ai-cost')    || !can('analytics:ai-cost:view'))) navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
+    if (currentView === 'adr'           && !isSuperAdmin && (!enabledViews.includes('adr')       || !can('adr:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
     if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
@@ -419,6 +424,7 @@ function App() {
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateAdr={() => navigate('/adr')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
@@ -465,6 +471,7 @@ function App() {
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateAdr={() => navigate('/adr')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
@@ -557,6 +564,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <AiCostAnalytics project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'adr' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                {location.pathname === '/adr' ? <AdrsDashboard /> : <AdrChatView />}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'backlog' ? (

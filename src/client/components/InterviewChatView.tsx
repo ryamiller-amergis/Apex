@@ -123,7 +123,7 @@ interface InterviewAgentMessageProps {
   alreadyAnswered?: boolean;
 }
 
-const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false }) => {
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false }) => {
   const parts = parseAgentMessage(text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 

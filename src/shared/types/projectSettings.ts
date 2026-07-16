@@ -77,6 +77,8 @@ export interface ProjectSkillConfig {
   updatedBy?: string | null;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
+  adrInterviewSkillPath?: string | null;
+  adrFinalizeSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -85,6 +87,7 @@ export interface ProjectSkillConfig {
   prdValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
+  adrModel?: string | null;
   designDocModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
@@ -142,6 +145,8 @@ export interface UpsertProjectSkillConfigRequest {
   skillBranch: string;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
+  adrInterviewSkillPath?: string | null;
+  adrFinalizeSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -150,6 +155,7 @@ export interface UpsertProjectSkillConfigRequest {
   prdValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
+  adrModel?: string | null;
   designDocModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
@@ -235,6 +241,8 @@ export interface ProjectSkillConfigResponse {
   skillBranch: string;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
+  adrInterviewSkillPath?: string | null;
+  adrFinalizeSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -243,6 +251,7 @@ export interface ProjectSkillConfigResponse {
   prdValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
+  adrModel?: string | null;
   designDocModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;

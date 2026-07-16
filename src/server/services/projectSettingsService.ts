@@ -70,6 +70,8 @@ export interface UpsertSkillConfigOptions {
   updatedBy?: string;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
+  adrInterviewSkillPath?: string | null;
+  adrFinalizeSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -78,6 +80,7 @@ export interface UpsertSkillConfigOptions {
   prdValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
+  adrModel?: string | null;
   designDocModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
@@ -133,6 +136,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     updatedBy: opts.updatedBy,
     interviewSkillPath: opts.interviewSkillPath ?? null,
     prdSkillPath: opts.prdSkillPath ?? null,
+    adrInterviewSkillPath: opts.adrInterviewSkillPath ?? null,
+    adrFinalizeSkillPath: opts.adrFinalizeSkillPath ?? null,
     designDocSkillPath: opts.designDocSkillPath ?? null,
     designDocAssistantSkillPath: opts.designDocAssistantSkillPath ?? null,
     designPrototypeSkillPath: opts.designPrototypeSkillPath ?? null,
@@ -141,6 +146,7 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     prdAssistantSkillPath: opts.prdAssistantSkillPath ?? null,
     interviewModel: opts.interviewModel ?? null,
     prdModel: opts.prdModel ?? null,
+    adrModel: opts.adrModel ?? null,
     designDocModel: opts.designDocModel ?? null,
     designDocAssistantModel: opts.designDocAssistantModel ?? null,
     designPrototypeModel: opts.designPrototypeModel ?? null,
