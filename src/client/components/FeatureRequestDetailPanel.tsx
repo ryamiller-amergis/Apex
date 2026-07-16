@@ -161,7 +161,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
 
           <section className={styles['section']}>
             <h3 className={styles['sectionTitle']}>Advantage</h3>
-            <div className={styles['prose']}>{formatBody(fr.advantage)}</div>
+            <div className={styles['prose']}>{fr.advantage ? formatBody(fr.advantage) : null}</div>
           </section>
 
           {fr.type === 'feature' && fr.interviewId && (
