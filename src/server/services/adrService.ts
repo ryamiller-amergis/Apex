@@ -1,9 +1,13 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { adrs } from '../db/schema';
+import { adrs, appUsers, reviewComments } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
 import { markAsInterviewThread, readOutputAdr } from './chatAgentService';
 import { getSkillSettingsName } from './projectSettingsService';
+import { assignApprovers, isApprovalComplete } from './documentApprovalService';
+import { getUnresolvedCount } from './reviewCommentService';
+import { recordOwnerApproval } from './ownerApprovalService';
+import { listGroupsWithMembers } from './groupService';
 
 const EDITABLE_STATUSES: AdrStatus[] = ['in_progress', 'accepted', 'superseded'];
 const WATCHER_INTERVAL_MS = 5_000;
@@ -45,16 +49,53 @@ function forceProposedStatus(content: string): string {
   return content.replace(frontmatter[0], `---\n${nextBlock}\n---`);
 }
 
+function setAdrLifecycleStatus(content: string, status: 'Accepted' | 'Superseded'): string {
+  if (!content.trim()) return content;
+  const frontmatter = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  let nextContent: string;
+  if (frontmatter) {
+    const block = frontmatter[1];
+    const nextBlock = /^status:\s*.+$/im.test(block)
+      ? block.replace(/^status:\s*.+$/im, `status: ${status}`)
+      : `${block}\nstatus: ${status}`;
+    nextContent = content.replace(frontmatter[0], `---\n${nextBlock}\n---`);
+  } else if (/^status:\s*.+$/im.test(content)) {
+    nextContent = content.replace(/^status:\s*.+$/im, `status: ${status}`);
+  } else {
+    nextContent = `---\nstatus: ${status}\n---\n\n${content}`;
+  }
+  return nextContent.replace(
+    /(^##[ \t]+Status[ \t]*\r?\n(?:[ \t]*\r?\n)*)([^\r\n]+)/im,
+    `$1${status}`,
+  );
+}
+
 async function withSettingsName(
   row: typeof adrs.$inferSelect,
 ): Promise<Adr> {
+  const reviewerIds = row.reviewerIds ?? [];
+  const userIds = [...new Set([row.authorId, ...reviewerIds])];
+  const users = userIds.length > 0
+    ? await db
+      .select({ id: appUsers.oid, displayName: appUsers.displayName })
+      .from(appUsers)
+      .where(inArray(appUsers.oid, userIds))
+    : [];
+  const displayNameById = new Map(users.map((user) => [user.id, user.displayName ?? user.id]));
   return {
     ...row,
+    ownerName: displayNameById.get(row.authorId) ?? row.authorId,
+    reviewerIds,
+    reviewers: reviewerIds.map((id) => ({
+      id,
+      displayName: displayNameById.get(id) ?? id,
+    })),
     model: row.model ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: await getSkillSettingsName(row.skillSettingsId),
     status: mapStatus(row.status),
     slug: row.slug ?? null,
+    fixCommentId: row.fixCommentId ?? null,
   };
 }
 
@@ -66,10 +107,26 @@ export async function createAdr(opts: {
   chatThreadId: string;
   model?: string;
   skillSettingsId?: string | null;
+  reviewerIds?: string[];
 }): Promise<{ adrId: string; threadId: string }> {
+  const reviewerIds = [...new Set(opts.reviewerIds ?? [])];
+  if (reviewerIds.includes(opts.userId)) {
+    throw httpError('The ADR owner cannot also be assigned as a reviewer', 400);
+  }
+  if (reviewerIds.length > 0) {
+    const groups = await listGroupsWithMembers(opts.project);
+    const developerIds = new Set(
+      groups.find((group) => group.name === 'Developer')?.members.map((member) => member.userId) ?? [],
+    );
+    const invalidReviewerIds = reviewerIds.filter((id) => !developerIds.has(id));
+    if (invalidReviewerIds.length > 0) {
+      throw httpError(`ADR reviewers must belong to the Developer group: ${invalidReviewerIds.join(', ')}`, 400);
+    }
+  }
   const [row] = await db.insert(adrs).values({
     chatThreadId: opts.chatThreadId,
     authorId: opts.userId,
+    reviewerIds,
     title: opts.title,
     project: opts.project,
     repo: opts.repo,
@@ -78,6 +135,9 @@ export async function createAdr(opts: {
     status: 'in_progress',
   }).returning({ id: adrs.id });
 
+  if (reviewerIds.length > 0) {
+    await assignApprovers(row.id, 'adr', reviewerIds, opts.userId);
+  }
   markAsInterviewThread(opts.chatThreadId);
   return { adrId: row.id, threadId: opts.chatThreadId };
 }
@@ -122,7 +182,27 @@ export async function updateAdrStatus(id: string, userId: string, status: AdrSta
   if (status === 'accepted' && row.proposedContent != null) {
     throw httpError('Apply or reject the proposed ADR edits before accepting the ADR', 409);
   }
-  await db.update(adrs).set({ status, updatedAt: new Date().toISOString() }).where(eq(adrs.id, id));
+  if (status === 'accepted') {
+    const unresolvedCount = await getUnresolvedCount(id, 'adr');
+    if (unresolvedCount > 0) {
+      throw httpError('Resolve all review comments before accepting the ADR', 409);
+    }
+    const { complete } = await isApprovalComplete(id, 'adr', row.project);
+    if (!complete) {
+      throw httpError('Reviewers must approve the ADR before the owner can give final approval', 409);
+    }
+    await recordOwnerApproval(id, 'adr', userId, 'approved');
+  }
+  const content = status === 'accepted'
+    ? setAdrLifecycleStatus(row.content, 'Accepted')
+    : status === 'superseded'
+      ? setAdrLifecycleStatus(row.content, 'Superseded')
+      : row.content;
+  await db.update(adrs).set({
+    status,
+    content,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
 }
 
 export async function updateAdrTitle(id: string, userId: string, title: string): Promise<void> {
@@ -150,6 +230,22 @@ export async function stageAdrProposedContent(
   if (row.adrAssistantThreadId !== threadId) throw httpError('Thread is not linked to this ADR assistant', 403);
   await db.update(adrs).set({
     proposedContent: forceProposedStatus(content),
+    fixCommentId: null,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
+}
+
+export async function stageAdrReviewFix(
+  id: string,
+  userId: string,
+  content: string,
+  fixCommentId: string | null,
+): Promise<void> {
+  const row = await requireAuthor(id, userId);
+  if (row.status !== 'proposed') throw httpError('ADR review fixes are available only while the ADR is proposed', 409);
+  await db.update(adrs).set({
+    proposedContent: forceProposedStatus(content),
+    fixCommentId,
     updatedAt: new Date().toISOString(),
   }).where(eq(adrs.id, id));
 }
@@ -160,13 +256,33 @@ export async function applyAdrProposedContent(id: string, userId: string): Promi
   if (row.proposedContent == null) throw httpError('No proposed ADR edits to apply', 409);
   const content = forceProposedStatus(row.proposedContent);
   const metadata = parseFrontmatter(content);
+  const now = new Date().toISOString();
   await db.update(adrs).set({
     content,
     slug: metadata.slug,
     status: 'proposed',
     proposedContent: null,
-    updatedAt: new Date().toISOString(),
+    fixCommentId: null,
+    updatedAt: now,
   }).where(eq(adrs.id, id));
+  const commentFilter = row.fixCommentId
+    ? and(
+      eq(reviewComments.id, row.fixCommentId),
+      eq(reviewComments.documentId, id),
+      eq(reviewComments.documentType, 'adr'),
+      eq(reviewComments.status, 'open'),
+    )
+    : and(
+      eq(reviewComments.documentId, id),
+      eq(reviewComments.documentType, 'adr'),
+      eq(reviewComments.status, 'open'),
+    );
+  await db.update(reviewComments).set({
+    status: 'resolved',
+    resolvedBy: userId,
+    resolvedAt: now,
+    updatedAt: now,
+  }).where(commentFilter);
 }
 
 export async function rejectAdrProposedContent(id: string, userId: string): Promise<void> {
@@ -174,6 +290,7 @@ export async function rejectAdrProposedContent(id: string, userId: string): Prom
   if (row.status !== 'proposed') throw httpError('Proposed edits can be rejected only while the ADR is proposed', 409);
   await db.update(adrs).set({
     proposedContent: null,
+    fixCommentId: null,
     updatedAt: new Date().toISOString(),
   }).where(eq(adrs.id, id));
 }

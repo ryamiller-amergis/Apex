@@ -28,6 +28,7 @@ jest.mock('../db/drizzle', () => {
         interviews: { findFirst: jest.fn() },
         designDocs: { findFirst: jest.fn() },
         designPrototypes: { findFirst: jest.fn() },
+        adrs: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -95,6 +96,14 @@ describe('ownerApprovalService', () => {
   });
 
   describe('resolveDocumentOwnerId', () => {
+    it('resolves ADR owner from the author', async () => {
+      mockDb.query.adrs.findFirst.mockResolvedValue({ authorId: 'adr-owner' });
+
+      const result = await resolveDocumentOwnerId('adr-1', 'adr');
+
+      expect(result).toBe('adr-owner');
+    });
+
     it('resolves PRD owner via prds → interviews', async () => {
       mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
       mockDb.query.interviews.findFirst.mockResolvedValue({ prdOwnerId: 'user-prd-owner' });

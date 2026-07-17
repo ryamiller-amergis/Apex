@@ -54,6 +54,10 @@ jest.mock('../services/notificationService', () => ({
   createNotification: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock('../services/groupService', () => ({
+  listGroupsWithMembers: jest.fn().mockResolvedValue([]),
+}));
+
 import {
   assignApprovers,
   getAssignments,
@@ -74,6 +78,9 @@ const { getApproversForDocumentByProject: mockGetApproversForDocument } = jest.r
 const { createNotification: mockCreateNotification } = jest.requireMock(
   '../services/notificationService',
 ) as { createNotification: jest.Mock };
+const { listGroupsWithMembers: mockListGroupsWithMembers } = jest.requireMock(
+  '../services/groupService',
+) as { listGroupsWithMembers: jest.Mock };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -609,6 +616,40 @@ describe('reassignApprovers', () => {
       title: 'You have been assigned as a design doc approver',
       body: 'Review requested for: My Design Doc',
       link: '/backlog/design-doc/dd-1',
+    }));
+  });
+
+  it('notifies a newly assigned ADR reviewer from the Developer group', async () => {
+    mockDb.select
+      .mockReturnValueOnce(makeWhereSelectChain([]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ project: 'Apex' }]))
+      .mockReturnValueOnce(makeWhereSelectChain([]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ title: 'Choose event transport' }]))
+      .mockReturnValueOnce(makeAssignmentSelectChain([
+        makeAssignmentRow({
+          documentId: 'adr-1',
+          documentType: 'adr',
+          approverUserId: 'dev-1',
+        }),
+      ]));
+    mockListGroupsWithMembers.mockResolvedValue([
+      {
+        name: 'Developer',
+        members: [{ userId: 'dev-1', displayName: 'Dev One' }],
+      },
+    ]);
+    const onConflictMock = jest.fn().mockResolvedValue(undefined);
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await reassignApprovers('adr-1', 'adr', ['dev-1'], 'owner-1');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockCreateNotification).toHaveBeenCalledWith('dev-1', expect.objectContaining({
+      type: 'user-action',
+      title: 'You have been assigned as an ADR reviewer',
+      body: 'Review requested for: Choose event transport',
+      link: '/adr/adr-1',
     }));
   });
 });

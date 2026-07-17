@@ -4,9 +4,10 @@ import {
   projectSkillSettings,
   prds,
   designDocs,
+  adrs,
   appUsers,
 } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { getApproverUserIdsForProject, getApproverPoolForProject, getApproversForDocumentByProject } from './projectSettingsService';
 import { createNotification } from './notificationService';
 import type {
@@ -16,18 +17,28 @@ import type {
   ApproverResponseStatus,
 } from '../../shared/types/approvals';
 import type { ProjectApprover, ApproverPoolResponse } from '../../shared/types/projectSettings';
+import { listGroupsWithMembers } from './groupService';
 
 /**
  * Document kinds that support approver assignment.
  * For `design_prototype`, the `documentId` is the PRD id — prototypes are
  * reviewed as a set on the per-PRD prototype review screen.
  */
-type DocumentType = 'prd' | 'design_doc' | 'design_prototype' | 'test_case';
+export type DocumentType = 'prd' | 'design_doc' | 'design_prototype' | 'test_case' | 'adr';
 
 async function getProjectForDocument(
   documentId: string,
   documentType: DocumentType,
 ): Promise<string> {
+  if (documentType === 'adr') {
+    const rows = await db
+      .select({ project: adrs.project })
+      .from(adrs)
+      .where(eq(adrs.id, documentId))
+      .limit(1);
+    if (!rows[0]) throw new Error(`ADR not found: ${documentId}`);
+    return rows[0].project;
+  }
   if (documentType === 'prd' || documentType === 'design_prototype' || documentType === 'test_case') {
     const rows = await db
       .select({ project: prds.project })
@@ -47,6 +58,10 @@ async function getProjectForDocument(
 }
 
 async function getDocumentTitle(documentId: string, documentType: DocumentType): Promise<string> {
+  if (documentType === 'adr') {
+    const rows = await db.select({ title: adrs.title }).from(adrs).where(eq(adrs.id, documentId)).limit(1);
+    return rows[0]?.title ?? 'Untitled ADR';
+  }
   if (documentType === 'prd' || documentType === 'design_prototype' || documentType === 'test_case') {
     const rows = await db.select({ title: prds.title }).from(prds).where(eq(prds.id, documentId)).limit(1);
     return rows[0]?.title ?? 'Untitled PRD';
@@ -70,6 +85,8 @@ function assignmentNotificationCopy(
       };
     case 'test_case':
       return { title: 'You have been assigned as a QA reviewer', link: `/backlog/prd/${documentId}` };
+    case 'adr':
+      return { title: 'You have been assigned as an ADR reviewer', link: `/adr/${documentId}` };
     case 'design_doc':
     default:
       return { title: 'You have been assigned as a design doc approver', link: `/backlog/design-doc/${documentId}` };
@@ -96,6 +113,15 @@ async function notifyAssignedApprovers(
   );
 }
 
+async function getAllowedApproverIds(project: string, documentType: DocumentType): Promise<Set<string>> {
+  if (documentType === 'adr') {
+    const groups = await listGroupsWithMembers(project);
+    const developerGroup = groups.find((group) => group.name === 'Developer');
+    return new Set(developerGroup?.members.map((member) => member.userId) ?? []);
+  }
+  return new Set(await getApproverUserIdsForProject(project, documentType));
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function assignApprovers(
@@ -107,7 +133,7 @@ export async function assignApprovers(
   if (approverUserIds.length === 0) return getAssignments(documentId, documentType);
 
   const project = await getProjectForDocument(documentId, documentType);
-  const poolUserIds = new Set(await getApproverUserIdsForProject(project, documentType));
+  const poolUserIds = await getAllowedApproverIds(project, documentType);
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -274,7 +300,7 @@ export async function reassignApprovers(
   }
 
   const project = await getProjectForDocument(documentId, documentType);
-  const poolUserIds = new Set(await getApproverUserIdsForProject(project, documentType));
+  const poolUserIds = await getAllowedApproverIds(project, documentType);
   const invalid = approverUserIds.filter((id) => !poolUserIds.has(id));
   if (invalid.length > 0) {
     throw new Error(
@@ -316,11 +342,29 @@ export async function reassignApprovers(
   return getAssignments(documentId, documentType);
 }
 
+export async function removeApproverAssignments(
+  documentId: string,
+  documentType: DocumentType,
+  approverUserIds: string[],
+): Promise<void> {
+  if (approverUserIds.length === 0) return;
+  await db
+    .delete(documentApproverAssignments)
+    .where(
+      and(
+        eq(documentApproverAssignments.documentId, documentId),
+        eq(documentApproverAssignments.documentType, documentType),
+        inArray(documentApproverAssignments.approverUserId, approverUserIds),
+      ),
+    );
+}
+
 export async function getAvailableApprovers(
   project: string,
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ProjectApprover[]> {
+  if (documentType === 'adr') return [];
   const approvers = await getApproversForDocumentByProject(project, documentType);
   if (excludeUserId) {
     return approvers.filter((a) => a.userId !== excludeUserId);
@@ -333,6 +377,7 @@ export async function getAvailableApproverPool(
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ApproverPoolResponse> {
+  if (documentType === 'adr') return { individuals: [], groups: [] };
   const pool = await getApproverPoolForProject(project, documentType);
   if (excludeUserId) {
     return {
@@ -377,13 +422,15 @@ export async function notifyApproversDocumentReady(
   const docTitle = await getDocumentTitle(documentId, documentType);
 
   const notifTitle =
-    documentType === 'prd' ? 'A PRD is ready for your review'
+    documentType === 'adr' ? 'An ADR is ready for your review'
+    : documentType === 'prd' ? 'A PRD is ready for your review'
     : documentType === 'test_case' ? 'Test cases are ready for your QA review'
     : documentType === 'design_prototype' ? 'A design prototype is ready for your review'
     : 'A design doc is ready for your review';
 
   const notifLink =
-    documentType === 'prd' || documentType === 'test_case' ? `/backlog/prd/${documentId}`
+    documentType === 'adr' ? `/adr/${documentId}`
+    : documentType === 'prd' || documentType === 'test_case' ? `/backlog/prd/${documentId}`
     : documentType === 'design_prototype' ? `/backlog/design-prototypes/${documentId}`
     : `/backlog/design-doc/${documentId}`;
 

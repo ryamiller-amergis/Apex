@@ -35,6 +35,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:create` | adr | admin, member |
 | `adr:edit` | adr | admin, member |
 | `adr:delete` | adr | admin, member |
+| `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
 | `calendar:view` | calendar | admin, member |

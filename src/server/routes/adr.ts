@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { db } from '../db/drizzle';
-import { chatThreads } from '../db/schema';
+import { adrs as adrsTable, chatThreads } from '../db/schema';
 import {
   applyAdrProposedContent,
   createAdr,
@@ -15,6 +15,7 @@ import {
   markAdrGenerating,
   rejectAdrProposedContent,
   setAdrAssistantThread,
+  stageAdrReviewFix,
   startAdrWatcher,
   updateAdrStatus,
   updateAdrTitle,
@@ -23,6 +24,20 @@ import { createThread, getThread, updateThreadKickoffContext } from '../services
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
+import { listGroupsWithMembers } from '../services/groupService';
+import {
+  getAssignments,
+  isApprovalComplete,
+  isAssignedApprover,
+  removeApproverAssignments,
+  reassignApprovers,
+  recordApproverResponse,
+} from '../services/documentApprovalService';
+import { getOwnerApproval, recordOwnerApproval } from '../services/ownerApprovalService';
+import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
+import { createNotification } from '../services/notificationService';
+import { fixAdrContentWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import type { OwnerApproveRequest } from '../../shared/types/approvals';
 
 const router = Router();
 
@@ -37,18 +52,45 @@ router.get('/', requirePermission('adr:view'), async (req, res, next) => {
   }
 });
 
+router.get('/reviewer-candidates', requirePermission('adr:create'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const groups = await listGroupsWithMembers(project);
+    const developerGroup = groups.find((group) => group.name === 'Developer');
+    const ownerId = getUserId(req);
+    res.json((developerGroup?.members ?? [])
+      .filter((member) => member.userId !== ownerId)
+      .map((member) => ({
+        id: member.userId,
+        displayName: member.displayName ?? member.email ?? member.userId,
+        email: member.email,
+      })));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/', requirePermission('adr:create'), async (req, res, next) => {
   try {
-    const { project, repo, title, chatThreadId, model, skillSettingsId } = req.body as {
+    const { project, repo, title, chatThreadId, model, skillSettingsId, reviewerIds } = req.body as {
       project?: string;
       repo?: string;
       title?: string;
       chatThreadId?: string;
       model?: string;
       skillSettingsId?: string;
+      reviewerIds?: string[];
     };
     if (!project || !repo || !title?.trim() || !chatThreadId) {
       res.status(400).json({ error: 'project, repo, title, and chatThreadId are required' });
+      return;
+    }
+    if (reviewerIds !== undefined && (!Array.isArray(reviewerIds) || reviewerIds.some((id) => typeof id !== 'string'))) {
+      res.status(400).json({ error: 'reviewerIds must be an array of user IDs' });
       return;
     }
     const result = await createAdr({
@@ -59,6 +101,7 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       chatThreadId,
       model,
       skillSettingsId,
+      reviewerIds,
     });
     res.status(201).json(result);
   } catch (error) {
@@ -158,6 +201,144 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
   }
 });
 
+router.get('/:id/assignments', requirePermission('adr:view'), async (req, res, next) => {
+  try {
+    res.json(await getAssignments(req.params.id, 'adr'));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/:id/assignments', requirePermission('adr:edit'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.authorId !== userId) {
+      res.status(403).json({ error: 'Only the owner can update ADR reviewers' });
+      return;
+    }
+    if (adr.status !== 'proposed') {
+      res.status(409).json({ error: 'Reviewers can only be updated while the ADR is proposed' });
+      return;
+    }
+    const { reviewerIds } = req.body as { reviewerIds?: string[] };
+    if (!Array.isArray(reviewerIds) || reviewerIds.some((id) => typeof id !== 'string')) {
+      res.status(400).json({ error: 'reviewerIds must be an array of user IDs' });
+      return;
+    }
+    const uniqueReviewerIds = [...new Set(reviewerIds)];
+    if (uniqueReviewerIds.includes(userId)) {
+      res.status(400).json({ error: 'The ADR owner cannot also be assigned as a reviewer' });
+      return;
+    }
+    const removedReviewerIds = adr.reviewerIds.filter((id) => !uniqueReviewerIds.includes(id));
+    await reassignApprovers(req.params.id, 'adr', uniqueReviewerIds, userId);
+    await removeApproverAssignments(req.params.id, 'adr', removedReviewerIds);
+    await db.update(adrsTable).set({
+      reviewerIds: uniqueReviewerIds,
+      updatedAt: new Date().toISOString(),
+    }).where(eq(adrsTable.id, req.params.id));
+    res.json(await getAssignments(req.params.id, 'adr'));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/review', requirePermission('adr:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.status !== 'proposed') {
+      res.status(409).json({ error: 'Only proposed ADRs can be reviewed' });
+      return;
+    }
+    const assigned = await isAssignedApprover(adr.id, 'adr', userId);
+    if (!assigned) {
+      res.status(403).json({ error: 'You are not an assigned reviewer for this ADR' });
+      return;
+    }
+    const { status, comment } = req.body as {
+      status?: 'approved' | 'revision_requested';
+      comment?: string;
+    };
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
+    if (status === 'approved' && await getUnresolvedCount(adr.id, 'adr') > 0) {
+      res.status(409).json({ error: 'Resolve all review comments before approving the ADR' });
+      return;
+    }
+    await recordApproverResponse(adr.id, 'adr', userId, status, comment);
+    const completion = await isApprovalComplete(adr.id, 'adr', adr.project);
+    await createNotification(adr.authorId, {
+      type: 'user-action',
+      title: status === 'approved' ? 'ADR reviewer approved' : 'ADR reviewer requested revisions',
+      body: `A reviewer responded to "${adr.title}"`,
+      link: `/adr/${adr.id}`,
+    });
+    res.json({ ok: true, approvalComplete: completion.complete });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/owner-approval', requirePermission('adr:view'), async (req, res, next) => {
+  try {
+    res.json(await getOwnerApproval(req.params.id, 'adr'));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/owner-approve', requirePermission('adr:review'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.authorId !== userId) {
+      res.status(403).json({ error: 'Only the ADR owner can give final approval' });
+      return;
+    }
+    if (adr.status !== 'proposed') {
+      res.status(409).json({ error: `Cannot owner-approve ADR from status '${adr.status}'` });
+      return;
+    }
+    const { status, comment } = req.body as OwnerApproveRequest;
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
+    if (status === 'approved') {
+      await updateAdrStatus(adr.id, userId, 'accepted');
+    } else {
+      await recordOwnerApproval(adr.id, 'adr', userId, status, comment);
+    }
+    await Promise.allSettled(adr.reviewerIds.map((reviewerId) =>
+      createNotification(reviewerId, {
+        type: 'user-action',
+        title: status === 'approved' ? 'ADR accepted by owner' : 'ADR owner requested revisions',
+        body: `"${adr.title}" has an owner response`,
+        link: `/adr/${adr.id}`,
+      }),
+    ));
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermission('adr:edit'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -248,6 +429,116 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
     await setAdrAssistantThread(adr.id, userId, thread.id);
     res.status(201).json({ threadId: thread.id });
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/fix-with-ai', requirePermission('adr:edit'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.authorId !== userId) {
+      res.status(403).json({ error: 'Only the ADR owner can fix comments with AI' });
+      return;
+    }
+    if (adr.status !== 'proposed') {
+      res.status(409).json({ error: 'ADR review fixes are available only while the ADR is proposed' });
+      return;
+    }
+    const comments = (await getComments(adr.id, 'adr')).filter((comment) => comment.status === 'open');
+    if (comments.length === 0) {
+      res.status(400).json({ error: 'No open comments to fix' });
+      return;
+    }
+    const projectConfig = await resolveSkillConfig({
+      project: adr.project,
+      settingsId: adr.skillSettingsId ?? undefined,
+    });
+    const fixedContent = await fixAdrContentWithBedrock(
+      adr.content,
+      comments.map((comment) => ({
+        sectionKey: comment.sectionKey,
+        exact: comment.selector.exact,
+        body: comment.body,
+        authorName: comment.authorDisplayName,
+        replies: comment.replies.map((reply) => ({
+          authorName: reply.authorDisplayName,
+          body: reply.body,
+        })),
+      })),
+      projectConfig?.prdReviewBedrockModelId,
+      projectConfig?.prdReviewBedrockMaxTokens,
+      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+    );
+    await stageAdrReviewFix(adr.id, userId, fixedContent, null);
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+router.post('/:id/fix-comment-with-ai', requirePermission('adr:edit'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.authorId !== userId) {
+      res.status(403).json({ error: 'Only the ADR owner can fix comments with AI' });
+      return;
+    }
+    if (adr.status !== 'proposed') {
+      res.status(409).json({ error: 'ADR review fixes are available only while the ADR is proposed' });
+      return;
+    }
+    const { commentId } = req.body as { commentId?: string };
+    if (!commentId) {
+      res.status(400).json({ error: 'commentId is required' });
+      return;
+    }
+    const comment = (await getComments(adr.id, 'adr'))
+      .find((candidate) => candidate.id === commentId && candidate.status === 'open');
+    if (!comment) {
+      res.status(404).json({ error: 'Comment not found or not open' });
+      return;
+    }
+    const projectConfig = await resolveSkillConfig({
+      project: adr.project,
+      settingsId: adr.skillSettingsId ?? undefined,
+    });
+    const fixedContent = await fixAdrContentWithBedrock(
+      adr.content,
+      [{
+        sectionKey: comment.sectionKey,
+        exact: comment.selector.exact,
+        body: comment.body,
+        authorName: comment.authorDisplayName,
+        replies: comment.replies.map((reply) => ({
+          authorName: reply.authorDisplayName,
+          body: reply.body,
+        })),
+      }],
+      projectConfig?.prdReviewBedrockModelId,
+      projectConfig?.prdReviewBedrockMaxTokens,
+      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+    );
+    await stageAdrReviewFix(adr.id, userId, fixedContent, comment.id);
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

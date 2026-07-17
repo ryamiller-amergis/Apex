@@ -2647,6 +2647,47 @@ ${commentLines}
   return fenced ? fenced[1].trim() : text.trim();
 }
 
+/** Apply ADR review comments and return the complete revised ADR markdown. */
+export async function fixAdrContentWithBedrock(
+  adrContent: string,
+  comments: PrdComment[],
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<string> {
+  const commentLines = formatCommentsForPrompt(comments);
+  const prompt = `You are a senior principal architect. Revise the architecture decision record below to address every review comment listed.
+
+## Current ADR
+
+${adrContent || '(empty)'}
+
+## Review Comments to Address
+
+${commentLines}
+
+## Instructions
+
+- Target the exact highlighted passage for each comment and make no unrelated edits.
+- Incorporate relevant thread replies as reviewer guidance.
+- Preserve MADR frontmatter, headings, decision drivers, options, and consequences unless feedback explicitly changes them.
+- Produce the complete revised ADR as clean markdown.
+- Output only the revised markdown with no preamble or explanation.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(
+    prompt,
+    undefined,
+    resolvedModel,
+    resolvedMaxTokens,
+    undefined,
+    usageCtx ?? { feature: 'other', project: 'unknown' },
+  );
+  const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
+  return fenced ? fenced[1].trim() : text.trim();
+}
+
 /**
  * Apply open review comments to a PRD backlog and return the revised backlog JSON.
  * Calls Bedrock once — returns the updated backlog as a parsed object.

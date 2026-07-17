@@ -5,7 +5,7 @@ export type ApproverResponseStatus = 'pending' | 'approved' | 'revision_requeste
 export interface DocumentApproverAssignment {
   id: string;
   documentId: string;
-  documentType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case';
+  documentType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case' | 'adr';
   approverUserId: string;
   approverDisplayName?: string;
   status: ApproverResponseStatus;
@@ -35,7 +35,7 @@ export interface ApprovalCompletionResult {
 
 export type OwnerApprovalStatus = 'pending' | 'approved' | 'revision_requested';
 
-export type OwnerApprovalDocumentType = 'prd' | 'test_case' | 'design_prototype' | 'design_doc';
+export type OwnerApprovalDocumentType = 'prd' | 'test_case' | 'design_prototype' | 'design_doc' | 'adr';
 
 export interface DocumentOwnerApproval {
   id: string;
