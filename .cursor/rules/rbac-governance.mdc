@@ -54,6 +54,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
+| `pdf-assembly:use` | pdf-tools | *(no default roles — assign explicitly)* |
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |

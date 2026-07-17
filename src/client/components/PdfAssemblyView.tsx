@@ -24,6 +24,7 @@ import { ExportSelectedButton } from './ExportSelectedButton';
 import { RangeInput } from './RangeInput';
 import { DeduplicationToast } from './DeduplicationToast';
 import { generateDefaultFilename } from '../hooks/useExportSession';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import type {
   FileUploadResult,
   PageManifestEntry,
@@ -35,15 +36,26 @@ import styles from './PdfAssemblyView.module.css';
 const MIN_ASSEMBLY_PANE_PERCENT = 30;
 const MAX_ASSEMBLY_PANE_PERCENT = 75;
 const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
+const PDF_SESSION_STORAGE_KEY = 'pdf-active-session';
+
+interface PdfAssemblyViewProps {
+  userId?: string;
+}
+
+function getPdfSessionStorageKey(userId: string): string {
+  return userId ? `${PDF_SESSION_STORAGE_KEY}:${userId}` : PDF_SESSION_STORAGE_KEY;
+}
 
 function isUnavailableSessionError(error: unknown): error is PdfApiError {
   const status = (error as PdfApiError | null)?.status;
-  return status === 404 || status === 410;
+  // 403 = session belongs to another user (common after switching mock/dev accounts)
+  return status === 403 || status === 404 || status === 410;
 }
 
-export const PdfAssemblyView: React.FC = () => {
+export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' }) => {
+  const storageKey = getPdfSessionStorageKey(userId);
   const [sessionId, setSessionId] = useState<string | null>(
-    () => sessionStorage.getItem('pdf-active-session'),
+    () => sessionStorage.getItem(storageKey),
   );
   const [isSourceBrowserCollapsed, setIsSourceBrowserCollapsed] = useState(false);
   const [assemblyPanePercent, setAssemblyPanePercent] = useState(
@@ -64,26 +76,32 @@ export const PdfAssemblyView: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const workspacePanelsRef = useRef<HTMLDivElement>(null);
 
-  const createSession = useCreatePdfSession();
-  const { data: session, error: sessionError } = usePdfSession(sessionId);
-  const uploadFiles = useUploadPdfFiles();
-  const { data: activeSessions } = useActivePdfSessions();
-  const removePdfFile = useRemovePdfFile();
+  const createSession = useCreatePdfSession(userId);
+  const { data: session, error: sessionError } = usePdfSession(sessionId, userId);
+  const uploadFiles = useUploadPdfFiles(userId);
+  const { data: activeSessions } = useActivePdfSessions(userId);
+  const removePdfFile = useRemovePdfFile(userId);
+
+  useEffect(() => {
+    // Remove the legacy cross-user key. User-scoped keys are the only source
+    // of persisted PDF session identity from this point forward.
+    if (userId) sessionStorage.removeItem(PDF_SESSION_STORAGE_KEY);
+  }, [userId]);
 
   useEffect(() => {
     if (sessionId) return;
     if (activeSessions && activeSessions.length > 0) {
       const mostRecent = activeSessions[0];
       setSessionId(mostRecent.id);
-      sessionStorage.setItem('pdf-active-session', mostRecent.id);
+      sessionStorage.setItem(storageKey, mostRecent.id);
     }
-  }, [sessionId, activeSessions]);
+  }, [sessionId, activeSessions, storageKey]);
 
   useEffect(() => {
     if (!sessionId || !isUnavailableSessionError(sessionError)) return;
-    sessionStorage.removeItem('pdf-active-session');
+    sessionStorage.removeItem(storageKey);
     setSessionId(null);
-  }, [sessionError, sessionId]);
+  }, [sessionError, sessionId, storageKey]);
 
   const conversionJobs = useMemo<PdfConversionJob[]>(() => {
     const serverJobs = session?.conversionJobs ?? [];
@@ -134,7 +152,7 @@ export const PdfAssemblyView: React.FC = () => {
       const result = await createSession.mutateAsync({});
       activeSessionId = result.sessionId;
       setSessionId(activeSessionId);
-      sessionStorage.setItem('pdf-active-session', activeSessionId);
+      sessionStorage.setItem(storageKey, activeSessionId);
     };
 
     try {
@@ -149,7 +167,7 @@ export const PdfAssemblyView: React.FC = () => {
         });
       } catch (error) {
         if (!isUnavailableSessionError(error)) throw error;
-        sessionStorage.removeItem('pdf-active-session');
+        sessionStorage.removeItem(storageKey);
         await startFreshSession();
         result = await uploadFiles.mutateAsync({
           sessionId: activeSessionId!,
@@ -163,7 +181,7 @@ export const PdfAssemblyView: React.FC = () => {
     } finally {
       setUploadProgress(null);
     }
-  }, [sessionId, createSession, uploadFiles]);
+  }, [sessionId, createSession, uploadFiles, storageKey]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -238,6 +256,7 @@ export const PdfAssemblyView: React.FC = () => {
   } = usePageManipulation({
     sessionId: sessionId ?? '',
     serverManifest,
+    userId,
   });
 
   const {
@@ -267,7 +286,7 @@ export const PdfAssemblyView: React.FC = () => {
       const result = await createSession.mutateAsync({});
 
       setSessionId(result.sessionId);
-      sessionStorage.setItem('pdf-active-session', result.sessionId);
+      sessionStorage.setItem(storageKey, result.sessionId);
       setUploadResults([]);
       setDismissedConversionIds(new Set());
       setUploadProgress(null);
@@ -285,7 +304,7 @@ export const PdfAssemblyView: React.FC = () => {
     } catch {
       // Mutation errors are surfaced by the existing session error UI.
     }
-  }, [clearSelection, createSession, ensureManifestSaved]);
+  }, [clearSelection, createSession, ensureManifestSaved, storageKey]);
 
   const handleExportComplete = useCallback(() => {
     void handleStartNewSession();
@@ -793,7 +812,7 @@ export const PdfAssemblyView: React.FC = () => {
         <PagePreviewModal
           isOpen={!!previewPageId}
           pageId={previewPageId}
-          fileUrl={`/api/pdf/sessions/${sessionId}/files/${previewPage.fileId}`}
+          fileUrl={pdfFileUrl(sessionId, previewPage.fileId)}
           sourcePageIndex={previewPage.sourcePageIndex}
           rotation={previewPage.rotation}
           sourceFileName={previewFileName}

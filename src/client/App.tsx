@@ -177,6 +177,7 @@ function App() {
     authenticatedUser,
     can,
     isInAnyGroup,
+    userId,
     isSuperAdmin,
     permissionsLoaded,
     workItems,
@@ -709,7 +710,7 @@ function App() {
                 <DesktopOnlyGate>
                   <Suspense fallback={<div data-testid="pdf-tools-loading"><ViewSkeleton /></div>}>
                     <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                      <PdfAssemblyView />
+                      <PdfAssemblyView key={userId} userId={userId} />
                     </div>
                   </Suspense>
                 </DesktopOnlyGate>

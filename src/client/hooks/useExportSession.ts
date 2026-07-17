@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { apexProjectHeaders } from '../utils/apiFetch';
 
 interface ExportSessionParams {
   sessionId: string;
@@ -33,7 +34,7 @@ export function useExportSession() {
       const res = await fetch(`/api/pdf/sessions/${sessionId}/export`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apexProjectHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       });
 
