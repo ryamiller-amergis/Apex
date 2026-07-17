@@ -243,7 +243,8 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
             <div className={styles.errorCard} data-testid="pdf-session-limit">
               <span className={styles.errorIcon}>⚠️</span>
               <p className={styles.errorText}>
-                Maximum 3 concurrent sessions reached. Close an existing session first.
+                Too many open PDF sessions. Starting a new session should free space
+                automatically — try New session again, or refresh the page.
               </p>
             </div>
           )}
@@ -347,7 +348,8 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
         <div className={styles.errorCard} data-testid="pdf-session-limit">
           <span className={styles.errorIcon}>⚠️</span>
           <p className={styles.errorText}>
-            Maximum 3 concurrent sessions reached. Close an existing session first.
+            Too many open PDF sessions. Starting a new session should free space
+            automatically — try New session again, or refresh the page.
           </p>
         </div>
       )}

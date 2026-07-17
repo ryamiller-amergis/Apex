@@ -16,6 +16,7 @@ import {
   removeFile,
   assembleAndExport,
   cleanupSessionFiles,
+  closeSession,
 } from '../services/pdfAssemblyService';
 import {
   PDF_ERROR_CODES,
@@ -98,9 +99,12 @@ router.get('/sessions', async (req, res): Promise<void> => {
 router.post('/sessions', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { projectId } = req.body as { projectId?: string };
+    const { projectId, replaceSessionId } = req.body as {
+      projectId?: string;
+      replaceSessionId?: string;
+    };
 
-    const result = await createSession(userId, projectId);
+    const result = await createSession(userId, projectId, { replaceSessionId });
 
     res.status(201).json({
       sessionId: result.sessionId,
@@ -115,6 +119,26 @@ router.post('/sessions', async (req, res): Promise<void> => {
       return;
     }
     console.error('[pdf] POST /sessions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── DELETE /api/pdf/sessions/:sessionId ───────────────────────────────────────
+
+router.delete('/sessions/:sessionId', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+
+    const closed = await closeSession(sessionId, userId);
+    if (!closed) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    res.status(204).end();
+  } catch (err) {
+    console.error('[pdf] DELETE session error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

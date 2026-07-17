@@ -413,6 +413,25 @@
   cursor: not-allowed;
 }
 
+.local-dev-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.local-dev-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: var(--bg-secondary);
+}
+
 .completed-label {
   font-size: 0.8125rem;
   font-weight: 500;

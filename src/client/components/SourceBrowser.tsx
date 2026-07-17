@@ -323,7 +323,8 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
         <div className={styles['error-card']} data-testid="pdf-session-limit">
           <span className={styles['error-icon']}>⚠️</span>
           <p className={styles['error-text']}>
-            Maximum 3 concurrent sessions reached. Close an existing session first.
+            Too many open PDF sessions. Starting a new session should free space
+            automatically — try New session again, or refresh the page.
           </p>
         </div>
       )}

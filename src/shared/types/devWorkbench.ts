@@ -132,6 +132,31 @@ export interface StartDevSessionRequest {
   featureId?: string;
 }
 
+/** One file in a local-dev context pack (path relative to repo root). */
+export interface LocalDevContextFile {
+  name: string;
+  content: string;
+}
+
+/**
+ * Payload for GET /api/dev-workbench/local-dev-context — in-memory context pack
+ * for the client to ZIP and open in Cursor / VS Code (no cloud session created).
+ */
+export interface LocalDevContextResponse {
+  slug: string;
+  title: string;
+  files: LocalDevContextFile[];
+  prompt: string;
+}
+
+/** Query params for fetching a local-dev context pack. */
+export interface LocalDevContextRequest {
+  project: string;
+  workItemId?: number;
+  prdId?: string;
+  featureId?: string;
+}
+
 export type DevSessionStatus = 'setting_up' | 'in_progress' | 'conflict' | 'failed' | 'closed' | 'completed';
 export type DevSessionSetupPhase =
   | 'dependencies_preparing'

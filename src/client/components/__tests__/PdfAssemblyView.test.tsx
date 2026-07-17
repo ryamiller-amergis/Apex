@@ -554,7 +554,7 @@ describe('PdfAssemblyView', () => {
     fireEvent.click(screen.getByTestId('pdf-new-session'));
 
     await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(mockCreateSession).toHaveBeenCalledWith({ replaceSessionId: 'sess-wired' });
       expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-fresh');
     });
 

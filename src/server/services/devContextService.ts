@@ -4,7 +4,7 @@ import { db } from '../db/drizzle';
 import { prds, designDocs, testCases } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 
-function sanitizeSlug(input: string): string {
+export function sanitizeSlug(input: string): string {
   return input
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -81,7 +81,7 @@ export async function injectDevContextFiles(
   }
 }
 
-function resolveFeatureIndex(backlogJson: unknown, featureId: string): number | null {
+export function resolveFeatureIndex(backlogJson: unknown, featureId: string): number | null {
   if (!backlogJson || typeof backlogJson !== 'object') return null;
   const backlog = backlogJson as { epics?: Array<{ features?: Array<{ id?: string }> }> };
   let globalIdx = 0;
