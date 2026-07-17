@@ -92,7 +92,14 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
     if (canDeepLink) {
       if (writtenNote) setStatusNote(writtenNote);
       if (!desktopLink) return;
-      window.location.href = desktopLink;
+      // Use an anchor click instead of location.href so the page stays put and
+      // any last disk flush isn't interrupted by a navigation.
+      const anchor = document.createElement('a');
+      anchor.href = desktopLink;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
       setOpenAttempted(true);
       return;
     }
@@ -100,7 +107,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
     setPromptCopied(true);
     setStatusNote(
       writtenNote
-        ? `${writtenNote}. Kickoff prompt copied — paste it into VS Code chat.`
+        ? `${writtenNote} Kickoff prompt copied — paste it into VS Code chat.`
         : 'Kickoff prompt copied — paste it into VS Code chat.',
     );
     window.setTimeout(() => setPromptCopied(false), 2000);
@@ -114,10 +121,12 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
     try {
       let writtenNote: string | undefined;
       if (fsSupported) {
+        // Always confirm the folder so we don't silently write to a stale handle.
         const result = await writeLocalDevFilesToRepo(data.files, {
+          forcePick: true,
           extractPathHint: extractPath,
         });
-        writtenNote = `Context written to ${result.repoName} → ${result.extractPath}`;
+        writtenNote = `Wrote ${result.fileCount} files into ${result.repoName}/${result.extractPath}`;
       }
       finishInEditor(writtenNote);
     } catch (err) {
@@ -206,13 +215,15 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
             <div className={styles.primaryBlock}>
               {canDeepLink ? (
                 <p className={styles.lead}>
-                  Writes the context pack into your repo at <code>{extractPath}</code> and opens
-                  Cursor with the kickoff prompt prefilled.
+                  You&apos;ll pick your <strong>repository root</strong>. We write the context pack to{' '}
+                  <code>{extractPath}</code> (may be hidden in the IDE because it&apos;s gitignored),
+                  then open Cursor with the kickoff prompt.
                 </p>
               ) : (
                 <p className={styles.lead}>
-                  Writes the context pack into your repo at <code>{extractPath}</code> and copies
-                  the kickoff prompt. Open the repo in VS Code and paste it into chat.
+                  You&apos;ll pick your <strong>repository root</strong>. We write the context pack to{' '}
+                  <code>{extractPath}</code> (may be hidden in the IDE because it&apos;s gitignored)
+                  and copy the kickoff prompt — paste it into VS Code chat.
                 </p>
               )}
               <button
