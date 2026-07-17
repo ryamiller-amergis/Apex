@@ -16,6 +16,7 @@ import {
   clearStaleRun,
 } from './chatThreadRepository';
 import { expireOldSessions } from './pdfAssemblyService';
+import { recoverAnalyzingFeatureRequests } from './featureRequestAnalysisService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -309,6 +310,18 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   } catch (err) {
     console.error('[recovery] Failed to clean expired PDF sessions:', err);
+  }
+
+  try {
+    const featureRequestRecovered = await recoverAnalyzingFeatureRequests();
+    if (featureRequestRecovered > 0) {
+      recovered += featureRequestRecovered;
+      console.log(
+        `[recovery] Restarted ${featureRequestRecovered} feature-request analysis watcher(s)`,
+      );
+    }
+  } catch (err) {
+    console.error('[recovery] Failed to recover feature-request analysis:', err);
   }
 
   if (recovered > 0) {

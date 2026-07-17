@@ -10,6 +10,7 @@ import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
 import { PdfConversionStatus } from './PdfConversionStatus';
 import type { PdfUploadProgress } from '../hooks/usePdfSession';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import styles from './SourceBrowser.module.css';
 
 function formatBytes(bytes: number): string {
@@ -355,7 +356,7 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
               const isExpanded = expandedFileIds.has(f.fileId);
               const color = documentColors.get(f.fileId);
               const filePages = pagesByFile.get(f.fileId) ?? [];
-              const fileUrl = `/api/pdf/sessions/${sessionId}/files/${f.fileId}`;
+              const fileUrl = pdfFileUrl(sessionId, f.fileId);
 
               return (
                 <React.Fragment key={f.fileId}>

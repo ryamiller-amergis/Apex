@@ -253,6 +253,9 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({ title, hint, expand
 const SKILL_FIELDS = [
   { key: 'interviewSkillPath' as const, label: 'Interview Skill', desc: 'Guides the stakeholder interview process', emptyLabel: 'None (use default)' },
   { key: 'prdSkillPath' as const, label: 'PRD Skill', desc: 'Generates the product requirements document', emptyLabel: 'None (use default)' },
+  { key: 'adrInterviewSkillPath' as const, label: 'ADR Interview Skill', desc: 'Guides repository-grounded architecture decision interviews', emptyLabel: 'None (use adr-interview default)' },
+  { key: 'adrFinalizeSkillPath' as const, label: 'ADR Finalize Skill', desc: 'Generates the final MADR document', emptyLabel: 'None (use adr-finalize default)' },
+  { key: 'adrAssistantSkillPath' as const, label: 'ADR Assistant Skill', desc: 'Guides repository-grounded refinement of proposed ADRs', emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)' },
   { key: 'designPrototypeSkillPath' as const, label: 'Design Prototype Skill', desc: 'Guides HTML prototype generation from approved requirements', emptyLabel: 'None (use default)' },
   { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
   { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
@@ -269,6 +272,7 @@ const SKILL_FIELDS = [
 const MODEL_FIELDS = [
   { key: 'interviewModel' as const, label: 'Interview Model' },
   { key: 'prdModel' as const, label: 'PRD Model' },
+  { key: 'adrModel' as const, label: 'ADR Model' },
   { key: 'designDocModel' as const, label: 'Design Doc Model' },
   { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
   { key: 'testCaseModel' as const, label: 'Test Case Model' },
@@ -439,6 +443,9 @@ interface EditState {
   skillBranch: string;
   interviewSkillPath: string;
   prdSkillPath: string;
+  adrInterviewSkillPath: string;
+  adrFinalizeSkillPath: string;
+  adrAssistantSkillPath: string;
   designDocSkillPath: string;
   designDocAssistantSkillPath: string;
   designPrototypeSkillPath: string;
@@ -452,6 +459,7 @@ interface EditState {
   issueSkillPath: string;
   interviewModel: string;
   prdModel: string;
+  adrModel: string;
   designDocModel: string;
   designDocAssistantModel: string;
   designPrototypeModel: string;
@@ -492,10 +500,12 @@ const emptyEdit = (): EditState => ({
   id: null, project: '', friendlyName: '', isDefault: false,
   skillProvider: 'ado', skillRepo: '', skillBranch: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
+  adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
   technicalSkillPath: '', issueSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
+  adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
   technicalModel: '', issueModel: '',
@@ -645,6 +655,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
+      adrInterviewSkillPath: config.adrInterviewSkillPath ?? '',
+      adrFinalizeSkillPath: config.adrFinalizeSkillPath ?? '',
+      adrAssistantSkillPath: config.adrAssistantSkillPath ?? '',
       designDocSkillPath: config.designDocSkillPath ?? '',
       designDocAssistantSkillPath: config.designDocAssistantSkillPath ?? '',
       designPrototypeSkillPath: config.designPrototypeSkillPath ?? '',
@@ -658,6 +671,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       issueSkillPath: config.issueSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
+      adrModel: config.adrModel ?? '',
       designDocModel: config.designDocModel ?? '',
       designDocAssistantModel: config.designDocAssistantModel ?? '',
       designPrototypeModel: config.designPrototypeModel ?? '',
@@ -725,6 +739,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         skillBranch: edit.skillBranch.trim(),
         interviewSkillPath: edit.interviewSkillPath || null,
         prdSkillPath: edit.prdSkillPath || null,
+        adrInterviewSkillPath: edit.adrInterviewSkillPath || null,
+        adrFinalizeSkillPath: edit.adrFinalizeSkillPath || null,
+        adrAssistantSkillPath: edit.adrAssistantSkillPath || null,
         designDocSkillPath: edit.designDocSkillPath || null,
         designDocAssistantSkillPath: edit.designDocAssistantSkillPath || null,
         designPrototypeSkillPath: edit.designPrototypeSkillPath || null,
@@ -738,6 +755,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         issueSkillPath: edit.issueSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
+        adrModel: edit.adrModel || null,
         designDocModel: edit.designDocModel || null,
         designDocAssistantModel: edit.designDocAssistantModel || null,
         designPrototypeModel: edit.designPrototypeModel || null,

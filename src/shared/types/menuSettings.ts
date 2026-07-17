@@ -3,6 +3,7 @@ export type MenuItemKey =
   | 'planning'
   | 'cloudcost'
   | 'backlog'
+  | 'adr'
   | 'my-work'
   | 'standup'
   | 'ui-lab'
@@ -16,6 +17,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'planning', label: 'Planning' },
   { key: 'cloudcost', label: 'Cloud Cost' },
   { key: 'backlog', label: 'Interview' },
+  { key: 'adr', label: 'ADR' },
   { key: 'my-work', label: 'My Work' },
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },

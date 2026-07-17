@@ -8,6 +8,7 @@ interface AnnotationLayerProps {
   activeCommentId: string | null;
   onAddComment: (sectionKey: ReviewSectionKey, selector: TextSelector) => void;
   onCommentClick: (commentId: string) => void;
+  readOnly?: boolean;
   children: React.ReactNode;
 }
 
@@ -203,6 +204,7 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   activeCommentId,
   onAddComment,
   onCommentClick,
+  readOnly = false,
   children,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -306,6 +308,10 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   }, [highlightFingerprint, activeCommentId, onCommentClick, clearHighlights]);
 
   const handleMouseUp = useCallback(() => {
+    if (readOnly) {
+      setFloatingButton(null);
+      return;
+    }
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !containerRef.current) {
       setFloatingButton(null);
@@ -350,7 +356,7 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
       left: rect.left - containerRect.left + rect.width / 2,
       selector,
     });
-  }, []);
+  }, [readOnly]);
 
   const handleAddComment = useCallback(() => {
     if (!floatingButton) return;

@@ -7,12 +7,13 @@ export interface TextSelector {
 }
 
 export type ReviewCommentStatus = 'open' | 'resolved';
-export type ReviewSectionKey = 'prd' | 'design' | 'tech_spec' | 'assumptions' | 'backlog';
+export type ReviewDocumentType = 'prd' | 'design_doc' | 'adr';
+export type ReviewSectionKey = 'prd' | 'design' | 'tech_spec' | 'assumptions' | 'backlog' | 'adr';
 
 export interface ReviewComment {
   id: string;
   documentId: string;
-  documentType: 'prd' | 'design_doc';
+  documentType: ReviewDocumentType;
   sectionKey: ReviewSectionKey;
   authorUserId: string;
   authorDisplayName?: string;

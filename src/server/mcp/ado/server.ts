@@ -20,6 +20,7 @@ import { getThread } from '../../services/chatAgentService';
 import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
+import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
@@ -60,6 +61,26 @@ export async function handleUpdatePrd(params: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
+export async function handleUpdateAdr(params: {
+  threadId: string;
+  adrId: string;
+  content: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  try {
+    await stageAdrProposedContent(params.adrId, thread.userId, params.threadId, params.content);
+    console.log(`[MCP] update_adr: staged content for adr ${params.adrId}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`);
     return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
@@ -325,6 +346,17 @@ export function createAdoMcpServer(): McpServer {
       content: z.string().describe('The full new content for the section (markdown for content; JSON string for backlog)'),
     },
     async (params) => handleUpdatePrd(params),
+  );
+
+  server.tool(
+    'update_adr',
+    'Stage a complete revised Architecture Decision Record for explicit author review. This writes only proposed content and never changes the live ADR or its status.',
+    {
+      threadId: z.string().describe('The ADR assistant thread ID from kickoff-context.md'),
+      adrId: z.string().describe('The ADR ID from kickoff-context.md'),
+      content: z.string().describe('The complete revised ADR markdown, including frontmatter'),
+    },
+    async (params) => handleUpdateAdr(params),
   );
 
   server.tool(

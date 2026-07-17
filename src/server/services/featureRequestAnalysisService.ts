@@ -1,10 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { featureRequests, chatThreads } from '../db/schema';
+import { adrs, featureRequestAdrs, featureRequests, chatThreads } from '../db/schema';
 import {
   isThreadIdle,
+  hydrateThread,
   createThread as createChatThread,
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
@@ -13,6 +14,8 @@ import type { WorkItemType } from '../../shared/types/featureRequest';
 
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 720;
+const MAX_LINKED_ADR_CONTEXT_CHARS = 24_000;
+const MAX_SINGLE_ADR_CHARS = 8_000;
 const TYPE_CONFIG: Record<
   WorkItemType,
   {
@@ -144,6 +147,41 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
   } else if (type === 'issue') {
     contextLines.push('Analysis focus: user impact, likely severity, reproducibility clues, operational risk, and urgency.');
   }
+  if (type !== 'issue') {
+    const linkedAdrs = await db
+      .select({
+        id: adrs.id,
+        title: adrs.title,
+        project: adrs.project,
+        repo: adrs.repo,
+        slug: adrs.slug,
+        content: adrs.content,
+      })
+      .from(featureRequestAdrs)
+      .innerJoin(adrs, eq(featureRequestAdrs.adrId, adrs.id))
+      .where(and(
+        eq(featureRequestAdrs.featureRequestId, requestId),
+        eq(adrs.status, 'accepted'),
+      ));
+    if (linkedAdrs.length > 0) {
+      contextLines.push('', '## Linked accepted ADRs (architectural source context)');
+      let remaining = MAX_LINKED_ADR_CONTEXT_CHARS;
+      for (const adr of linkedAdrs) {
+        if (remaining <= 0) break;
+        const header = [
+          `### ADR: ${adr.title}`,
+          `ADR ID: ${adr.id}`,
+          `Project: ${adr.project}`,
+          `Repository: ${adr.repo}`,
+          `Slug: ${adr.slug ?? '(none)'}`,
+          'Accepted ADR markdown:',
+        ].join('\n');
+        const section = `${header}\n${adr.content.slice(0, MAX_SINGLE_ADR_CHARS)}`.slice(0, remaining);
+        contextLines.push(section);
+        remaining -= section.length;
+      }
+    }
+  }
   const freeformContext = contextLines.join('\n');
 
   const thread = await createChatThread('system', {
@@ -242,4 +280,63 @@ export async function reanalyzeFeatureRequest(requestId: string): Promise<void> 
     aiThreadId: null,
   });
   await autoStartFeatureRequestAnalysis(requestId);
+}
+
+function resolveRequestType(type: string | null | undefined): WorkItemType {
+  const requested = type as WorkItemType;
+  return TYPE_CONFIG[requested] ? requested : 'feature';
+}
+
+/**
+ * Restart watchers (or re-kick dead agents) for feature requests stuck in
+ * `analyzing` after a server restart killed the in-memory watcher.
+ */
+export async function recoverAnalyzingFeatureRequests(): Promise<number> {
+  const analyzing = await db.query.featureRequests.findMany({
+    where: eq(featureRequests.aiStatus, 'analyzing'),
+    columns: { id: true, type: true, aiThreadId: true },
+  });
+
+  let recovered = 0;
+  for (const request of analyzing) {
+    if (isWatcherActive(request.id)) continue;
+
+    const type = resolveRequestType(request.type);
+    if (!request.aiThreadId) {
+      console.log(`[featureRequestAnalysis] Recovery restart (no thread) — requestId=${request.id}`);
+      await autoStartFeatureRequestAnalysis(request.id);
+      recovered += 1;
+      continue;
+    }
+
+    const ok = await hydrateThread(request.aiThreadId);
+    if (!ok) {
+      console.warn(
+        `[featureRequestAnalysis] Recovery hydrate failed — marking failed (requestId=${request.id}, threadId=${request.aiThreadId})`,
+      );
+      await updateAiFields(request.id, { aiStatus: 'failed' });
+      recovered += 1;
+      continue;
+    }
+
+    const workspaceDir = await getWorkspaceDir(request.aiThreadId);
+    const hasOutput = workspaceDir ? Boolean(readOutputFromWorkspace(workspaceDir, type)) : false;
+
+    if (isThreadIdle(request.aiThreadId) && !hasOutput) {
+      console.log(
+        `[featureRequestAnalysis] Recovery re-kick dead agent — requestId=${request.id} threadId=${request.aiThreadId}`,
+      );
+      await autoStartFeatureRequestAnalysis(request.id);
+      recovered += 1;
+      continue;
+    }
+
+    startWatcher(request.id, request.aiThreadId, type);
+    recovered += 1;
+    console.log(
+      `[featureRequestAnalysis] Recovery restarted watcher — requestId=${request.id} threadId=${request.aiThreadId}`,
+    );
+  }
+
+  return recovered;
 }

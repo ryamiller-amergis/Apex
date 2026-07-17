@@ -30,7 +30,7 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -479,7 +479,28 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    if (kickoff.assistantType === 'prd') {
+    if (kickoff.assistantType === 'adr') {
+      const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
+      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# ADR session identifiers`,
+        `Use these exact values when calling MCP tools:`,
+        `  adr_id:    ${adrId}`,
+        `  thread_id: ${threadId}`,
+        ``,
+        `# ADR context and repository grounding`,
+        `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
+        `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
+        `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
+        `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
+      );
+    } else if (kickoff.assistantType === 'prd') {
       // Extract prd_id and thread_id from the freeform context so the agent
       // has them directly in the system prompt — no file-read required.
       const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
@@ -1255,11 +1276,16 @@ function resetIdleTimer(state: ThreadState) {
 }
 
 async function checkIsInterviewThread(threadId: string): Promise<boolean> {
-  const row = await db.query.interviews.findFirst({
+  const interviewRow = await db.query.interviews.findFirst({
     where: eq(interviews.chatThreadId, threadId),
     columns: { id: true },
   });
-  return row !== undefined;
+  if (interviewRow) return true;
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  return adrRow !== undefined;
 }
 
 /**
@@ -1270,6 +1296,12 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
  * ON DELETE CASCADE FK would silently destroy the parent document.
  */
 async function threadBacksDocument(threadId: string): Promise<string | null> {
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  if (adrRow) return 'adr';
+
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
     columns: { id: true },
@@ -2809,6 +2841,14 @@ export function readOutputPrd(threadId: string): string | null {
   if (named) return fs.readFileSync(named, 'utf-8');
   const legacy = path.join(outputDir, 'PRD.md');
   return fs.existsSync(legacy) ? fs.readFileSync(legacy, 'utf-8') : null;
+}
+
+/** Read a generated MADR document from the ephemeral workspace. */
+export function readOutputAdr(threadId: string): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const file = findOutputFile(outputDir, /\.adr\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**

@@ -1,10 +1,12 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
+  adrs,
   appPermissions,
   appRolePermissions,
   appUserRoles,
   appUsers,
+  featureRequestAdrs,
   featureRequests,
   userProjectAssignments,
 } from '../db/schema';
@@ -14,6 +16,7 @@ import type {
   FeatureRequestStatus,
   FeatureRequestPriority,
   FeatureRequestRisk,
+  LinkedAdrSummary,
   WorkItemType,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
@@ -45,7 +48,7 @@ interface FeatureRequestRow {
   submitterName?: string | null;
 }
 
-function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
+function toFeatureRequest(row: FeatureRequestRow, linkedAdrs: LinkedAdrSummary[] = []): FeatureRequest {
   return {
     id: row.id,
     type: row.type as WorkItemType,
@@ -68,7 +71,47 @@ function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     submitterName: row.submitterName ?? undefined,
+    linkedAdrs,
   };
+}
+
+function httpError(message: string, status: number): Error {
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = status;
+  return error;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function loadLinkedAdrs(requestIds: string[]): Promise<Map<string, LinkedAdrSummary[]>> {
+  const result = new Map<string, LinkedAdrSummary[]>();
+  if (requestIds.length === 0) return result;
+  const rows = await db
+    .select({
+      featureRequestId: featureRequestAdrs.featureRequestId,
+      id: adrs.id,
+      title: adrs.title,
+      project: adrs.project,
+      repo: adrs.repo,
+      slug: adrs.slug,
+      status: adrs.status,
+    })
+    .from(featureRequestAdrs)
+    .innerJoin(adrs, eq(featureRequestAdrs.adrId, adrs.id))
+    .where(inArray(featureRequestAdrs.featureRequestId, requestIds));
+  for (const row of rows) {
+    const linked = result.get(row.featureRequestId) ?? [];
+    linked.push({
+      id: row.id,
+      title: row.title,
+      project: row.project,
+      repo: row.repo,
+      slug: row.slug,
+      status: 'accepted',
+    });
+    result.set(row.featureRequestId, linked);
+  }
+  return result;
 }
 
 // ── createFeatureRequest ──────────────────────────────────────────────────────
@@ -76,8 +119,58 @@ function toFeatureRequest(row: FeatureRequestRow): FeatureRequest {
 export async function createFeatureRequest(
   userId: string,
   project: string,
-  data: { type: WorkItemType; title: string; request: string; advantage?: string | null },
+  data: { type: WorkItemType; title: string; request: string; advantage?: string | null; adrIds?: string[] },
 ): Promise<FeatureRequest> {
+  const adrIds = [...new Set(data.adrIds ?? [])];
+  if (adrIds.some((id) => !UUID_PATTERN.test(id))) {
+    throw httpError('adrIds must contain valid UUIDs', 400);
+  }
+  if (data.type === 'issue' && adrIds.length > 0) {
+    throw httpError('ADRs can only be linked to feature or technical requests', 400);
+  }
+  if (adrIds.length > 0) {
+    return db.transaction(async (tx) => {
+      const linkedRows = await tx
+        .select({
+          id: adrs.id,
+          title: adrs.title,
+          project: adrs.project,
+          repo: adrs.repo,
+          slug: adrs.slug,
+          status: adrs.status,
+        })
+        .from(adrs)
+        .where(and(
+          inArray(adrs.id, adrIds),
+          eq(adrs.status, 'accepted'),
+          eq(adrs.project, project),
+        ));
+      if (linkedRows.length !== adrIds.length) {
+        throw httpError('Every linked ADR must exist, be accepted, and belong to the request project', 400);
+      }
+      const [row] = await tx.insert(featureRequests).values({
+        type: data.type,
+        title: data.title,
+        request: data.request,
+        advantage: data.advantage ?? null,
+        submittedBy: userId,
+        sourceProject: project,
+        status: 'new',
+        aiStatus: 'pending',
+      }).returning();
+      await tx.insert(featureRequestAdrs).values(
+        adrIds.map((adrId) => ({ featureRequestId: row.id, adrId })),
+      );
+      return toFeatureRequest(row, linkedRows.map((adr) => ({
+        id: adr.id,
+        title: adr.title,
+        project: adr.project,
+        repo: adr.repo,
+        slug: adr.slug,
+        status: 'accepted',
+      })));
+    });
+  }
   const [row] = await db
     .insert(featureRequests)
     .values({
@@ -126,7 +219,8 @@ export async function listFeatureRequests(): Promise<FeatureRequest[]> {
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
     .orderBy(sql`${featureRequests.rank} NULLS LAST`, desc(featureRequests.createdAt));
 
-  return rows.map(toFeatureRequest);
+  const linksByRequest = await loadLinkedAdrs(rows.map((row) => row.id));
+  return rows.map((row) => toFeatureRequest(row, linksByRequest.get(row.id) ?? []));
 }
 
 // ── getFeatureRequest ─────────────────────────────────────────────────────────
@@ -161,7 +255,23 @@ export async function getFeatureRequest(id: string): Promise<FeatureRequest | nu
     .where(eq(featureRequests.id, id));
 
   if (rows.length === 0) return null;
-  return toFeatureRequest(rows[0]);
+  const linksByRequest = await loadLinkedAdrs([rows[0].id]);
+  return toFeatureRequest(rows[0], linksByRequest.get(rows[0].id) ?? []);
+}
+
+export async function listAcceptedAdrsForProject(project: string): Promise<LinkedAdrSummary[]> {
+  const rows = await db
+    .select({
+      id: adrs.id,
+      title: adrs.title,
+      project: adrs.project,
+      repo: adrs.repo,
+      slug: adrs.slug,
+    })
+    .from(adrs)
+    .where(and(eq(adrs.project, project), eq(adrs.status, 'accepted')))
+    .orderBy(desc(adrs.updatedAt));
+  return rows.map((row) => ({ ...row, status: 'accepted' }));
 }
 
 // ── updateFeatureRequest ──────────────────────────────────────────────────────

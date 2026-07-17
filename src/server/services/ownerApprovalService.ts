@@ -1,6 +1,6 @@
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { documentOwnerApprovals, interviews, prds, designDocs, designPrototypes } from '../db/schema';
+import { adrs, documentOwnerApprovals, interviews, prds, designDocs, designPrototypes } from '../db/schema';
 import type { DocumentOwnerApproval, OwnerApprovalDocumentType, OwnerApprovalStatus } from '../../shared/types/approvals';
 
 export async function getOwnerApproval(
@@ -85,6 +85,13 @@ export async function resolveDocumentOwnerId(
   documentType: OwnerApprovalDocumentType,
 ): Promise<string | null> {
   switch (documentType) {
+    case 'adr': {
+      const adrRow = await db.query.adrs.findFirst({
+        where: eq(adrs.id, documentId),
+        columns: { authorId: true },
+      });
+      return adrRow?.authorId ?? null;
+    }
     case 'prd': {
       const prdRow = await db.query.prds.findFirst({
         where: eq(prds.id, documentId),

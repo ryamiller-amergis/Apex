@@ -7,6 +7,12 @@ import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hoo
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
+import {
+  adrAttachmentFileName,
+  buildFeatureRequestInterviewPrefillText,
+  type FeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
+import type { Adr } from '../../shared/types/adr';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
@@ -121,9 +127,10 @@ interface InterviewAgentMessageProps {
   questionOffset?: number;
   interviewLocked?: boolean;
   alreadyAnswered?: boolean;
+  fullWidth?: boolean;
 }
 
-const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false }) => {
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false }) => {
   const parts = parseAgentMessage(text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -180,7 +187,7 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
 
   if (choiceBlocks.length === 0) {
     return (
-      <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+      <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
         <div className={styles.bubbleActions}>
           <ReadAloudButton text={text} />
         </div>
@@ -191,7 +198,7 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
 
   let questionCounter = questionOffset;
   return (
-    <div className={styles.assistantBubble}>
+    <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
       <div className={styles.bubbleActions}>
         <ReadAloudButton text={text} />
       </div>
@@ -236,27 +243,8 @@ const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onS
 
 // ── New interview compose view ────────────────────────────────────────────────
 
-interface FeatureRequestPrefill {
-  id: string;
-  title: string;
-  request: string;
-  advantage: string;
-}
-
 interface NewInterviewLocationState {
-  featureRequest?: FeatureRequestPrefill;
-}
-
-function buildFeatureRequestPrefill(featureRequest?: FeatureRequestPrefill): string {
-  if (!featureRequest) return '';
-  return [
-    'This interview originated from a feature request.',
-    '',
-    featureRequest.request,
-    '',
-    'Advantage:',
-    featureRequest.advantage,
-  ].join('\n');
+  featureRequest?: FeatureRequestInterviewPrefill;
 }
 
 const NewInterviewCompose: React.FC = () => {
@@ -264,7 +252,7 @@ const NewInterviewCompose: React.FC = () => {
   const location = useLocation();
   const featureRequest = (location.state as NewInterviewLocationState | null)?.featureRequest;
   const { selectedProject, selectedSkillSettingsId } = useAppShell();
-  const [input, setInput] = useState(() => buildFeatureRequestPrefill(featureRequest));
+  const [input, setInput] = useState(() => buildFeatureRequestInterviewPrefillText(featureRequest));
   const [title, setTitle] = useState(() => featureRequest?.title ?? '');
   const [titleTouched, setTitleTouched] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -276,6 +264,7 @@ const NewInterviewCompose: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
   const featureRequestIdRef = useRef(featureRequest?.id);
+  const linkedAdrSeedDoneRef = useRef(false);
 
   const [selectedSkillOption, setSelectedSkillOption] = useState<InterviewSkillOption | null>(null);
 
@@ -322,6 +311,7 @@ const NewInterviewCompose: React.FC = () => {
     attachments,
     attachmentError,
     addFiles,
+    addTextAttachments,
     removeAttachment,
     clearAttachments,
   } = useChatAttachments();
@@ -331,6 +321,41 @@ const NewInterviewCompose: React.FC = () => {
   const startChat = useStartChat();
   const createInterview = useCreateInterview();
   const { mutateAsync: linkFeatureRequestInterview } = useLinkFeatureRequestInterview();
+
+  useEffect(() => {
+    if (linkedAdrSeedDoneRef.current) return;
+    const linkedAdrs = featureRequest?.linkedAdrs ?? [];
+    if (linkedAdrs.length === 0) return;
+    linkedAdrSeedDoneRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const results = await Promise.all(
+          linkedAdrs.map(async (adr) => {
+            const res = await fetch(`/api/adr/${adr.id}`, { credentials: 'include' });
+            if (!res.ok) return null;
+            const body = (await res.json()) as Adr;
+            if (!body.content?.trim()) return null;
+            return {
+              name: adrAttachmentFileName(adr),
+              content: body.content,
+              type: 'text/markdown',
+            };
+          }),
+        );
+        if (cancelled) return;
+        const files = results.filter((file): file is NonNullable<typeof file> => file != null);
+        if (files.length > 0) addTextAttachments(files);
+      } catch (err) {
+        console.error('[InterviewChatView] Failed to seed linked ADR attachments:', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [featureRequest?.linkedAdrs, addTextAttachments]);
 
   useEffect(() => {
     const el = textareaRef.current;

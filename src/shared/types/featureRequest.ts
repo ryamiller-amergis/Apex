@@ -28,6 +28,15 @@ export const FEATURE_REQUEST_RISKS: FeatureRequestRisk[] = [
   'low', 'medium', 'high',
 ];
 
+export interface LinkedAdrSummary {
+  id: string;
+  title: string;
+  project: string;
+  repo: string;
+  slug: string | null;
+  status: 'accepted';
+}
+
 export interface FeatureRequest {
   id: string;
   type: WorkItemType;
@@ -51,6 +60,7 @@ export interface FeatureRequest {
   updatedAt: string;
   /** Joined from app_users for display */
   submitterName?: string;
+  linkedAdrs: LinkedAdrSummary[];
 }
 
 export interface CreateFeatureRequestDTO {
@@ -59,6 +69,7 @@ export interface CreateFeatureRequestDTO {
   request: string;
   advantage?: string | null;
   project: string;
+  adrIds?: string[];
 }
 
 export interface UpdateFeatureRequestDTO {

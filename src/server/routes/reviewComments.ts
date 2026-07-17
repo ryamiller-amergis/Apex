@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { requireAnyPermission } from '../middleware/rbac';
+import type { RequestHandler } from 'express';
+import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import {
   createComment,
@@ -10,15 +11,22 @@ import {
   getUnresolvedCount,
   deleteComment,
 } from '../services/reviewCommentService';
-import type { CreateReviewCommentRequest, CreateReviewReplyRequest } from '../../shared/types/reviewComments';
+import type { CreateReviewCommentRequest, CreateReviewReplyRequest, ReviewDocumentType } from '../../shared/types/reviewComments';
 
 const router = Router();
 
-const validDocumentTypes = new Set(['prd', 'design_doc']);
+const validDocumentTypes = new Set<ReviewDocumentType>(['prd', 'design_doc', 'adr']);
 
 function permissionForDocType(docType: string): string {
-  return docType === 'design_doc' ? 'design-docs:review' : 'prds:review';
+  return docType === 'design_doc'
+    ? 'design-docs:review'
+    : docType === 'adr'
+      ? 'adr:review'
+      : 'prds:review';
 }
+
+const requireDocumentReviewPermission: RequestHandler = (req, res, next) =>
+  requirePermission(permissionForDocType(req.params.documentType))(req, res, next);
 
 router.post('/:commentId/replies', async (req, res, next) => {
   try {
@@ -36,14 +44,14 @@ router.post('/:commentId/replies', async (req, res, next) => {
 
 router.get(
   '/:documentType/:documentId',
-  requireAnyPermission('prds:review', 'design-docs:review'),
+  requireDocumentReviewPermission,
   async (req, res, next) => {
     try {
       const { documentType, documentId } = req.params;
-      if (!validDocumentTypes.has(documentType)) {
+      if (!validDocumentTypes.has(documentType as ReviewDocumentType)) {
         return res.status(400).json({ error: 'Invalid document type' });
       }
-      const comments = await getComments(documentId, documentType as 'prd' | 'design_doc');
+      const comments = await getComments(documentId, documentType as ReviewDocumentType);
       res.json(comments);
     } catch (err) {
       next(err);
@@ -53,12 +61,12 @@ router.get(
 
 router.post(
   '/:documentType/:documentId',
-  requireAnyPermission('prds:review', 'design-docs:review'),
+  requireDocumentReviewPermission,
   async (req, res, next) => {
     try {
       const userId = getUserId(req);
       const { documentType, documentId } = req.params;
-      if (!validDocumentTypes.has(documentType)) {
+      if (!validDocumentTypes.has(documentType as ReviewDocumentType)) {
         return res.status(400).json({ error: 'Invalid document type' });
       }
       const { sectionKey, body, selector } = req.body as CreateReviewCommentRequest;
@@ -67,7 +75,7 @@ router.post(
       }
       const comment = await createComment(
         documentId,
-        documentType as 'prd' | 'design_doc',
+        documentType as ReviewDocumentType,
         sectionKey,
         userId,
         body,
@@ -115,10 +123,10 @@ router.get(
   async (req, res, next) => {
     try {
       const { documentType, documentId } = req.params;
-      if (!validDocumentTypes.has(documentType)) {
+      if (!validDocumentTypes.has(documentType as ReviewDocumentType)) {
         return res.status(400).json({ error: 'Invalid document type' });
       }
-      const cnt = await getUnresolvedCount(documentId, documentType as 'prd' | 'design_doc');
+      const cnt = await getUnresolvedCount(documentId, documentType as ReviewDocumentType);
       res.json({ count: cnt });
     } catch (err) {
       next(err);

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   FeatureRequest,
   CreateFeatureRequestDTO,
+  LinkedAdrSummary,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
 
@@ -20,6 +21,19 @@ export function useFeatureRequests() {
     queryKey: ['feature-requests'],
     queryFn: () => apiFetch('/api/feature-requests?project=Apex'),
     staleTime: 15_000,
+    refetchInterval: (query) =>
+      query.state.data?.some((fr) => fr.aiStatus === 'analyzing' || fr.aiStatus === 'pending')
+        ? 5_000
+        : false,
+  });
+}
+
+export function useAvailableFeatureRequestAdrs(project: string, enabled: boolean) {
+  return useQuery<LinkedAdrSummary[]>({
+    queryKey: ['feature-request-adrs', project],
+    queryFn: () => apiFetch(`/api/feature-requests/available-adrs?project=${encodeURIComponent(project)}`),
+    enabled: enabled && !!project,
+    staleTime: 30_000,
   });
 }
 

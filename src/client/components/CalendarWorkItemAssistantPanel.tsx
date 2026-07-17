@@ -350,7 +350,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
         <div className={`${styles.resizeHandle} ${styles.resizeBottom}${resizeDir === 'bottom' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom')}/>
         <div className={`${styles.resizeHandle} ${styles.resizeBL}    ${resizeDir === 'bottom-left'  ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-left')} />
         <div className={`${styles.resizeHandle} ${styles.resizeBR}    ${resizeDir === 'bottom-right' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-right')} />
-      
+
 
         <div
           className={`${styles.header} ${styles.headerDraggable}`}

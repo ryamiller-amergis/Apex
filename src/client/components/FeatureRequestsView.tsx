@@ -26,6 +26,10 @@ import {
   FEATURE_REQUEST_RISKS,
   WORK_ITEM_TYPES,
 } from '../../shared/types/featureRequest';
+import {
+  isInterviewableWorkItemType,
+  toFeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
 import { FeatureRequestDetailPanel } from './FeatureRequestDetailPanel';
 import { FeatureRequestModal } from './FeatureRequestModal';
 import {
@@ -140,8 +144,13 @@ export const FeatureRequestsView: React.FC = () => {
     isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
   const showActionsColumn =
     canManage ||
-    (activeType === 'feature' &&
-      (canKickOff || Boolean(requests?.some((fr) => fr.type === 'feature' && fr.interviewId))));
+    (isInterviewableWorkItemType(activeType) &&
+      (canKickOff ||
+        Boolean(
+          requests?.some(
+            (fr) => isInterviewableWorkItemType(fr.type) && fr.interviewId,
+          ),
+        )));
 
   useEffect(() => {
     if (openActionMenuId === null) return;
@@ -350,7 +359,7 @@ export const FeatureRequestsView: React.FC = () => {
                     index={idx}
                     total={sorted.length}
                     canManage={canManage}
-                    canKickOff={activeType === 'feature' && canKickOff}
+                    canKickOff={isInterviewableWorkItemType(activeType) && canKickOff}
                     showActions={showActionsColumn}
                     showRank={canManage && sortMode === 'rank'}
                     isDragging={dragIndex === idx}
@@ -396,12 +405,7 @@ export const FeatureRequestsView: React.FC = () => {
                       setOpenActionMenuId(null);
                       navigate('/backlog/interview/new', {
                         state: {
-                          featureRequest: {
-                            id: request.id,
-                            title: request.title,
-                            request: request.request,
-                            advantage: request.advantage ?? '',
-                          },
+                          featureRequest: toFeatureRequestInterviewPrefill(request),
                         },
                       });
                     }}
@@ -528,8 +532,8 @@ const FeatureRequestRow: React.FC<RowProps> = ({
     .filter(Boolean)
     .join(' ');
 
-  const showKickOff = canKickOff && !fr.interviewId;
-  const showViewInterview = Boolean(fr.interviewId);
+  const showKickOff = canKickOff && isInterviewableWorkItemType(fr.type) && !fr.interviewId;
+  const showViewInterview = isInterviewableWorkItemType(fr.type) && Boolean(fr.interviewId);
   const hasMenuItems = canManage || showKickOff || showViewInterview;
 
   return (

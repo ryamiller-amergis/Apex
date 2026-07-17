@@ -10,6 +10,7 @@ import { Grid, type GridImperativeAPI } from 'react-window';
 import { PageThumbnail } from './PageThumbnail';
 import { ManipulationToolbar } from './ManipulationToolbar';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import styles from './AssemblyLane.module.css';
 
 // PageThumbnail is 200px wide. Grid cells include 8px of padding on each side,
@@ -136,7 +137,7 @@ function ThumbnailCell({
   const assemblyPosition = index + 1;
   const sourceFileName = fileNameMap.get(page.fileId) ?? 'Unknown';
   const originalPageNumber = page.sourcePageIndex + 1;
-  const fileUrl = `/api/pdf/sessions/${sessionId}/files/${page.fileId}`;
+  const fileUrl = pdfFileUrl(sessionId, page.fileId);
   const isThisDropTarget = dropTargetId === page.pageId;
   const docColor = documentColors.get(page.fileId);
 

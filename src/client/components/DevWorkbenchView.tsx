@@ -1,7 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
-import { useAssignedWorkItems, useStartDevSession, useActiveSessions, useCloseDevSession, useCompleteFeature } from '../hooks/useDevWorkbench';
+import {
+  useActiveSessions,
+  useAssignedWorkItems,
+  useCloseDevSession,
+  useCompleteFeature,
+  useStartDevSession,
+} from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession } from '../../shared/types/devWorkbench';
 import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
@@ -326,9 +332,15 @@ export const DevWorkbenchView: React.FC = () => {
       <div className={styles.container}>
         <div className={styles.header}>
           <h1 className={styles.title}>My Work</h1>
-          <p className={styles.subtitle}>Approved PRD features — start a development session to begin coding</p>
+          <p className={styles.subtitle}>Approved PRD features ready for development</p>
         </div>
-        <ApexBacklogView project="Apex" activeSessions={activeSessions ?? []} />
+        <section className={styles.section} aria-labelledby="feature-backlog-heading">
+          <div className={styles['section-header']}>
+            <h2 id="feature-backlog-heading">Feature Backlog</h2>
+            <p>Approved PRD features</p>
+          </div>
+          <ApexBacklogView project="Apex" activeSessions={activeSessions ?? []} />
+        </section>
       </div>
     );
   }

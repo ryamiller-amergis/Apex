@@ -146,7 +146,7 @@ export interface StartDevSessionResponse {
 
 export interface DevSessionDetail {
   id: string;
-  workItemId: number;
+  workItemId: number | null;
   chatThreadId: string | null;
   branchName: string | null;
   status: DevSessionStatus;
@@ -188,7 +188,7 @@ export interface DevDiff {
 
 export interface ActiveDevSession {
   id: string;
-  workItemId: number;
+  workItemId: number | null;
   chatThreadId: string | null;
   branchName: string | null;
   status: DevSessionStatus;

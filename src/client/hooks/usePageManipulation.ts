@@ -5,6 +5,7 @@ import type { PageManifestEntry } from '../../shared/types/pdf';
 interface UsePageManipulationArgs {
   sessionId: string;
   serverManifest: PageManifestEntry[];
+  userId?: string;
 }
 
 interface UndoState {
@@ -46,7 +47,11 @@ function mergeServerIntoLocal(
   return [...kept, ...added];
 }
 
-export function usePageManipulation({ sessionId, serverManifest }: UsePageManipulationArgs) {
+export function usePageManipulation({
+  sessionId,
+  serverManifest,
+  userId = '',
+}: UsePageManipulationArgs) {
   const [localManifest, setLocalManifest] = useState<PageManifestEntry[]>(serverManifest);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
   const [undoReorderState, setUndoReorderState] = useState<UndoReorderState | null>(null);
@@ -54,7 +59,7 @@ export function usePageManipulation({ sessionId, serverManifest }: UsePageManipu
   const [reorderSyncError, setReorderSyncError] = useState<string | null>(null);
   const lastSyncedRef = useRef<PageManifestEntry[]>(serverManifest);
   const localManifestRef = useRef<PageManifestEntry[]>(serverManifest);
-  const { mutate, mutateAsync } = useUpdateManifest();
+  const { mutate, mutateAsync } = useUpdateManifest(userId);
 
   localManifestRef.current = localManifest;
 

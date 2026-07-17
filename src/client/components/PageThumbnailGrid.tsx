@@ -3,6 +3,7 @@ import { Grid, type GridImperativeAPI } from 'react-window';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { PageThumbnail } from './PageThumbnail';
 import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import styles from './PageThumbnailGrid.module.css';
 
 const THUMBNAIL_WIDTH = 200;
@@ -72,7 +73,7 @@ function ThumbnailCell({
   const assemblyPosition = index + 1;
   const sourceFileName = fileNameMap.get(page.fileId) ?? 'Unknown';
   const originalPageNumber = page.sourcePageIndex + 1;
-  const fileUrl = `/api/pdf/sessions/${sessionId}/files/${page.fileId}`;
+  const fileUrl = pdfFileUrl(sessionId, page.fileId);
   const isThisDropTarget = dropTargetId === page.pageId;
 
   return (

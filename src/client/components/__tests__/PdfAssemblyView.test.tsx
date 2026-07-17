@@ -221,6 +221,26 @@ describe('PdfAssemblyView', () => {
     });
   });
 
+  it('does not reuse a PDF session stored for another user', async () => {
+    sessionStorage.setItem('pdf-active-session:qa-user', 'qa-session');
+
+    renderWithQuery(<PdfAssemblyView userId="ryan-user" />);
+    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(mockUploadFiles).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+    });
+
+    expect(sessionStorage.getItem('pdf-active-session:qa-user')).toBe('qa-session');
+    expect(sessionStorage.getItem('pdf-active-session:ryan-user')).toBe('sess-1');
+  });
+
   it('replaces an expired stored session before uploading', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-expired');
     mockSessionError = Object.assign(new Error('Session has expired'), { status: 410 });
@@ -276,6 +296,51 @@ describe('PdfAssemblyView', () => {
       });
     });
     expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-1');
+  });
+
+  it('retries an upload with a fresh session when the stored session returns 403', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-other-user');
+    mockUploadFiles
+      .mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }))
+      .mockResolvedValueOnce({
+        files: [{
+          fileId: 'f1',
+          originalName: 'test.pdf',
+          status: 'success',
+          pageCount: 3,
+          sizeBytes: 1024,
+        }],
+      });
+
+    renderWithQuery(<PdfAssemblyView />);
+    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockUploadFiles).toHaveBeenNthCalledWith(1, {
+        sessionId: 'sess-other-user',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+      expect(mockCreateSession).toHaveBeenCalledWith({});
+      expect(mockUploadFiles).toHaveBeenNthCalledWith(2, {
+        sessionId: 'sess-1',
+        files: [file],
+        onProgress: expect.any(Function),
+      });
+    });
+    expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-1');
+  });
+
+  it('clears a forbidden stored session when session fetch returns 403', async () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-other-user');
+    mockSessionError = Object.assign(new Error('Forbidden'), { status: 403 });
+
+    renderWithQuery(<PdfAssemblyView />);
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem('pdf-active-session')).toBeNull();
+    });
   });
 
   it('displays validation errors from upload results', async () => {
