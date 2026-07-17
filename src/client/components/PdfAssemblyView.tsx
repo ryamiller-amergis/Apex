@@ -283,7 +283,9 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   const handleStartNewSession = useCallback(async () => {
     try {
       await ensureManifestSaved();
-      const result = await createSession.mutateAsync({});
+      const result = await createSession.mutateAsync({
+        ...(sessionId ? { replaceSessionId: sessionId } : {}),
+      });
 
       setSessionId(result.sessionId);
       sessionStorage.setItem(storageKey, result.sessionId);
@@ -304,7 +306,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
     } catch {
       // Mutation errors are surfaced by the existing session error UI.
     }
-  }, [clearSelection, createSession, ensureManifestSaved, storageKey]);
+  }, [clearSelection, createSession, ensureManifestSaved, sessionId, storageKey]);
 
   const handleExportComplete = useCallback(() => {
     void handleStartNewSession();

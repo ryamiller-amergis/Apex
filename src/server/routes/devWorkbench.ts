@@ -48,6 +48,7 @@ import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
+import { buildLocalDevContext } from '../services/localDevContextService';
 
 const router = Router();
 
@@ -150,6 +151,47 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[dev-workbench] getBacklogFeatures failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch backlog features' });
+  }
+});
+
+// GET /local-dev-context — assemble an in-memory context pack for local Cursor/VS Code
+// (no cloud session, no git clone). Query: project + (workItemId | prdId+featureId).
+router.get('/local-dev-context', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const workItemIdRaw = req.query.workItemId as string | undefined;
+    const prdId = req.query.prdId as string | undefined;
+    const featureId = req.query.featureId as string | undefined;
+
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+
+    let workItemId: number | undefined;
+    if (workItemIdRaw !== undefined && workItemIdRaw !== '') {
+      workItemId = Number(workItemIdRaw);
+      if (!Number.isFinite(workItemId) || workItemId <= 0) {
+        res.status(400).json({ error: 'workItemId must be a positive number' });
+        return;
+      }
+    }
+
+    const payload = await buildLocalDevContext({
+      project,
+      workItemId,
+      prdId,
+      featureId,
+    });
+    res.json(payload);
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 400 || status === 404) {
+      res.status(status).json({ error: (err as Error).message });
+      return;
+    }
+    console.error('[dev-workbench] local-dev-context failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to build local development context' });
   }
 });
 

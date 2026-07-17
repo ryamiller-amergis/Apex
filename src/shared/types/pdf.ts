@@ -56,6 +56,8 @@ export interface PdfSession {
 
 export interface CreateSessionRequest {
   projectId?: string;
+  /** When set, the server closes this session before creating the new one. */
+  replaceSessionId?: string;
 }
 
 export interface CreateSessionResponse {

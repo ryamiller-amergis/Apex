@@ -11,6 +11,7 @@ import {
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession } from '../../shared/types/devWorkbench';
 import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import styles from './DevWorkbenchView.module.css';
 
 interface FeatureReadiness {
@@ -73,6 +74,7 @@ const ApexBacklogView: React.FC<{
   const [completingFeature, setCompletingFeature] = useState<string | null>(null);
   const [openPrds, setOpenPrds] = useState<Set<string>>(new Set());
   const [openEpics, setOpenEpics] = useState<Set<string>>(new Set());
+  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
 
   const allSessions = activeSessions ?? [];
 
@@ -255,6 +257,22 @@ const ApexBacklogView: React.FC<{
                                 </button>
                               </>
                             )}
+                            <button
+                              className={styles['local-dev-btn']}
+                              onClick={() =>
+                                setLocalDevTarget({
+                                  kind: 'apex',
+                                  project,
+                                  prdId: feature.prdId,
+                                  featureId: feature.featureId,
+                                  title: feature.featureTitle,
+                                })
+                              }
+                              type="button"
+                              title="Download a context pack and open Cursor or VS Code locally"
+                            >
+                              Start Local Development
+                            </button>
                           </div>
                         </div>
                       );
@@ -266,6 +284,13 @@ const ApexBacklogView: React.FC<{
           })}
         </div>
       ))}
+
+      {localDevTarget && (
+        <StartLocalDevModal
+          target={localDevTarget}
+          onClose={() => setLocalDevTarget(null)}
+        />
+      )}
     </div>
   );
 };
@@ -281,6 +306,7 @@ export const DevWorkbenchView: React.FC = () => {
   const closeSession = useCloseDevSession();
   const [startingId, setStartingId] = useState<number | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
 
   const sessionByWorkItem = useMemo(() => {
     const map = new Map<number, { sessionId: string }>();
@@ -420,11 +446,33 @@ export const DevWorkbenchView: React.FC = () => {
                       {startingId === item.id ? 'Starting...' : 'Start Development'}
                     </button>
                   )}
+                  <button
+                    className={styles['local-dev-btn']}
+                    onClick={() =>
+                      setLocalDevTarget({
+                        kind: 'ado',
+                        project: selectedProject!,
+                        workItemId: item.id,
+                        title: item.title,
+                      })
+                    }
+                    type="button"
+                    title="Download a context pack and open Cursor or VS Code locally"
+                  >
+                    Start Local Development
+                  </button>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {localDevTarget && (
+        <StartLocalDevModal
+          target={localDevTarget}
+          onClose={() => setLocalDevTarget(null)}
+        />
       )}
     </div>
   );

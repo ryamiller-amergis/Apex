@@ -3,7 +3,7 @@ import fsPromises from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
-import { and, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
 import { resolveDataRoot } from '../utils/dataDir';
@@ -49,21 +49,55 @@ export async function cleanupSessionFiles(sessionId: string): Promise<void> {
 
 // ── Session management ─────────────────────────────────────────────────────────
 
+export interface CreateSessionOptions {
+  /** Close this session before creating a new one (e.g. "New session" in the UI). */
+  replaceSessionId?: string;
+}
+
+/**
+ * Mark a session expired and delete its temp files.
+ * Returns false when the session is missing or owned by another user.
+ */
+export async function closeSession(sessionId: string, userId: string): Promise<boolean> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session || session.userId !== userId) return false;
+  if (session.status === 'expired') return true;
+
+  await cleanupSessionFiles(sessionId);
+  await db
+    .update(pdfSessions)
+    .set({ status: 'expired', updatedAt: new Date().toISOString() })
+    .where(eq(pdfSessions.id, sessionId));
+  return true;
+}
+
 export async function createSession(
   userId: string,
   projectId?: string,
+  options?: CreateSessionOptions,
 ): Promise<{ sessionId: string; createdAt: string; expiresAt: string }> {
-  // Enforce concurrent session limit
-  const activeSessions = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(pdfSessions)
-    .where(and(eq(pdfSessions.userId, userId), eq(pdfSessions.status, 'active')));
+  // Reclaim past-due sessions so they don't block the concurrent limit.
+  await expireOldSessions(userId);
 
-  const count = activeSessions[0]?.count ?? 0;
-  if (count >= MAX_CONCURRENT_SESSIONS) {
-    const err = new Error('Session limit reached') as Error & { code: string };
-    err.code = PDF_ERROR_CODES.SESSION_LIMIT_REACHED;
-    throw err;
+  if (options?.replaceSessionId) {
+    await closeSession(options.replaceSessionId, userId);
+  }
+
+  // Evict oldest active sessions until there is room for one new workspace.
+  // The UI only shows one session at a time; orphaned "New session" clicks
+  // previously accumulated invisible actives and blocked the user.
+  let activeSessions = await getActiveSessions(userId);
+  while (activeSessions.length >= MAX_CONCURRENT_SESSIONS) {
+    const oldest = activeSessions[activeSessions.length - 1];
+    const closed = await closeSession(oldest.id, userId);
+    if (!closed) {
+      const err = new Error('Session limit reached') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.SESSION_LIMIT_REACHED;
+      throw err;
+    }
+    activeSessions = await getActiveSessions(userId);
   }
 
   const rows = await db
@@ -103,9 +137,11 @@ export async function getSession(sessionId: string) {
   };
 }
 
+/** Active sessions for a user, newest first. */
 export async function getActiveSessions(userId: string) {
   return db.query.pdfSessions.findMany({
     where: and(eq(pdfSessions.userId, userId), eq(pdfSessions.status, 'active')),
+    orderBy: [desc(pdfSessions.createdAt)],
   });
 }
 
@@ -496,13 +532,16 @@ export function resolveFilePath(sessionId: string, fileId: string): string | nul
 
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
-export async function expireOldSessions(): Promise<{ expired: number; errors: number }> {
+export async function expireOldSessions(
+  userId?: string,
+): Promise<{ expired: number; errors: number }> {
   const now = new Date().toISOString();
   let expired = 0;
   let errors = 0;
 
   const expiredSessions = await db.query.pdfSessions.findMany({
     where: and(
+      ...(userId ? [eq(pdfSessions.userId, userId)] : []),
       or(eq(pdfSessions.status, 'active'), eq(pdfSessions.status, 'exported')),
       lt(pdfSessions.expiresAt, now),
     ),

@@ -67,7 +67,11 @@ export function useActivePdfSessions(userId = '') {
 
 export function useCreatePdfSession(userId = '') {
   const queryClient = useQueryClient();
-  return useMutation<CreateSessionResponse, PdfApiError, { projectId?: string }>({
+  return useMutation<
+    CreateSessionResponse,
+    PdfApiError,
+    { projectId?: string; replaceSessionId?: string }
+  >({
     mutationFn: (body) =>
       pdfApiFetch('/api/pdf/sessions', {
         method: 'POST',
@@ -76,6 +80,32 @@ export function useCreatePdfSession(userId = '') {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pdf-session', userId] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
+    },
+  });
+}
+
+export function useClosePdfSession(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<void, PdfApiError, { sessionId: string }>({
+    mutationFn: async ({ sessionId }) => {
+      const res = await fetch(`/api/pdf/sessions/${sessionId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: apexProjectHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err = new Error(
+          body.error?.message ?? body.error ?? `HTTP ${res.status}`,
+        ) as PdfApiError;
+        err.code = body.error?.code;
+        err.status = res.status;
+        throw err;
+      }
+    },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
       queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
     },
   });
