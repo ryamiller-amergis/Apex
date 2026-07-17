@@ -31,6 +31,7 @@ jest.mock('../middleware/rbac', () => ({
   },
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
   requireAnyPermission: () => (_req: any, _res: any, next: any) => next(),
+  requireProjectAccess: () => (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
 }));
 

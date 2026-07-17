@@ -3,6 +3,9 @@ import { WorkItem } from '../types/workitem';
 import { EpicProgress } from './EpicProgress';
 import { RichTextField } from './RichTextField';
 import { useAppShell } from '../hooks/useAppShell';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { TERMINAL_WORK_ITEM_STATES } from '../../shared/types/calendarWorkItemAssistant';
+import { env } from '../config/env';
 import './DetailsPanel.css';
 
 interface DetailsPanelProps {
@@ -15,6 +18,7 @@ interface DetailsPanelProps {
   project: string;
   areaPath: string;
   onSelectItem: (item: WorkItem) => void;
+  onOpenAssistant?: (anchorId: number, anchorTitle: string) => void;
 }
 
 export const DetailsPanel: React.FC<DetailsPanelProps> = ({
@@ -27,8 +31,10 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   project,
   areaPath,
   onSelectItem,
+  onOpenAssistant,
 }) => {
-  const { authenticatedUser } = useAppShell();
+  const { authenticatedUser, can, isSuperAdmin } = useAppShell();
+  const assistantEnabled = useFeatureFlag('calendar-work-item-assistant', project);
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [tempDueDate, setTempDueDate] = useState('');
   const [dueDateReason, setDueDateReason] = useState('');
@@ -75,8 +81,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   if (!workItem) return null;
 
-  const adoOrg = import.meta.env.VITE_ADO_ORG || 'amergis';
-  const adoProject = import.meta.env.VITE_ADO_PROJECT || 'MaxView';
+  const adoOrg = env.VITE_ADO_ORG;
+  const adoProject = env.VITE_ADO_PROJECT;
   const adoUrl = `https://dev.azure.com/${adoOrg}/${adoProject}/_workitems/edit/${workItem.id}`;
 
   // Fetch related items when workItem changes and is PBI, TBI, or Feature
@@ -584,6 +590,20 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         {parentEpicId && !navigationHistory.length && (
           <button onClick={handleBackToEpic} className="back-to-epic-btn" title="Back to Epic">
             Back to Epic
+          </button>
+        )}
+        {(assistantEnabled || isSuperAdmin) && can('calendar:view') && onOpenAssistant &&
+          !(TERMINAL_WORK_ITEM_STATES as readonly string[]).includes(workItem.state) && (
+          <button
+            className="details-assistant-btn"
+            onClick={() => onOpenAssistant(workItem.id, workItem.title)}
+            title="Open Work-Item Assistant — AI-propose Description / Acceptance Criteria changes"
+            aria-label="Open Work-Item Assistant"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Assistant
           </button>
         )}
         <button onClick={onClose} className="close-btn">

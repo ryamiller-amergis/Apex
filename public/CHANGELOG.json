@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.34.0",
+    "date": "2026-07-15",
+    "title": "Calendar Work-Item Assistant",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "New Calendar Work-Item Assistant lets you select any work item (and its descendants) on the Calendar, chat with an AI to propose Description and Acceptance Criteria improvements, review a per-item diff, manually edit any proposed change, then apply directly to Azure DevOps with one click"
+      },
+      {
+        "type": "feature",
+        "description": "Draggable, resizable floating dialog — grab the header to reposition anywhere on screen; drag any edge or corner to resize; minimise to a title bar when not in use"
+      },
+      {
+        "type": "feature",
+        "description": "Current content panel shows the live Description and Acceptance Criteria of all selected items before you start chatting, so you always have context on what you are changing"
+      },
+      {
+        "type": "feature",
+        "description": "Inline editing in the diff review lets you manually adjust the AI-proposed text before applying — edits are saved back to the proposal and reflected in the diff"
+      },
+      {
+        "type": "feature",
+        "description": "All ADO writes go through a mandatory review-and-confirm gate; the assistant can only propose changes, not write to ADO directly — revisions conflict are caught per item with stale-revision detection"
+      },
+      {
+        "type": "improvement",
+        "description": "Chat thread now shows a live tool-activity pill (spinning indicator + tool name) while the agent reads files or searches the codebase, and animated dots while waiting for the first response token — no more fragmented pill-per-word rendering"
+      }
+    ]
+  },
+  {
     "version": "1.33.2",
     "date": "2026-07-01",
     "title": "What's New Reliability",

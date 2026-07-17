@@ -7,6 +7,13 @@ import type {
   PdfSessionStatus,
 } from '../../shared/types/pdf';
 import type {
+  WorkItemHierarchyNode,
+  WorkItemChangeSet,
+  WorkItemProposalStatus,
+  WorkItemAssistantSessionStatus,
+  WorkItemApplyItemResult,
+} from '../../shared/types/calendarWorkItemAssistant';
+import type {
   AgentRunCancelEvent,
   AgentRunEventStatus,
   AgentRunEventType,
@@ -599,6 +606,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   cursorApiKeyEnvRef: text('cursor_api_key_env_ref'),
   cursorServiceAccountId: text('cursor_service_account_id'),
+  calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
+  calendarAssistantModel: text('calendar_assistant_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -1452,3 +1461,55 @@ export const aiCostDailyBrief = pgTable('ai_cost_daily_brief', {
 }, (t) => ({
   projectDateTypeIdx: unique('ai_cost_daily_brief_project_date_type').on(t.project, t.briefDate, t.briefType),
 }));
+
+// ── Calendar Work-Item Assistant ──────────────────────────────────────────────
+
+export const workItemAssistantSessions = pgTable('work_item_assistant_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerUserId: text('owner_user_id').notNull(),
+  project: text('project').notNull(),
+  areaPath: text('area_path').notNull().default(''),
+  anchorWorkItemId: integer('anchor_work_item_id').notNull(),
+  selectedWorkItemIds: jsonb('selected_work_item_ids').$type<number[]>().notNull().default([]),
+  contextSnapshot: jsonb('context_snapshot').$type<WorkItemHierarchyNode[]>().notNull().default([]),
+  threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  status: text('status').$type<WorkItemAssistantSessionStatus>().notNull().default('active'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  ownerIdx: index('idx_work_item_assistant_sessions_owner').on(t.ownerUserId),
+  projectAnchorIdx: index('idx_work_item_assistant_sessions_project_anchor').on(t.project, t.anchorWorkItemId),
+  threadIdx: index('idx_work_item_assistant_sessions_thread').on(t.threadId),
+}));
+
+export const workItemChangeProposals = pgTable('work_item_change_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => workItemAssistantSessions.id, { onDelete: 'cascade' }),
+  changeSet: jsonb('change_set').$type<WorkItemChangeSet>().notNull(),
+  status: text('status').$type<WorkItemProposalStatus>().notNull().default('pending'),
+  itemResults: jsonb('item_results').$type<WorkItemApplyItemResult[]>(),
+  resolvedBy: text('resolved_by'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionCreatedIdx: index('idx_work_item_change_proposals_session_created').on(t.sessionId, t.createdAt),
+}));
+
+export const workItemAssistantSessionsRelations = relations(workItemAssistantSessions, ({ one, many }) => ({
+  thread: one(chatThreads, {
+    fields: [workItemAssistantSessions.threadId],
+    references: [chatThreads.id],
+  }),
+  proposals: many(workItemChangeProposals),
+}));
+
+export const workItemChangeProposalsRelations = relations(workItemChangeProposals, ({ one }) => ({
+  session: one(workItemAssistantSessions, {
+    fields: [workItemChangeProposals.sessionId],
+    references: [workItemAssistantSessions.id],
+  }),
+}));
+
+// Add calendar assistant columns to projectSkillSettings (applied via migration)
+// Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql

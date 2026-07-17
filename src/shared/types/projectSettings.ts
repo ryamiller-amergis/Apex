@@ -134,6 +134,8 @@ export interface ProjectSkillConfig {
   uiLabRegenBedrockMaxTokens?: number | null;
   uiLabBedrockTemperature?: number | null;
   uiLabSkillPath?: string | null;
+  calendarAssistantSkillPath?: string | null;
+  calendarAssistantModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -199,6 +201,8 @@ export interface UpsertProjectSkillConfigRequest {
   uiLabRegenBedrockMaxTokens?: number | null;
   uiLabBedrockTemperature?: number | null;
   uiLabSkillPath?: string | null;
+  calendarAssistantSkillPath?: string | null;
+  calendarAssistantModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }

@@ -116,6 +116,8 @@ export interface UpsertSkillConfigOptions {
   uiLabRegenBedrockMaxTokens?: number | null;
   uiLabBedrockTemperature?: number | null;
   uiLabSkillPath?: string | null;
+  calendarAssistantSkillPath?: string | null;
+  calendarAssistantModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
@@ -182,6 +184,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     uiLabRegenBedrockMaxTokens: opts.uiLabRegenBedrockMaxTokens ?? null,
     uiLabBedrockTemperature: opts.uiLabBedrockTemperature ?? null,
     uiLabSkillPath: opts.uiLabSkillPath ?? null,
+    calendarAssistantSkillPath: opts.calendarAssistantSkillPath ?? null,
+    calendarAssistantModel: opts.calendarAssistantModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,
