@@ -3,7 +3,11 @@ import fsPromises from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { BlobServiceClient, ContainerClient } from '@azure/storage-blob';
-import { DefaultAzureCredential } from '@azure/identity';
+import {
+  AzureCliCredential,
+  ManagedIdentityCredential,
+  type TokenCredential,
+} from '@azure/identity';
 import { resolveDataRoot } from '../utils/dataDir';
 
 export interface PdfArtifactRef {
@@ -108,7 +112,11 @@ export class BlobPdfArtifactStore implements PdfArtifactStore {
   constructor(
     accountName: string,
     containerName: string,
-    credential = new DefaultAzureCredential(),
+    // AZURE_CLIENT_* config belongs to Apex application authentication, not
+    // Blob access. Prefer managed identity in Azure and Azure CLI locally.
+    credential: TokenCredential = process.env.NODE_ENV === 'production'
+      ? new ManagedIdentityCredential()
+      : new AzureCliCredential(),
   ) {
     const service = new BlobServiceClient(
       `https://${accountName}.blob.core.windows.net`,

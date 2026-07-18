@@ -9,6 +9,8 @@ const mockExists = jest.fn();
 const mockDeleteIfExists = jest.fn();
 const mockDeleteBlob = jest.fn();
 const mockListBlobsFlat = jest.fn();
+const mockAzureCliCredential = jest.fn();
+const mockManagedIdentityCredential = jest.fn();
 const mockGetBlockBlobClient = jest.fn(() => ({
   uploadData: mockUploadData,
   uploadFile: jest.fn(),
@@ -33,7 +35,8 @@ jest.mock('@azure/storage-blob', () => ({
 }));
 
 jest.mock('@azure/identity', () => ({
-  DefaultAzureCredential: jest.fn(),
+  AzureCliCredential: mockAzureCliCredential,
+  ManagedIdentityCredential: mockManagedIdentityCredential,
 }));
 
 import {
@@ -52,6 +55,7 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 
 describe('pdfArtifactStore', () => {
   let root: string;
+  const originalNodeEnv = process.env.NODE_ENV;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -67,6 +71,7 @@ describe('pdfArtifactStore', () => {
   });
 
   afterEach(async () => {
+    process.env.NODE_ENV = originalNodeEnv;
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -106,6 +111,24 @@ describe('pdfArtifactStore', () => {
     expect(mockDeleteIfExists).toHaveBeenCalledWith(
       { deleteSnapshots: 'include' },
     );
+  });
+
+  test('Blob backend uses Azure CLI credentials outside production', () => {
+    process.env.NODE_ENV = 'development';
+
+    new BlobPdfArtifactStore('account', 'pdf-artifacts');
+
+    expect(mockAzureCliCredential).toHaveBeenCalledTimes(1);
+    expect(mockManagedIdentityCredential).not.toHaveBeenCalled();
+  });
+
+  test('Blob backend uses managed identity credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+
+    new BlobPdfArtifactStore('account', 'pdf-artifacts');
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(mockAzureCliCredential).not.toHaveBeenCalled();
   });
 
   test('Blob backend records exists failures before rethrowing', async () => {

@@ -70,6 +70,33 @@ function resultRows<T>(result: unknown): T[] {
   return rows ?? [];
 }
 
+function mapClaimedJobRow(row: Record<string, unknown>): PdfJobRow {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobType: row.job_type,
+    userId: row.user_id,
+    originalName: row.original_name,
+    originalMimeType: row.original_mime_type,
+    inputKey: row.input_key,
+    status: row.status,
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    payload: row.payload,
+    result: row.result,
+    fileId: row.file_id,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    ownerInstance: row.owner_instance,
+    heartbeatAt: row.heartbeat_at,
+    lockExpiresAt: row.lock_expires_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } as PdfJobRow;
+}
+
 async function safeDelete(filePath: string): Promise<void> {
   try {
     await fs.rm(filePath, { force: true });
@@ -313,7 +340,8 @@ export async function claimNextPdfJob(): Promise<PdfJobRow | null> {
         AND jobs.status = 'queued'
       RETURNING jobs.*
     `);
-    return resultRows<PdfJobRow>(result)[0] ?? null;
+    const row = resultRows<Record<string, unknown>>(result)[0];
+    return row ? mapClaimedJobRow(row) : null;
   });
 }
 
@@ -351,8 +379,10 @@ export async function recoverExpiredPdfJobs(): Promise<{ requeued: number; poiso
         owner_instance = NULL,
         heartbeat_at = NULL,
         lock_expires_at = NULL
-    WHERE status = 'processing'
-      AND lock_expires_at < now()
+    WHERE (
+        status = 'queued'
+        OR (status = 'processing' AND lock_expires_at < now())
+      )
       AND attempts >= max_attempts
     RETURNING id
   `);

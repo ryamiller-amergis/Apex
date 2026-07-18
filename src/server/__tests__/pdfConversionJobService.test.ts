@@ -80,6 +80,31 @@ const jobRow = {
   updatedAt: '2026-07-11T05:00:00.000Z',
 };
 
+const rawClaimedJobRow = {
+  id: jobRow.id,
+  session_id: jobRow.sessionId,
+  job_type: jobRow.jobType,
+  user_id: jobRow.userId,
+  original_name: jobRow.originalName,
+  original_mime_type: jobRow.originalMimeType,
+  input_key: jobRow.inputKey,
+  status: jobRow.status,
+  attempts: jobRow.attempts,
+  max_attempts: jobRow.maxAttempts,
+  payload: jobRow.payload,
+  result: jobRow.result,
+  file_id: jobRow.fileId,
+  error_code: jobRow.errorCode,
+  error_message: jobRow.errorMessage,
+  owner_instance: jobRow.ownerInstance,
+  heartbeat_at: jobRow.heartbeatAt,
+  lock_expires_at: jobRow.lockExpiresAt,
+  started_at: jobRow.startedAt,
+  completed_at: jobRow.completedAt,
+  created_at: jobRow.createdAt,
+  updated_at: jobRow.updatedAt,
+};
+
 describe('pdfConversionJobService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -142,7 +167,7 @@ describe('pdfConversionJobService', () => {
   test('claims atomically through a transaction and records a lease', async () => {
     mockTxExecute
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [jobRow] });
+      .mockResolvedValueOnce({ rows: [rawClaimedJobRow] });
 
     const claimed = await claimNextPdfJob();
 
@@ -168,6 +193,8 @@ describe('pdfConversionJobService', () => {
       requeued: 2,
       poisoned: 1,
     });
+    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain("status = 'queued'");
+    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain('attempts >= max_attempts');
   });
 
   test('exposes the configured three-tier governor', () => {
