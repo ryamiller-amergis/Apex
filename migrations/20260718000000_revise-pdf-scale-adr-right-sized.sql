@@ -2,7 +2,7 @@
 -- capacity model: ~2000 concurrent light app users but only ~20 concurrent
 -- PDF-assembly users / single-digit simultaneous CPU jobs. This supersedes the
 -- managed-broker + dedicated-worker decision with an in-app async + Postgres
--- queue + private Blob + App Service autoscale approach.
+-- queue + private Blob approach on the fixed zone-redundant App Service plan.
 --
 -- The prior content was seeded by 20260717235959_seed-production-pdf-scale-adr.
 -- We UPDATE the same row (idempotent) rather than editing that historical file.
@@ -29,7 +29,7 @@ Apex PDF Tools (`/pdf-tools`) supports assembly and related heavy paths (upload/
 
 **Corrected capacity model:** the platform serves roughly **2000 concurrent app users** doing normal, light interactive work. PDF assembly is a small slice: expect **~20 concurrent PDF-assembly users at peak** and **single-digit simultaneous CPU-heavy jobs** (conversion/export). This is one to two orders of magnitude smaller than the original "2000 concurrent heavy sessions / ~75 simultaneous jobs" assumption that drove the prior decision.
 
-**Production runtime (verified):** the API runs on `plan-apex-prd-v2` — P1v3 (PremiumV3), **zone-redundant across 3 instances**. Autoscale is now added (min 3 for zone redundancy, scale out to 6 on sustained CPU). Because the API is multi-instance, PDF work cannot depend on `PDF_TEMP_DIR` local-disk affinity.
+**Production runtime (verified):** the API runs on `plan-apex-prd-v2` — P1v3 (PremiumV3), **zone-redundant across 3 fixed instances**. Horizontal autoscale is deferred until Interview and other long-running AI flows have explicit multi-instance ownership, cleanup, and scale-in recovery guarantees. Because the API is already multi-instance, PDF work cannot depend on `PDF_TEMP_DIR` local-disk affinity.
 
 **In scope:** concurrency governor, artifact storage, long-job ownership correctness, and the worker execution model for heavy PDF work at the real load.
 
@@ -39,7 +39,7 @@ Apex PDF Tools (`/pdf-tools`) supports assembly and related heavy paths (upload/
 
 - Serve ~2000 concurrent light app users without heavy PDF work degrading interactive latency
 - Handle the actual heavy concurrency (~20 users, single-digit simultaneous CPU jobs) without over-provisioning infrastructure
-- Multi-instance App Service correctness: any instance (including autoscaled instances) can process any session's artifacts
+- Multi-instance App Service correctness: any of the fixed zone-redundant instances can process any session's artifacts
 - Fix long-job ownership: DOCX conversion can run up to `DOCX_CONVERSION_TIMEOUT_MS` (15 min) while today's stale reclaim is ~60 s
 - Protect sensitive PDF content (private blob, short-lived user-scoped URLs)
 - Prefer reusing existing repo patterns over adding new infrastructure dependencies and operational surface
@@ -47,13 +47,13 @@ Apex PDF Tools (`/pdf-tools`) supports assembly and related heavy paths (upload/
 
 ## Considered Options
 
-### Option A′ — Postgres job queue + in-app capped workers + private Blob + App Service autoscale (chosen)
+### Option A′ — Postgres job queue + in-app capped workers + private Blob on fixed App Service capacity (chosen)
 
-Extend the existing Postgres conversion queue to cover export/assembly. Process heavy work **in-process on the Apex App Service** off the request thread (`worker_threads`), bounded by a strict application concurrency governor (global ~20, per-user 3). Fix job ownership with lock renewal covering the full job duration and retire the ~60 s stale-reclaim path. Store all session/job artifacts in **private Azure Blob** keyed per `{userId}/{sessionId}/...` via managed identity, eliminating `PDF_TEMP_DIR` affinity. Add **App Service autoscale** (min 3 for zone redundancy, scale out on CPU) so heavy spikes get compute headroom without a separate worker tier.
+Extend the existing Postgres conversion queue to cover export/assembly. Process heavy work **in-process on the Apex App Service** off the request thread (`worker_threads`), bounded by a three-tier application concurrency governor (global ceiling ~40, per-instance ~6-8, per-user 3). The per-instance cap protects each fixed instance from PDF CPU and memory pressure while the global and per-user tiers enforce fleet protection and fairness. Fix job ownership with lock renewal covering the full job duration and retire the ~60 s stale-reclaim path. Store all session/job artifacts in **private Azure Blob** keyed per `{userId}/{sessionId}/...` via managed identity, eliminating `PDF_TEMP_DIR` affinity. Keep the App Service at its fixed zone-redundant instance count until all long-running AI workflows are proven safe during cross-instance routing and scale-in.
 
-Benefits: reuses repo patterns; no new broker/worker deployment or ops surface; multi-instance correct via shared blob; autoscale absorbs spikes; fits the real load.
+Benefits: reuses repo patterns; no new broker/worker deployment or ops surface; multi-instance correct via shared blob; protects Interview stability by avoiding scale-in termination; fits the real load.
 
-Costs/risks: heavy CPU (LibreOffice-WASM) still shares App Service compute with the API — mitigated by the concurrency cap and autoscale; Postgres remains the queue backbone (indexing, reaping, depth alerts); blob I/O latency vs local disk.
+Costs/risks: heavy CPU (LibreOffice-WASM) still shares fixed App Service compute with the API — mitigated by conservative concurrency caps and back-pressure; Postgres remains the queue backbone (indexing, reaping, depth alerts); blob I/O latency vs local disk.
 
 ### Option B — Managed broker (Azure Service Bus) + dedicated PDF worker pool + Blob (deferred)
 
@@ -67,9 +67,9 @@ Keep ad-hoc `worker_threads` with per-process caps, no global governor, no share
 
 ## Decision Outcome
 
-Chosen option: **Option A′ — Postgres queue + in-app capped workers + private Blob + App Service autoscale.**
+Chosen option: **Option A′ — Postgres queue + in-app capped workers + private Blob on fixed App Service capacity.**
 
-This satisfies the corrected drivers with the least infrastructure: interactive traffic stays responsive via an enforced concurrency governor and autoscale headroom; heavy jobs are multi-instance-correct because artifacts live in shared blob and ownership survives long jobs; and no new broker/worker ops surface is introduced for a load that does not require it.
+This satisfies the corrected drivers with the least infrastructure: interactive traffic stays responsive via an enforced concurrency governor and explicit back-pressure; heavy jobs are multi-instance-correct because artifacts live in shared blob and ownership survives long jobs; and no new broker/worker ops surface is introduced for a load that does not require it. Horizontal autoscale remains a future option only after Interview and other long-running AI flows are hardened for instance changes.
 
 **Architecture locked by this ADR:**
 
@@ -78,20 +78,20 @@ This satisfies the corrected drivers with the least infrastructure: interactive 
 | Load profile | ~2000 concurrent light app users; ~20 concurrent PDF-assembly users; single-digit simultaneous CPU jobs |
 | Heavy-job delivery | Existing Postgres job queue extended to conversion + export/assembly; atomic claim (`FOR UPDATE SKIP LOCKED`) |
 | Worker execution | In-process on the Apex App Service (`worker_threads`) off the request thread — no dedicated worker plan |
-| Concurrency governor | Application-enforced global ~20 and per-user 3 concurrent heavy jobs; keep 3 sessions/user |
+| Concurrency governor | Application-enforced, three tiers: global ceiling ~40 (DB-derived across all instances), per-instance ~6-8 (protects each fixed instance's CPU and memory), per-user 3; keep 3 sessions/user. Expected steady-state load is single-digit simultaneous jobs — the caps are burst ceilings, not targets |
 | Long-job ownership | Lock/lease renewal covering full job duration; retire the ~60 s stale-reclaim path |
 | Storage | Private Azure Blob for all PDF session/job artifacts, keyed `{userId}/{sessionId}/...`; no `PDF_TEMP_DIR` cross-instance reliance |
-| Blob access | Managed identity for the app; short-lived user-scoped download URLs after authorization |
-| Compute scaling | App Service autoscale (min 3 for zone redundancy, scale out to 6 on sustained CPU) |
+| Blob access | Managed identity for the app; artifacts stream through the authenticated API after ownership checks |
+| Compute scaling | Fixed App Service capacity at 3 zone-redundant P1v3 instances. Horizontal autoscale is deferred pending a cross-feature design for live agent ownership, workspace cleanup, SSE routing, and graceful scale-in recovery |
 | Back-pressure | Queue with status; reject new heavy jobs with 429 when the governor is saturated or estimated wait is excessive |
 | Sync APIs | Session CRUD and manifest patches remain synchronous |
 | Managed broker + dedicated workers | Deferred (Option B) behind explicit scale triggers |
 | Observability | Metrics/alerts on queue depth/age, lock-renewal failures, job success/latency by type, App Service CPU + instance count, 429 rate, blob I/O errors |
 
-**Scale-up triggers (revisit Option B) — adopt a managed broker and/or a dedicated worker plan when any hold under real load:**
+**Scale-up triggers — revisit horizontal autoscale only after long-running AI flow hardening; adopt a managed broker and/or a dedicated worker plan when any hold under real load:**
 
-- Sustained App Service CPU saturation from PDF work despite autoscale to max, harming interactive latency
-- Concurrent heavy-job demand consistently approaching or exceeding ~20 (governor rejecting frequently)
+- Sustained App Service CPU saturation from PDF work at fixed capacity, harming interactive latency
+- Concurrent heavy-job demand consistently approaching effective fixed-capacity limits (governor rejecting frequently)
 - Postgres queue contention or reaper/lock-renewal correctness proving hard to keep healthy
 - A need to deploy/scale PDF workers independently of the API release cadence
 
@@ -99,15 +99,15 @@ This satisfies the corrected drivers with the least infrastructure: interactive 
 
 ### Positive
 
-- Minimal new infrastructure: reuses the Postgres queue and the existing App Service; only Blob + autoscale are added
-- Multi-instance correct: shared blob artifacts work across the 3 zone-redundant instances and any autoscaled instance
-- Autoscale gives real CPU headroom for heavy spikes without a standing dedicated worker tier
+- Minimal new infrastructure: reuses the Postgres queue and the existing fixed App Service; only Blob is added
+- Multi-instance correct: shared blob artifacts work across the 3 fixed zone-redundant instances
+- Avoids introducing scale-in interruption risk to Interview and other long-running AI flows
 - Long-job ownership fix removes the ~60 s vs 15 min defect class
 - Clear, evidence-gated path to the managed-broker/dedicated-worker design if usage grows
 
 ### Accepted trade-offs
 
-- Heavy CPU (LibreOffice-WASM) shares App Service compute with the API — bounded by the concurrency governor and autoscale; validated by monitoring CPU and 429 rate
+- Heavy CPU (LibreOffice-WASM) shares fixed App Service compute with the API — bounded by the concurrency governor and back-pressure; validated by monitoring CPU and 429 rate
 - Postgres remains the queue backbone (indexing, reaping, depth alerts) rather than a managed broker
 - Blob I/O adds latency vs local disk for uploads, conversion inputs, and export outputs — accepted cost of multi-instance correctness
 - Under extreme simultaneous spikes users may queue or receive 429 — accepted vs provisioning dedicated heavy-job infrastructure for a load that is not expected
@@ -115,7 +115,7 @@ This satisfies the corrected drivers with the least infrastructure: interactive 
 ### Required mitigations (must ship with this work)
 
 - **Shared private blob for all artifacts** keyed per user/session — eliminate `PDF_TEMP_DIR` affinity
-- **Concurrency governor** (global ~20 / per-user 3) enforced in application coordination
+- **Concurrency governor** (global ~40 / per-instance ~6-8 / per-user 3) enforced in application coordination, with the per-instance tier protecting each fixed App Service instance
 - **Long-job lock/lease renewal** covering `DOCX_CONVERSION_TIMEOUT_MS`-class durations; retire the ~60 s stale reclaim
 - **Idempotent handlers** safe under retry, with sticky terminal states
 - **Back-pressure** (queue status + 429 on saturation) so heavy work never blocks session/manifest APIs
@@ -126,8 +126,8 @@ This satisfies the corrected drivers with the least infrastructure: interactive 
 - PDF Tools assembly surface: `/pdf-tools`
 - Existing services: `pdfAssemblyService`, `pdfExportWorker`, `pdfConversionJobService`, `pdfConversionJobs`
 - Conversion runtime: `@matbee/libreoffice-converter` (LibreOffice WASM, in-process `worker_threads`)
-- Production plan: `plan-apex-prd-v2` (P1v3, zone-redundant, 3 instances, autoscale 3–6 on CPU)
-- Infra: `infra/shared-async.tf` (Blob `pdf-artifacts`), `infra/pdf-processing.tf` (Apex identity Blob RBAC), `infra/main.tf` (autoscale)
+- Production plan: `plan-apex-prd-v2` (P1v3, zone-redundant, 3 fixed instances)
+- Infra: `infra/shared-async.tf` (Blob `pdf-artifacts`), `infra/pdf-processing.tf` (Apex identity Blob RBAC), `infra/main.tf` (fixed App Service capacity)
 - Related timeout: `DOCX_CONVERSION_TIMEOUT_MS` (default 15 minutes) versus the ~60-second stale-reclaim gap
 $revised_adr$,
   updated_at = NOW()

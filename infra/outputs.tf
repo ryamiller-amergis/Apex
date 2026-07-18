@@ -23,16 +23,6 @@ output "app_service_plan_name" {
   value       = azurerm_service_plan.main.name
 }
 
-output "app_service_autoscale_enabled" {
-  description = "Whether CPU-based autoscale is managing the App Service plan"
-  value       = var.enable_autoscale
-}
-
-output "app_service_autoscale_setting_name" {
-  description = "Name of the autoscale setting when enabled"
-  value       = var.enable_autoscale ? azurerm_monitor_autoscale_setting.main[0].name : null
-}
-
 output "application_insights_instrumentation_key" {
   description = "Application Insights Instrumentation Key"
   value       = azurerm_application_insights.main.instrumentation_key
@@ -85,7 +75,7 @@ output "pdf_blob_container_name" {
 
 output "pdf_api_managed_identity_principal_id" {
   description = "Apex App Service identity granted PDF Blob contributor role"
-  value       = azurerm_linux_web_app.main.identity[0].principal_id
+  value       = try(azurerm_linux_web_app.main.identity[0].principal_id, null)
 }
 
 output "pdf_app_setting_names" {

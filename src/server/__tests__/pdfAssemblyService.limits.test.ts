@@ -40,10 +40,25 @@ jest.mock('../services/documentConversionService', () => ({
   documentConversionService: { convert: mockConvert },
 }));
 
+jest.mock('../services/pdfArtifactStore', () => ({
+  getPdfArtifactStore: () => ({
+    putFile: jest.fn().mockResolvedValue(undefined),
+    deleteFile: jest.fn().mockResolvedValue(undefined),
+    deleteSessionPrefix: jest.fn().mockResolvedValue(undefined),
+    exists: jest.fn().mockResolvedValue(true),
+    getStream: jest.fn(),
+  }),
+  readPdfArtifact: jest.fn(),
+  buildPdfArtifactKey: ({ userId, sessionId, fileName }: any) =>
+    `${userId}/${sessionId}/${fileName}`,
+}));
+
 jest.mock('../services/pdfConversionJobService', () => ({
   enqueuePdfConversion: jest.fn(),
+  enqueuePdfExport: jest.fn(),
   getPdfConversionJobs: jest.fn().mockResolvedValue([]),
-  processPendingPdfConversions: jest.fn().mockResolvedValue(undefined),
+  processPendingPdfJobs: jest.fn().mockResolvedValue(undefined),
+  startPdfJobPoller: jest.fn(),
 }));
 
 jest.mock('worker_threads', () => ({

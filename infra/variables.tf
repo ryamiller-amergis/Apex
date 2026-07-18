@@ -41,50 +41,9 @@ variable "app_service_zone_redundant" {
 }
 
 variable "app_service_worker_count" {
-  description = "App Service plan worker count / floor. Use 3 when app_service_zone_redundant is true. When autoscale is enabled this is the starting count; live capacity is managed by autoscale."
+  description = "Fixed App Service plan worker count. Use 3 when app_service_zone_redundant is true."
   type        = number
   default     = null
-}
-
-variable "enable_autoscale" {
-  description = "Create a CPU-based autoscale setting for the App Service plan. Requires a Standard/Premium plan. Keep the minimum >= 3 when zone redundancy is enabled."
-  type        = bool
-  default     = false
-}
-
-variable "autoscale_min_capacity" {
-  description = "Minimum App Service instances under autoscale. Must be >= 3 when app_service_zone_redundant is true."
-  type        = number
-  default     = 3
-}
-
-variable "autoscale_max_capacity" {
-  description = "Maximum App Service instances autoscale may scale out to."
-  type        = number
-  default     = 6
-
-  validation {
-    condition     = var.autoscale_max_capacity >= var.autoscale_min_capacity
-    error_message = "autoscale_max_capacity must be >= autoscale_min_capacity."
-  }
-}
-
-variable "autoscale_default_capacity" {
-  description = "Instance count autoscale falls back to when metrics are unavailable."
-  type        = number
-  default     = 3
-}
-
-variable "autoscale_cpu_scale_out_threshold" {
-  description = "Average CPU percentage over the evaluation window that triggers a scale-out."
-  type        = number
-  default     = 70
-}
-
-variable "autoscale_cpu_scale_in_threshold" {
-  description = "Average CPU percentage below which autoscale scales in."
-  type        = number
-  default     = 30
 }
 
 variable "enable_staging_slot" {
@@ -328,7 +287,7 @@ variable "postgresql_standby_availability_zone" {
 # Add containers for new modules; do not provision a second account unless
 # isolation requirements demand it. PDF job delivery uses Postgres (not Service Bus).
 variable "shared_storage_account_name" {
-  description = "Globally unique shared Storage Account for private async artifacts. A deterministic name is generated when null."
+  description = "Globally unique shared Storage Account for private async artifacts. Defaults to stapex<environment>async when null."
   type        = string
   default     = null
 

@@ -15,9 +15,8 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **App Service Plan**: Linux-based plan with Node.js support (B1 tier)
 - **App Service**: Linux web app running Node.js 24 LTS
 - **Application Insights**: Monitoring and telemetry
-- **App Service autoscale** (optional): CPU-based scale-out on the API plan, minimum held at 3 for zone redundancy
 - **Shared async Blob storage**: One private Storage Account per environment; modules isolate via containers (PDF starts with `pdf-artifacts`, keyed per `{userId}/{sessionId}/...`)
-- **Managed-identity access**: The Apex App Service identity is scoped to the PDF container. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
+- **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 
 ## Shared async platform conventions
 
@@ -29,7 +28,7 @@ Prefer extending the shared storage account over provisioning one-offs:
 | Background jobs at current PDF scale | Postgres job queue (app-owned) | Service Bus "because async" |
 | Worker compute | Prefer in-app on the Apex App Service unless isolation/scale requires a dedicated host | New App Service “because the feature is async” |
 
-RBAC stays least-privilege per container: grant Blob Data Contributor on the specific container. Service Bus remains an optional future platform (revised ADR scale-up path) — do not provision it by default.
+RBAC defaults to least-privilege per container. The shared Apex App Service identity is the documented exception because it hosts multiple in-process workloads and receives Blob Data Contributor at the shared account scope. Service Bus remains an optional future platform (revised ADR scale-up path) — do not provision it by default.
 ## Setup
 
 1. **Authenticate with Azure**:
@@ -175,30 +174,19 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_pat` | Azure DevOps PAT | (required) |
 | `ado_project` | Azure DevOps project | (required) |
 
-### App Service autoscale
-
-Autoscale is optional and off by default (`enable_autoscale = false`), so non-prod plans run at the static `app_service_worker_count`. Production enables it (`terraform.prd.tfvars`) to scale the API plan out on sustained CPU while keeping the minimum at 3 for zone redundancy.
-
-| Terraform variable | Purpose | Default |
-|--------------------|---------|---------|
-| `enable_autoscale` | Create the CPU autoscale setting for the API plan | `false` |
-| `autoscale_min_capacity` | Instance floor (keep >= 3 when zone-redundant) | `3` |
-| `autoscale_max_capacity` | Scale-out ceiling | `6` |
-| `autoscale_default_capacity` | Fallback when metrics are unavailable | `3` |
-| `autoscale_cpu_scale_out_threshold` | Avg CPU % (10-min window) that adds an instance | `70` |
-| `autoscale_cpu_scale_in_threshold` | Avg CPU % below which an instance is removed | `30` |
-
-When autoscale is enabled it owns the live instance count, so the plan's `worker_count` is intentionally ignored by Terraform (`ignore_changes`) to avoid drift. Scale-out cooldown is 5 min; scale-in cooldown is 10 min.
+The App Service plan uses the fixed `app_service_worker_count`. Production
+autoscaling is intentionally deferred until Interview and other long-running AI
+flows have a multi-instance ownership, cleanup, and scale-in recovery design.
 
 ### Shared async + PDF processing settings
 
 The shared Blob account is created in every Terraform workspace. PDF is the first consumer (`pdf-artifacts` container) and runs **inside the Apex App Service**. Job delivery uses the **Postgres queue** (revised ADR) — Terraform does **not** provision Service Bus or a separate PDF worker host.
 
-**Artifact layout:** PDF session/job files live in the private `pdf-artifacts` container keyed per user and session (`{userId}/{sessionId}/...`) rather than on the App Service local disk (`PDF_TEMP_DIR`). This is required because the API runs multiple instances — any instance (or autoscaled instance) must be able to read/write a session's artifacts. The Apex managed identity has container-scoped access; clients receive short-lived user-scoped URLs after authorization.
+**Artifact layout:** PDF session/job files live in the private `pdf-artifacts` container keyed per user and session (`{userId}/{sessionId}/...`) rather than on the App Service local disk (`PDF_TEMP_DIR`). This is required because the production API is zone-redundant across multiple fixed instances — any instance must be able to read/write a session's artifacts. The cross-cutting Apex managed identity has shared-account access; clients receive artifacts only through the authenticated API.
 
 | Terraform variable | Purpose | Default |
 |--------------------|---------|---------|
-| `shared_storage_account_name` | Globally unique shared artifact account; set explicitly if the derived name is unavailable | derived |
+| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
 | `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {} }` |
 | `pdf_blob_container_name` | PDF container key inside `blob_containers` | `pdf-artifacts` |
 
@@ -209,7 +197,17 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 | `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
 | `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
 
-The Apex managed identity receives container-scoped Blob contributor. No connection strings or shared keys are emitted.
+The cross-cutting Apex managed identity receives Storage Account-scoped Blob contributor. No connection strings or shared keys are emitted.
+
+When adding the system identity to an existing App Service with AzureRM 3.x,
+provisioning is intentionally two-stage:
+
+1. The first `terraform apply` adds the identity, Storage Account, and container.
+2. Run `terraform plan` again after Azure returns the principal ID, then apply
+   the Storage Account-scoped Blob role assignment.
+
+Do not deploy the Blob-backed application settings until the second plan shows
+`azurerm_role_assignment.api_pdf_blob_contributor` will be created.
 
 #### Extending for another module
 

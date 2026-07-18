@@ -1,7 +1,8 @@
 locals {
+  shared_storage_environment_token = replace(lower(var.environment), "/[^a-z0-9]/", "")
   shared_storage_account_name = coalesce(
     var.shared_storage_account_name,
-    "st${substr(md5("${var.resource_group_name}-${var.environment}-async"), 0, 22)}"
+    substr("stapex${local.shared_storage_environment_token}async", 0, 24)
   )
 }
 

@@ -35,10 +35,20 @@ jest.mock('fs/promises', () => ({
   rm: (...args: unknown[]) => mockRm(...args),
 }));
 
+jest.mock('../services/pdfArtifactStore', () => ({
+  getPdfArtifactStore: () => ({
+    deleteSessionPrefix: jest.fn().mockResolvedValue(undefined),
+  }),
+  buildPdfArtifactKey: ({ userId, sessionId, fileName }: any) =>
+    `${userId}/${sessionId}/${fileName}`,
+}));
+
 jest.mock('../services/pdfConversionJobService', () => ({
   enqueuePdfConversion: jest.fn(),
+  enqueuePdfExport: jest.fn(),
   getPdfConversionJobs: jest.fn().mockResolvedValue([]),
-  processPendingPdfConversions: jest.fn().mockResolvedValue(undefined),
+  processPendingPdfJobs: jest.fn().mockResolvedValue(undefined),
+  startPdfJobPoller: jest.fn(),
 }));
 
 jest.mock('worker_threads', () => ({
@@ -141,7 +151,7 @@ describe('pdfAssemblyService session lifecycle', () => {
           status: 'active',
         }),
       );
-      expect(mockMkdirSync).toHaveBeenCalled();
+      expect(mockMkdirSync).not.toHaveBeenCalled();
     });
 
     it('closes replaceSessionId before creating', async () => {

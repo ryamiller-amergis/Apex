@@ -34,70 +34,6 @@ resource "azurerm_service_plan" "main" {
 
   lifecycle {
     create_before_destroy = true
-    # When autoscale manages the plan it owns the live instance count; ignore it
-    # here so Terraform does not fight autoscale back to the static worker_count.
-    ignore_changes = [worker_count]
-  }
-}
-
-# CPU-based autoscale for the API plan. Optional; when disabled the plan runs at
-# the static worker_count. Minimum stays >= worker_count so zone redundancy holds.
-resource "azurerm_monitor_autoscale_setting" "main" {
-  count               = var.enable_autoscale ? 1 : 0
-  name                = "${var.app_service_plan_name}-autoscale"
-  resource_group_name = local.app_resource_group_name
-  location            = local.app_service_location
-  target_resource_id  = azurerm_service_plan.main.id
-  tags                = merge(var.tags, { Environment = var.environment })
-
-  profile {
-    name = "cpu-autoscale"
-
-    capacity {
-      minimum = var.autoscale_min_capacity
-      maximum = var.autoscale_max_capacity
-      default = var.autoscale_default_capacity
-    }
-
-    rule {
-      metric_trigger {
-        metric_name        = "CpuPercentage"
-        metric_resource_id = azurerm_service_plan.main.id
-        time_grain         = "PT1M"
-        statistic          = "Average"
-        time_window        = "PT10M"
-        time_aggregation   = "Average"
-        operator           = "GreaterThan"
-        threshold          = var.autoscale_cpu_scale_out_threshold
-      }
-
-      scale_action {
-        direction = "Increase"
-        type      = "ChangeCount"
-        value     = "1"
-        cooldown  = "PT5M"
-      }
-    }
-
-    rule {
-      metric_trigger {
-        metric_name        = "CpuPercentage"
-        metric_resource_id = azurerm_service_plan.main.id
-        time_grain         = "PT1M"
-        statistic          = "Average"
-        time_window        = "PT10M"
-        time_aggregation   = "Average"
-        operator           = "LessThan"
-        threshold          = var.autoscale_cpu_scale_in_threshold
-      }
-
-      scale_action {
-        direction = "Decrease"
-        type      = "ChangeCount"
-        value     = "1"
-        cooldown  = "PT10M"
-      }
-    }
   }
 }
 
@@ -117,17 +53,14 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
-    application_stack {
-      node_version = "20-lts"
-    }
-
-    # Enable local logging
+    # Node 24 is configured by deploy.yml. AzureRM 3.x cannot represent 24-lts
+    # in application_stack, so Terraform intentionally does not declare it.
     app_command_line = "npm start"
   }
 
   app_settings = {
     # Node / build
-    "WEBSITE_NODE_DEFAULT_VERSION"        = "20-lts"
+    "WEBSITE_NODE_DEFAULT_VERSION"        = "24-lts"
     "NODE_ENV"                            = "production"
     "PORT"                                = var.port
     "SCM_DO_BUILD_DURING_DEPLOYMENT"      = "false"
@@ -137,6 +70,10 @@ resource "azurerm_linux_web_app" "main" {
 
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
+
+    # PDF artifacts (managed identity; no storage keys)
+    "PDF_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
+    "PDF_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared[var.pdf_blob_container_name].name
 
     # Database
     "DATABASE_URL" = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
@@ -182,6 +119,14 @@ resource "azurerm_linux_web_app" "main" {
     "POLL_INTERVAL" = var.poll_interval
   }
 
+  # Keep environment-specific values with their deployment slot during swaps.
+  sticky_settings {
+    app_setting_names = [
+      "AZURE_REDIRECT_URL",
+      "APPLICATIONINSIGHTS_CONNECTION_STRING",
+    ]
+  }
+
   logs {
     detailed_error_messages = true
     failed_request_tracing  = true
@@ -204,7 +149,6 @@ resource "azurerm_linux_web_app" "main" {
       site_config[0].application_stack,
       client_affinity_enabled,
       tags,
-      identity,
     ]
   }
 }
@@ -220,10 +164,7 @@ resource "azurerm_linux_web_app_slot" "staging" {
   site_config {
     always_on = true
 
-    application_stack {
-      node_version = "20-lts"
-    }
-
+    # Node 24 is configured by deploy.yml; see the main app comment above.
     app_command_line = "npm start"
   }
 
@@ -261,7 +202,9 @@ resource "azurerm_postgresql_flexible_server" "main" {
   }
 
   lifecycle {
-    ignore_changes = [tags]
+    # Availability-zone placement is fixed when the server is created. Preserve
+    # the existing zone when an environment does not explicitly pass the value.
+    ignore_changes = [tags, zone]
   }
 }
 
