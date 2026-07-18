@@ -35,7 +35,18 @@ export class SidebarPage {
 
   /** Wait for the sidebar to be rendered and dismiss any auto-open overlays. */
   async waitForReady(): Promise<void> {
-    await this.nav().waitFor({ state: 'visible', timeout: 15_000 });
+    // The nav landmark (with Home) renders as soon as the shell mounts, but module
+    // items appear only after async menu-visibility + RBAC data resolves — which can
+    // lag on a slow/cold deployed environment. Wait for the landmark, then for the
+    // module list to hydrate (tolerating accounts/menus that expose no module items).
+    await this.nav().waitFor({ state: 'visible', timeout: 30_000 });
+    await this.page
+      .locator('[data-testid^="nav-item-"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .catch(() => {
+        /* no module items for this account/menu config — assertions in the spec decide */
+      });
     await dismissOverlays(this.page);
   }
 

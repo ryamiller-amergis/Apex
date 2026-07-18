@@ -97,9 +97,11 @@ test.describe('Authentication and project selection @smoke @critical', () => {
     const sidebar = new SidebarPage(page);
     await sidebar.waitForReady();
 
-    // Core nav items are present for a member.
+    // Core nav items are present for a member. Use a generous timeout because module
+    // items render only after async menu-visibility + RBAC data loads, which can lag
+    // on a freshly-deployed (cold) environment.
     await expect(sidebar.isHomeVisible()).resolves.toBe(true);
-    await expect(page.getByTestId('nav-item-calendar')).toBeVisible();
-    await expect(page.getByTestId('nav-item-backlog')).toBeVisible();
+    await expect(page.getByTestId('nav-item-calendar')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('nav-item-backlog')).toBeVisible({ timeout: 15_000 });
   });
 });

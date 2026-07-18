@@ -399,6 +399,26 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
+      # Deployed App Service cold-starts after each deploy (the startup command even
+      # reinstalls git before Node boots), so the first requests can hang or 5xx.
+      # Poll the SPA root until it serves 200 so the smoke run doesn't race the boot.
+      - name: Wait for deployed dev app to be ready (warm-up)
+        env:
+          E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
+        run: |
+          echo "Warming up ${E2E_BASE_URL} (waiting for the SPA to serve)..."
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_BASE_URL}/home" || echo "000")
+            echo "Attempt $i: GET /home -> $code"
+            if [ "$code" = "200" ]; then
+              echo "Deployed dev app is serving — proceeding to smoke."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Deployed dev app did not become ready within the warm-up window." >&2
+          exit 1
+
       - name: Run setup + deployed-smoke against dev
         env:
           CI: true
