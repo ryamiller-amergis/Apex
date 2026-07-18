@@ -58,7 +58,21 @@ type FileStoreFactory = (
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
+import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
+
+// ── E2E mode guard ────────────────────────────────────────────────────────────
+// When E2E_MODE=true, background services and schedulers are suppressed so
+// Playwright tests get a deterministic, side-effect-free server. This flag is
+// categorically rejected in production to prevent accidental misuse.
+const isE2EMode = process.env.E2E_MODE === 'true';
+if (isE2EMode) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[startup] E2E_MODE=true is not permitted when NODE_ENV=production. Exiting.');
+    process.exit(1);
+  }
+  console.log('[startup] E2E mode active — background services, schedulers, and integrations are disabled.');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -197,6 +211,12 @@ mountAdoMcp(app);
 mountGitHubMcp(app);
 mountMaxviewMcp(app);
 
+// E2E seed/reset endpoints — only active when E2E_MODE=true (already verified
+// earlier that this flag cannot be set in production).
+if (isE2EMode) {
+  app.use('/e2e', e2eSetupRoutes);
+}
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   // Serve static assets with cache for versioned files
@@ -275,7 +295,16 @@ async function bootstrapAdmin(): Promise<void> {
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  
+
+  if (isE2EMode) {
+    // E2E mode: skip all background services so tests run against a clean,
+    // side-effect-free server. Graceful shutdown still registers so the process
+    // exits cleanly when Playwright tears down the web server.
+    console.log('[E2E] Server ready — background services suppressed.');
+    registerGracefulShutdown(server);
+    return;
+  }
+
   // Start the feature auto-complete background service after a 2-minute delay
   // to avoid bursting ADO calls at the same time as UAT auto-release on boot.
   setTimeout(() => {

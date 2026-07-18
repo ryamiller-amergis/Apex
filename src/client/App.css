@@ -55,6 +55,11 @@
   --accent-teal-hover: #1C33A6;
   --success-color: #16A34A;
   --success-hover: #15803D;
+  /* Text color that renders ON accent/success fills (WCAG AA >= 4.5:1).
+     Light accent is a dark blue, so white passes; the medium green success
+     fill needs dark text (white is only ~3.3:1 on #16A34A). */
+  --on-accent: #ffffff;
+  --on-success: #0b1220;
   --error-color: #d32f2f;
   --shadow-sm: rgba(0, 0, 0, 0.08);
   --shadow-md: rgba(0, 0, 0, 0.14);
@@ -85,6 +90,10 @@
   --accent-teal-hover: #9CA8FF;
   --success-color: #4ADE80;
   --success-hover: #86EFAC;
+  /* Dark-theme accent/success fills are light (periwinkle / bright green),
+     so white text fails; dark text meets AA (>= 6:1 on both). */
+  --on-accent: #0b1220;
+  --on-success: #0b1220;
   --error-color: #ef5350;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);
@@ -115,6 +124,11 @@
   --accent-teal-hover: #6ed9b4;
   --success-color: #5ACCA6;
   --success-hover: #6ed9b4;
+  /* Accent/success are the light mint brand color; white text is only 1.97:1.
+     A dark on-brand teal-green gives 6.3:1 on #5ACCA6 while leaving the mint
+     brand fill unchanged. */
+  --on-accent: #0B3B2E;
+  --on-success: #0B3B2E;
   --error-color: #ef5350;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);

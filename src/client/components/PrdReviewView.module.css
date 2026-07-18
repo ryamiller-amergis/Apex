@@ -142,7 +142,12 @@
 
 .badgeGenerating { background: rgba(99, 102, 241, 0.15); color: #6366f1; }
 .badgeDraft { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
-.badgePendingReview { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+/* Amber tuned per surface: darker amber on the light theme's pale composite,
+   lighter amber on the dark themes' dark composite — both meet WCAG AA where
+   the single #d97706 did not (only ~3.3:1 on the dark surface). */
+.badgePendingReview { background: rgba(245, 158, 11, 0.15); color: #92400e; }
+:global([data-theme="dark"]) .badgePendingReview,
+:global([data-theme="amergis"]) .badgePendingReview { color: #fbbf24; }
 .badgeApproved { background: rgba(34, 197, 94, 0.15); color: var(--success-color); }
 .badgeRevisionRequested { background: rgba(249, 115, 22, 0.15); color: #ea580c; }
 
@@ -319,7 +324,7 @@
 .actionBtnPrimary {
   composes: actionBtn;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
   font-weight: 600;
 }
@@ -327,7 +332,7 @@
 .actionBtnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actionBtnPrimary:disabled {
@@ -438,14 +443,14 @@
   composes: actionBtn;
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   font-weight: 600;
 }
 
 .btnApprove:hover:not(:disabled) {
   background: color-mix(in srgb, var(--success-color) 85%, #000);
   border-color: color-mix(in srgb, var(--success-color) 85%, #000);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .btnApprove:disabled {
@@ -453,16 +458,26 @@
   cursor: not-allowed;
 }
 
+/* Orange revision action: #ea580c is only ~3.1:1 on the light card and 3.86:1
+   on the dark card. Use a darker orange on light surfaces and a lighter orange
+   on dark surfaces to meet WCAG AA. */
 .btnRevision {
   composes: actionBtn;
   border-color: #ea580c;
-  color: #ea580c;
+  color: #c2410c;
 }
 
 .btnRevision:hover:not(:disabled) {
   background: color-mix(in srgb, #ea580c 8%, transparent);
   border-color: #ea580c;
-  color: #ea580c;
+  color: #c2410c;
+}
+
+:global([data-theme="dark"]) .btnRevision,
+:global([data-theme="dark"]) .btnRevision:hover:not(:disabled),
+:global([data-theme="amergis"]) .btnRevision,
+:global([data-theme="amergis"]) .btnRevision:hover:not(:disabled) {
+  color: #fb923c;
 }
 
 
@@ -746,7 +761,7 @@
 .btnPrimary {
   padding: 9px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.88rem;
@@ -1121,7 +1136,7 @@
 
 .designDocBannerLink:hover {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 /* ── PRD readiness gate ─────────────────────────────────────────────────── */
@@ -1296,7 +1311,7 @@
 }
 
 .readinessStepPending {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .readinessStepFailed {
@@ -1314,7 +1329,7 @@
 }
 
 .readinessStepDetail {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
@@ -1894,7 +1909,7 @@
 .fixBtnGreen {
   composes: fixBtn;
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .fixBtnGreen:hover:not(:disabled) {

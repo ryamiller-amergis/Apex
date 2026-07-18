@@ -1,0 +1,61 @@
+name: E2E Failure Triage (Cursor SDK)
+
+# Trigger manually after a Playwright run to get AI-assisted failure classification.
+# This workflow is INFORMATIONAL ONLY — it cannot change the result of any test run.
+#
+# Prerequisites before enabling in CI:
+# 1. Verify CURSOR_API_KEY in GitHub secrets belongs to an Enterprise service account.
+# 2. Confirm the key has access to the composer-2.5 model.
+# 3. Test the script locally: npm run e2e:triage -- --results-dir playwright-results
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'GitHub run ID containing the playwright-results artifact'
+        required: true
+      artifact_name:
+        description: 'Artifact name (default: playwright-smoke-results)'
+        required: false
+        default: 'playwright-smoke-results'
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Playwright results artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.artifact_name }}
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: playwright-results/
+
+      - name: Run Cursor triage
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          npm run e2e:triage -- \
+            --results-dir playwright-results \
+            --run-id ${{ github.event.inputs.run_id }}
+
+      - name: Upload triage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cursor-triage-report-${{ github.run_id }}
+          path: playwright-results/cursor-triage-report.json
+          retention-days: 30

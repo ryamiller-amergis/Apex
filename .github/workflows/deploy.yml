@@ -272,3 +272,108 @@ jobs:
       - name: Azure logout
         run: az logout || true
         if: always()
+
+  # ── Post-deploy read-only smoke ─────────────────────────────────────────────
+  # Run the `deployed-smoke` Playwright project (no local server, no seeding, no
+  # /e2e/* writes) against the deployed staging slot and, after swap, production.
+  # Both jobs are non-blocking (continue-on-error) and do NOT gate the deploy or
+  # swap — they surface authenticated-navigation regressions as visible signal.
+  #
+  # Auth model:
+  #   • STAGING → FULLY-AUTOMATED programmatic Azure AD SSO login. The `setup`
+  #     Playwright project drives the real Entra login form with the dedicated
+  #     test-account credentials and produces a fresh, ephemeral storageState each
+  #     run (no stored/manually-captured session blob).
+  #   • PROD → stays UNAUTHENTICATED: only the read-only @prod-safe boundary runs,
+  #     with NO credentials and NO setup project. Authenticated coverage lives on
+  #     dev + staging.
+  #
+  # The E2E test account MUST be exempt from MFA / conditional access for staging —
+  # programmatic login cannot clear an interactive MFA challenge.
+  #
+  # Required repo config:
+  #   vars.E2E_STAGING_BASE_URL  (optional) staging URL; defaults to the staging slot.
+  #   vars.E2E_PROD_BASE_URL     (optional) prod URL; defaults to app-apex-prd.
+  #   secrets.E2E_TEST_USER      dedicated Azure AD E2E test account UPN/email (staging).
+  #   secrets.E2E_TEST_PASSWORD  password for that account (staging).
+  deployed-smoke-staging:
+    needs: [deploy-staging]
+    if: always() && !cancelled() && needs.deploy-staging.result == 'success'
+    runs-on: ubuntu-latest
+    # No `environment:` — reads repo-level vars/secrets and stays ungated so a
+    # read-only smoke never adds an approval prompt to the prod deploy.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run setup + deployed-smoke against staging slot
+        continue-on-error: true
+        env:
+          CI: true
+          E2E_BASE_URL: ${{ vars.E2E_STAGING_BASE_URL || format('https://{0}-{1}.azurewebsites.net', env.APP_SERVICE_NAME, env.SLOT_NAME) }}
+          E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
+          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+        run: npx playwright test --project=deployed-smoke
+
+      - name: Upload deployed-smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-smoke-staging-results-${{ github.run_id }}
+          path: playwright-results/
+          retention-days: 7
+
+  deployed-smoke-prod:
+    needs: [swap]
+    if: always() && !cancelled() && needs.swap.result == 'success'
+    runs-on: ubuntu-latest
+    # No `environment:` — must stay ungated so it does not re-trigger the
+    # prd-production manual-approval gate after the swap already completed.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      # Production stays UNAUTHENTICATED by design: no SSO credentials, no `setup`
+      # project, no storageState. The @prod-safe subset is the strictly read-only
+      # boundary — never seeds, never mutates, never calls /e2e/*, and never logs
+      # in against production. Authenticated coverage runs on dev + staging.
+      - name: Run prod-safe smoke against production (unauthenticated)
+        continue-on-error: true
+        env:
+          CI: true
+          E2E_BASE_URL: ${{ vars.E2E_PROD_BASE_URL || format('https://{0}.azurewebsites.net', env.APP_SERVICE_NAME) }}
+        run: npx playwright test --project=deployed-smoke --grep "@prod-safe"
+
+      - name: Upload prod-safe smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-smoke-prod-results-${{ github.run_id }}
+          path: playwright-results/
+          retention-days: 7
