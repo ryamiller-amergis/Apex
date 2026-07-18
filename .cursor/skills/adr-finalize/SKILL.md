@@ -27,7 +27,7 @@ Generate one Architecture Decision Record without asking questions.
 5. Include at least two considered options when the transcript supports them. Never manufacture an option merely to reach a count.
 6. State both positive and negative consequences. Preserve unresolved risks explicitly.
 7. Keep references traceable to repository paths, design documents, work items, or external sources present in the transcript.
-
-## Quality check
+8. When the decision adopts or rejects shared Blob/Service Bus topology, cite `.cursor/skills/azure-async-infra/SKILL.md` and `infra/shared-async.tf` in References.
+9. When the decision implies Terraform delivery under `infra/`, cite `.cursor/skills/terraform-infra/SKILL.md` and the expected `*.tf` ownership in References.## Quality check
 
 Before finishing, verify the file has valid YAML frontmatter and every template section. The title, selected option, drivers, and consequences must agree. Do not respond with the ADR content in chat; the file is the deliverable.

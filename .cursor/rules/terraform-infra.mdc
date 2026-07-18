@@ -1,0 +1,40 @@
+---
+description: Apex Terraform coding standards for infra/ (layout, for_each, MI/RBAC, secrets, fmt/validate, README contracts)
+globs: infra/**/*
+alwaysApply: false
+---
+
+# Terraform Infrastructure Conventions
+
+When creating or editing files under `infra/`, follow
+`.cursor/skills/terraform-infra/SKILL.md`. For Blob / async topology, also
+follow `.cursor/skills/azure-async-infra/SKILL.md`.
+
+## Must follow
+
+1. **Single root module** in `infra/`. Split by workload (`main.tf`,
+   `shared-async.tf`, `pdf-processing.tf`, …) — not one file per Azure resource type.
+2. **Extend shared maps** (`blob_containers`) before creating new storage accounts.
+   Do not provision Service Bus by default (PDF uses Postgres + Blob).
+3. Prefer **`for_each` + stable keys** for homogeneous entities; use `count` only
+   for simple optional resources.
+4. Every variable: typed, described; secrets marked `sensitive = true`.
+5. Outputs expose names/IDs/FQDNs and app-setting contracts — not shared keys as
+   the primary auth story.
+6. Use **system-assigned managed identity** and **entity-scoped** role
+   assignments (container).
+7. Tag with `merge(var.tags, { Environment = var.environment, ... })`; add
+   `Workload` for non-core stacks.
+8. Update `terraform.tfvars.example` and `infra/README.md` when resources or
+   operator steps change.
+9. After edits: `terraform fmt -recursive` and `terraform validate` from `infra/`.
+10. Do not `apply`/destroy unless the user explicitly requests it. Do not commit
+    real `terraform.tfvars` or secrets.
+11. Do not provision a new App Service for a feature that already runs in Apex
+    when the only cloud need is shared Blob access.
+
+## Why
+
+Consistent Terraform keeps Apex environments reproducible, keeps async platform
+extension cheap for the next module, and prevents secret sprawl and over-broad
+cloud RBAC.

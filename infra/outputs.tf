@@ -23,6 +23,16 @@ output "app_service_plan_name" {
   value       = azurerm_service_plan.main.name
 }
 
+output "app_service_autoscale_enabled" {
+  description = "Whether CPU-based autoscale is managing the App Service plan"
+  value       = var.enable_autoscale
+}
+
+output "app_service_autoscale_setting_name" {
+  description = "Name of the autoscale setting when enabled"
+  value       = var.enable_autoscale ? azurerm_monitor_autoscale_setting.main[0].name : null
+}
+
 output "application_insights_instrumentation_key" {
   description = "Application Insights Instrumentation Key"
   value       = azurerm_application_insights.main.instrumentation_key
@@ -49,4 +59,39 @@ output "postgresql_connection_string" {
   description = "Full PostgreSQL connection URI for the application"
   value       = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
   sensitive   = true
+}
+
+# Shared async Blob platform
+output "shared_storage_account_name" {
+  description = "Shared private Storage Account for async workload artifacts"
+  value       = azurerm_storage_account.shared.name
+}
+
+output "blob_container_names" {
+  description = "Private blob containers provisioned on the shared storage account"
+  value       = sort(keys(azurerm_storage_container.shared))
+}
+
+# PDF workload (first consumer of shared blob)
+output "pdf_storage_account_name" {
+  description = "Storage Account used by PDF (alias of shared_storage_account_name)"
+  value       = azurerm_storage_account.shared.name
+}
+
+output "pdf_blob_container_name" {
+  description = "Private Blob container used for PDF artifacts"
+  value       = azurerm_storage_container.shared[var.pdf_blob_container_name].name
+}
+
+output "pdf_api_managed_identity_principal_id" {
+  description = "Apex App Service identity granted PDF Blob contributor role"
+  value       = azurerm_linux_web_app.main.identity[0].principal_id
+}
+
+output "pdf_app_setting_names" {
+  description = "Non-secret app setting contract for PDF assembly inside the Apex application"
+  value = {
+    blob_account_name   = "PDF_BLOB_ACCOUNT_NAME"
+    blob_container_name = "PDF_BLOB_CONTAINER_NAME"
+  }
 }

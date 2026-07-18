@@ -45,8 +45,8 @@ Load immediately when any of the following are true:
 2. Read `AGENTS.md` (repo root) — feature map, directory structure, service files. **Mandatory.**
 3. Scan `design-docs/` file names — know what's already been designed.
 4. Based on the feature description, do a targeted codebase scan (2–3 Grep/Read calls) to understand the current state of the area being discussed.
-
----
+5. If the topic involves async jobs, workers, Blob, Service Bus, queues, topics, or pub/sub, load `.cursor/skills/azure-async-infra/SKILL.md` and treat the shared platform in `infra/shared-async.tf` as the default topology unless the interview rejects it with a concrete isolation driver.
+6. If the topic will require Terraform changes under `infra/`, load `.cursor/skills/terraform-infra/SKILL.md` and call out file ownership, managed identity/RBAC scope, and outputs/README as part of the technical approach.---
 
 ## Phase 1 — Technical discovery (architecture-first)
 

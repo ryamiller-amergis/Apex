@@ -8,6 +8,15 @@ app_service_plan_name  = "plan-ai-pilot-dev"
 app_service_plan_sku   = "B1" # Use S1+ in prod for deployment slots (blue-green)
 environment            = "dev"
 
+# App Service autoscale (off by default; requires Standard/Premium plan).
+# Keep the minimum >= 3 in any zone-redundant environment.
+enable_autoscale           = false
+autoscale_min_capacity     = 3
+autoscale_max_capacity     = 6
+autoscale_default_capacity = 3
+# autoscale_cpu_scale_out_threshold = 70
+# autoscale_cpu_scale_in_threshold  = 30
+
 # Azure DevOps Configuration
 ado_org     = "https://dev.azure.com/your-org"
 ado_pat     = "your-pat-token-here"
@@ -57,3 +66,16 @@ postgresql_admin_username = "pgadmin"
 postgresql_admin_password = "ChangeMe123!"  # Must include upper, lower, number, min 8 chars
 postgresql_database_name  = "aipilot"
 postgresql_sku_name       = "B_Standard_B1ms"
+
+# Shared async Blob platform
+# One private storage account per environment. Add containers for new modules.
+# PDF job delivery uses the Postgres queue (revised ADR) — Service Bus is not
+# provisioned until scale-up triggers require a managed broker.
+shared_storage_account_name = null
+# blob_containers default includes pdf-artifacts. Example for another module:
+# blob_containers = {
+#   pdf-artifacts      = {}
+#   standup-recordings = {}
+# }
+
+pdf_blob_container_name = "pdf-artifacts"
