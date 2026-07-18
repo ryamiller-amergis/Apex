@@ -27,9 +27,15 @@ describe('RBAC integration — getUserPermissions', () => {
     expect(permissions).not.toContain('analytics:ai-cost:view');
   });
 
-  it('returns an empty array for an unknown user', async () => {
+  it('falls back to the default member role for an unknown user', async () => {
+    // Unprovisioned-but-authenticated users inherit the default (member) role's
+    // baseline permissions rather than receiving nothing.
     const permissions = await getUserPermissions('nonexistent-oid-12345', 'MaxView');
-    expect(permissions).toEqual([]);
+    expect(permissions).toContain('calendar:view');
+    expect(permissions).toContain('chat:view');
+    // but never admin-only permissions
+    expect(permissions).not.toContain('admin:roles');
+    expect(permissions).not.toContain('analytics:ai-cost:view');
   });
 });
 
@@ -41,8 +47,8 @@ describe('RBAC integration — getUserRoleNames', () => {
     expect(roles).not.toContain('admin');
   });
 
-  it('returns empty array for unknown user', async () => {
+  it('falls back to the default member role for an unknown user', async () => {
     const roles = await getUserRoleNames('unknown-oid-99999');
-    expect(roles).toEqual([]);
+    expect(roles).toEqual(['member']);
   });
 });
