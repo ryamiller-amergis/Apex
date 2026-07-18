@@ -359,7 +359,9 @@ jobs:
 
   # Post-deploy read-only smoke against the deployed dev site. Runs the
   # `deployed-smoke` Playwright project (no local server, no seeding) against the
-  # dev URL. Non-blocking (continue-on-error) so a smoke failure never blocks a PR.
+  # dev URL. BLOCKING: a smoke failure fails the run so regressions introduced by
+  # the branch's changes are caught and fixed rather than silently deployed. CI
+  # retries (retries: 2 in playwright.config.ts) absorb transient infra flakes.
   #
   # AUTH: deployed dev runs with NODE_ENV=production, so /auth/dev-login is gated
   # OFF there. Authenticated smoke logs in via FULLY-AUTOMATED programmatic Azure
@@ -398,7 +400,6 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Run setup + deployed-smoke against dev
-        continue-on-error: true
         env:
           CI: true
           E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
