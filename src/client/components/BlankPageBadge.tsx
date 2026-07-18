@@ -17,12 +17,12 @@ export const BlankPageBadge: React.FC<BlankPageBadgeProps> = ({ isBlank, pageInd
   const tooltipId = `blank-page-tooltip-${pageIndex}`;
 
   return (
-    <span
+    <button
+      type="button"
       className={styles.badge}
       data-testid={`blank-page-badge-${pageIndex}`}
       aria-label="Likely blank page"
       aria-describedby={showTooltip ? tooltipId : undefined}
-      tabIndex={0}
       onMouseEnter={handleShowTooltip}
       onMouseLeave={handleHideTooltip}
       onFocus={handleShowTooltip}
@@ -39,6 +39,6 @@ export const BlankPageBadge: React.FC<BlankPageBadgeProps> = ({ isBlank, pageInd
           This page appears to be blank. You may want to delete it before export.
         </span>
       )}
-    </span>
+    </button>
   );
 };

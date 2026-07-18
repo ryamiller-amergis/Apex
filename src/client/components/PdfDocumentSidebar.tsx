@@ -384,7 +384,7 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                     className={`${styles.fileCard} ${f.fileId === selectedFileId ? styles.fileCardSelected : ''}`}
                     onClick={() => onSelectFile(f.fileId)}
                     tabIndex={0}
-                    role="listitem"
+                    role="option"
                     aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
                     aria-selected={f.fileId === selectedFileId}
                     onKeyDown={(e) => {

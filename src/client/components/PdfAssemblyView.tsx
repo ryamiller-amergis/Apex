@@ -710,6 +710,8 @@ export const PdfAssemblyView: React.FC = () => {
               />
             </div>
 
+            {/* Focusable window-splitter: keyboard-resizable separator per WAI-ARIA */}
+            {/* eslint-disable jsx-a11y/no-noninteractive-tabindex */}
             <div
               className={styles.workspaceDivider}
               role="separator"
@@ -730,6 +732,7 @@ export const PdfAssemblyView: React.FC = () => {
             >
               <span className={styles.workspaceDividerHandle} aria-hidden="true" />
             </div>
+            {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
 
             <div className={styles.previewPanel} role="complementary" aria-label="Page preview">
               <PdfInlinePreview

@@ -104,7 +104,7 @@ function renderWorkItemLinks(text: string, onWorkItemClick: (id: number) => void
 }
 
 function processStandupText(text: string, onWorkItemClick: (id: number) => void, keyPrefix: string): React.ReactNode {
-  const releaseSuffix = text.match(/( · Release: [^🎯\n]+)( 🎯)?$/);
+  const releaseSuffix = text.match(/( · Release: [^🎯\n]+)( 🎯)?$/u);
   const withoutRelease = releaseSuffix ? text.slice(0, releaseSuffix.index) : text;
 
   const typeMatch = withoutRelease.match(/^(#\d+)( · )([A-Za-z][A-Za-z ]*?)( — )(.*)$/);
