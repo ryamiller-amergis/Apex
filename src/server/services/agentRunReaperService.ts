@@ -127,6 +127,30 @@ export function assessAgentRunHealth(
   return 'healthy';
 }
 
+/**
+ * Cross-instance liveness check for a thread's agent run.
+ *
+ * Unlike in-memory `isThreadIdle`, this reads `agent_runs` and treats a run as
+ * alive while any queued/running row is not terminal (`worker_lost`,
+ * `hard_timeout`, `never_claimed`). Use this before failing generation so
+ * non-owner instances do not discard work still owned by another worker.
+ */
+export async function isThreadRunAlive(
+  threadId: string,
+  options: ReaperOptions = {},
+): Promise<boolean> {
+  const config = options.config ?? resolveAgentRunHealthConfig();
+  const nowMs = options.now?.() ?? Date.now();
+  const rows = await db.query.agentRuns.findMany({
+    where: and(eq(agentRuns.threadId, threadId), inArray(agentRuns.status, ['queued', 'running'])),
+  });
+  return rows.some((row) => {
+    const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
+    const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
+    return health !== 'worker_lost' && health !== 'hard_timeout' && health !== 'never_claimed';
+  });
+}
+
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {
   if (health === 'progress_stale') {
     return `No meaningful progress for more than ${Math.round(config.progressStaleMs / 60_000)} minutes`;

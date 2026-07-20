@@ -9,6 +9,7 @@ const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -605,11 +606,13 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       }
     }
 
-    // Done: the agent thread must be idle (finished) AND we found at least one
-    // feature AND the set was stable across two consecutive ticks.  Without the
-    // idle check, slow agents that write features one-by-one will trigger a
-    // premature "stable" detection and the watcher cleans up mid-generation.
-    const agentFinished = isThreadIdle(chatThreadId);
+    // Done: the agent run must be authoritatively finished (in-memory idle AND
+    // no live agent_runs row) AND we found at least one feature AND the set was
+    // stable across two consecutive ticks. Without the cross-instance liveness
+    // check, non-owner recovery watchers treat hydrated threads as idle and
+    // clean up mid-generation. Without the idle check, slow agents that write
+    // features one-by-one will trigger a premature "stable" detection.
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
     const allDone = agentFinished && createdSlugs.size > 0 && currentSlugsKey === prevFoundSlugsKey && currentSlugsKey !== '';
     prevFoundSlugsKey = currentSlugsKey;
 
@@ -746,7 +749,9 @@ export function startSingleFeatureDocWatcher(
       return;
     }
 
-    if (isThreadIdle(chatThreadId)) {
+    // Fail only when the run is dead across instances — in-memory idle alone is
+    // unreliable after hydrateThread resets status on non-owner workers.
+    if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);

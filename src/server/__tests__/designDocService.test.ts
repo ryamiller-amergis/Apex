@@ -58,6 +58,10 @@ jest.mock('../services/chatAgentService', () => ({
   cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
+}));
+
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
@@ -103,6 +107,7 @@ import {
   syncValidationResult,
   markValidationReady,
   startDesignDocWatcher,
+  startSingleFeatureDocWatcher,
   startSingleFeatureDesignDocWatcher,
   finalizeSingleFeatureDoc,
 } from '../services/designDocService';
@@ -995,6 +1000,76 @@ describe('startDesignDocWatcher', () => {
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'draft' }),
+    );
+  });
+});
+
+// ── startSingleFeatureDocWatcher — cross-instance liveness ────────────────────
+
+describe('startSingleFeatureDocWatcher', () => {
+  const { isThreadIdle: mockIsThreadIdle } =
+    jest.requireMock('../services/chatAgentService') as { isThreadIdle: jest.Mock };
+  const { isThreadRunAlive: mockIsThreadRunAlive } =
+    jest.requireMock('../services/agentRunReaperService') as { isThreadRunAlive: jest.Mock };
+  const {
+    readOutputDesignDoc: mockDesign,
+    readOutputTechSpec: mockTech,
+    readOutputAssumptions: mockAssumptions,
+  } = jest.requireMock('../services/chatAgentService') as {
+    readOutputDesignDoc: jest.Mock;
+    readOutputTechSpec: jest.Mock;
+    readOutputAssumptions: jest.Mock;
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockDesign.mockReturnValue(null);
+    mockTech.mockReturnValue(null);
+    mockAssumptions.mockReturnValue(null);
+    mockIsThreadIdle.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('does not fail generation while agent_runs says the run is still alive', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockIsThreadRunAlive).toHaveBeenCalledWith('thread-1');
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('fails generation when the thread is idle and the run is dead', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
     );
   });
 });

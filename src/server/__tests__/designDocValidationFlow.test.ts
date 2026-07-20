@@ -40,6 +40,10 @@ jest.mock('../services/chatAgentService', () => ({
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
 }));
 
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
+}));
+
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));

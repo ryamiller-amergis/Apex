@@ -18,6 +18,7 @@ jest.mock('../services/pgNotifyService', () => ({
 
 import {
   assessAgentRunHealth,
+  isThreadRunAlive,
   reapOrphanedRuns,
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
@@ -243,5 +244,76 @@ describe('reapOrphanedRuns', () => {
       }),
       { persist: true }
     );
+  });
+});
+
+describe('isThreadRunAlive', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns true while a healthy running agent_runs row exists', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns true for progress_stale and long_running (worker still alive)', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(45 * 60_000),
+        startedAt: timestamp(45 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(3 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when the only run is worker_lost', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(6 * 60_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(false);
+  });
+
+  it('returns false when no queued/running rows exist', async () => {
+    mockFindMany.mockResolvedValue([]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(false);
   });
 });
