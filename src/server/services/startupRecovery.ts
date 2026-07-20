@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
 import {
   startSingleFeatureDocWatcher,
@@ -177,7 +178,8 @@ export async function recoverInFlightWork(): Promise<void> {
 
       // If the agent was killed mid-run (thread is idle after hydration), re-kick
       // it so the validation run actually resumes rather than the watcher polling forever.
-      if (isThreadIdle(doc.validationThreadId)) {
+      // Skip re-kick when another instance still owns a live run.
+      if (isThreadIdle(doc.validationThreadId) && !(await isThreadRunAlive(doc.validationThreadId))) {
         sendMessage(doc.validationThreadId, 'Begin.').catch((err: Error) => {
           console.error(
             `[recovery] Failed to re-kick validation agent (designDocId=${doc.id}, threadId=${doc.validationThreadId}):`,
@@ -188,14 +190,19 @@ export async function recoverInFlightWork(): Promise<void> {
           `[recovery] Re-kicked dead validation agent (designDocId=${doc.id})`
         );
       }
-    } else {
-      // Thread is unrecoverable — reset the doc so it's not stuck forever
+    } else if (!(await isThreadRunAlive(doc.validationThreadId))) {
+      // Thread is unrecoverable and no other instance owns a live run —
+      // reset so the doc is not stuck forever.
       await db.update(designDocs)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
       recovered++;
       console.warn(
         `[recovery] Could not hydrate validation thread — reset to pending_review (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+      );
+    } else {
+      console.warn(
+        `[recovery] Could not hydrate validation thread but run is still alive elsewhere — leaving validating (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
       );
     }
   }
@@ -230,7 +237,7 @@ export async function recoverInFlightWork(): Promise<void> {
         `[recovery] Restarted PRD validation watcher (prdId=${prd.id})`
       );
 
-      if (isThreadIdle(prd.validationThreadId)) {
+      if (isThreadIdle(prd.validationThreadId) && !(await isThreadRunAlive(prd.validationThreadId))) {
         sendMessage(prd.validationThreadId, 'Begin.').catch((err: Error) => {
           console.error(
             `[recovery] Failed to re-kick PRD validation agent (prdId=${prd.id}, threadId=${prd.validationThreadId}):`,
@@ -241,13 +248,17 @@ export async function recoverInFlightWork(): Promise<void> {
           `[recovery] Re-kicked dead PRD validation agent (prdId=${prd.id})`
         );
       }
-    } else {
+    } else if (!(await isThreadRunAlive(prd.validationThreadId))) {
       await db.update(prds)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
       recovered++;
       console.warn(
         `[recovery] Could not hydrate PRD validation thread — reset to pending_review (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+      );
+    } else {
+      console.warn(
+        `[recovery] Could not hydrate PRD validation thread but run is still alive elsewhere — leaving validating (prdId=${prd.id}, threadId=${prd.validationThreadId})`
       );
     }
   }

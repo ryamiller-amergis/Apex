@@ -1057,6 +1057,10 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     doc.assumptionsContent || '(empty)',
   ].join('\n');
 
+  // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts.
+  // Otherwise the agent can finish during the await gap and post-run sync cannot
+  // find this doc (validationThreadId still null) — scorecard is lost and the
+  // watcher later resets to pending_review with no score.
   const thread = await createChatThread(doc.authorId, {
     project: doc.project,
     repo: skillConfig.skillRepo,
@@ -1065,7 +1069,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     skillPath: skillConfig.designDocValidationSkillPath,
     freeformContext: context,
     model,
-  });
+  }, { skipAutoKickoff: true });
 
   // #region agent log
   try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:thread-created',message:'new validation thread created',data:{designDocId,newThreadId:thread.id,docStatus:doc.status,prevValidationThreadId:doc.validationThreadId??null,skillRepo:skillConfig.skillRepo,skillBranch:skillConfig.skillBranch??'main',skillPath:skillConfig.designDocValidationSkillPath,model},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
@@ -1094,6 +1098,17 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   // #endregion
 
   startValidationWatcher(designDocId, thread.id);
+
+  const kickoffMessage =
+    'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
+    'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
+    '`review-scorecard.md` to `.ai-pilot/output/`.';
+  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
+    console.error(
+      `[autoStartValidation] Failed to kick off validation agent (designDocId=${designDocId}, threadId=${thread.id}):`,
+      err.message,
+    );
+  });
 }
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
@@ -1133,9 +1148,15 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
 
     if (!scorecardRaw) {
       // If the agent has completed or errored without producing a scorecard,
-      // reset the doc status to draft so the user can re-run.
+      // reset so the user can re-run. Require a terminal local/owned run —
+      // isThreadIdle alone is unsafe under multi-instance (and also true in the
+      // brief window before sendMessage claims the run).
       // The `status = 'validating'` WHERE guard prevents downgrading an already-scored doc.
-      if (isThreadIdle(validationThreadId)) {
+      if (
+        isThreadIdle(validationThreadId)
+        && !(await isThreadRunAlive(validationThreadId))
+        && (await canThisInstanceFailGeneration(validationThreadId))
+      ) {
         clearInterval(interval);
         activeValidationWatchers.delete(designDocId);
         console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);

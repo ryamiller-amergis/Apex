@@ -4,14 +4,8 @@ import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
-import {
-  readOutputValidationScorecard,
-  readOutputValidationScorecardMd,
-  isThreadIdle,
-  createThread as createChatThread,
-  cancelRun,
-  sendMessage,
-} from './chatAgentService';
+import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage } from './chatAgentService';
+import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 
@@ -76,6 +70,8 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
   const model = adapter.getModel(skillConfig, globalModel);
   const context = adapter.buildValidationContext(skillConfig);
 
+  // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts
+  // so post-run sync can find the owning document when the run completes.
   const thread = await createChatThread(adapter.getAuthorId(), {
     project,
     repo: skillConfig.skillRepo,
@@ -84,11 +80,22 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     skillPath,
     freeformContext: context,
     model,
-  });
+  }, { skipAutoKickoff: true });
 
   stopDocumentValidationWatcher(adapter.getDocumentId());
   await adapter.updateDbForValidationStart(thread.id);
   startDocumentValidationWatcher(adapter, thread.id);
+
+  const kickoffMessage =
+    'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
+    'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
+    '`review-scorecard.md` to `.ai-pilot/output/`.';
+  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
+    console.error(
+      `[autoStartDocumentValidation] Failed to kick off validation agent (documentId=${adapter.getDocumentId()}, threadId=${thread.id}):`,
+      err.message,
+    );
+  });
 }
 
 export function startDocumentValidationWatcher(
@@ -115,7 +122,11 @@ export function startDocumentValidationWatcher(
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
-      if (isThreadIdle(validationThreadId)) {
+      if (
+        isThreadIdle(validationThreadId)
+        && !(await isThreadRunAlive(validationThreadId))
+        && (await canThisInstanceFailGeneration(validationThreadId))
+      ) {
         clearInterval(interval);
         activeValidationWatchers.delete(documentId);
         console.warn(`[documentValidationWatcher] Agent completed without scorecard — resetting (documentId=${documentId})`);
