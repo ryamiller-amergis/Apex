@@ -70,7 +70,11 @@ import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
 import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
-import { getTestCases, triggerTestCaseGeneration } from '../services/testCaseService';
+import {
+  getTestCases,
+  recalculateTestCaseCoverage,
+  triggerTestCaseGeneration,
+} from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
@@ -218,6 +222,20 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     const sourceThreadId = prdRow.chatThreadId ?? '';
     const started = await triggerTestCaseGeneration(prdId, sourceThreadId);
     res.json({ started });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/prds/:prdId/test-cases/recalculate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    const coverageSummary = await recalculateTestCaseCoverage(req.params.prdId);
+    res.json({ coverageSummary });
   } catch (err) {
     next(err);
   }
@@ -633,7 +651,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         '',
         '- To update PRD content: call `update_prd` with section="content" and the full revised markdown.',
         '- To update the backlog: call `update_prd` with section="backlog" and the full revised JSON string.',
-        '- To add a REAL QA test case (with steps) for a backlog item: call `add_test_case` with `pbiId`, a `title`, an ordered `steps` array, and optionally `acceptanceCriteriaIndex`. Use this whenever the user asks you to add or write a test case — do NOT just bump a count via `update_prd`.',
+        '- To add a REAL QA test case (with steps) for a backlog item: call `add_test_case` with `pbiId`, a `title`, an ordered `steps` array, and all applicable `acceptanceCriteriaIndex` and `businessRules` traceability. Use this whenever the user asks you to add or write a test case — do NOT just bump a count via `update_prd`.',
         '- Always pass `threadId: "' + threadId + '"` and `prdId: "' + req.params.prdId + '"` when calling the tool.',
         '',
         'After you call `update_prd`, the changes will appear as a proposed diff that the PRD owner can review and accept or reject.',

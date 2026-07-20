@@ -31,6 +31,7 @@ import {
   useRevertPrdSection,
   usePrdValidationReport,
   useGenerateTestCases,
+  useRecalculateTestCaseCoverage,
   useScreenInventoryRoutes,
   useCreateDesignDoc,
   useOwnerApprove,
@@ -397,6 +398,7 @@ export const PrdReviewView: React.FC = () => {
   const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
 
   const generateTestCases = useGenerateTestCases();
+  const recalculateTestCaseCoverage = useRecalculateTestCaseCoverage();
 
   // PRD Validation hooks
   const createPrdValidationThread = useCreatePrdValidationThread();
@@ -1113,6 +1115,10 @@ export const PrdReviewView: React.FC = () => {
     !!prd.content &&
     (readiness.state === 'test_cases_pending' ||
       readiness.state === 'test_case_generation_failed');
+  const canRecalculateTestCaseCoverageAction =
+    canManage &&
+    prd.status !== 'approved' &&
+    readiness.state === 'coverage_gaps';
   const canRunValidationAction =
     canManage &&
     prd.prdValidationEnabled &&
@@ -1405,6 +1411,19 @@ export const PrdReviewView: React.FC = () => {
               type="button"
             >
               {readiness.state === 'test_case_generation_failed' ? 'Regenerate Test Cases' : 'Generate Test Cases'}
+            </button>
+          )}
+
+          {canRecalculateTestCaseCoverageAction && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => void recalculateTestCaseCoverage.mutateAsync(prd.id)}
+              disabled={recalculateTestCaseCoverage.isPending}
+              type="button"
+            >
+              {recalculateTestCaseCoverage.isPending
+                ? 'Re-evaluating Coverage…'
+                : 'Re-evaluate Coverage'}
             </button>
           )}
 
