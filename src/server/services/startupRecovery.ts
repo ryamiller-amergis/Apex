@@ -153,7 +153,17 @@ export async function recoverInFlightWork(): Promise<void> {
     columns: { id: true, validationThreadId: true },
   });
   for (const doc of validatingDocs) {
-    if (!doc.validationThreadId) continue;
+    if (!doc.validationThreadId) {
+      // No thread at all — stuck without any way to resume
+      await db.update(designDocs)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] Design doc validating with no thread — reset to pending_review (designDocId=${doc.id})`
+      );
+      continue;
+    }
     // Skip docs that already have an active watcher — avoids clobbering a
     // watcher that was just started by autoStartValidation or acceptFixValidation.
     if (isValidationWatcherActive(doc.id)) continue;
@@ -179,8 +189,13 @@ export async function recoverInFlightWork(): Promise<void> {
         );
       }
     } else {
+      // Thread is unrecoverable — reset the doc so it's not stuck forever
+      await db.update(designDocs)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
+      recovered++;
       console.warn(
-        `[recovery] Could not hydrate thread for validation (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+        `[recovery] Could not hydrate validation thread — reset to pending_review (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
       );
     }
   }
@@ -196,7 +211,16 @@ export async function recoverInFlightWork(): Promise<void> {
     columns: { id: true, validationThreadId: true },
   });
   for (const prd of validatingPrds) {
-    if (!prd.validationThreadId) continue;
+    if (!prd.validationThreadId) {
+      await db.update(prds)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] PRD validating with no thread — reset to pending_review (prdId=${prd.id})`
+      );
+      continue;
+    }
     if (isPrdValidationWatcherActive(prd.id)) continue;
     const ok = await hydrateThread(prd.validationThreadId);
     if (ok) {
@@ -218,8 +242,12 @@ export async function recoverInFlightWork(): Promise<void> {
         );
       }
     } else {
+      await db.update(prds)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      recovered++;
       console.warn(
-        `[recovery] Could not hydrate thread for PRD validation (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+        `[recovery] Could not hydrate PRD validation thread — reset to pending_review (prdId=${prd.id}, threadId=${prd.validationThreadId})`
       );
     }
   }
