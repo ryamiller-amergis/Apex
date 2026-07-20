@@ -86,6 +86,17 @@ async function runPlanGeneration(prdId: string): Promise<void> {
   try {
     const { generateDesignPlanForPrd } = await import('./bedrockService');
     const input = buildGenerationInput(prd.title, prd.backlogJson);
+
+    // Resolve project-specific design system so the design brief uses the project's
+    // own app name, components, and shell — not the MaxView catalog.
+    try {
+      const { resolvePrototypeContext } = await import('./prototypeContextService');
+      const ctx = await resolvePrototypeContext(prd.project, prd.skillSettingsId ?? undefined);
+      if (ctx) input.prototypeContext = ctx;
+    } catch (err: any) {
+      console.warn(`[designPlanService] resolvePrototypeContext failed for "${prd.project}": ${err.message} — using MaxView design plan context`);
+    }
+
     const features = await generateDesignPlanForPrd(input, modelId, maxTokens);
 
     const now = new Date().toISOString();

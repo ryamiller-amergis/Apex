@@ -2,7 +2,7 @@ import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
@@ -122,6 +122,12 @@ export interface UpsertSkillConfigOptions {
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
+  interviewWebResearchEnabled?: boolean;
+  interviewWebMcp?: QuickMcpPill | null;
+  prototypeEngine?: PrototypeEngine;
+  prototypeDesignSystemPath?: string | null;
+  screenInventoryPath?: string | null;
+  prototypeWebReferencesEnabled?: boolean;
   approvalMode?: ApprovalMode;
 }
 
@@ -190,6 +196,12 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,
     prototypeStageEnabled: opts.prototypeStageEnabled ?? true,
+    interviewWebResearchEnabled: opts.interviewWebResearchEnabled ?? false,
+    interviewWebMcp: opts.interviewWebMcp ?? null,
+    prototypeEngine: opts.prototypeEngine ?? 'bedrock',
+    prototypeDesignSystemPath: opts.prototypeDesignSystemPath ?? null,
+    screenInventoryPath: opts.screenInventoryPath ?? null,
+    prototypeWebReferencesEnabled: opts.prototypeWebReferencesEnabled ?? false,
     defaultModel: opts.defaultModel ?? null,
     approvalMode: approvalModeValue,
     updatedAt: now,

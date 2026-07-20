@@ -3,6 +3,9 @@ import type { GroupWithMembers } from './groups';
 
 export type SkillProvider = 'ado' | 'github';
 
+/** Which prototype generator a project uses: the existing one-shot Bedrock path or a skill/agent flow. */
+export type PrototypeEngine = 'bedrock' | 'agent';
+
 /**
  * Configuration for a Quick MCP Pill — a home-page shortcut that wires an
  * external MCP server into the chat agent for the duration of a thread.
@@ -120,6 +123,27 @@ export interface ProjectSkillConfig {
   issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
+  /** When true, interview threads for this project get a scope carve-out permitting live web research. */
+  interviewWebResearchEnabled?: boolean;
+  /** Optional web-search MCP server wired into interview threads when web research is enabled. */
+  interviewWebMcp?: QuickMcpPill | null;
+  /** Which prototype generator this project uses. Defaults to 'bedrock'. */
+  prototypeEngine?: PrototypeEngine;
+  /**
+   * Path within the project's own repo to the design-system skill file used by Bedrock prototype
+   * generation. Defaults to `.cursor/skills/design-system/SKILL.md` when null.
+   */
+  prototypeDesignSystemPath?: string | null;
+  /**
+   * Optional path within the project's repo to a screen-inventory markdown file used in
+   * EXTEND mode. When null, EXTEND falls back gracefully.
+   */
+  screenInventoryPath?: string | null;
+  /**
+   * When true, a live per-feature Tavily web design-reference step is injected into NEW-page
+   * prototype generation for this project. Default false. Ignored in EXTEND mode.
+   */
+  prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -191,6 +215,12 @@ export interface UpsertProjectSkillConfigRequest {
   issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
+  interviewWebResearchEnabled?: boolean;
+  interviewWebMcp?: QuickMcpPill | null;
+  prototypeEngine?: PrototypeEngine;
+  prototypeDesignSystemPath?: string | null;
+  screenInventoryPath?: string | null;
+  prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
@@ -278,6 +308,12 @@ export interface ProjectSkillConfigResponse {
   issueModel?: string | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
+  interviewWebResearchEnabled?: boolean;
+  interviewWebMcp?: QuickMcpPill | null;
+  prototypeEngine?: PrototypeEngine;
+  prototypeDesignSystemPath?: string | null;
+  screenInventoryPath?: string | null;
+  prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;

@@ -3066,6 +3066,12 @@ export interface DesignPlanGenerationFeature {
 export interface GenerateDesignPlanInput {
   prdTitle?: string;
   features: DesignPlanGenerationFeature[];
+  /**
+   * Per-project prototype context resolved from the project's own design-system skill.
+   * When present, the design plan prompt uses the project's app name and design system
+   * instead of the MaxView catalog/screen-inventory. Absent → legacy MaxView path.
+   */
+  prototypeContext?: import('./prototypeContextService').PrototypeContext;
 }
 
 function buildDesignPlanPrompt(input: GenerateDesignPlanInput, catalogSection: string, screensContextSection: string): string {
@@ -3082,10 +3088,27 @@ function buildDesignPlanPrompt(input: GenerateDesignPlanInput, catalogSection: s
     return `### Feature ${f.featureIndex}: ${f.featureName}\n${f.featureDescription ? `${f.featureDescription}\n` : ''}${f.targetRoute ? `Suggested existing route to extend: \`${f.targetRoute}\`\n` : ''}PBIs:\n${pbis}`;
   }).join('\n\n');
 
-  return `You are a senior UI/UX designer producing a **design plan** for a MaxView application PRD. This plan will be reviewed and edited by a UI/UX designer before any high-fidelity HTML prototype is generated. Write the plan in clear, plain English that a designer can understand and modify — not in developer jargon.
+  const ctx = input.prototypeContext;
+  const appName = ctx?.appName ?? 'MaxView';
 
-${catalogSection}${screensContextSection}
-## PRD${input.prdTitle ? `: ${input.prdTitle}` : ''}
+  // Project-specific design system section (replaces MaxView catalog + screen inventory).
+  const designSystemSection = ctx
+    ? `## ${appName} Design System (AUTHORITATIVE — use these components, tokens, and shell conventions)\n\n${ctx.designSystemMarkdown}\n\n`
+    : `${catalogSection}${screensContextSection}`;
+
+  // In project-specific mode, `update-page` / targetRoute only apply when the project
+  // has existing pages (non-greenfield). For greenfield projects all features are new-page.
+  const targetRouteRule = ctx
+    ? `- \`targetRoute\` must be null for all features unless the project has documented existing pages/routes. For a greenfield application with no existing pages, set every feature to "new-page" and \`targetRoute\` to null.`
+    : `- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be a SINGLE route — exactly one of the existing routes listed above. NEVER return a comma-separated list or multiple routes. If the feature touches several related screens, choose the ONE primary route where the change is most central; the others can be mentioned in the \`designBrief\`.`;
+
+  const componentsRule = ctx
+    ? `- \`primaryComponents\` should reference component names from the ${appName} Design System above where possible.`
+    : `- \`primaryComponents\` should reference MWx Design System component names from the catalog where possible.`;
+
+  return `You are a senior UI/UX designer producing a **design plan** for a **${appName}** application PRD. This plan will be reviewed and edited by a UI/UX designer before any high-fidelity HTML prototype is generated. Write the plan in clear, plain English that a designer can understand and modify — not in developer jargon.
+
+${designSystemSection}## PRD${input.prdTitle ? `: ${input.prdTitle}` : ''}
 
 Produce one plan entry per feature below.
 
@@ -3120,17 +3143,17 @@ Respond with ONLY a JSON fenced block containing an array with one object per fe
 
 The \`designBrief\` is the primary content of the plan. It is a multi-paragraph, plain-English description of the screen that a UI/UX designer will read, edit, and approve before prototypes are generated. The prototype generator will follow this brief as its authoritative source. Write it as if you are briefing a designer colleague:
 
-1. **What the user sees:** Describe the page layout, the main content area, and every visible element — headers, tables, forms, cards, filters, buttons, empty states, etc. Be specific about placement (e.g. "a search bar at the top of the content area, followed by a data grid").
+1. **What the user sees:** Describe the page layout, the main content area, and every visible element — headers, tables, forms, cards, filters, buttons, empty states, etc. Be specific about placement.
 2. **Key interactions:** Explain what happens when the user clicks, types, selects, or submits. Describe modals, drawers, inline edits, or navigation that occurs.
 3. **User flow:** Walk through the primary happy path and any important alternate flows (error handling, empty state, loading).
-4. **Design decisions:** Explain which layout pattern you chose and why. Reference specific design system components by name where possible.
+4. **Design decisions:** Explain which layout pattern you chose and why. Reference the ${appName} Design System components by name where possible.
 5. **Per-PBI mapping:** For each PBI, briefly explain how it manifests in the UI — which part of the screen, which interaction.
 
 Use newlines (\\n) to separate paragraphs for readability. Aim for 150–300 words per feature. Do NOT use markdown headings — just plain text with paragraph breaks.
 
 ### Other rules
-- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be a SINGLE route — exactly one of the existing routes listed above. NEVER return a comma-separated list or multiple routes. If the feature touches several related screens, choose the ONE primary route where the change is most central; the others can be mentioned in the \`designBrief\`.
-- \`primaryComponents\` should reference MWx Design System component names from the catalog where possible.
+${targetRouteRule}
+${componentsRule}
 - \`states\` should list the UI states worth designing (default/empty/error/loading is a good baseline).
 - Every PBI of a feature must have exactly one entry in \`pbiContributions\`.
 - Leave \`notes\` as an empty string.
@@ -3208,17 +3231,23 @@ export async function generateDesignPlanForPrd(
   maxTokens?: number,
   usageCtx?: BedrockUsageContext,
 ): Promise<DesignPlanFeature[]> {
-  const designSystemService = await import('./designSystemService');
-  const catalog = await designSystemService.getDesignSystemCatalog();
-  const catalogSection = buildCatalogSection(catalog);
-
-  let screenInventory: ScreenInventoryRoute[] = [];
-  try {
-    screenInventory = await designSystemService.getScreenInventory();
-  } catch (err) {
-    console.warn('[bedrockService] getScreenInventory failed for design plan:', err);
+  // When a project-specific design system is provided, skip MaxView catalog + screen inventory.
+  // The project's own design system markdown is injected directly into the prompt via
+  // input.prototypeContext, so these MaxView ADO calls are unnecessary and would produce
+  // misleading context (e.g. MaxView routes/components showing up in non-MaxView design briefs).
+  let catalogSection = '';
+  let screensContextSection = '';
+  if (!input.prototypeContext) {
+    const designSystemService = await import('./designSystemService');
+    const catalog = await designSystemService.getDesignSystemCatalog();
+    catalogSection = buildCatalogSection(catalog);
+    try {
+      const screenInventory = await designSystemService.getScreenInventory();
+      screensContextSection = buildScreensContextSection(screenInventory);
+    } catch (err) {
+      console.warn('[bedrockService] getScreenInventory failed for design plan:', err);
+    }
   }
-  const screensContextSection = buildScreensContextSection(screenInventory);
 
   const prompt = buildDesignPlanPrompt(input, catalogSection, screensContextSection);
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
@@ -3243,7 +3272,7 @@ export interface DesignPrototypeInput {
     /** Same control, different behavior per persona group. */
     personaBehaviors?: Array<{ userTypes: string[]; behavior: string }>;
   }>;
-  /** Route of an existing MaxView page this feature extends. When set, EXTEND mode is used. */
+  /** Route of an existing page this feature extends. When set, EXTEND mode is used. */
   targetRoute?: string;
   /** Pre-fetched existing page code/structure text. When omitted in EXTEND mode it is fetched. */
   existingPageContext?: string;
@@ -3264,6 +3293,127 @@ export interface DesignPrototypeInput {
     rationale?: string;
     notes?: string;
   };
+  /**
+   * Per-project prototype context resolved from the project's own repo design-system skill.
+   * When present, the prompt uses the project's design system instead of the MaxView bundle.
+   * When absent, the legacy MaxView path runs unchanged (transition fallback).
+   */
+  prototypeContext?: import('./prototypeContextService').PrototypeContext;
+  /**
+   * Live web design references distilled from a Tavily search (inspiration only).
+   * Injected only for NEW-page features when prototype_web_references_enabled is true.
+   */
+  webReferences?: string;
+}
+
+// ── Project-specific prototype prompt builder ────────────────────────────────
+// Used when DesignPrototypeInput.prototypeContext is supplied (project has its own
+// design-system skill). Produces a fully project-driven prompt that contains no
+// MaxView-specific wording, catalog, colors, sidebar, or Figma reference.
+
+function buildProjectPrototypePrompt(
+  input: DesignPrototypeInput,
+  extendMode: boolean,
+  existingPageContext: string | undefined,
+  planSection: string,
+  pbiSection: string,
+  targetScreenHint: string,
+  pageScreenshotHint: string,
+): string {
+  const ctx = input.prototypeContext!;
+  const appName = ctx.appName;
+
+  const scopingSection = extendMode && existingPageContext?.trim()
+    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
+${targetScreenHint}${pageScreenshotHint}
+The existing page is defined by the AUTHORITATIVE source(s) below: the **ACTUAL source code** at \`${input.targetRoute}\`${input.pageScreenshot ? ' **and the page screenshot (vision input)**' : ''}. Reproduce the existing page faithfully and add the new feature as a clearly annotated delta.
+1. **Reproduce the existing page faithfully.** Keep the real structure: regions, panels, tab bars, and the real entry mechanism.
+2. **The feature description, PBIs, and design brief describe ONLY the DELTA.** Use them solely to decide what to add or modify.
+3. **Add the new feature** in the correct location. Wrap ONLY the new/changed element(s) in a 2px dashed annotation border using the project's primary color with 8px padding, and a small "NEW: ${input.featureName}" label at the top-left. Also wrap in \`<!-- NEW_FEATURE:START -->\` … \`<!-- NEW_FEATURE:END -->\` markers.
+4. **DO NOT invent, fabricate, or hallucinate** UI elements not in the existing page or described in the PBIs.
+5. **The four state sections apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
+
+## Existing Page Code (route: ${input.targetRoute})
+
+${existingPageContext}`
+    : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
+
+1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly described in the PBI Requirements or the feature description.
+2. **The page shell** should match the app's design (described in the Design System section below). Render only what the feature requires plus the minimal app chrome described in the design system skill.
+3. **The content area must contain ONLY the new feature component** described in the PBI Requirements.
+4. **States apply ONLY to the new feature component** — the app chrome remains unchanged across all four sections.`;
+
+  const webSection = input.webReferences?.trim()
+    ? `\n## Modern Design References (live web — inspiration only)\n\nThe following patterns were found via web research. Use them as **inspiration only** — they are **subordinate to the Design System** above. Apply the project's own tokens/components; do NOT copy off-brand colors, fonts, or layout structures from these references.\n\n${input.webReferences}\n`
+    : '';
+
+  return `You are a world-class product designer generating a **market-quality, production-ready** HTML prototype for a feature of the **${appName}** application. This prototype should look like something a Series A SaaS startup would actually ship — not a wireframe, not a developer mockup. Reference companies like Linear, Loom, Vercel, Retool, or Rippling for the quality bar.
+
+## ${appName} Design System (AUTHORITATIVE — sole design and color source)
+
+${ctx.designSystemMarkdown}
+
+## Feature to Design
+
+**Feature:** ${input.featureName}
+${input.featureDescription ? `**Description:** ${input.featureDescription}` : ''}
+
+${planSection}## PBI Requirements
+
+${pbiSection}
+${webSection}
+## Instructions
+
+Generate a single, self-contained HTML document with inline CSS and inline JavaScript (no external dependencies). The document must show **four state sections** stacked vertically, each clearly separated.
+
+### Design token usage — STRICT (the ${appName} Design System above is the ONLY color and style source)
+
+- Use ONLY the colors and tokens defined in the Design System section above, referencing them by their CSS variable names or semantic roles.
+- **NEVER invent, approximate, or sample** any hex/rgba value not listed in the Design System.
+- When a :root block is provided, define those variables in your document's :root and reference them throughout.
+- All fonts, spacing, radius, and shadows must follow the Design System values.
+
+${scopingSection}
+
+${extendMode ? '' : `### Visual annotation of the new feature — PRECISE SCOPING
+
+Apply a **2px dashed annotation border** using the project's primary color with 8px padding around ONLY the new element(s). Add a small floating label at the top-left corner reading "NEW: ${input.featureName}". Wrap ALL new feature HTML content in:
+\`<!-- NEW_FEATURE:START -->\` immediately before the first new element and \`<!-- NEW_FEATURE:END -->\` immediately after the last.
+
+`}### State sections — FOUR REQUIRED, STACKED VERTICALLY
+
+Stack all four state sections from top to bottom in the HTML. Do NOT hide any section — the reviewer scrolls through all four. Each section must have a sticky section header with a colored dot indicator and a subtle background tint so sections are visually distinct.
+
+Wrap each section in these exact comment markers:
+
+\`<!-- STATE:DEFAULT:START -->\` … default / populated state … \`<!-- STATE:DEFAULT:END -->\`
+\`<!-- STATE:EMPTY:START -->\` … empty / zero-data state … \`<!-- STATE:EMPTY:END -->\`
+\`<!-- STATE:ERROR:START -->\` … error / failure state … \`<!-- STATE:ERROR:END -->\`
+\`<!-- STATE:LOADING:START -->\` … skeleton / spinner state … \`<!-- STATE:LOADING:END -->\`
+
+Section header style for each:
+- **DEFAULT** — label "Default State", green dot (#16a34a)
+- **EMPTY** — label "Empty State", gray dot (#64748b)
+- **ERROR** — label "Error State", red dot (#dc2626)
+- **LOADING** — label "Loading State", blue dot (#3b82f6)
+
+Do NOT use JavaScript to hide/show states. All four sections are always visible and the reviewer scrolls between them.
+
+### Self-contained HTML rules — STRICTLY ENFORCED
+
+- **ALL CSS** in a single \`<style>\` block in \`<head>\`. **ALL JS** in a single \`<script>\` at end of \`<body>\`.
+- **NO** \`<link>\`, \`<base>\`, \`<meta http-equiv>\` tags.
+- **NO** external \`src\`/\`href\` (http/https), \`url(https://…)\`, web fonts, CDN, or external images.
+- **NO** network calls: \`fetch\`, \`XMLHttpRequest\`, \`window.open\`, \`window.location\` are banned.
+- \`<a href>\` must be \`href="#"\` with \`event.preventDefault()\`.
+- For icons, use inline SVGs (Material Icons style, 24×24 viewBox, \`fill="currentColor"\`). No emoji.
+- For images/avatars, use colored circles with initials. No external image sources.
+
+### Interactivity — lightweight inline JavaScript
+
+Add inline JavaScript for: dropdowns, tabs, accordions, modals/dialogs, checkboxes/toggles, date pickers (simple month grid), hover effects (CSS :hover).
+
+Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 }
 
 export async function generateDesignPrototypeHtml(
@@ -3308,20 +3458,26 @@ export async function generateDesignPrototypeHtml(
 
   // EXTEND mode: when the feature targets an existing page, fetch that page's actual
   // code (unless supplied) and reproduce it faithfully instead of using a generic shell.
-  // The feature text guides the resolver's deep import traversal toward the relevant
-  // sub-views (e.g. an in-page snapshot/modal) rather than just the top-level page.
+  // For project-specific prototypes (non-MaxView), the existing-page fetch is skipped
+  // because fetchExistingPageContext is hardcoded to the MaxView ADO repo. Those
+  // projects use NEW-page mode instead (no existing page to reproduce). MaxView
+  // (isProjectSpecific=false fallback, or no prototypeContext) keeps the full path.
   let existingPageContext = input.existingPageContext;
   if (input.targetRoute && !existingPageContext) {
-    try {
-      const { fetchExistingPageContext } = await import('./designSystemService');
-      const featureText = [
-        input.featureName,
-        input.featureDescription,
-        ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
-      ].filter(Boolean).join(' ');
-      existingPageContext = await fetchExistingPageContext(input.targetRoute, featureText);
-    } catch (err) {
-      console.warn(`[bedrockService] fetchExistingPageContext failed for ${input.targetRoute}:`, err);
+    if (input.prototypeContext?.isProjectSpecific) {
+      console.log(`[bedrockService] Skipping EXTEND page fetch for project-specific prototype "${input.featureName}" (non-MaxView repo fetch not yet supported — using NEW-page mode)`);
+    } else {
+      try {
+        const { fetchExistingPageContext } = await import('./designSystemService');
+        const featureText = [
+          input.featureName,
+          input.featureDescription,
+          ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
+        ].filter(Boolean).join(' ');
+        existingPageContext = await fetchExistingPageContext(input.targetRoute, featureText);
+      } catch (err) {
+        console.warn(`[bedrockService] fetchExistingPageContext failed for ${input.targetRoute}:`, err);
+      }
     }
   }
   const extendMode = Boolean(input.targetRoute && existingPageContext?.trim());
@@ -3399,6 +3555,45 @@ You must follow these rules with zero exceptions:
       parts.push('');
     }
     planSection = parts.join('\n');
+  }
+
+  // ── Project-specific prototype path ─────────────────────────────────────────
+  // When the project has its own design-system skill (resolved by prototypeContextService),
+  // use the project-driven prompt. The MaxView catalog/colors/Figma/sidebar are NOT injected.
+  if (input.prototypeContext) {
+    const projectPrompt = buildProjectPrototypePrompt(
+      input,
+      extendMode,
+      existingPageContext,
+      planSection,
+      pbiSection,
+      targetScreenHint,
+      pageScreenshotHint,
+    );
+    const effectiveModelPS = modelId ?? UI_MOCK_MODEL_ID;
+    const effectiveMaxTokensPS = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+    const projectImages: ImageInput[] = [];
+    if (extendMode && input.pageScreenshot) {
+      projectImages.push({
+        base64: input.pageScreenshot.base64,
+        mediaType: (input.pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],
+        width: 0,
+        height: 0,
+      });
+    }
+    const psText = await invokeModel(
+      projectPrompt,
+      projectImages.length > 0 ? projectImages : undefined,
+      effectiveModelPS,
+      effectiveMaxTokensPS,
+      timeoutMs,
+      usageCtx ?? { feature: 'design-prototype', project: 'unknown' },
+    );
+    let psHtml = psText.trim();
+    if (psHtml.startsWith('```')) {
+      psHtml = psHtml.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    return psHtml;
   }
 
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
@@ -3586,7 +3781,127 @@ export async function regenerateDesignPrototypeHtml(
   timeoutMs?: number,
   pageScreenshot?: { base64: string; mediaType: string },
   usageCtx?: BedrockUsageContext,
+  prototypeContext?: import('./prototypeContextService').PrototypeContext,
+  webReferences?: string,
 ): Promise<string> {
+  // ── Project-specific regeneration path ────────────────────────────────────
+  // When the project has its own design-system skill, the revision prompt uses the
+  // project's design system instead of the MaxView catalog/colors/Figma.
+  if (prototypeContext) {
+    const appName = prototypeContext.appName;
+    const commentsSection = unresolvedComments.length > 0
+      ? `\n## Unresolved Review Comments\n\n${unresolvedComments.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n`
+      : '';
+
+    const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
+    const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+    const allStates = DESIGN_PROTOTYPE_STATE_NAMES;
+    const requested = (targetStates && targetStates.length > 0)
+      ? allStates.filter(s => targetStates.includes(s))
+      : resolveAutoStates(feedback, unresolvedComments);
+    const markersPresent = hasStateMarkers(priorHtml);
+    const scoped = markersPresent && requested.length > 0 && requested.length < allStates.length;
+
+    const regenImages: ImageInput[] = [];
+    if (pageScreenshot) {
+      regenImages.push({
+        base64: pageScreenshot.base64,
+        mediaType: (pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],
+        width: 0,
+        height: 0,
+      });
+    }
+
+    const webRefsSection = webReferences?.trim()
+      ? `\n## Modern Design References (live web — inspiration only)\n\nThese patterns are provided as inspiration. The ${appName} Design System above is authoritative — do not deviate from its tokens or components.\n\n${webReferences}\n`
+      : '';
+
+    const projectRegenPrompt = `You are revising an existing ${appName} UI prototype based on reviewer feedback.
+
+## ${appName} Design System (AUTHORITATIVE — the sole design and color source)
+
+${prototypeContext.designSystemMarkdown}
+${webRefsSection}
+## Current Prototype HTML
+
+${priorHtml}
+
+## Reviewer Feedback
+
+${feedback}
+${commentsSection}
+## Instructions
+
+Revise the HTML prototype to address the feedback and unresolved comments. Maintain all four state sections (DEFAULT, EMPTY, ERROR, LOADING) stacked vertically — all visible, reviewer scrolls between them. Keep the ${appName} design system styling. Preserve all content not mentioned in the feedback. Maintain all inline JavaScript interactivity within each section. Keep each state section wrapped in its markers (\`<!-- STATE:DEFAULT:START -->\`…\`<!-- STATE:DEFAULT:END -->\` etc.).
+
+### Design token usage — STRICT
+- Use ONLY tokens from the ${appName} Design System above. NEVER invent hex/rgba values not listed there.
+
+### SURGICAL EDIT RULE — make minimal, targeted changes only
+1. **PRESERVE the existing prototype as-is** — keep all markup, layout, copy, styling byte-for-byte intact EXCEPT where the feedback/comments explicitly require a change.
+2. **Localize the change** — modify ONLY the specific region(s) or state(s) the feedback actually affects.
+3. **DO NOT restructure, re-theme, re-order, or regenerate unrelated sections.**
+4. **DO NOT drop existing content or states** — all four state sections must survive unchanged where not mentioned.
+5. **Return the COMPLETE HTML document** — minimal diff from current prototype.
+
+### Self-contained HTML rules
+- All CSS in \`<style>\`, all JS in \`<script>\` at end of \`<body>\`. No external resources.
+
+Return ONLY the complete revised HTML document. No markdown fences — just the raw HTML starting with <!DOCTYPE html>.`;
+
+    if (!scoped) {
+      const text = await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
+      return stripHtmlFences(text);
+    }
+
+    // Scoped path: regenerate only the requested sections
+    const targetLabels = requested.map(s => s.toUpperCase()).join(', ');
+    const currentSections = requested
+      .map(s => `<!-- STATE:${s}:START -->${extractStateInner(priorHtml, s) ?? ''}<!-- STATE:${s}:END -->`)
+      .join('\n\n');
+
+    const projectScopedPrompt = `You are revising ONLY specific state sections of an existing ${appName} UI prototype based on reviewer feedback.
+
+## ${appName} Design System (AUTHORITATIVE)
+
+${prototypeContext.designSystemMarkdown}
+
+## Full Current Prototype HTML (CONTEXT ONLY)
+
+${priorHtml}
+
+## Reviewer Feedback
+
+${feedback}
+${commentsSection}
+## State sections to revise: ${targetLabels}
+
+${currentSections}
+
+## Instructions — STRICT OUTPUT CONTRACT
+- Return ONLY the revised state section(s) listed (${targetLabels}), each wrapped in its exact STATE markers.
+- SURGICAL revision: keep all markup byte-for-byte intact EXCEPT where feedback explicitly requires a change.
+- Use ONLY ${appName} Design System tokens.
+- No external resources, no network calls, no emoji.
+
+Return ONLY the revised sections, each in its STATE markers. No markdown fences, no document shell.`;
+
+    const scopedText = stripHtmlFences(await invokeModel(projectScopedPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+
+    if (/<!DOCTYPE html|<html[\s>]/i.test(scopedText)) return scopedText;
+
+    let merged = priorHtml;
+    let appliedCount = 0;
+    for (const s of requested) {
+      const inner = extractStateInner(scopedText, s);
+      if (inner != null) { merged = spliceStateSection(merged, s, inner); appliedCount++; }
+      else console.warn(`[bedrockService] project regen: state "${s}" missing from model output — keeping prior`);
+    }
+    if (appliedCount === 0) return stripHtmlFences(await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+    return merged;
+  }
+
+  // ── Legacy MaxView regeneration path (unchanged) ─────────────────────────
   const designSystemService = await import('./designSystemService');
   const catalog = await designSystemService.getDesignSystemCatalog();
   const catalogSection = buildCatalogSection(catalog);

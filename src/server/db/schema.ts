@@ -26,7 +26,7 @@ import type { DesignPrototypeHistoryEntry } from '../../shared/types/designProto
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
-import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
@@ -601,6 +601,12 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
+  interviewWebResearchEnabled: boolean('interview_web_research_enabled').notNull().default(false),
+  interviewWebMcp: jsonb('interview_web_mcp').$type<QuickMcpPill>(),
+  prototypeEngine: text('prototype_engine').$type<PrototypeEngine>().notNull().default('bedrock'),
+  prototypeDesignSystemPath: text('prototype_design_system_path'),
+  screenInventoryPath: text('screen_inventory_path'),
+  prototypeWebReferencesEnabled: boolean('prototype_web_references_enabled').notNull().default(false),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),

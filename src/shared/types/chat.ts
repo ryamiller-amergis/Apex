@@ -65,6 +65,11 @@ export interface ChatThreadKickoff {
   pillDescription?: string;
   /** When true, the scope guardrail is omitted from the system prompt for this thread */
   pillBypassScopePolicy?: boolean;
+  /**
+   * Server-set for interview threads when the project enables live web research.
+   * Relaxes the scope policy with a narrow web-research carve-out (does NOT fully bypass it).
+   */
+  webResearchEnabled?: boolean;
   /** Thread mode — controls system prompt behavior */
   mode?: 'development' | 'standup-participant' | 'standup-facilitator' | 'standup-followup';
   /** Work item ID driving the development session */
