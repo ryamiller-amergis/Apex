@@ -27,6 +27,13 @@ jest.mock('../utils/retry', () => ({
   retryWithBackoff: jest.fn((fn: () => any) => fn()),
 }));
 
+// recordAiUsage is a fire-and-forget DB write; mock it so no real pg
+// connection is opened (which otherwise leaks past Jest teardown).
+jest.mock('../services/aiUsageService', () => ({
+  recordAiUsage: jest.fn(),
+  estimateTokens: jest.fn().mockReturnValue(0),
+}));
+
 import {
   createSession,
   getSession,

@@ -75,7 +75,13 @@ const MAX_DYNAMIC_STRATEGIES = 25;
 const HOSTNAME_RE = /^[a-z0-9.-]+(:\d+)?$/i;
 const strategyNameByRedirect = new Map<string, string>();
 
+// Azure AD is only usable when credentials are provided. In test/e2e and local dev
+// without creds, we skip registering the OIDC strategy entirely and rely on the
+// dev-login flow — constructing OIDCStrategy with an empty clientID throws at boot.
+const isAzureAdConfigured = Boolean(process.env.AZURE_CLIENT_ID && process.env.AZURE_TENANT_ID);
+
 function registerStrategy(name: string, redirectUrl: string): void {
+  if (!isAzureAdConfigured) return;
   passport.use(name, new OIDCStrategy({ ...baseAzureAdConfig, redirectUrl }, verifyAzureAd));
 }
 
@@ -120,6 +126,10 @@ passport.deserializeUser((user: any, done) => {
 
 // Login route
 router.get('/login', (req, res, next) => {
+  if (!isAzureAdConfigured) {
+    console.warn('[auth] Azure AD is not configured — /login is unavailable. Use dev-login in non-production environments.');
+    return res.redirect('/auth/login-failed');
+  }
   const strategyName = resolveStrategyName(req);
   console.log(`Login route hit, initiating OAuth flow via "${strategyName}" (host: ${req.get('host')})`);
   passport.authenticate(strategyName, { 
@@ -133,6 +143,9 @@ router.get(
   '/callback',
   (req, res, next) => {
     console.log('Auth callback received');
+    if (!isAzureAdConfigured) {
+      return res.redirect('/auth/login-failed');
+    }
     passport.authenticate(resolveStrategyName(req), (err: any, user: any, info: any) => {
       if (err) {
         console.error('Authentication error:', err);

@@ -257,6 +257,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
 
   return (
     <div 
+      data-testid="unscheduled-list"
       className={`unscheduled-list ${isDropZone ? 'drop-zone-active' : ''} ${isCollapsed ? 'collapsed' : ''}`}
       style={{ width: isCollapsed ? '40px' : `${width}px` }}
       onDragOver={handleDragOver}

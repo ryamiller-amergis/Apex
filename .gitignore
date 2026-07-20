@@ -9,6 +9,11 @@ build/
 .env
 .env.local
 
+# Local deployed-smoke E2E config (E2E_BASE_URL + SSO creds) — never commit.
+# Copy from the committed .env.e2e.example / .env.e2e.prod.example templates.
+.env.e2e
+.env.e2e.prod
+
 # Terraform
 infra/.terraform/
 infra/.terraform.lock.hcl
@@ -62,3 +67,14 @@ data/*
 !data/ai-capability-baseline.json
 wiki-*.json
 wiki-page.json
+
+# Playwright / E2E generated output — never commit test artifacts
+playwright-report/
+playwright-results/
+test-results/
+.last-run.json
+e2e-*.log
+
+# Captured SSO storageState for deployed-smoke runs — contains a live session,
+# never commit it (see tests/e2e/support/capture-storage-state.ts)
+tests/e2e/.auth/

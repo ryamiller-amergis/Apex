@@ -119,6 +119,8 @@ export function createArtifactZip(files: ArtifactFile[], modifiedAt = new Date()
 export function sanitizeArtifactName(value: string, fallback: string): string {
   const sanitized = value
     .trim()
+    // Strip filesystem-reserved and control characters from artifact filenames.
+    // eslint-disable-next-line no-control-regex
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')

@@ -62,8 +62,112 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: TypeScript type-check (client)
+        run: npx tsc -p tsconfig.client.json --noEmit
+
+      - name: TypeScript type-check (server)
+        run: npx tsc -p tsconfig.server.json --noEmit
+
+      - name: Lint (ESLint)
+        run: npm run lint:check
+
       - name: Run full test suite
         run: npm test -- --ci
+
+  integration-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.markdown_only != 'true'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations to integration test database
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+        run: npm run migrate:up
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+        run: npm run test:integration
+
+  e2e-smoke:
+    needs: [detect-changes, test]
+    if: needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run E2E smoke tests
+        env:
+          CI: true
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          SESSION_SECRET: e2e-ci-secret-not-for-production
+          VITE_TEAMS: 'false'
+        run: npm run test:e2e:smoke
+
+      - name: Upload Playwright results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-smoke-results
+          path: playwright-results/
+          retention-days: 7
 
   migrate-check:
     needs: detect-changes
@@ -106,11 +210,17 @@ jobs:
         run: node scripts/ci/validate-migrations.mjs
 
   deploy-dev:
-    needs: [test, detect-changes, migrate-check]
+    needs: [test, integration-test, e2e-smoke, detect-changes, migrate-check]
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
     # PRs should still deploy to dev.
-    if: ${{ always() && !cancelled() && needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success' && (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') }}
+    if: >-
+      always() && !cancelled() &&
+      needs.detect-changes.outputs.markdown_only != 'true' &&
+      needs.test.result == 'success' &&
+      needs.integration-test.result == 'success' &&
+      needs.e2e-smoke.result == 'success' &&
+      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
@@ -248,3 +358,81 @@ jobs:
       - name: Azure logout
         run: az logout
         if: always()
+
+  # Post-deploy read-only smoke against the deployed dev site. Runs the
+  # `deployed-smoke` Playwright project (no local server, no seeding) against the
+  # dev URL. BLOCKING: a smoke failure fails the run so regressions introduced by
+  # the branch's changes are caught and fixed rather than silently deployed. CI
+  # retries (retries: 2 in playwright.config.ts) absorb transient infra flakes.
+  #
+  # AUTH: deployed dev runs with NODE_ENV=production, so /auth/dev-login is gated
+  # OFF there. Authenticated smoke logs in via FULLY-AUTOMATED programmatic Azure
+  # AD SSO — the `setup` Playwright project drives the real Entra login form using
+  # the dedicated test-account credentials and produces a fresh, ephemeral
+  # storageState each run (no stored/manually-captured session blob). When the
+  # credentials are absent, only the unauthenticated @prod-safe boundary passes.
+  #
+  # Required repo config:
+  #   vars.E2E_DEV_BASE_URL     (optional) dev URL; defaults to app-scrum-dev.
+  #   secrets.E2E_TEST_USER     dedicated Azure AD E2E test account UPN/email.
+  #   secrets.E2E_TEST_PASSWORD password for that account.
+  #
+  # The E2E test account MUST be exempt from MFA / conditional access for dev —
+  # programmatic login cannot clear an interactive MFA challenge.
+  deployed-smoke-dev:
+    needs: [deploy-dev]
+    if: always() && !cancelled() && needs.deploy-dev.result == 'success'
+    runs-on: ubuntu-latest
+    # No `environment:` — reads repo-level vars/secrets; read-only smoke stays ungated.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      # Deployed App Service cold-starts after each deploy (the startup command even
+      # reinstalls git before Node boots), so the first requests can hang or 5xx.
+      # Poll the SPA root until it serves 200 so the smoke run doesn't race the boot.
+      - name: Wait for deployed dev app to be ready (warm-up)
+        env:
+          E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
+        run: |
+          echo "Warming up ${E2E_BASE_URL} (waiting for the SPA to serve)..."
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_BASE_URL}/home" || echo "000")
+            echo "Attempt $i: GET /home -> $code"
+            if [ "$code" = "200" ]; then
+              echo "Deployed dev app is serving — proceeding to smoke."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Deployed dev app did not become ready within the warm-up window." >&2
+          exit 1
+
+      - name: Run setup + deployed-smoke against dev
+        env:
+          CI: true
+          E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
+          E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
+          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+        run: npx playwright test --project=deployed-smoke
+
+      - name: Upload deployed-smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-smoke-dev-results-${{ github.run_id }}
+          path: playwright-results/
+          retention-days: 7
