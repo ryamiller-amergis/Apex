@@ -21,6 +21,19 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
+jest.mock('../services/pdfArtifactStore', () => ({
+  getPdfArtifactStore: () => ({
+    exists: jest.fn().mockResolvedValue(true),
+    getStream: jest.fn(),
+    putFile: jest.fn(),
+    deleteFile: jest.fn(),
+    deleteSessionPrefix: jest.fn().mockResolvedValue(undefined),
+  }),
+  readPdfArtifact: jest.fn().mockResolvedValue(Buffer.from('%PDF-test')),
+  buildPdfArtifactKey: ({ userId, sessionId, fileName }: any) =>
+    `${userId}/${sessionId}/${fileName}`,
+}));
+
 jest.mock('worker_threads', () => {
   const actualWt = jest.requireActual('worker_threads');
   return {

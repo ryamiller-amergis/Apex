@@ -109,6 +109,7 @@ export async function handleAddTestCase(params: {
   prdId: string;
   pbiId: string;
   acceptanceCriteriaIndex?: number;
+  businessRules?: string[];
   title: string;
   steps: string[];
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
@@ -123,6 +124,7 @@ export async function handleAddTestCase(params: {
       title: params.title,
       steps: params.steps,
       acceptanceCriteriaIndex: params.acceptanceCriteriaIndex,
+      businessRules: params.businessRules,
     });
     console.log(
       `[MCP] add_test_case: added ${result.testCaseId} to pbi ${params.pbiId} for prd ${params.prdId}`,
@@ -389,6 +391,10 @@ export function createAdoMcpServer(): McpServer {
         .min(0)
         .optional()
         .describe('Optional zero-based index of the acceptance criterion this case traces to'),
+      businessRules: z
+        .array(z.string())
+        .optional()
+        .describe('Business-rule IDs this case covers, e.g. ["BR-001"]'),
     },
     async (params) => handleAddTestCase(params),
   );

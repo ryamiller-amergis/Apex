@@ -18,6 +18,7 @@ import type {
   ReviewDesignDocRequest,
   ReviewPrdRequest,
   ReviewPrdResponse,
+  TestCaseCoverageSummary,
   TestCaseRecord,
 } from '../../shared/types/interview';
 import type {
@@ -140,6 +141,24 @@ export function useGenerateTestCases() {
   return useMutation<{ started: boolean }, Error, string>({
     mutationFn: (prdId) =>
       apiFetch(`/api/interviews/prds/${prdId}/test-cases/generate`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, prdId) => {
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useRecalculateTestCaseCoverage() {
+  const qc = useQueryClient();
+  return useMutation<
+    { coverageSummary: TestCaseCoverageSummary },
+    Error,
+    string
+  >({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/test-cases/recalculate`, {
         method: 'POST',
       }),
     onSuccess: (_data, prdId) => {

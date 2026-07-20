@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'worker_threads';
 import fs from 'fs';
 import { PDFDocument, PDFPage, degrees } from 'pdf-lib';
 import type { ExportWorkerInput, ExportWorkerOutput } from '../../shared/types/pdf';
+import { getPdfArtifactStore, readPdfArtifact } from '../services/pdfArtifactStore';
 
 /**
  * Core assembly logic extracted for testability.
@@ -10,7 +11,13 @@ import type { ExportWorkerInput, ExportWorkerOutput } from '../../shared/types/p
  */
 export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorkerOutput> {
   try {
-    const { manifest, filePaths } = input;
+    const {
+      manifest,
+      filePaths = {},
+      fileBytes = {},
+      artifactFiles = {},
+      outputRef,
+    } = input;
     const outputDoc = await PDFDocument.create();
     const activeEntries = manifest.filter((entry) => !entry.deleted);
     const entriesByFile = new Map<
@@ -28,15 +35,20 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
 
     for (const [fileId, groupedEntries] of entriesByFile) {
       const filePath = filePaths[fileId];
-      if (!filePath) {
+      let providedBytes = fileBytes[fileId];
+      const artifactRef = artifactFiles[fileId];
+      if (!providedBytes && artifactRef) {
+        providedBytes = await readPdfArtifact(artifactRef);
+      }
+      if (!filePath && !providedBytes) {
         return { success: false, error: `Source file not found for fileId: ${fileId}` };
       }
-      if (!fs.existsSync(filePath)) {
+      if (filePath && !fs.existsSync(filePath)) {
         return { success: false, error: `File missing on disk: ${filePath}` };
       }
 
-      const fileBytes = fs.readFileSync(filePath);
-      const sourceDoc = await PDFDocument.load(fileBytes);
+      const sourceBytes = providedBytes ?? fs.readFileSync(filePath);
+      const sourceDoc = await PDFDocument.load(sourceBytes);
       const pageCount = sourceDoc.getPageCount();
       const invalidEntry = groupedEntries.find(
         ({ entry }) =>
@@ -68,6 +80,9 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
     }
 
     const pdfBytes = await outputDoc.save();
+    if (outputRef) {
+      await getPdfArtifactStore().putFile(outputRef, pdfBytes);
+    }
     return { success: true, pdfBytes: new Uint8Array(pdfBytes) };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown assembly error';
@@ -80,7 +95,11 @@ if (parentPort && workerData) {
   const input = workerData as ExportWorkerInput;
   assemblePdf(input)
     .then((result) => {
-      parentPort!.postMessage(result);
+      parentPort!.postMessage(
+        input.outputRef && result.success
+          ? { success: true } satisfies ExportWorkerOutput
+          : result,
+      );
     })
     .catch((err) => {
       parentPort!.postMessage({

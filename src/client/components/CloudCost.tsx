@@ -909,7 +909,7 @@ export const CloudCost: React.FC<CloudCostProps> = () => {
                             // Parse date - handle both YYYY-MM-DD and YYYYMMDD formats
                             let formattedDate = '';
                             try {
-                              let dateStr = day.date.toString();
+                              const dateStr = day.date.toString();
                               let year, month, dayNum;
                               
                               if (dateStr.includes('-')) {

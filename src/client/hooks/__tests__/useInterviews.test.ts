@@ -38,6 +38,7 @@ import {
   useAcceptFixPrdValidation,
   useRevertPrdSection,
   useGenerateTestCases,
+  useRecalculateTestCaseCoverage,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -1198,5 +1199,35 @@ describe('useGenerateTestCases', () => {
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+describe('useRecalculateTestCaseCoverage', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POSTs to the test-case coverage recalculation endpoint', async () => {
+    mockFetchOk({
+      coverageSummary: {
+        totalCases: 3,
+        pbisCovered: 1,
+        acCovered: '2/2',
+        brCovered: '1/1',
+        gaps: 0,
+      },
+    });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useRecalculateTestCaseCoverage(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/test-cases/recalculate',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

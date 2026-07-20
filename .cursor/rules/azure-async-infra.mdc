@@ -1,0 +1,21 @@
+---
+description: Shared Azure Blob conventions (container isolation; Service Bus deferred unless scale-up ADR) for async infra and ADRs
+globs: infra/**/*
+alwaysApply: false
+---
+
+# Azure Async Infrastructure Conventions
+
+When changing `infra/` or designing async/messaging/storage architecture for Apex, follow the shared platform pattern documented in `.cursor/skills/azure-async-infra/SKILL.md` and implemented in `infra/shared-async.tf`.
+
+## Rules
+
+1. **One shared private Storage Account per environment.** Isolate workloads with **containers**, not new accounts, unless a documented isolation driver requires otherwise.
+2. **Do not provision Service Bus by default.** PDF and similar current-scale jobs use the **Postgres queue** + shared Blob (revised ADR). Add Service Bus only when an accepted ADR scale-up path requires a managed broker — then prefer one shared namespace with queues/topics.
+3. **Do not** put unrelated domains on a single mega-queue. **Do not** use a job queue as a substitute for pub/sub fan-out.
+4. Scope managed-identity RBAC to the **container** (or future queue/subscription) — not the entire account/namespace — unless a cross-cutting operator principal is explicitly justified.
+5. Keep heavy workers on a **separate App Service plan** only when isolation/scale
+   evidence requires it. PDF assembly currently runs in the Apex app with shared
+   Blob — do not provision a PDF worker App Service by default.
+6. Prefer managed identity and Terraform outputs/app setting names over connection strings and account keys.
+7. During ADR / grill-design / infra interviews that touch Blob, Service Bus, workers, or async jobs, **load and apply** `.cursor/skills/azure-async-infra/SKILL.md` before recommending topology.

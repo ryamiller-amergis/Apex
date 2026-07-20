@@ -9,6 +9,7 @@ const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
+import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -605,13 +606,24 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       }
     }
 
-    // Done: the agent thread must be idle (finished) AND we found at least one
-    // feature AND the set was stable across two consecutive ticks.  Without the
-    // idle check, slow agents that write features one-by-one will trigger a
-    // premature "stable" detection and the watcher cleans up mid-generation.
-    const agentFinished = isThreadIdle(chatThreadId);
+    // Done: the agent run must be authoritatively finished (in-memory idle AND
+    // no live agent_runs row) AND we found at least one feature AND the set was
+    // stable across two consecutive ticks. Without the cross-instance liveness
+    // check, non-owner recovery watchers treat hydrated threads as idle and
+    // clean up mid-generation. Without the idle check, slow agents that write
+    // features one-by-one will trigger a premature "stable" detection.
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
     const allDone = agentFinished && createdSlugs.size > 0 && currentSlugsKey === prevFoundSlugsKey && currentSlugsKey !== '';
     prevFoundSlugsKey = currentSlugsKey;
+
+    if (agentFinished && !allDone) {
+      if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+        clearInterval(interval);
+        activeDocWatchers.delete(seedDocId);
+        console.warn(`[designDocWatcher] Skipping fail — not run owner or no terminal run (seedDocId=${seedDocId})`);
+        return;
+      }
+    }
 
     if (allDone) {
       try {
@@ -746,7 +758,15 @@ export function startSingleFeatureDocWatcher(
       return;
     }
 
-    if (isThreadIdle(chatThreadId)) {
+    // Fail only when the run is dead across instances — in-memory idle alone is
+    // unreliable after hydrateThread resets status on non-owner workers.
+    if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
+      if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+        clearInterval(interval);
+        activeDocWatchers.delete(designDocId);
+        console.warn(`[singleFeatureDocWatcher] Skipping fail — not run owner or no terminal run (designDocId=${designDocId})`);
+        return;
+      }
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
@@ -1037,6 +1057,10 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     doc.assumptionsContent || '(empty)',
   ].join('\n');
 
+  // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts.
+  // Otherwise the agent can finish during the await gap and post-run sync cannot
+  // find this doc (validationThreadId still null) — scorecard is lost and the
+  // watcher later resets to pending_review with no score.
   const thread = await createChatThread(doc.authorId, {
     project: doc.project,
     repo: skillConfig.skillRepo,
@@ -1045,7 +1069,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     skillPath: skillConfig.designDocValidationSkillPath,
     freeformContext: context,
     model,
-  });
+  }, { skipAutoKickoff: true });
 
   // #region agent log
   try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:thread-created',message:'new validation thread created',data:{designDocId,newThreadId:thread.id,docStatus:doc.status,prevValidationThreadId:doc.validationThreadId??null,skillRepo:skillConfig.skillRepo,skillBranch:skillConfig.skillBranch??'main',skillPath:skillConfig.designDocValidationSkillPath,model},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
@@ -1074,6 +1098,17 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   // #endregion
 
   startValidationWatcher(designDocId, thread.id);
+
+  const kickoffMessage =
+    'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
+    'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
+    '`review-scorecard.md` to `.ai-pilot/output/`.';
+  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
+    console.error(
+      `[autoStartValidation] Failed to kick off validation agent (designDocId=${designDocId}, threadId=${thread.id}):`,
+      err.message,
+    );
+  });
 }
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
@@ -1113,9 +1148,15 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
 
     if (!scorecardRaw) {
       // If the agent has completed or errored without producing a scorecard,
-      // reset the doc status to draft so the user can re-run.
+      // reset so the user can re-run. Require a terminal local/owned run —
+      // isThreadIdle alone is unsafe under multi-instance (and also true in the
+      // brief window before sendMessage claims the run).
       // The `status = 'validating'` WHERE guard prevents downgrading an already-scored doc.
-      if (isThreadIdle(validationThreadId)) {
+      if (
+        isThreadIdle(validationThreadId)
+        && !(await isThreadRunAlive(validationThreadId))
+        && (await canThisInstanceFailGeneration(validationThreadId))
+      ) {
         clearInterval(interval);
         activeValidationWatchers.delete(designDocId);
         console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);

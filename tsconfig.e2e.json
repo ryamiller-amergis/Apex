@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": {
+    "outDir": "./dist/e2e",
+    "rootDir": ".",
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/server/**/*",
+    "src/shared/**/*",
+    "tests/e2e/**/*",
+    "tests/integration/**/*"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

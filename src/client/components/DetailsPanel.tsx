@@ -79,14 +79,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [newTag, setNewTag] = useState('');
   const [teamAssignees, setTeamAssignees] = useState<string[]>([]);
 
-  if (!workItem) return null;
-
-  const adoOrg = env.VITE_ADO_ORG;
-  const adoProject = env.VITE_ADO_PROJECT;
-  const adoUrl = `https://dev.azure.com/${adoOrg}/${adoProject}/_workitems/edit/${workItem.id}`;
-
   // Fetch related items when workItem changes and is PBI, TBI, or Feature
   useEffect(() => {
+    if (!workItem) return;
     const shouldFetchRelations = 
       workItem.workItemType === 'Product Backlog Item' || 
       workItem.workItemType === 'Technical Backlog Item' ||
@@ -116,7 +111,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     } else {
       setRelatedItems([]);
     }
-  }, [workItem.id, workItem.workItemType, project, areaPath]);
+  }, [workItem?.id, workItem?.workItemType, project, areaPath]);
 
   // Fetch available release epics (not in Done status)
   useEffect(() => {
@@ -139,7 +134,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   // Fetch current parent epic when Link to Release section is opened
   useEffect(() => {
-    if (showLinkToEpic && !currentParentEpic) {
+    if (showLinkToEpic && !currentParentEpic && workItem) {
       setIsLoadingParentEpic(true);
       console.log(`Fetching parent epic for work item ${workItem.id}`);
       fetch(`/api/workitems/${workItem.id}/parent-epic?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`)
@@ -159,10 +154,11 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           setIsLoadingParentEpic(false);
         });
     }
-  }, [showLinkToEpic, workItem.id, project, areaPath, currentParentEpic]);
+  }, [showLinkToEpic, workItem?.id, project, areaPath, currentParentEpic]);
 
   // Fetch due date change history for PBI/TBI
   useEffect(() => {
+    if (!workItem) return;
     const shouldFetchChanges = 
       workItem.workItemType === 'Product Backlog Item' || 
       workItem.workItemType === 'Technical Backlog Item';
@@ -182,10 +178,11 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     } else {
       setDueDateChanges([]);
     }
-  }, [workItem.id, workItem.workItemType, project]);
+  }, [workItem?.id, workItem?.workItemType, project]);
 
   // Fetch discussions/comments for all work items
   useEffect(() => {
+    if (!workItem) return;
     setIsLoadingDiscussions(true);
     fetch(`/api/workitems/${workItem.id}/discussions?project=${encodeURIComponent(project)}`)
       .then(res => res.json())
@@ -197,7 +194,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         console.error('Error fetching discussions:', err);
         setIsLoadingDiscussions(false);
       });
-  }, [workItem.id, project]);
+  }, [workItem?.id, project]);
 
   // Load ADO team members for the Assigned To dropdown when allWorkItems isn't provided
   useEffect(() => {
@@ -273,15 +270,49 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
       allWorkItems.map((item) => item.assignedTo).filter((name): name is string => Boolean(name)),
     );
     teamAssignees.forEach((name) => assignees.add(name));
-    if (workItem.assignedTo) assignees.add(workItem.assignedTo);
+    if (workItem?.assignedTo) assignees.add(workItem.assignedTo);
     if (authenticatedUser?.name) assignees.add(authenticatedUser.name);
     return Array.from(assignees).sort();
-  }, [allWorkItems, teamAssignees, workItem.assignedTo, authenticatedUser?.name]);
+  }, [allWorkItems, teamAssignees, workItem?.assignedTo, authenticatedUser?.name]);
 
   const uniqueIterations = useMemo(() => {
     const iterations = new Set(allWorkItems.map(item => item.iterationPath));
     return Array.from(iterations).sort();
   }, [allWorkItems]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      
+      const newWidth = window.innerWidth - e.clientX;
+      // Min width: 300px, Max width: 70% of window
+      const maxWidth = Math.floor(window.innerWidth * 0.7);
+      if (newWidth >= 300 && newWidth <= maxWidth) {
+        setPanelWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // All hooks are declared above this guard so hook order stays stable across renders.
+  if (!workItem) return null;
+
+  const adoOrg = env.VITE_ADO_ORG;
+  const adoProject = env.VITE_ADO_PROJECT;
+  const adoUrl = `https://dev.azure.com/${adoOrg}/${adoProject}/_workitems/edit/${workItem.id}`;
 
   const handleRemoveDueDate = async () => {
     await onUpdateDueDate(workItem.id, null);
@@ -544,33 +575,6 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     e.preventDefault();
     setIsResizing(true);
   };
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      
-      const newWidth = window.innerWidth - e.clientX;
-      // Min width: 300px, Max width: 70% of window
-      const maxWidth = Math.floor(window.innerWidth * 0.7);
-      if (newWidth >= 300 && newWidth <= maxWidth) {
-        setPanelWidth(newWidth);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isResizing]);
 
   return (
     <div className="details-panel" style={{ width: `${panelWidth}px` }}>

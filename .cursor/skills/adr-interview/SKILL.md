@@ -20,7 +20,14 @@ Before recommending an option, inspect the selected repository through the avail
 3. Use `get_skill_file` when project skills define relevant conventions.
 4. Cite concrete repository findings in the conversation. Do not claim code behavior you have not verified.
 
-## Mandatory opening
+### Infra / async messaging
+
+If the decision involves Blob storage, Service Bus, queues, topics, workers, pub/sub, or other async cloud infra:
+
+1. Load and follow `.cursor/skills/azure-async-infra/SKILL.md`.
+2. Prefer the shared platform in `infra/shared-async.tf` (containers + queues/topics) over new accounts/namespaces unless the interview establishes a hard isolation driver.
+3. Treat queues as competing-consumer jobs and topics as pub/sub; record that distinction in the transcript.
+4. If the decision will change Terraform under `infra/`, also load `.cursor/skills/terraform-infra/SKILL.md` so the transcript records file layout, identity/RBAC, and output/README contracts—not only topology.## Mandatory opening
 
 Ask these questions first, one at a time:
 

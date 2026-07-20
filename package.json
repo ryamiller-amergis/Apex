@@ -12,6 +12,19 @@
     "build:client": "tsc -p tsconfig.client.json && vite build",
     "start": "node dist/server/index.js",
     "test": "jest",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --grep @smoke",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:a11y": "playwright test --grep @a11y",
+    "test:e2e:deployed": "dotenv -e .env.e2e -- playwright test --project=deployed-smoke",
+    "test:e2e:deployed:prod": "dotenv -e .env.e2e.prod -- playwright test --project=deployed-smoke --grep @prod-safe",
+    "test:e2e:auth:capture": "ts-node -P tsconfig.e2e.json tests/e2e/support/capture-storage-state.ts",
+    "test:e2e:create-db": "node scripts/e2e/create-test-db.mjs",
+    "test:e2e:reset-db": "ts-node -P tsconfig.e2e.json tests/e2e/data/reset.ts",
+    "e2e:triage": "ts-node -P tsconfig.server.json scripts/e2e/cursor-triage.ts",
+    "playwright:install": "playwright install chromium --with-deps",
+    "test:integration": "jest --config jest.config.integration.js",
     "lint": "prettier --check .",
     "lint:check": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint src/client --ext .ts,.tsx",
     "lint:fix": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint src/client --ext .ts,.tsx --fix",
@@ -45,6 +58,7 @@
     "@azure/arm-subscriptions": "^6.0.0",
     "@azure/identity": "^4.13.0",
     "@azure/msal-node": "^5.2.5",
+    "@azure/storage-blob": "12.32.0",
     "@cursor/sdk": "^1.0.12",
     "@hookform/resolvers": "^5.2.2",
     "@matbee/libreoffice-converter": "^2.7.0",
@@ -85,6 +99,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",
     "@testing-library/user-event": "^14.5.1",
@@ -129,5 +145,10 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
     "vite": "^5.0.12"
+  },
+  "overrides": {
+    "@azure/core-rest-pipeline": "1.24.0",
+    "@azure/core-xml": "1.5.0",
+    "@typespec/ts-http-runtime": "0.3.4"
   }
 }

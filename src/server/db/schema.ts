@@ -4,6 +4,7 @@ import type {
   PageManifestEntry,
   PdfConversionStatus,
   PdfFileMetadata,
+  PdfJobType,
   PdfSessionStatus,
 } from '../../shared/types/pdf';
 import type {
@@ -1284,15 +1285,22 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
 export const pdfConversionJobs = pgTable('pdf_conversion_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   sessionId: uuid('session_id').notNull().references(() => pdfSessions.id, { onDelete: 'cascade' }),
+  jobType: text('job_type').$type<PdfJobType>().notNull().default('docx_convert'),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   originalName: text('original_name').notNull(),
   originalMimeType: text('original_mime_type').notNull(),
-  inputPath: text('input_path').notNull(),
+  inputKey: text('input_key').notNull(),
   status: text('status').$type<PdfConversionStatus>().notNull().default('queued'),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb('result').$type<Record<string, unknown>>(),
   fileId: uuid('file_id'),
   errorCode: text('error_code'),
   errorMessage: text('error_message'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true, mode: 'string' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -1300,6 +1308,10 @@ export const pdfConversionJobs = pgTable('pdf_conversion_jobs', {
 }, (t) => ({
   sessionCreatedIdx: index('idx_pdf_conversion_jobs_session_created').on(t.sessionId, t.createdAt),
   statusCreatedIdx: index('idx_pdf_conversion_jobs_status_created').on(t.status, t.createdAt),
+  claimIdx: index('idx_pdf_conversion_jobs_claim').on(t.createdAt).where(sql`status = 'queued'`),
+  processingUserIdx: index('idx_pdf_conversion_jobs_processing_user')
+    .on(t.userId, t.lockExpiresAt)
+    .where(sql`status = 'processing'`),
 }));
 
 export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one }) => ({

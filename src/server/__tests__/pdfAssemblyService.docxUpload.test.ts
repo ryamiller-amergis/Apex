@@ -10,6 +10,8 @@
 const mockConvert = jest.fn();
 const mockEnqueueConversion = jest.fn();
 const mockProcessPendingConversions = jest.fn();
+const mockArtifactPut = jest.fn();
+const mockArtifactDelete = jest.fn();
 const mockFindFirst = jest.fn();
 const mockUpdate = jest.fn().mockReturnValue({
   set: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([]) }),
@@ -31,8 +33,23 @@ jest.mock('../services/documentConversionService', () => ({
 
 jest.mock('../services/pdfConversionJobService', () => ({
   enqueuePdfConversion: (...args: unknown[]) => mockEnqueueConversion(...args),
+  enqueuePdfExport: jest.fn(),
   getPdfConversionJobs: jest.fn().mockResolvedValue([]),
-  processPendingPdfConversions: (...args: unknown[]) => mockProcessPendingConversions(...args),
+  processPendingPdfJobs: (...args: unknown[]) => mockProcessPendingConversions(...args),
+  startPdfJobPoller: jest.fn(),
+}));
+
+jest.mock('../services/pdfArtifactStore', () => ({
+  getPdfArtifactStore: () => ({
+    putFile: (...args: unknown[]) => mockArtifactPut(...args),
+    deleteFile: (...args: unknown[]) => mockArtifactDelete(...args),
+    deleteSessionPrefix: jest.fn(),
+    exists: jest.fn().mockResolvedValue(true),
+    getStream: jest.fn(),
+  }),
+  readPdfArtifact: jest.fn(),
+  buildPdfArtifactKey: ({ userId, sessionId, fileName }: any) =>
+    `${userId}/${sessionId}/${fileName}`,
 }));
 
 jest.mock('../db/drizzle', () => ({
@@ -117,6 +134,8 @@ describe('pdfAssemblyService — .docx upload routing', () => {
       status: 'queued',
     });
     mockProcessPendingConversions.mockResolvedValue(undefined);
+    mockArtifactPut.mockResolvedValue(undefined);
+    mockArtifactDelete.mockResolvedValue(undefined);
     mockStatSync.mockReturnValue({ size: 1024 });
   });
 
@@ -219,9 +238,9 @@ describe('pdfAssemblyService — .docx upload routing', () => {
     const result = await convertAndIngestDocx(SESSION_ID, '/tmp/upload.docx', 'report.docx', DOCX_MIME);
 
     expect(result.status).toBe('success');
-    // File is stored as PDF (writeFile called with PDF buffer)
-    expect(mockWriteFile).toHaveBeenCalled();
-    const writtenBuffer = mockWriteFile.mock.calls[0][1];
+    // File is stored as PDF through the pluggable artifact store.
+    expect(mockArtifactPut).toHaveBeenCalled();
+    const writtenBuffer = mockArtifactPut.mock.calls[0][1];
     expect(Buffer.isBuffer(writtenBuffer) || writtenBuffer instanceof Uint8Array).toBe(true);
 
     // Manifest entries are created
@@ -234,6 +253,35 @@ describe('pdfAssemblyService — .docx upload routing', () => {
       expect(entry.rotation).toBe(0);
       expect(entry.deleted).toBe(false);
     }
+  });
+
+  test('retries return an already-ingested deterministic file without reconverting', async () => {
+    const jobId = '10000000-0000-4000-8000-000000000001';
+    mockFindFirst.mockResolvedValue({
+      ...mockSession,
+      fileMetadata: [{
+        fileId: jobId,
+        originalName: 'report.docx',
+        storedName: `${jobId}.pdf`,
+        mimeType: 'application/pdf',
+        sizeBytes: 1024,
+        pageCount: 5,
+        convertedFrom: 'report.docx',
+        uploadedAt: new Date().toISOString(),
+      }],
+    });
+
+    const result = await convertAndIngestDocx(
+      SESSION_ID,
+      `user-1/${SESSION_ID}/${jobId}.docx`,
+      'report.docx',
+      DOCX_MIME,
+      { userId: 'user-1', fileId: jobId, preserveInputOnFailure: true },
+    );
+
+    expect(result).toEqual(expect.objectContaining({ status: 'success', fileId: jobId }));
+    expect(mockConvert).not.toHaveBeenCalled();
+    expect(mockArtifactDelete).toHaveBeenCalled();
   });
 
   // ── NFR-security: original .docx deleted after conversion ───────────────────

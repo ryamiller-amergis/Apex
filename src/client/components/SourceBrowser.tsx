@@ -364,7 +364,6 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
                   <div
                     className={`${styles['file-card']} ${isExpanded ? styles['file-card-expanded'] : ''}`}
                     role="listitem"
-                    tabIndex={0}
                     aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
                   >
                     <div

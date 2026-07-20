@@ -65,6 +65,8 @@ describe('GET /auth/login dynamic strategy', () => {
     process.env = {
       ...originalEnv,
       NODE_ENV: 'development',
+      AZURE_TENANT_ID: 'tenant-test',
+      AZURE_CLIENT_ID: 'client-test',
       AZURE_REDIRECT_URL: 'http://localhost:3001/auth/callback',
     };
 
@@ -111,6 +113,8 @@ describe('GET /auth/login dynamic strategy', () => {
     process.env = {
       ...originalEnv,
       NODE_ENV: 'production',
+      AZURE_TENANT_ID: 'tenant-test',
+      AZURE_CLIENT_ID: 'client-test',
       AZURE_REDIRECT_URL: 'https://app-apex-prd.azurewebsites.net/auth/callback',
     };
 
@@ -123,6 +127,19 @@ describe('GET /auth/login dynamic strategy', () => {
       .expect(200);
 
     expect(authenticateMock).toHaveBeenCalledWith('azuread-openidconnect', expect.any(Object));
+  });
+
+  it('redirects to login-failed when Azure AD is not configured', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    delete process.env.AZURE_CLIENT_ID;
+    delete process.env.AZURE_TENANT_ID;
+
+    const authRouter = loadAuthRouter();
+    const app = buildApp(authRouter);
+
+    const res = await request(app).get('/auth/login').expect(302);
+    expect(res.headers.location).toBe('/auth/login-failed');
+    expect(authenticateMock).not.toHaveBeenCalled();
   });
 });
 

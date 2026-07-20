@@ -456,7 +456,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                   </span>
                 </div>
 
-                <ul className={styles.nodeList} role="list" aria-label="Work items to include">
+                <ul className={styles.nodeList} aria-label="Work items to include">
                   {nodes.map(node => (
                     <ScopeNodeRow
                       key={node.id}
