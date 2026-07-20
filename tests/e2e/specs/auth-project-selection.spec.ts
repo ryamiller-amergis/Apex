@@ -40,7 +40,7 @@ test.describe('Authentication and project selection @smoke @critical', () => {
     });
   });
 
-  test('BA persona can log in and sees the project selector @deployed-smoke @prod-safe', async ({ page, loginAsPersona }) => {
+  test('BA persona can log in and sees the project selector @deployed-smoke', async ({ page, loginAsPersona }) => {
     await suppressBetaAnnouncement(page);
     await stubAdoProjects(page);
     await loginAsPersona('ba');
@@ -88,7 +88,7 @@ test.describe('Authentication and project selection @smoke @critical', () => {
     await expect(sidebar.isHomeVisible()).resolves.toBe(true);
   });
 
-  test('app shell renders with sidebar and header after login @deployed-smoke @prod-safe', async ({ page, loginAsPersona }) => {
+  test('app shell renders with sidebar and header after login @deployed-smoke', async ({ page, loginAsPersona }) => {
     await suppressBetaAnnouncement(page);
     await stubAdoProjects(page);
     await loginAsPersona('ba');

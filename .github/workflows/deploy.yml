@@ -219,7 +219,7 @@ jobs:
         if: always()
 
   swap:
-    needs: deploy-staging
+    needs: [deploy-staging, deployed-smoke-staging]
     runs-on: ubuntu-latest
     environment: prd-production
 
@@ -278,8 +278,11 @@ jobs:
   # ── Post-deploy read-only smoke ─────────────────────────────────────────────
   # Run the `deployed-smoke` Playwright project (no local server, no seeding, no
   # /e2e/* writes) against the deployed staging slot and, after swap, production.
-  # Both jobs are non-blocking (continue-on-error) and do NOT gate the deploy or
-  # swap — they surface authenticated-navigation regressions as visible signal.
+  # The STAGING smoke is blocking and gates the swap: it runs to completion while
+  # the staging slot is still stable, so the swap cannot restart the slot out from
+  # under the authenticated session mid-run. The PROD smoke runs AFTER the swap and
+  # stays non-blocking (continue-on-error) — it surfaces regressions as visible
+  # signal without failing a promotion that has already completed.
   #
   # Auth model:
   #   • STAGING → FULLY-AUTOMATED programmatic Azure AD SSO login. The `setup`
@@ -322,7 +325,6 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Run setup + deployed-smoke against staging slot
-        continue-on-error: true
         env:
           CI: true
           E2E_BASE_URL: ${{ vars.E2E_STAGING_BASE_URL || format('https://{0}-{1}.azurewebsites.net', env.APP_SERVICE_NAME, env.SLOT_NAME) }}
