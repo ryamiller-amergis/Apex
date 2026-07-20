@@ -4,6 +4,16 @@
  * Covers: DoD-1 (manifest order, rotations, deleted exclusion), DoD-3 (missing file error)
  */
 
+const mockReadPdfArtifact = jest.fn();
+const mockArtifactPut = jest.fn();
+
+jest.mock('../services/pdfArtifactStore', () => ({
+  readPdfArtifact: (...args: unknown[]) => mockReadPdfArtifact(...args),
+  getPdfArtifactStore: () => ({
+    putFile: (...args: unknown[]) => mockArtifactPut(...args),
+  }),
+}));
+
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -39,6 +49,10 @@ async function createTestPdf(pageCount: number, filePath: string): Promise<void>
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('assemblePdf (worker core logic)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   // DoD-1: pages assembled in manifest order
   it('DoD-1: assembles pages in manifest order from multiple source files', async () => {
     const fileA = path.join(tmpDir, 'source-a.pdf');
@@ -83,6 +97,42 @@ describe('assemblePdf (worker core logic)', () => {
     const outputDoc = await PDFDocument.load(result.pdfBytes!);
     expect(outputDoc.getPage(0).getRotation().angle).toBe(90);
     expect(outputDoc.getPage(1).getRotation().angle).toBe(270);
+  });
+
+  it('reads source artifacts and writes the result through the store', async () => {
+    const source = await PDFDocument.create();
+    source.addPage([612, 792]);
+    mockReadPdfArtifact.mockResolvedValue(Buffer.from(await source.save()));
+    mockArtifactPut.mockResolvedValue(undefined);
+    const outputRef = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      fileName: 'job-1.pdf',
+    };
+
+    const result = await assemblePdf({
+      manifest: [{
+        pageId: 'p1',
+        fileId: 'file-1',
+        sourcePageIndex: 0,
+        rotation: 0,
+        deleted: false,
+      }],
+      artifactFiles: {
+        'file-1': {
+          userId: 'user-1',
+          sessionId: 'session-1',
+          fileName: 'file-1.pdf',
+        },
+      },
+      outputRef,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockReadPdfArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      fileName: 'file-1.pdf',
+    }));
+    expect(mockArtifactPut).toHaveBeenCalledWith(outputRef, expect.any(Uint8Array));
   });
 
   // DoD-1: deleted pages excluded

@@ -1,12 +1,12 @@
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { PDFDocument } from 'pdf-lib';
 import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pdfSessions } from '../db/schema';
-import { resolveDataRoot } from '../utils/dataDir';
 import { Worker } from 'worker_threads';
 import type {
   FileUploadResult,
@@ -19,13 +19,22 @@ import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 import { documentConversionService } from './documentConversionService';
 import {
   enqueuePdfConversion,
+  enqueuePdfExport,
   getPdfConversionJobs,
-  processPendingPdfConversions,
+  processPendingPdfJobs,
+  startPdfJobPoller,
+  type PdfJobRow,
 } from './pdfConversionJobService';
+import {
+  buildPdfArtifactKey,
+  getPdfArtifactStore,
+  readPdfArtifact,
+  type PdfArtifactRef,
+} from './pdfArtifactStore';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(resolveDataRoot(), 'pdf-sessions');
+const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-uploads');
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
@@ -43,7 +52,13 @@ export function getSessionDir(sessionId: string): string {
   return path.join(PDF_TEMP_DIR, sessionId);
 }
 
-export async function cleanupSessionFiles(sessionId: string): Promise<void> {
+export async function cleanupSessionFiles(sessionId: string, userId?: string): Promise<void> {
+  const resolvedUserId = userId ?? (await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  }))?.userId;
+  if (resolvedUserId) {
+    await getPdfArtifactStore().deleteSessionPrefix(resolvedUserId, sessionId);
+  }
   await fsPromises.rm(getSessionDir(sessionId), { recursive: true, force: true });
 }
 
@@ -65,7 +80,7 @@ export async function closeSession(sessionId: string, userId: string): Promise<b
   if (!session || session.userId !== userId) return false;
   if (session.status === 'expired') return true;
 
-  await cleanupSessionFiles(sessionId);
+  await cleanupSessionFiles(sessionId, userId);
   await db
     .update(pdfSessions)
     .set({ status: 'expired', updatedAt: new Date().toISOString() })
@@ -113,10 +128,6 @@ export async function createSession(
 
   const row = rows[0];
 
-  // Ensure temp directory exists for this session
-  const sessionDir = getSessionDir(row.id);
-  fs.mkdirSync(sessionDir, { recursive: true });
-
   return {
     sessionId: row.id,
     createdAt: row.createdAt,
@@ -125,7 +136,6 @@ export async function createSession(
 }
 
 export async function getSession(sessionId: string) {
-  startPendingDocxConversions();
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
@@ -189,19 +199,28 @@ export async function validateAndIngest(
     };
   }
 
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session) {
+    await safeDeleteFile(filePath);
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code: PDF_ERROR_CODES.SESSION_NOT_FOUND, message: 'Session not found.' },
+    };
+  }
+
   // ── .docx → queue conversion and return immediately ──────────────────────────
   if (isDocx) {
     const result = await enqueuePdfConversion(
       sessionId,
+      session.userId,
       filePath,
       sanitizedOriginalName,
       mimeType,
-      getSessionDir(sessionId),
       MAX_FILE_BYTES,
     );
-    if (result.status === 'queued') {
-      startPendingDocxConversions();
-    }
     return result;
   }
 
@@ -302,19 +321,6 @@ export async function validateAndIngest(
   const pageCount = doc.getPageCount();
 
   // ── Fetch current session state for aggregate limit checks ───────────────────
-  const session = await db.query.pdfSessions.findFirst({
-    where: eq(pdfSessions.id, sessionId),
-  });
-
-  if (!session) {
-    await safeDeleteFile(filePath);
-    return {
-      originalName: sanitizedOriginalName,
-      status: 'error',
-      error: { code: 'SESSION_NOT_FOUND', message: 'Session not found.' },
-    };
-  }
-
   const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
   const currentTotalBytes = existingMetadata.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
   const currentTotalPages = (session.pageManifest ?? []).filter((p) => !p.deleted).length;
@@ -347,17 +353,11 @@ export async function validateAndIngest(
   // ── Persist the file with a UUID storage name ────────────────────────────────
   const fileId = crypto.randomUUID();
   const storedName = `${fileId}.pdf`;
-  const sessionDir = getSessionDir(sessionId);
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const destPath = path.join(sessionDir, storedName);
-
-  try {
-    await fsPromises.rename(filePath, destPath);
-  } catch {
-    // rename across devices fails — copy then delete
-    await fsPromises.copyFile(filePath, destPath);
-    await safeDeleteFile(filePath);
-  }
+  await getPdfArtifactStore().putFile(
+    { userId: session.userId, sessionId, fileName: storedName },
+    buffer,
+  );
+  await safeDeleteFile(filePath);
 
   // ── Build updated file_metadata and page_manifest ────────────────────────────
   const newFileMeta: PdfFileMetadata = {
@@ -448,10 +448,11 @@ export async function removeFile(
     })
     .where(eq(pdfSessions.id, sessionId));
 
-  const filePath = resolveFilePath(sessionId, fileId);
-  if (filePath) {
-    await safeDeleteFile(filePath);
-  }
+  await getPdfArtifactStore().deleteFile({
+    userId,
+    sessionId,
+    fileName: `${fileId}.pdf`,
+  });
 }
 
 // ── Manifest update ────────────────────────────────────────────────────────────
@@ -516,18 +517,17 @@ export async function updateManifest(
 
 // ── File serving ───────────────────────────────────────────────────────────────
 
-/**
- * Returns the absolute path to the stored file, or null if not found.
- * Validates that fileId is a UUID to prevent path traversal.
- */
-export function resolveFilePath(sessionId: string, fileId: string): string | null {
-  // Validate UUID format to prevent path traversal
+export async function getPdfFileStream(
+  sessionId: string,
+  userId: string,
+  fileId: string,
+): Promise<NodeJS.ReadableStream | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) {
     return null;
   }
-  const filePath = path.join(getSessionDir(sessionId), `${fileId}.pdf`);
-  if (!fs.existsSync(filePath)) return null;
-  return filePath;
+  const ref = { userId, sessionId, fileName: `${fileId}.pdf` };
+  if (!(await getPdfArtifactStore().exists(ref))) return null;
+  return getPdfArtifactStore().getStream(ref);
 }
 
 // ── Cleanup ───────────────────────────────────────────────────────────────────
@@ -549,7 +549,7 @@ export async function expireOldSessions(
 
   for (const session of expiredSessions) {
     try {
-      await cleanupSessionFiles(session.id);
+      await cleanupSessionFiles(session.id, session.userId);
       await db
         .update(pdfSessions)
         .set({ status: 'expired', updatedAt: now })
@@ -600,6 +600,7 @@ export async function assembleAndExport(
   userId: string,
   rawFilename?: string,
   pages?: number[],
+  workerOutputRef?: PdfArtifactRef,
 ): Promise<AssembleAndExportResult> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -648,29 +649,38 @@ export async function assembleAndExport(
   const filename = sanitizeExportFilename(rawFilename);
 
   const fileMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
-  const filePaths: Record<string, string> = {};
-  for (const fm of fileMetadata) {
-    const resolved = resolveFilePath(sessionId, fm.fileId);
-    if (resolved) {
-      filePaths[fm.fileId] = resolved;
+  const fileBytes: Record<string, Uint8Array> = {};
+  const artifactFiles: Record<string, PdfArtifactRef> = {};
+  if (workerOutputRef) {
+    for (const fm of fileMetadata) {
+      artifactFiles[fm.fileId] = { userId, sessionId, fileName: `${fm.fileId}.pdf` };
     }
-  }
+  } else {
+    for (const fm of fileMetadata) {
+      const ref = { userId, sessionId, fileName: `${fm.fileId}.pdf` };
+      if (await getPdfArtifactStore().exists(ref)) {
+        fileBytes[fm.fileId] = await readPdfArtifact(ref);
+      }
+    }
 
-  const missingFiles = pagesToExport.filter((p) => !filePaths[p.fileId]);
-  if (missingFiles.length > 0) {
-    const err = new Error('Source files missing on disk') as Error & { code: string };
-    err.code = PDF_ERROR_CODES.EXPORT_FAILED;
-    throw err;
+    const missingFiles = pagesToExport.filter((p) => !fileBytes[p.fileId]);
+    if (missingFiles.length > 0) {
+      const err = new Error('Source PDF artifacts are missing') as Error & { code: string };
+      err.code = PDF_ERROR_CODES.EXPORT_FAILED;
+      throw err;
+    }
   }
 
   const workerInput: ExportWorkerInput = {
     manifest: pagesToExport,
-    filePaths,
+    ...(workerOutputRef
+      ? { artifactFiles, outputRef: workerOutputRef }
+      : { fileBytes }),
   };
 
   const result = await runPdfExport(workerInput);
 
-  if (!result.success || !result.pdfBytes) {
+  if (!result.success || (!workerOutputRef && !result.pdfBytes)) {
     const err = new Error(result.error ?? 'PDF assembly failed. Please retry.') as Error & { code: string };
     err.code = PDF_ERROR_CODES.EXPORT_FAILED;
     throw err;
@@ -695,7 +705,7 @@ export async function assembleAndExport(
   }
 
   return {
-    pdfBytes: result.pdfBytes,
+    pdfBytes: result.pdfBytes ?? new Uint8Array(),
     filename,
     pageCount: pagesToExport.length,
   };
@@ -703,18 +713,68 @@ export async function assembleAndExport(
 
 // ── Word document conversion + ingestion ────────────────────────────────────────
 
+interface ConvertDocxOptions {
+  userId?: string;
+  fileId?: string;
+  preserveInputOnFailure?: boolean;
+}
+
 export async function convertAndIngestDocx(
   sessionId: string,
-  filePath: string,
+  inputKeyOrPath: string,
   sanitizedOriginalName: string,
   originalMimeType: string,
+  options: ConvertDocxOptions = {},
 ): Promise<FileUploadResult> {
-  // Read the .docx file
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session) {
+    return {
+      originalName: sanitizedOriginalName,
+      status: 'error',
+      error: { code: PDF_ERROR_CODES.SESSION_NOT_FOUND, message: 'Session not found.' },
+    };
+  }
+  const resolvedUserId = options.userId ?? session.userId;
+  const isArtifactKey = inputKeyOrPath.startsWith(`${resolvedUserId}/${sessionId}/`);
+  const inputRef = isArtifactKey
+    ? {
+        userId: resolvedUserId,
+        sessionId,
+        fileName: path.basename(inputKeyOrPath),
+      }
+    : undefined;
+  const deleteInput = async () => {
+    if (inputRef) await getPdfArtifactStore().deleteFile(inputRef);
+    else await safeDeleteFile(inputKeyOrPath);
+  };
+  const deleteFailedInput = async () => {
+    if (!options.preserveInputOnFailure) await deleteInput();
+  };
+  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const alreadyIngested = options.fileId
+    ? existingMetadata.find((metadata) => metadata.fileId === options.fileId)
+    : undefined;
+  if (alreadyIngested) {
+    await deleteInput();
+    return {
+      fileId: alreadyIngested.fileId,
+      originalName: alreadyIngested.originalName,
+      status: 'success',
+      pageCount: alreadyIngested.pageCount,
+      sizeBytes: alreadyIngested.sizeBytes,
+      convertedFrom: alreadyIngested.convertedFrom,
+    };
+  }
+
   let docxBuffer: Buffer;
   try {
-    docxBuffer = await fsPromises.readFile(filePath);
+    docxBuffer = inputRef
+      ? await readPdfArtifact(inputRef)
+      : await fsPromises.readFile(inputKeyOrPath);
   } catch {
-    await safeDeleteFile(filePath);
+    await deleteFailedInput();
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
@@ -722,21 +782,22 @@ export async function convertAndIngestDocx(
     };
   }
 
-  // File size check (applied to the original docx)
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    await safeDeleteFile(filePath);
-    return {
-      originalName: sanitizedOriginalName,
-      status: 'error',
-      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
-    };
+  let sourceSize = docxBuffer.length;
+  if (!inputRef) {
+    try {
+      sourceSize = fs.statSync(inputKeyOrPath).size;
+    } catch {
+      await deleteFailedInput();
+      return {
+        originalName: sanitizedOriginalName,
+        status: 'error',
+        error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+      };
+    }
   }
 
-  if (stat.size > MAX_FILE_BYTES) {
-    await safeDeleteFile(filePath);
+  if (sourceSize > MAX_FILE_BYTES) {
+    await deleteFailedInput();
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
@@ -752,7 +813,7 @@ export async function convertAndIngestDocx(
   try {
     pdfBuffer = await documentConversionService.convert(docxBuffer, sanitizedOriginalName);
   } catch (err: unknown) {
-    await safeDeleteFile(filePath);
+    await deleteFailedInput();
     const code = (err as any)?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED;
     const message =
       (err as Error)?.message ??
@@ -764,14 +825,12 @@ export async function convertAndIngestDocx(
     };
   }
 
-  // Delete original .docx from disk immediately (security: A6)
-  await safeDeleteFile(filePath);
-
   // Validate the converted PDF with pdf-lib
   let doc: PDFDocument;
   try {
     doc = await PDFDocument.load(pdfBuffer);
   } catch {
+    await deleteFailedInput();
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
@@ -786,23 +845,11 @@ export async function convertAndIngestDocx(
   const pdfSize = pdfBuffer.length;
 
   // Session-level limit checks
-  const session = await db.query.pdfSessions.findFirst({
-    where: eq(pdfSessions.id, sessionId),
-  });
-
-  if (!session) {
-    return {
-      originalName: sanitizedOriginalName,
-      status: 'error',
-      error: { code: 'SESSION_NOT_FOUND', message: 'Session not found.' },
-    };
-  }
-
-  const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
   const currentTotalBytes = existingMetadata.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
   const currentTotalPages = (session.pageManifest ?? []).filter((p) => !p.deleted).length;
 
   if (currentTotalBytes + pdfSize > MAX_SESSION_BYTES) {
+    await deleteFailedInput();
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
@@ -814,6 +861,7 @@ export async function convertAndIngestDocx(
   }
 
   if (currentTotalPages + pageCount > MAX_SESSION_PAGES) {
+    await deleteFailedInput();
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
@@ -824,13 +872,12 @@ export async function convertAndIngestDocx(
     };
   }
 
-  // Persist converted PDF to session directory
-  const fileId = crypto.randomUUID();
+  const fileId = options.fileId ?? crypto.randomUUID();
   const storedName = `${fileId}.pdf`;
-  const sessionDir = getSessionDir(sessionId);
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const destPath = path.join(sessionDir, storedName);
-  await fsPromises.writeFile(destPath, pdfBuffer);
+  await getPdfArtifactStore().putFile(
+    { userId: resolvedUserId, sessionId, fileName: storedName },
+    pdfBuffer,
+  );
 
   // Build file metadata with convertedFrom provenance
   const newFileMeta: PdfFileMetadata = {
@@ -864,6 +911,8 @@ export async function convertAndIngestDocx(
     })
     .where(eq(pdfSessions.id, sessionId));
 
+  await deleteInput();
+
   return {
     fileId,
     originalName: sanitizedOriginalName,
@@ -874,14 +923,102 @@ export async function convertAndIngestDocx(
   };
 }
 
-export function kickPendingDocxConversions(): Promise<void> {
-  return processPendingPdfConversions(convertAndIngestDocx);
+export async function queuePdfExport(
+  sessionId: string,
+  userId: string,
+  rawFilename?: string,
+  pages?: number[],
+) {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session) {
+    throw Object.assign(new Error('Session not found'), { code: PDF_ERROR_CODES.SESSION_NOT_FOUND });
+  }
+  if (session.userId !== userId) {
+    throw Object.assign(new Error('You do not have access to this session'), {
+      code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
+    });
+  }
+  if (session.status === 'expired') {
+    throw Object.assign(new Error('This session has expired'), {
+      code: PDF_ERROR_CODES.SESSION_EXPIRED,
+    });
+  }
+
+  const activePages = ((session.pageManifest ?? []) as PageManifestEntry[])
+    .filter((entry) => !entry.deleted);
+  if (activePages.length === 0) {
+    throw Object.assign(new Error('Session has no pages to export'), {
+      code: PDF_ERROR_CODES.NO_PAGES,
+    });
+  }
+  if (pages?.some((index) =>
+    !Number.isInteger(index) || index < 0 || index >= activePages.length)) {
+    throw Object.assign(new Error(`Page indices out of bounds. Valid range: 0-${activePages.length - 1}`), {
+      code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
+    });
+  }
+  return enqueuePdfExport(sessionId, userId, sanitizeExportFilename(rawFilename), pages);
 }
 
-function startPendingDocxConversions(): void {
-  void kickPendingDocxConversions().catch((error) => {
-    console.error('[pdf-conversion] Background processor failed:', error);
-  });
+export async function processPdfJob(job: PdfJobRow) {
+  if (job.jobType === 'docx_convert') {
+    const result = await convertAndIngestDocx(
+      job.sessionId,
+      job.inputKey,
+      job.originalName,
+      job.originalMimeType,
+      {
+        userId: job.userId,
+        fileId: job.id,
+        preserveInputOnFailure: true,
+      },
+    );
+    if (result.status !== 'success') {
+      const error = Object.assign(
+        new Error(result.error?.message ?? 'Word document conversion failed.'),
+        { code: result.error?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED },
+      );
+      throw error;
+    }
+    return { fileId: result.fileId, result: { fileId: result.fileId } };
+  }
+
+  const payload = job.payload as {
+    filename?: string;
+    pages?: number[];
+    resultFileName?: string;
+  };
+  const resultFileName = payload.resultFileName ?? `${job.id}.pdf`;
+  const ref: PdfArtifactRef = {
+    userId: job.userId,
+    sessionId: job.sessionId,
+    fileName: resultFileName,
+  };
+  const result = await assembleAndExport(
+    job.sessionId,
+    job.userId,
+    payload.filename ?? job.originalName,
+    payload.pages,
+    ref,
+  );
+  return {
+    result: {
+      filename: result.filename,
+      pageCount: result.pageCount,
+      resultFileName,
+      resultKey: buildPdfArtifactKey(ref),
+    },
+  };
+}
+
+export function kickPendingDocxConversions(): Promise<void> {
+  return processPendingPdfJobs(processPdfJob);
+}
+
+export function startPdfProcessingPoller(): void {
+  startPdfJobPoller(processPdfJob);
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

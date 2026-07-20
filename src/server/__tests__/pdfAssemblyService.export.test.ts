@@ -19,6 +19,19 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
+jest.mock('../services/pdfArtifactStore', () => ({
+  getPdfArtifactStore: () => ({
+    exists: jest.fn().mockResolvedValue(true),
+    getStream: jest.fn(),
+    putFile: jest.fn(),
+    deleteFile: jest.fn(),
+    deleteSessionPrefix: jest.fn(),
+  }),
+  readPdfArtifact: jest.fn().mockResolvedValue(Buffer.from('%PDF-test')),
+  buildPdfArtifactKey: ({ userId, sessionId, fileName }: any) =>
+    `${userId}/${sessionId}/${fileName}`,
+}));
+
 // Mock worker_threads — Worker constructor captures workerData and emits result
 const mockPostMessage = jest.fn();
 const mockOn = jest.fn();

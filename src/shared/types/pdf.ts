@@ -2,13 +2,20 @@
 
 export type PdfSessionStatus = 'active' | 'exported' | 'expired';
 export type PdfConversionStatus = 'queued' | 'processing' | 'completed' | 'failed';
+export type PdfJobType = 'docx_convert' | 'export';
 
 export interface PdfConversionJob {
   id: string;
   sessionId: string;
+  jobType?: PdfJobType;
   originalName: string;
   status: PdfConversionStatus;
   fileId?: string | null;
+  queuePosition?: number | null;
+  resultUrl?: string | null;
+  resultFilename?: string | null;
+  attempts?: number;
+  maxAttempts?: number;
   error?: {
     code: string;
     message: string;
@@ -102,14 +109,30 @@ export interface ExportRequest {
   filename?: string;
 }
 
+export interface EnqueueExportResponse {
+  jobId: string;
+  status: PdfConversionStatus;
+  queuePosition: number;
+  statusUrl: string;
+}
+
 export interface ExtractionRequest {
   filename?: string;
   pages?: number[];
 }
 
+export interface ExportArtifactRef {
+  userId: string;
+  sessionId: string;
+  fileName: string;
+}
+
 export interface ExportWorkerInput {
   manifest: PageManifestEntry[];
-  filePaths: Record<string, string>;
+  filePaths?: Record<string, string>;
+  fileBytes?: Record<string, Uint8Array>;
+  artifactFiles?: Record<string, ExportArtifactRef>;
+  outputRef?: ExportArtifactRef;
 }
 
 export interface ExportWorkerOutput {

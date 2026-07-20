@@ -15,7 +15,20 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **App Service Plan**: Linux-based plan with Node.js support (B1 tier)
 - **App Service**: Linux web app running Node.js 24 LTS
 - **Application Insights**: Monitoring and telemetry
+- **Shared async Blob storage**: One private Storage Account per environment; modules isolate via containers (PDF starts with `pdf-artifacts`, keyed per `{userId}/{sessionId}/...`)
+- **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 
+## Shared async platform conventions
+
+Prefer extending the shared storage account over provisioning one-offs:
+
+| Need | Add | Do not |
+|------|-----|--------|
+| Binary/session artifacts for a module | A private container in `blob_containers` | A second storage account (unless hard isolation is required) |
+| Background jobs at current PDF scale | Postgres job queue (app-owned) | Service Bus "because async" |
+| Worker compute | Prefer in-app on the Apex App Service unless isolation/scale requires a dedicated host | New App Service “because the feature is async” |
+
+RBAC defaults to least-privilege per container. The shared Apex App Service identity is the documented exception because it hosts multiple in-process workloads and receives Blob Data Contributor at the shared account scope. Service Bus remains an optional future platform (revised ADR scale-up path) — do not provision it by default.
 ## Setup
 
 1. **Authenticate with Azure**:
@@ -160,6 +173,64 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_org` | Azure DevOps org URL | (required) |
 | `ado_pat` | Azure DevOps PAT | (required) |
 | `ado_project` | Azure DevOps project | (required) |
+
+The App Service plan uses the fixed `app_service_worker_count`. Production
+autoscaling is intentionally deferred until Interview and other long-running AI
+flows have a multi-instance ownership, cleanup, and scale-in recovery design.
+
+### Shared async + PDF processing settings
+
+The shared Blob account is created in every Terraform workspace. PDF is the first consumer (`pdf-artifacts` container) and runs **inside the Apex App Service**. Job delivery uses the **Postgres queue** (revised ADR) — Terraform does **not** provision Service Bus or a separate PDF worker host.
+
+**Artifact layout:** PDF session/job files live in the private `pdf-artifacts` container keyed per user and session (`{userId}/{sessionId}/...`) rather than on the App Service local disk (`PDF_TEMP_DIR`). This is required because the production API is zone-redundant across multiple fixed instances — any instance must be able to read/write a session's artifacts. The cross-cutting Apex managed identity has shared-account access; clients receive artifacts only through the authenticated API.
+
+| Terraform variable | Purpose | Default |
+|--------------------|---------|---------|
+| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
+| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {} }` |
+| `pdf_blob_container_name` | PDF container key inside `blob_containers` | `pdf-artifacts` |
+
+App setting contract for the Apex application (wire via deploy pipeline / App Service config — `main.tf` ignores `app_settings` drift):
+
+| App setting | Value source | Consumer |
+|-------------|--------------|----------|
+| `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
+| `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
+
+The cross-cutting Apex managed identity receives Storage Account-scoped Blob contributor. No connection strings or shared keys are emitted.
+
+When adding the system identity to an existing App Service with AzureRM 3.x,
+provisioning is intentionally two-stage:
+
+1. The first `terraform apply` adds the identity, Storage Account, and container.
+2. Run `terraform plan` again after Azure returns the principal ID, then apply
+   the Storage Account-scoped Blob role assignment.
+
+Do not deploy the Blob-backed application settings until the second plan shows
+`azurerm_role_assignment.api_pdf_blob_contributor` will be created.
+
+#### Extending for another module
+
+1. Add a container key to `blob_containers`.
+2. Add a container-scoped role assignment for that module's identity.
+3. Wire module-specific app settings to the shared account/container outputs.
+
+#### Non-prod verification
+
+After confirming the `default` workspace and `MSS-DevTest` subscription:
+
+```bash
+terraform fmt -check
+terraform validate
+terraform plan
+terraform output shared_storage_account_name
+terraform output pdf_blob_container_name
+```
+
+Complete the following smoke checks before marking the infrastructure ready:
+
+1. From the Apex App Service identity, upload/read/delete a test blob under a `{userId}/{sessionId}/` prefix in `pdf-artifacts`.
+2. Attempt anonymous Blob access from an unassigned principal; access must fail.
 
 ## Deployment
 

@@ -45,6 +45,7 @@
     "@azure/arm-subscriptions": "^6.0.0",
     "@azure/identity": "^4.13.0",
     "@azure/msal-node": "^5.2.5",
+    "@azure/storage-blob": "12.32.0",
     "@cursor/sdk": "^1.0.12",
     "@hookform/resolvers": "^5.2.2",
     "@matbee/libreoffice-converter": "^2.7.0",
@@ -129,5 +130,10 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
     "vite": "^5.0.12"
+  },
+  "overrides": {
+    "@azure/core-rest-pipeline": "1.24.0",
+    "@azure/core-xml": "1.5.0",
+    "@typespec/ts-http-runtime": "0.3.4"
   }
 }

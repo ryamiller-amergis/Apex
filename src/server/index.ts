@@ -60,6 +60,7 @@ import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
 import designModuleRoutes from './routes/designModule';
+import { startPdfProcessingPoller } from './services/pdfAssemblyService';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -296,6 +297,8 @@ const server = app.listen(PORT, () => {
 
   aiCostScheduler.start();
   console.log('AI cost scheduler started');
+
+  startPdfProcessingPoller();
 
   bootstrapAdmin();
 
