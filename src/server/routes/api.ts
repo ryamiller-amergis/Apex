@@ -4153,6 +4153,12 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       issueModel: config.issueModel ?? null,
       interviewSkillOptions: config.interviewSkillOptions ?? null,
       prototypeStageEnabled: config.prototypeStageEnabled ?? true,
+      interviewWebResearchEnabled: config.interviewWebResearchEnabled ?? false,
+      interviewWebMcp: config.interviewWebMcp ?? null,
+      prototypeEngine: config.prototypeEngine ?? 'bedrock',
+      prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? null,
+      screenInventoryPath: config.screenInventoryPath ?? null,
+      prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });

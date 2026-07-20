@@ -404,7 +404,7 @@ function buildMaxviewPromptHint(): string {
 function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
   if (kickoff.pillBypassScopePolicy) return [];
   const project = kickoff.project;
-  return [
+  const lines = [
     ``,
     `# Scope policy — STRICTLY ENFORCED`,
     `This assistant exists exclusively to help the ${project} team with internal organisational and project work. You MUST NOT answer questions that have no connection to this project, its codebase, team processes, or org-level work.`,
@@ -425,6 +425,62 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
     ``,
     `You MAY draw on your training knowledge to give richer answers on in-scope topics (e.g. TypeScript patterns, REST design, testing strategies) — but only when the question is clearly related to this project's work.`,
   ];
+
+  // Narrow carve-out for greenfield product-discovery interviews with live web research enabled.
+  // This relaxes the "refuse web/general" rule ONLY for research in service of building this project —
+  // it is not a full bypass, and unrelated general-knowledge requests are still refused.
+  if (kickoff.webResearchEnabled) {
+    lines.push(
+      ``,
+      `# Live web research — ENABLED for this interview`,
+      `This is a product-discovery interview for building **${project}**. You MAY use the available web-search MCP tools to research competitors, market context, industry/regulatory standards, UX patterns, and technical approaches when doing so sharpens the requirements for this project.`,
+      `Every web lookup must be in service of this project's interview. Do NOT use web access for unrelated general knowledge, trivia, entertainment, or personal requests — the out-of-scope refusal above still applies to anything not tied to building ${project}.`,
+      `Cite what you found and tie it back to a concrete requirement, trade-off, or decision for ${project}.`,
+    );
+  }
+
+  return lines;
+}
+
+/**
+ * For interview-style threads, opt into live web research when the project's skill config
+ * enables it. Wires the configured web-search MCP into the thread and flags the kickoff so
+ * the scope policy applies the narrow web-research carve-out. Additive and fail-safe:
+ * never overrides an explicit Agent Home MCP pill and returns the kickoff unchanged on any error.
+ */
+async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff): Promise<ChatThreadKickoff> {
+  // Only interview-style threads with a skill path are candidates; never override an explicit pill.
+  if (kickoff.mcpPill || kickoff.webResearchEnabled) return kickoff;
+  if (!kickoff.skillPath || !kickoff.project) return kickoff;
+  try {
+    const { resolveSkillConfig } = await import('./projectSettingsService');
+    const cfg = await resolveSkillConfig({
+      project: kickoff.project,
+      settingsId: kickoff.skillSettingsId ?? undefined,
+    });
+    if (!cfg?.interviewWebResearchEnabled) return kickoff;
+
+    const interviewPaths = new Set<string>();
+    if (cfg.interviewSkillPath) interviewPaths.add(cfg.interviewSkillPath);
+    for (const opt of cfg.interviewSkillOptions ?? []) {
+      if (opt.path) interviewPaths.add(opt.path);
+    }
+    if (!interviewPaths.has(kickoff.skillPath)) return kickoff;
+
+    // Only activate web research when there is actually an MCP server configured to
+    // perform it. Setting webResearchEnabled without a tool gives the agent a
+    // scope carve-out but nothing to search with.
+    if (!cfg.interviewWebMcp) return kickoff;
+
+    return {
+      ...kickoff,
+      webResearchEnabled: true,
+      mcpPill: cfg.interviewWebMcp,
+    };
+  } catch (err) {
+    console.error('[chat] interview web-research enrichment failed:', (err as Error).message);
+    return kickoff;
+  }
 }
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
@@ -1441,13 +1497,16 @@ export async function createThread(
   const threadId = uuidv4();
   const workspaceDir = options?.workspaceDirOverride ?? path.join(WORKSPACE_BASE, threadId);
 
+  // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
+  const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
+
   // Resolve branch
-  const branch = kickoff.branch ?? 'main';
+  const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...kickoff,
+    ...enrichedKickoff,
     branch,
     dependenciesPrepared:
-      options?.dependenciesPrepared ?? kickoff.dependenciesPrepared,
+      options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
 
   if (!options?.workspaceDirOverride) {

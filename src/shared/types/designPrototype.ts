@@ -76,12 +76,19 @@ export interface ReviewDesignPrototypeRequest {
   comment?: string;
 }
 
-/** The two UI state sections rendered in every prototype document. */
-export type DesignPrototypeStateName = 'default' | 'error';
+/**
+ * UI state sections rendered in a prototype document.
+ * MaxView prototypes use 'default' + 'error' (2 states, lowercase markers).
+ * Project-specific prototypes add 'empty' + 'loading' (4 states, lowercase markers).
+ * The regex is case-insensitive so UPPERCASE markers in HTML also match.
+ */
+export type DesignPrototypeStateName = 'default' | 'error' | 'empty' | 'loading';
 
 export const DESIGN_PROTOTYPE_STATE_NAMES: DesignPrototypeStateName[] = [
   'default',
   'error',
+  'empty',
+  'loading',
 ];
 
 export interface RegeneratePrototypeRequest {

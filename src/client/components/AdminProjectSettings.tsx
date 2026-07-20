@@ -8,7 +8,7 @@ import {
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
-import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
@@ -256,7 +256,6 @@ const SKILL_FIELDS = [
   { key: 'adrInterviewSkillPath' as const, label: 'ADR Interview Skill', desc: 'Guides repository-grounded architecture decision interviews', emptyLabel: 'None (use adr-interview default)' },
   { key: 'adrFinalizeSkillPath' as const, label: 'ADR Finalize Skill', desc: 'Generates the final MADR document', emptyLabel: 'None (use adr-finalize default)' },
   { key: 'adrAssistantSkillPath' as const, label: 'ADR Assistant Skill', desc: 'Guides repository-grounded refinement of proposed ADRs', emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)' },
-  { key: 'designPrototypeSkillPath' as const, label: 'Design Prototype Skill', desc: 'Guides HTML prototype generation from approved requirements', emptyLabel: 'None (use default)' },
   { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
   { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
   { key: 'testCaseSkillPath' as const, label: 'Test Case Skill', desc: 'Generates QA test cases after PRD generation', emptyLabel: 'None (skip test-case generation)' },
@@ -426,6 +425,130 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
   );
 };
 
+// ── InterviewWebMcpEditor ──────────────────────────────────────────────────────
+// Compact editor for a single web-search MCP server wired into interview threads
+// when live web research is enabled. Mount with a `key` tied to the config id so
+// local draft state re-seeds when switching between rows.
+
+interface InterviewWebMcpEditorProps {
+  value: QuickMcpPill | null;
+  isPending: boolean;
+  onChange: (pill: QuickMcpPill | null) => void;
+}
+
+const parseKvPairs = (s: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const pair of s.split(',')) {
+    const eq = pair.indexOf('=');
+    if (eq > 0) out[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+  }
+  return out;
+};
+
+const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, isPending, onChange }) => {
+  const [transport, setTransport] = useState<'http' | 'stdio'>(value?.transport ?? 'stdio');
+  const [mcpServerName, setMcpServerName] = useState(value?.mcpServerName ?? 'web');
+  const [url, setUrl] = useState(value?.transport === 'http' ? value.url : 'https://mcp.tavily.com/mcp/');
+  const [headersStr, setHeadersStr] = useState(
+    value?.transport === 'http'
+      ? Object.entries(value.headers ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')
+      : 'Authorization=Bearer ${TAVILY_API_KEY}',
+  );
+  const [command, setCommand] = useState(value?.transport === 'stdio' ? value.command : 'npx');
+  const [args, setArgs] = useState(value?.transport === 'stdio' ? (value.args ?? []).join(' ') : '-y tavily-mcp');
+  const [envStr, setEnvStr] = useState(
+    value?.transport === 'stdio'
+      ? Object.entries(value.env ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')
+      : 'TAVILY_API_KEY=${TAVILY_API_KEY}',
+  );
+  const [systemPromptHint, setSystemPromptHint] = useState(
+    value?.systemPromptHint ?? 'Use the web-search tools for live product, market, competitor, and UX research to sharpen requirements during this interview.',
+  );
+
+  useEffect(() => {
+    const name = mcpServerName.trim();
+    if (!name) { onChange(null); return; }
+    const base = {
+      label: 'Web Research',
+      mcpServerName: name,
+      systemPromptHint: systemPromptHint.trim() || null,
+    };
+    if (transport === 'http') {
+      if (!url.trim()) { onChange(null); return; }
+      const headers = parseKvPairs(headersStr);
+      onChange({ ...base, transport: 'http', url: url.trim(), headers: Object.keys(headers).length ? headers : null });
+    } else {
+      if (!command.trim()) { onChange(null); return; }
+      const parsedArgs = args.trim() ? args.trim().split(/\s+/) : [];
+      const env = parseKvPairs(envStr);
+      onChange({ ...base, transport: 'stdio', command: command.trim(), args: parsedArgs.length ? parsedArgs : null, env: Object.keys(env).length ? env : null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transport, mcpServerName, url, headersStr, command, args, envStr, systemPromptHint]);
+
+  return (
+    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Transport:</span>
+        {(['stdio', 'http'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`${styles.btnAction} ${transport === t ? styles.transportActive : ''}`}
+            style={{ padding: '2px 10px', fontSize: '0.78rem' }}
+            onClick={() => setTransport(t)}
+            disabled={isPending}
+          >
+            {t === 'stdio' ? 'stdio (npx / command)' : 'HTTP (hosted URL)'}
+          </button>
+        ))}
+      </div>
+
+      <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+        <label className={styles.label}>Server Name</label>
+        <input className={styles.input} placeholder="e.g. web" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} />
+      </div>
+
+      {transport === 'http' ? (
+        <>
+          <div className={styles.field}>
+            <label className={styles.label}>HTTP URL</label>
+            <input className={styles.input} placeholder="https://mcp.tavily.com/mcp/" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>Headers (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
+            <input className={styles.input} placeholder="Authorization=Bearer ${TAVILY_API_KEY}" value={headersStr} onChange={(e) => setHeadersStr(e.target.value)} disabled={isPending} />
+            <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={styles.pillAddRow}>
+            <div className={styles.field} style={{ flex: '0 0 8rem' }}>
+              <label className={styles.label}>Command</label>
+              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} />
+            </div>
+            <div className={styles.field} style={{ flex: 1 }}>
+              <label className={styles.label}>Args (space-separated)</label>
+              <input className={styles.input} placeholder="-y tavily-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} />
+            </div>
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
+            <input className={styles.input} placeholder="TAVILY_API_KEY=${TAVILY_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} />
+            <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
+          </div>
+        </>
+      )}
+
+      <div className={styles.field}>
+        <label className={styles.label}>System prompt hint</label>
+        <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Describe what the web MCP is for" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} />
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface AdminProjectSettingsProps {
@@ -490,6 +613,12 @@ interface EditState {
   uiLabBedrockTemperature: number;
   interviewSkillOptions: InterviewSkillOption[];
   prototypeStageEnabled: boolean;
+  interviewWebResearchEnabled: boolean;
+  interviewWebMcp: QuickMcpPill | null;
+  prototypeEngine: PrototypeEngine;
+  prototypeDesignSystemPath: string;
+  screenInventoryPath: string;
+  prototypeWebReferencesEnabled: boolean;
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
@@ -528,6 +657,8 @@ const emptyEdit = (): EditState => ({
   uiLabBedrockTemperature: 0,
   quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
   interviewSkillOptions: [], prototypeStageEnabled: true,
+  interviewWebResearchEnabled: false, interviewWebMcp: null, prototypeEngine: 'bedrock',
+  prototypeDesignSystemPath: '', screenInventoryPath: '', prototypeWebReferencesEnabled: false,
 });
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -705,6 +836,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       approvalMode: config.approvalMode ?? 'any_one',
       interviewSkillOptions: config.interviewSkillOptions ?? [],
       prototypeStageEnabled: config.prototypeStageEnabled !== false,
+      interviewWebResearchEnabled: config.interviewWebResearchEnabled ?? false,
+      interviewWebMcp: config.interviewWebMcp ?? null,
+      prototypeEngine: config.prototypeEngine ?? 'bedrock',
+      prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? '',
+      screenInventoryPath: config.screenInventoryPath ?? '',
+      prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
       isNew: false,
     });
     setFormError(null);
@@ -788,6 +925,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
         interviewSkillOptions: edit.interviewSkillOptions.length > 0 ? edit.interviewSkillOptions : null,
         prototypeStageEnabled: edit.prototypeStageEnabled,
+        interviewWebResearchEnabled: edit.interviewWebResearchEnabled,
+        interviewWebMcp: edit.interviewWebResearchEnabled ? edit.interviewWebMcp : null,
+        prototypeEngine: edit.prototypeEngine,
+        prototypeDesignSystemPath: edit.prototypeDesignSystemPath || null,
+        screenInventoryPath: edit.screenInventoryPath || null,
+        prototypeWebReferencesEnabled: edit.prototypeWebReferencesEnabled,
         approvalMode: edit.approvalMode,
       };
 
@@ -1031,6 +1174,44 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </label>
                 <span className={styles.skillDescription}>When off, the workflow becomes Interview → PRD → Design Doc (skips prototype generation)</span>
               </div>
+
+              <div className={styles.field} style={{ marginTop: '12px' }}>
+                <label className={styles.label} htmlFor="ps-prototypeEngine">Prototype Engine</label>
+                <select
+                  id="ps-prototypeEngine"
+                  className={styles.select}
+                  value={edit.prototypeEngine}
+                  onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeEngine: e.target.value as PrototypeEngine } : prev)}
+                  disabled={upsert.isPending}
+                >
+                  <option value="bedrock">Bedrock (one-shot, built-in prompt)</option>
+                  <option value="agent">Agent / skill flow (web-enabled)</option>
+                </select>
+                <span className={styles.skillDescription}>Which generator produces design prototypes for this project. Bedrock is the default built-in path; Agent runs the project&apos;s prototype skill.</span>
+              </div>
+
+              <div className={styles.field} style={{ marginTop: '12px' }}>
+                <label className={styles.label} htmlFor="ps-interviewWebResearchEnabled">
+                  <input
+                    id="ps-interviewWebResearchEnabled"
+                    type="checkbox"
+                    checked={edit.interviewWebResearchEnabled}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewWebResearchEnabled: e.target.checked } : prev)}
+                    disabled={upsert.isPending}
+                    style={{ marginRight: '6px' }}
+                  />
+                  Enable live web research during interviews
+                </label>
+                <span className={styles.skillDescription}>Adds a narrow scope carve-out and wires the web-search MCP below into interview threads. Off by default; only affects this project&apos;s interviews.</span>
+                {edit.interviewWebResearchEnabled && (
+                  <InterviewWebMcpEditor
+                    key={edit.id ?? 'new'}
+                    value={edit.interviewWebMcp}
+                    isPending={upsert.isPending}
+                    onChange={(pill) => setEdit((prev) => prev ? { ...prev, interviewWebMcp: pill } : prev)}
+                  />
+                )}
+              </div>
             </AccordionSection>
 
             {/* Section 2: Process Skills */}
@@ -1119,24 +1300,84 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       className={styles.select}
                       value={edit[sf.key]}
                       onChange={(e) => setEdit((prev) => prev ? { ...prev, [sf.key]: e.target.value } : prev)}
-                      disabled={sf.key === 'designPrototypeSkillPath' || upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                      disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
                     >
                       <option value="">{sf.emptyLabel}</option>
                       {skillList.map((s) => (
                         <option key={s.id} value={s.path}>{s.name}</option>
                       ))}
                     </select>
-                    <span className={styles.skillDescription}>
-                      {sf.key === 'designPrototypeSkillPath'
-                        ? 'Uses built-in Bedrock prompt — skill override not yet supported'
-                        : sf.desc}
-                    </span>
+                    <span className={styles.skillDescription}>{sf.desc}</span>
                   </div>
                 ))}
               </div>
             </AccordionSection>
 
-            {/* Section 3: Model Overrides */}
+            {/* Section 3: Prototype Design System (Bedrock) */}
+            <AccordionSection
+              title="Prototype Design System"
+              expanded={expandedSections.bedrockReview}
+              onToggle={() => toggleSection('bedrockReview')}
+            >
+              <p className={styles.accordionHelp}>
+                Each project supplies its own design system for Bedrock prototype generation.
+                The design-system skill file (from the project&apos;s repo) defines brand tokens,
+                components, and shell — no MaxView styles are injected. Leave the path blank to
+                use the convention path <code>.cursor/skills/design-system/SKILL.md</code>.
+              </p>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-protoDesignSystemPath">Design System Skill</label>
+                  <select
+                    id="ps-protoDesignSystemPath"
+                    className={styles.select}
+                    value={edit.prototypeDesignSystemPath}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeDesignSystemPath: e.target.value } : prev)}
+                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
+                  >
+                    <option value="">None (use convention path .cursor/skills/design-system/SKILL.md)</option>
+                    {skillList.map((s) => (
+                      <option key={s.id} value={s.path}>{s.name}</option>
+                    ))}
+                  </select>
+                  <span className={styles.skillDescription}>
+                    Skill from this project&apos;s repo that defines brand tokens, components, shell, and self-contained HTML rules. Loaded by Bedrock for every prototype generation.
+                  </span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-screenInventoryPath">Screen Inventory Path (EXTEND mode)</label>
+                  <input
+                    id="ps-screenInventoryPath"
+                    className={styles.input}
+                    placeholder=".cursor/skills/figma-ui-knowledge-base/clientapp-screens.md"
+                    value={edit.screenInventoryPath}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, screenInventoryPath: e.target.value } : prev)}
+                    disabled={upsert.isPending || !edit.skillRepo}
+                  />
+                  <span className={styles.skillDescription}>
+                    Optional. Path within this project&apos;s repo to a screen-inventory markdown file used in EXTEND mode (extending an existing page). Leave blank to skip.
+                  </span>
+                </div>
+              </div>
+              <div className={styles.field} style={{ marginTop: '12px' }}>
+                <label className={styles.label} htmlFor="ps-protoWebRefs">
+                  <input
+                    id="ps-protoWebRefs"
+                    type="checkbox"
+                    checked={edit.prototypeWebReferencesEnabled}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeWebReferencesEnabled: e.target.checked } : prev)}
+                    disabled={upsert.isPending}
+                    style={{ marginRight: '6px' }}
+                  />
+                  Enable live web design references (NEW-page mode only)
+                </label>
+                <span className={styles.skillDescription}>
+                  When on, a per-feature Tavily web search gathers modern UI patterns and injects them as inspiration into the Bedrock prompt. Applied only for NEW-page features; EXTEND mode always uses repo sources only. Requires <code>TAVILY_API_KEY</code> on the server.
+                </span>
+              </div>
+            </AccordionSection>
+
+            {/* Section 4: Model Overrides */}
             <AccordionSection
               title="Model Overrides"
               expanded={expandedSections.models}
