@@ -2102,6 +2102,22 @@ export async function sendMessage(
   persistThread(state.thread);
   resetIdleTimer(state);
 
+  // Insert a provisional agent_runs row so cross-instance liveness checks
+  // (isThreadRunAlive) see a live run during the slow Agent.create / agent.send
+  // window. The real run ID is unknown until after agent.send, so use a
+  // thread-scoped provisional ID; the definitive insert at ~2222 will either
+  // reuse this row (onConflictDoNothing) or create the real one alongside it.
+  const provisionalRunId = `${threadId}:provisional`;
+  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  await db.insert(agentRuns).values({
+    id: provisionalRunId,
+    threadId,
+    status: 'queued',
+    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
+  }).onConflictDoNothing().catch((e) =>
+    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
+  );
+
   // Build initial prompt on first turn
   const isFirstTurn = !state.thread.cursorAgentId;
   let prompt: string;
@@ -2225,6 +2241,12 @@ export async function sendMessage(
       status: 'queued',
       timeoutAt: runTimeoutAt,
     }).onConflictDoNothing();
+
+    // Clean up provisional liveness row now that the real row exists
+    if (agentRunId !== provisionalRunId) {
+      db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
+        .catch((e) => console.warn('[chat] Failed to delete provisional agent_runs row:', e));
+    }
 
     // Atomic lease claim: only one worker transitions queued → running
     const [claimed] = await db.update(agentRuns)
@@ -2698,6 +2720,9 @@ export async function sendMessage(
       clearInterval(backgroundHeartbeatId);
       backgroundHeartbeatId = null;
     }
+    // Clean up provisional liveness row if it was never replaced by the real one
+    db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
+      .catch(() => {});
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);

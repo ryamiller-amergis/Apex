@@ -9,7 +9,7 @@ const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
-import { isThreadRunAlive } from './agentRunReaperService';
+import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -616,6 +616,15 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     const allDone = agentFinished && createdSlugs.size > 0 && currentSlugsKey === prevFoundSlugsKey && currentSlugsKey !== '';
     prevFoundSlugsKey = currentSlugsKey;
 
+    if (agentFinished && !allDone) {
+      if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+        clearInterval(interval);
+        activeDocWatchers.delete(seedDocId);
+        console.warn(`[designDocWatcher] Skipping fail — not run owner or no terminal run (seedDocId=${seedDocId})`);
+        return;
+      }
+    }
+
     if (allDone) {
       try {
         await db
@@ -752,6 +761,12 @@ export function startSingleFeatureDocWatcher(
     // Fail only when the run is dead across instances — in-memory idle alone is
     // unreliable after hydrateThread resets status on non-owner workers.
     if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
+      if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+        clearInterval(interval);
+        activeDocWatchers.delete(designDocId);
+        console.warn(`[singleFeatureDocWatcher] Skipping fail — not run owner or no terminal run (designDocId=${designDocId})`);
+        return;
+      }
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);

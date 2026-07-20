@@ -44,6 +44,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn().mockResolvedValue(false),
+  canThisInstanceFailGeneration: jest.fn().mockResolvedValue(true),
 }));
 jest.mock('../utils/rbacHelpers', () => ({ isAdminUser: jest.fn().mockResolvedValue(false) }));
 jest.mock('../services/projectSettingsService', () => {

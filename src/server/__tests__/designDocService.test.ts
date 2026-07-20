@@ -60,6 +60,7 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn().mockResolvedValue(false),
+  canThisInstanceFailGeneration: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -1009,8 +1010,11 @@ describe('startDesignDocWatcher', () => {
 describe('startSingleFeatureDocWatcher', () => {
   const { isThreadIdle: mockIsThreadIdle } =
     jest.requireMock('../services/chatAgentService') as { isThreadIdle: jest.Mock };
-  const { isThreadRunAlive: mockIsThreadRunAlive } =
-    jest.requireMock('../services/agentRunReaperService') as { isThreadRunAlive: jest.Mock };
+  const { isThreadRunAlive: mockIsThreadRunAlive, canThisInstanceFailGeneration: mockCanFail } =
+    jest.requireMock('../services/agentRunReaperService') as {
+      isThreadRunAlive: jest.Mock;
+      canThisInstanceFailGeneration: jest.Mock;
+    };
   const {
     readOutputDesignDoc: mockDesign,
     readOutputTechSpec: mockTech,
@@ -1028,6 +1032,7 @@ describe('startSingleFeatureDocWatcher', () => {
     mockTech.mockReturnValue(null);
     mockAssumptions.mockReturnValue(null);
     mockIsThreadIdle.mockReturnValue(true);
+    mockCanFail.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -1053,8 +1058,9 @@ describe('startSingleFeatureDocWatcher', () => {
     );
   });
 
-  it('fails generation when the thread is idle and the run is dead', async () => {
+  it('fails generation when the thread is idle, run is dead, and this instance owned it', async () => {
     mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(true);
     mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
@@ -1069,6 +1075,45 @@ describe('startSingleFeatureDocWatcher', () => {
     await Promise.resolve();
 
     expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('skips fail when this instance did not own the run (non-owner)', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(false);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('skips fail when no agent_runs row exists yet (kickoff in progress)', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(false);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockCanFail).toHaveBeenCalledWith('thread-1');
+    expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
   });
