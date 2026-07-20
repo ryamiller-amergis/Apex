@@ -95,7 +95,10 @@ describe('prototypeContextService', () => {
       );
     });
 
-    it('falls back to MaxView bundle when ADO fetch fails', async () => {
+    it('returns null (fail loudly) when a configured project ADO fetch fails', async () => {
+      // C3 fix: a project with skillRepo configured but an unreachable design-system file
+      // returns null so the prototype is marked generation_failed rather than silently
+      // producing MaxView-styled output for a non-MaxView project.
       resolveSkillConfig.mockResolvedValue({
         skillRepo: 'Org/Repo',
         skillBranch: 'main',
@@ -107,9 +110,7 @@ describe('prototypeContextService', () => {
 
       const ctx = await resolvePrototypeContext('some-project', undefined);
 
-      expect(ctx).not.toBeNull();
-      expect(ctx!.isProjectSpecific).toBe(false);
-      expect(ctx!.designSystemMarkdown).toContain('MaxView');
+      expect(ctx).toBeNull();
     });
 
     it('falls back to MaxView bundle when no skillRepo is configured', async () => {
