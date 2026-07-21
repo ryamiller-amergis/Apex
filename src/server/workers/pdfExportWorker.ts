@@ -3,6 +3,10 @@ import fs from 'fs';
 import { PDFDocument, PDFPage, degrees } from 'pdf-lib';
 import type { ExportWorkerInput, ExportWorkerOutput } from '../../shared/types/pdf';
 import { getPdfArtifactStore, readPdfArtifact } from '../services/pdfArtifactStore';
+import {
+  burnOverlaysOntoPage,
+  createStandardFontCache,
+} from '../services/pdfOverlayBurnIn';
 
 /**
  * Core assembly logic extracted for testability.
@@ -17,6 +21,7 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
       fileBytes = {},
       artifactFiles = {},
       outputRef,
+      overlays = [],
     } = input;
     const outputDoc = await PDFDocument.create();
     const activeEntries = manifest.filter((entry) => !entry.deleted);
@@ -75,8 +80,16 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
       });
     }
 
-    for (const copiedPage of copiedPagesByOutputIndex) {
+    const fontCache = await createStandardFontCache(outputDoc, overlays);
+    for (let index = 0; index < copiedPagesByOutputIndex.length; index++) {
+      const copiedPage = copiedPagesByOutputIndex[index];
       outputDoc.addPage(copiedPage);
+      const pageId = activeEntries[index].pageId;
+      burnOverlaysOntoPage(
+        copiedPage,
+        overlays.filter((overlay) => overlay.pageId === pageId),
+        fontCache
+      );
     }
 
     const pdfBytes = await outputDoc.save();

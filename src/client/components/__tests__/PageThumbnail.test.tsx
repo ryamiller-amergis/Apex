@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PageThumbnail, PageThumbnailProps } from '../PageThumbnail';
+import type { OverlayTextBox } from '../../../shared/types/pdf';
 
 jest.mock('../../hooks/usePdfDocument', () => ({
   usePdfDocument: jest.fn(() => ({
@@ -32,6 +33,27 @@ const defaultProps: PageThumbnailProps = {
   onPreview: jest.fn(),
 };
 
+const overlay: OverlayTextBox = {
+  id: 'overlay-1',
+  pageId: 'page-1',
+  x: 10,
+  y: 10,
+  width: 30,
+  height: 10,
+  text: 'Text',
+  fontFamily: 'Helvetica',
+  fontSize: 14,
+  bold: false,
+  italic: false,
+  color: '#000000',
+  horizontalAlign: 'left',
+  verticalAlign: 'top',
+  opacity: 100,
+  rotation: 0,
+  listStyle: 'none',
+  zIndex: 1,
+};
+
 function renderThumbnail(overrides: Partial<PageThumbnailProps> = {}) {
   return render(<PageThumbnail {...defaultProps} {...overrides} />);
 }
@@ -58,6 +80,31 @@ describe('PageThumbnail', () => {
     const label = screen.getByTestId('pdf-thumbnail-source-1');
     expect(label).toBeInTheDocument();
     expect(label).toHaveTextContent('report.pdf p.3');
+  });
+
+  it('shows an accessible presence badge when the page has overlays', () => {
+    renderThumbnail({ overlays: [overlay] });
+
+    const badge = screen.getByTestId('pdf-tools-overlay-badge');
+    expect(badge).toHaveAttribute('data-page-id', 'page-1');
+    expect(badge).toHaveAccessibleName('Page has text overlays');
+  });
+
+  it('does not show the overlay badge when the page has no overlays', () => {
+    renderThumbnail({ overlays: [] });
+
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-badge')
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps a badged thumbnail as page selection rather than an edit surface', () => {
+    const onSelect = jest.fn();
+    renderThumbnail({ overlays: [overlay], onSelect });
+
+    fireEvent.click(screen.getByTestId('pdf-tools-overlay-badge'));
+
+    expect(onSelect).toHaveBeenCalledWith('page-1', false, false);
   });
 
   it('calls onSelect with pageId on single click', () => {

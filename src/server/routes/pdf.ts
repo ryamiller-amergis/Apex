@@ -13,6 +13,7 @@ import {
   getPdfFileStream,
   getPdfTempDir,
   updateManifest,
+  updateOverlays,
   removeFile,
   queuePdfExport,
   closeSession,
@@ -25,6 +26,8 @@ import { getPdfArtifactStore } from '../services/pdfArtifactStore';
 import {
   PDF_ERROR_CODES,
   PDF_MVP_PERFORMANCE_TARGETS,
+  type OverlayFieldError,
+  type ReplaceOverlaysRequest,
 } from '../../shared/types/pdf';
 
 const router = express.Router();
@@ -41,7 +44,10 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => {
     // Temporary name — replaced by UUID during ingestion
     const ext = path.extname(file.originalname) || '.tmp';
-    cb(null, `upload-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+    cb(
+      null,
+      `upload-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
+    );
   },
 });
 
@@ -66,13 +72,15 @@ function getUserId(req: express.Request): string {
 
 async function cleanupMulterFiles(req: express.Request): Promise<void> {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-  await Promise.all(files.map((file) => fs.promises.rm(file.path, { force: true })));
+  await Promise.all(
+    files.map((file) => fs.promises.rm(file.path, { force: true }))
+  );
 }
 
 async function loadAndValidateSession(
   sessionId: string,
   userId: string,
-  res: express.Response,
+  res: express.Response
 ): Promise<ReturnType<typeof getSession> extends Promise<infer T> ? T : never> {
   const session = await getSession(sessionId);
   if (!session) {
@@ -124,7 +132,9 @@ router.post('/sessions', async (req, res): Promise<void> => {
   } catch (err: unknown) {
     const code = (err as any)?.code;
     if (code === PDF_ERROR_CODES.SESSION_LIMIT_REACHED) {
-      res.status(429).json({ error: { code, message: 'Maximum 3 concurrent sessions reached.' } });
+      res.status(429).json({
+        error: { code, message: 'Maximum 3 concurrent sessions reached.' },
+      });
       return;
     }
     console.error('[pdf] POST /sessions error:', err);
@@ -178,7 +188,12 @@ router.post(
     // Run Multer first so files are on disk before we do ownership check
     upload.array('files')(req, res, (err) => {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-        res.status(413).json({ error: { code: 'FILE_TOO_LARGE', message: 'File exceeds 100 MB limit.' } });
+        res.status(413).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'File exceeds 100 MB limit.',
+          },
+        });
         return;
       }
       if (err) {
@@ -208,16 +223,16 @@ router.post(
 
       const results = await Promise.all(
         files.map((f) =>
-          validateAndIngest(sessionId, f.path, f.originalname, f.mimetype),
-        ),
+          validateAndIngest(sessionId, f.path, f.originalname, f.mimetype)
+        )
       );
 
       const durationMs = Math.round(
-        performance.now() - (res.locals.pdfUploadStartedAt as number),
+        performance.now() - (res.locals.pdfUploadStartedAt as number)
       );
       res.setHeader(
         'Server-Timing',
-        `pdf-upload-parse;dur=${durationMs};desc="PDF upload and parse"`,
+        `pdf-upload-parse;dur=${durationMs};desc="PDF upload and parse"`
       );
 
       const uploadedPageCount = results[0]?.pageCount ?? 0;
@@ -248,7 +263,7 @@ router.post(
       console.error('[pdf] POST upload error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
-  },
+  }
 );
 
 // ── PUT /api/pdf/sessions/:sessionId/manifest ─────────────────────────────────
@@ -266,11 +281,27 @@ router.put('/sessions/:sessionId/manifest', async (req, res): Promise<void> => {
   } catch (err: unknown) {
     const code = (err as any)?.code;
     if (code === PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID) {
-      res.status(400).json({ error: { code, message: (err as Error).message } });
+      res
+        .status(400)
+        .json({ error: { code, message: (err as Error).message } });
       return;
     }
     if (code === PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION) {
-      res.status(400).json({ error: { code, message: (err as Error).message } });
+      res
+        .status(400)
+        .json({ error: { code, message: (err as Error).message } });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+      res.status(410).json({ error: 'Session has expired' });
       return;
     }
     console.error('[pdf] PUT manifest error:', err);
@@ -278,28 +309,77 @@ router.put('/sessions/:sessionId/manifest', async (req, res): Promise<void> => {
   }
 });
 
-// ── DELETE /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────
+// ── PUT /api/pdf/sessions/:sessionId/overlays ─────────────────────────────────
 
-router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void> => {
+router.put('/sessions/:sessionId/overlays', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { sessionId, fileId } = req.params;
+    const { sessionId } = req.params;
 
     const session = await loadAndValidateSession(sessionId, userId, res);
     if (!session) return;
 
-    await removeFile(sessionId, userId, fileId);
-    res.status(204).end();
+    const { overlays } = (req.body ?? {}) as Partial<ReplaceOverlaysRequest>;
+    const result = await updateOverlays(sessionId, userId, overlays);
+    res.json(result);
   } catch (err: unknown) {
-    const code = (err as any)?.code;
-    if (code === 'FILE_NOT_FOUND') {
-      res.status(404).json({ error: { code, message: 'File not found' } });
+    const serviceError = err as Error & {
+      code?: string;
+      errors?: OverlayFieldError[];
+    };
+    const code = serviceError.code;
+    if (code === PDF_ERROR_CODES.OVERLAY_VALIDATION_FAILED) {
+      res.status(400).json({
+        error: {
+          code,
+          message: serviceError.message,
+          errors: serviceError.errors ?? [],
+        },
+      });
       return;
     }
-    console.error('[pdf] DELETE file error:', err);
+    if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+      res.status(410).json({ error: 'Session has expired' });
+      return;
+    }
+    console.error('[pdf] PUT overlays error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ── DELETE /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────
+
+router.delete(
+  '/sessions/:sessionId/files/:fileId',
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId, fileId } = req.params;
+
+      const session = await loadAndValidateSession(sessionId, userId, res);
+      if (!session) return;
+
+      await removeFile(sessionId, userId, fileId);
+      res.status(204).end();
+    } catch (err: unknown) {
+      const code = (err as any)?.code;
+      if (code === 'FILE_NOT_FOUND') {
+        res.status(404).json({ error: { code, message: 'File not found' } });
+        return;
+      }
+      console.error('[pdf] DELETE file error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // ── POST /api/pdf/sessions/:sessionId/export ──────────────────────────────────
 
@@ -307,7 +387,10 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
     const { sessionId } = req.params;
-    const { filename, pages } = req.body as { filename?: string; pages?: number[] };
+    const { filename, pages } = req.body as {
+      filename?: string;
+      pages?: number[];
+    };
 
     // Validate pages array if provided
     if (pages !== undefined) {
@@ -339,11 +422,16 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       return;
     }
     if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
-      res.status(403).json({ error: code, message: 'You do not have access to this session' });
+      res.status(403).json({
+        error: code,
+        message: 'You do not have access to this session',
+      });
       return;
     }
     if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
-      res.status(410).json({ error: code, message: 'This session has expired' });
+      res
+        .status(410)
+        .json({ error: code, message: 'This session has expired' });
       return;
     }
     if (code === PDF_ERROR_CODES.INVALID_FILENAME) {
@@ -355,16 +443,23 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       return;
     }
     if (code === PDF_ERROR_CODES.NO_PAGES) {
-      res.status(422).json({ error: code, message: 'Session has no pages to export' });
+      res
+        .status(422)
+        .json({ error: code, message: 'Session has no pages to export' });
       return;
     }
     if (code === PDF_ERROR_CODES.EXPORT_FAILED) {
-      res.status(500).json({ error: code, message: 'PDF assembly failed. Please retry.' });
+      res
+        .status(500)
+        .json({ error: code, message: 'PDF assembly failed. Please retry.' });
       return;
     }
 
     console.error('[pdf] POST export error:', err);
-    res.status(500).json({ error: 'EXPORT_FAILED', message: 'PDF assembly failed. Please retry.' });
+    res.status(500).json({
+      error: 'EXPORT_FAILED',
+      message: 'PDF assembly failed. Please retry.',
+    });
   }
 });
 
@@ -408,7 +503,7 @@ router.get('/jobs/:jobId/result', async (req, res): Promise<void> => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${job.resultFilename ?? job.originalName}"`,
+      `attachment; filename="${job.resultFilename ?? job.originalName}"`
     );
     stream.on('error', (error) => {
       console.error('[pdf] Export result stream failed:', error);
@@ -424,39 +519,44 @@ router.get('/jobs/:jobId/result', async (req, res): Promise<void> => {
 
 // ── GET /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────────
 
-router.get('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void> => {
-  try {
-    const userId = getUserId(req);
-    const { sessionId, fileId } = req.params;
+router.get(
+  '/sessions/:sessionId/files/:fileId',
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId, fileId } = req.params;
 
-    const session = await loadAndValidateSession(sessionId, userId, res);
-    if (!session) return;
+      const session = await loadAndValidateSession(sessionId, userId, res);
+      if (!session) return;
 
-    // Verify this fileId belongs to the session
-    const fileMeta = (session.fileMetadata ?? []).find((f: any) => f.fileId === fileId);
-    if (!fileMeta) {
-      res.status(404).json({ error: 'File not found' });
-      return;
+      // Verify this fileId belongs to the session
+      const fileMeta = (session.fileMetadata ?? []).find(
+        (f: any) => f.fileId === fileId
+      );
+      if (!fileMeta) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+
+      const stream = await getPdfFileStream(sessionId, userId, fileId);
+      if (!stream) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline');
+      stream.on('error', (error) => {
+        console.error('[pdf] Preview stream failed:', error);
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy(error as Error);
+      });
+      stream.pipe(res);
+    } catch (err) {
+      console.error('[pdf] GET file error:', err);
+      res.status(500).json({ error: 'Internal server error' });
     }
-
-    const stream = await getPdfFileStream(sessionId, userId, fileId);
-    if (!stream) {
-      res.status(404).json({ error: 'File not found' });
-      return;
-    }
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline');
-    stream.on('error', (error) => {
-      console.error('[pdf] Preview stream failed:', error);
-      if (!res.headersSent) res.status(500).end();
-      else res.destroy(error as Error);
-    });
-    stream.pipe(res);
-  } catch (err) {
-    console.error('[pdf] GET file error:', err);
-    res.status(500).json({ error: 'Internal server error' });
   }
-});
+);
 
 export default router;

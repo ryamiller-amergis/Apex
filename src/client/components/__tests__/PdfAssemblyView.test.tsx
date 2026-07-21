@@ -2,11 +2,17 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PdfAssemblyView } from '../PdfAssemblyView';
-import type { PageManifestEntry, PdfFileMetadata, PdfSession } from '../../../shared/types/pdf';
+import type {
+  PageManifestEntry,
+  PdfFileMetadata,
+  PdfSession,
+} from '../../../shared/types/pdf';
 
 jest.mock('../../contexts/PdfWorkerContext', () => ({
   usePdfWorker: () => ({ getDocument: jest.fn() }),
-  PdfWorkerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PdfWorkerProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 jest.mock('../SourceBrowser', () => ({
@@ -18,12 +24,16 @@ jest.mock('../AssemblyLane', () => ({
     onReorder,
     onSelectAll,
     onDeselectAll,
+    onSelect,
+    onEditPage,
     selectedCount,
     visiblePages,
   }: {
     onReorder: (from: number, to: number) => void;
     onSelectAll: () => void;
     onDeselectAll: () => void;
+    onSelect: (pageId: string, shiftKey: boolean, ctrlKey: boolean) => void;
+    onEditPage: () => void;
     selectedCount: number;
     visiblePages: PageManifestEntry[];
   }) => (
@@ -39,8 +49,24 @@ jest.mock('../AssemblyLane', () => ({
       <button type="button" data-testid="mock-select-all" onClick={onSelectAll}>
         Select All
       </button>
-      <button type="button" data-testid="mock-deselect-all" onClick={onDeselectAll}>
+      <button
+        type="button"
+        data-testid="mock-deselect-all"
+        onClick={onDeselectAll}
+      >
         Deselect All
+      </button>
+      {visiblePages[0] && (
+        <button
+          type="button"
+          data-testid="mock-select-first"
+          onClick={() => onSelect(visiblePages[0].pageId, false, false)}
+        >
+          Select first page
+        </button>
+      )}
+      <button type="button" data-testid="mock-edit-page" onClick={onEditPage}>
+        Edit page
       </button>
     </div>
   ),
@@ -54,6 +80,34 @@ jest.mock('../PdfInlinePreview', () => ({
   PdfInlinePreview: () => <div data-testid="mock-inline-preview" />,
 }));
 
+jest.mock('../PdfPageEditorModal', () => ({
+  PdfPageEditorModal: ({
+    overlay,
+    onToggleTextTool,
+  }: {
+    overlay: {
+      textToolActive: boolean;
+      onCreateAt: (x: number, y: number) => void;
+    };
+    onToggleTextTool: () => void;
+  }) => (
+    <div data-testid="mock-page-editor-modal">
+      <button data-testid="mock-toggle-text" onClick={onToggleTextTool}>
+        Toggle text
+      </button>
+      <span data-testid="mock-text-tool-state">
+        {overlay.textToolActive ? 'active' : 'inactive'}
+      </span>
+      <button
+        data-testid="mock-create-overlay"
+        onClick={() => overlay.onCreateAt(10, 10)}
+      >
+        Create overlay
+      </button>
+    </div>
+  ),
+}));
+
 jest.mock('../../hooks/useDocumentColors', () => ({
   useDocumentColors: () => new Map(),
 }));
@@ -62,6 +116,7 @@ const mockCreateSession = jest.fn();
 const mockUploadFiles = jest.fn();
 const mockMutateManifest = jest.fn();
 const mockMutateAsyncManifest = jest.fn();
+const mockMutateAsyncOverlays = jest.fn();
 const mockExportMutate = jest.fn();
 let mockSessionData: PdfSession | null = null;
 let mockSessionError: (Error & { status?: number }) | null = null;
@@ -92,6 +147,11 @@ jest.mock('../../hooks/usePdfSession', () => ({
   useUpdateManifest: () => ({
     mutate: mockMutateManifest,
     mutateAsync: mockMutateAsyncManifest,
+    isPending: false,
+  }),
+  useUpdateOverlays: () => ({
+    mutate: jest.fn(),
+    mutateAsync: mockMutateAsyncOverlays,
     isPending: false,
   }),
   useRemovePdfFile: () => ({
@@ -143,13 +203,18 @@ function makeSession(pages: PageManifestEntry[]): PdfSession {
     expiresAt: '2026-07-10T16:00:00.000Z',
     fileMetadata: [file],
     pageManifest: pages,
+    textOverlays: [],
     conversionJobs: [],
   };
 }
 
 function renderWithQuery(ui: React.ReactElement) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  );
 }
 
 describe('PdfAssemblyView', () => {
@@ -171,15 +236,21 @@ describe('PdfAssemblyView', () => {
       expiresAt: '',
     });
     mockUploadFiles.mockResolvedValue({
-      files: [{
-        fileId: 'f1',
-        originalName: 'test.pdf',
-        status: 'success',
-        pageCount: 3,
-        sizeBytes: 1024,
-      }],
+      files: [
+        {
+          fileId: 'f1',
+          originalName: 'test.pdf',
+          status: 'success',
+          pageCount: 3,
+          sizeBytes: 1024,
+        },
+      ],
     });
     mockMutateAsyncManifest.mockResolvedValue({ pageCount: 3, updatedAt: '' });
+    mockMutateAsyncOverlays.mockImplementation(
+      ({ overlays }: { overlays: unknown[] }) =>
+        Promise.resolve({ overlays, updatedAt: '' })
+    );
   });
 
   it('renders the dropzone and heading', () => {
@@ -204,7 +275,9 @@ describe('PdfAssemblyView', () => {
   it('creates session and uploads files on file selection', async () => {
     renderWithQuery(<PdfAssemblyView />);
     const input = screen.getByTestId('pdf-file-input');
-    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
+    const file = new File(['%PDF-test'], 'test.pdf', {
+      type: 'application/pdf',
+    });
 
     fireEvent.change(input, { target: { files: [file] } });
 
@@ -225,8 +298,12 @@ describe('PdfAssemblyView', () => {
     sessionStorage.setItem('pdf-active-session:qa-user', 'qa-session');
 
     renderWithQuery(<PdfAssemblyView userId="ryan-user" />);
-    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+    const file = new File(['%PDF-test'], 'test.pdf', {
+      type: 'application/pdf',
+    });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), {
+      target: { files: [file] },
+    });
 
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith({});
@@ -237,13 +314,19 @@ describe('PdfAssemblyView', () => {
       });
     });
 
-    expect(sessionStorage.getItem('pdf-active-session:qa-user')).toBe('qa-session');
-    expect(sessionStorage.getItem('pdf-active-session:ryan-user')).toBe('sess-1');
+    expect(sessionStorage.getItem('pdf-active-session:qa-user')).toBe(
+      'qa-session'
+    );
+    expect(sessionStorage.getItem('pdf-active-session:ryan-user')).toBe(
+      'sess-1'
+    );
   });
 
   it('replaces an expired stored session before uploading', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-expired');
-    mockSessionError = Object.assign(new Error('Session has expired'), { status: 410 });
+    mockSessionError = Object.assign(new Error('Session has expired'), {
+      status: 410,
+    });
 
     renderWithQuery(<PdfAssemblyView />);
 
@@ -251,8 +334,12 @@ describe('PdfAssemblyView', () => {
       expect(sessionStorage.getItem('pdf-active-session')).toBeNull();
     });
 
-    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+    const file = new File(['%PDF-test'], 'test.pdf', {
+      type: 'application/pdf',
+    });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), {
+      target: { files: [file] },
+    });
 
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith({});
@@ -267,20 +354,28 @@ describe('PdfAssemblyView', () => {
   it('retries an upload with a fresh session when the stored session returns 410', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-expired');
     mockUploadFiles
-      .mockRejectedValueOnce(Object.assign(new Error('Session has expired'), { status: 410 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Session has expired'), { status: 410 })
+      )
       .mockResolvedValueOnce({
-        files: [{
-          fileId: 'f1',
-          originalName: 'test.pdf',
-          status: 'success',
-          pageCount: 3,
-          sizeBytes: 1024,
-        }],
+        files: [
+          {
+            fileId: 'f1',
+            originalName: 'test.pdf',
+            status: 'success',
+            pageCount: 3,
+            sizeBytes: 1024,
+          },
+        ],
       });
 
     renderWithQuery(<PdfAssemblyView />);
-    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+    const file = new File(['%PDF-test'], 'test.pdf', {
+      type: 'application/pdf',
+    });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), {
+      target: { files: [file] },
+    });
 
     await waitFor(() => {
       expect(mockUploadFiles).toHaveBeenNthCalledWith(1, {
@@ -301,20 +396,28 @@ describe('PdfAssemblyView', () => {
   it('retries an upload with a fresh session when the stored session returns 403', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-other-user');
     mockUploadFiles
-      .mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Forbidden'), { status: 403 })
+      )
       .mockResolvedValueOnce({
-        files: [{
-          fileId: 'f1',
-          originalName: 'test.pdf',
-          status: 'success',
-          pageCount: 3,
-          sizeBytes: 1024,
-        }],
+        files: [
+          {
+            fileId: 'f1',
+            originalName: 'test.pdf',
+            status: 'success',
+            pageCount: 3,
+            sizeBytes: 1024,
+          },
+        ],
       });
 
     renderWithQuery(<PdfAssemblyView />);
-    const file = new File(['%PDF-test'], 'test.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByTestId('pdf-file-input'), { target: { files: [file] } });
+    const file = new File(['%PDF-test'], 'test.pdf', {
+      type: 'application/pdf',
+    });
+    fireEvent.change(screen.getByTestId('pdf-file-input'), {
+      target: { files: [file] },
+    });
 
     await waitFor(() => {
       expect(mockUploadFiles).toHaveBeenNthCalledWith(1, {
@@ -345,11 +448,16 @@ describe('PdfAssemblyView', () => {
 
   it('displays validation errors from upload results', async () => {
     mockUploadFiles.mockResolvedValue({
-      files: [{
-        originalName: 'bad.pdf',
-        status: 'error',
-        error: { code: 'FILE_ENCRYPTED', message: 'This PDF is password-protected and cannot be processed.' },
-      }],
+      files: [
+        {
+          originalName: 'bad.pdf',
+          status: 'error',
+          error: {
+            code: 'FILE_ENCRYPTED',
+            message: 'This PDF is password-protected and cannot be processed.',
+          },
+        },
+      ],
     });
 
     renderWithQuery(<PdfAssemblyView />);
@@ -367,14 +475,16 @@ describe('PdfAssemblyView', () => {
 
   it('dismisses an upload error without refreshing the page', async () => {
     mockUploadFiles.mockResolvedValue({
-      files: [{
-        originalName: 'broken.docx',
-        status: 'error',
-        error: {
-          code: 'CONVERSION_FAILED',
-          message: 'This Word document could not be converted.',
+      files: [
+        {
+          originalName: 'broken.docx',
+          status: 'error',
+          error: {
+            code: 'CONVERSION_FAILED',
+            message: 'This Word document could not be converted.',
+          },
         },
-      }],
+      ],
     });
 
     renderWithQuery(<PdfAssemblyView />);
@@ -403,24 +513,28 @@ describe('PdfAssemblyView', () => {
       id: 'sess-active',
       fileMetadata: [],
       pageManifest: [],
-      conversionJobs: [{
-        id: 'conversion-failed',
-        sessionId: 'sess-active',
-        originalName: 'large-report.docx',
-        status: 'failed',
-        error: {
-          code: 'CONVERSION_FAILED',
-          message: 'This Word document could not be converted.',
+      conversionJobs: [
+        {
+          id: 'conversion-failed',
+          sessionId: 'sess-active',
+          originalName: 'large-report.docx',
+          status: 'failed',
+          error: {
+            code: 'CONVERSION_FAILED',
+            message: 'This Word document could not be converted.',
+          },
+          createdAt: '2026-07-11T05:00:00.000Z',
+          completedAt: '2026-07-11T05:01:00.000Z',
         },
-        createdAt: '2026-07-11T05:00:00.000Z',
-        completedAt: '2026-07-11T05:01:00.000Z',
-      }],
+      ],
     };
 
     renderWithQuery(<PdfAssemblyView />);
 
     expect(screen.getByText('large-report.docx')).toBeInTheDocument();
-    expect(screen.getByText(/This Word document could not be converted/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/This Word document could not be converted/)
+    ).toBeInTheDocument();
   });
 
   it('handles drag and drop events on the dropzone', () => {
@@ -442,11 +556,13 @@ describe('PdfAssemblyView', () => {
     };
 
     mockUploadFiles.mockResolvedValue({
-      files: [{
-        conversionId: 'conversion-1',
-        originalName: 'proposal.docx',
-        status: 'queued',
-      }],
+      files: [
+        {
+          conversionId: 'conversion-1',
+          originalName: 'proposal.docx',
+          status: 'queued',
+        },
+      ],
     });
 
     renderWithQuery(<PdfAssemblyView />);
@@ -524,7 +640,8 @@ describe('PdfAssemblyView', () => {
     const divider = screen.getByRole('separator', {
       name: 'Resize assembly and preview panels',
     });
-    const assemblyPanel = screen.getByTestId('mock-assembly-lane').parentElement;
+    const assemblyPanel =
+      screen.getByTestId('mock-assembly-lane').parentElement;
 
     expect(divider).toHaveAttribute('aria-valuenow', '50');
     expect(assemblyPanel).toHaveStyle({ flexBasis: '50%' });
@@ -538,6 +655,17 @@ describe('PdfAssemblyView', () => {
 
     fireEvent.doubleClick(divider);
     expect(divider).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  it('opens the large page editor for a selected assembly thumbnail', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([makePage('page-a', 0)]);
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('mock-select-first'));
+    fireEvent.click(screen.getByTestId('mock-edit-page'));
+
+    expect(screen.getByTestId('mock-page-editor-modal')).toBeInTheDocument();
   });
 
   it('starts a fresh session without deleting the current documents', async () => {
@@ -554,7 +682,9 @@ describe('PdfAssemblyView', () => {
     fireEvent.click(screen.getByTestId('pdf-new-session'));
 
     await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalledWith({ replaceSessionId: 'sess-wired' });
+      expect(mockCreateSession).toHaveBeenCalledWith({
+        replaceSessionId: 'sess-wired',
+      });
       expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-fresh');
     });
 
@@ -579,7 +709,7 @@ describe('PdfAssemblyView', () => {
     });
 
     expect(mockMutateAsyncManifest.mock.invocationCallOrder[0]).toBeLessThan(
-      mockCreateSession.mock.invocationCallOrder[0],
+      mockCreateSession.mock.invocationCallOrder[0]
     );
   });
 
@@ -597,7 +727,9 @@ describe('PdfAssemblyView', () => {
       renderWithQuery(<PdfAssemblyView />);
 
       expect(screen.getByTestId('pdf-export-bar')).toBeInTheDocument();
-      expect(screen.getByTestId('pdf-export-filename-input')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('pdf-export-filename-input')
+      ).toBeInTheDocument();
       expect(screen.getByTestId('pdf-range-input')).toBeInTheDocument();
       expect(screen.getByTestId('pdf-export-button')).toBeInTheDocument();
       expect(screen.getByTestId('pdf-export-selected-btn')).toBeInTheDocument();
@@ -631,7 +763,9 @@ describe('PdfAssemblyView', () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByTestId('pdf-export-selected-btn')).not.toBeDisabled();
+        expect(
+          screen.getByTestId('pdf-export-selected-btn')
+        ).not.toBeDisabled();
       });
 
       fireEvent.click(screen.getByTestId('pdf-export-selected-btn'));
@@ -658,7 +792,9 @@ describe('PdfAssemblyView', () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByTestId('pdf-export-selected-btn')).not.toBeDisabled();
+        expect(
+          screen.getByTestId('pdf-export-selected-btn')
+        ).not.toBeDisabled();
       });
 
       fireEvent.click(screen.getByTestId('pdf-export-selected-btn'));
@@ -684,7 +820,35 @@ describe('PdfAssemblyView', () => {
 
       // Save must complete before export starts
       expect(mockMutateAsyncManifest.mock.invocationCallOrder[0]).toBeLessThan(
-        mockExportMutate.mock.invocationCallOrder[0],
+        mockExportMutate.mock.invocationCallOrder[0]
+      );
+    });
+
+    it('flushes pending overlay edits before export starts', async () => {
+      renderWithQuery(<PdfAssemblyView />);
+      fireEvent.click(screen.getByTestId('mock-select-first'));
+      fireEvent.click(screen.getByTestId('mock-edit-page'));
+      fireEvent.click(screen.getByTestId('mock-toggle-text'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('mock-text-tool-state')).toHaveTextContent(
+          'active'
+        );
+      });
+      fireEvent.click(screen.getByTestId('mock-create-overlay'));
+      fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+      await waitFor(() => {
+        expect(mockMutateAsyncOverlays).toHaveBeenCalledWith({
+          sessionId: 'sess-wired',
+          overlays: [
+            expect.objectContaining({ text: 'Text', pageId: 'page-a' }),
+          ],
+        });
+        expect(mockExportMutate).toHaveBeenCalledTimes(1);
+      });
+      expect(mockMutateAsyncOverlays.mock.invocationCallOrder[0]).toBeLessThan(
+        mockExportMutate.mock.invocationCallOrder[0]
       );
     });
 

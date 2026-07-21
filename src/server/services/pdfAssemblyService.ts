@@ -12,11 +12,16 @@ import type {
   FileUploadResult,
   PageManifestEntry,
   PdfFileMetadata,
+  OverlayTextBox,
   ExportWorkerInput,
   ExportWorkerOutput,
+  OverlayFieldError,
+  ReplaceOverlaysResponse,
+  UpdateManifestResponse,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 import { documentConversionService } from './documentConversionService';
+import { stripOrphanOverlays, validateOverlays } from './overlayValidation';
 import {
   enqueuePdfConversion,
   enqueuePdfExport,
@@ -34,7 +39,8 @@ import {
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PDF_TEMP_DIR = process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-uploads');
+const PDF_TEMP_DIR =
+  process.env.PDF_TEMP_DIR ?? path.join(os.tmpdir(), 'apex-pdf-uploads');
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_SESSION_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_SESSION_PAGES = 500;
@@ -52,14 +58,24 @@ export function getSessionDir(sessionId: string): string {
   return path.join(PDF_TEMP_DIR, sessionId);
 }
 
-export async function cleanupSessionFiles(sessionId: string, userId?: string): Promise<void> {
-  const resolvedUserId = userId ?? (await db.query.pdfSessions.findFirst({
-    where: eq(pdfSessions.id, sessionId),
-  }))?.userId;
+export async function cleanupSessionFiles(
+  sessionId: string,
+  userId?: string
+): Promise<void> {
+  const resolvedUserId =
+    userId ??
+    (
+      await db.query.pdfSessions.findFirst({
+        where: eq(pdfSessions.id, sessionId),
+      })
+    )?.userId;
   if (resolvedUserId) {
     await getPdfArtifactStore().deleteSessionPrefix(resolvedUserId, sessionId);
   }
-  await fsPromises.rm(getSessionDir(sessionId), { recursive: true, force: true });
+  await fsPromises.rm(getSessionDir(sessionId), {
+    recursive: true,
+    force: true,
+  });
 }
 
 // ── Session management ─────────────────────────────────────────────────────────
@@ -73,7 +89,10 @@ export interface CreateSessionOptions {
  * Mark a session expired and delete its temp files.
  * Returns false when the session is missing or owned by another user.
  */
-export async function closeSession(sessionId: string, userId: string): Promise<boolean> {
+export async function closeSession(
+  sessionId: string,
+  userId: string
+): Promise<boolean> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
@@ -91,7 +110,7 @@ export async function closeSession(sessionId: string, userId: string): Promise<b
 export async function createSession(
   userId: string,
   projectId?: string,
-  options?: CreateSessionOptions,
+  options?: CreateSessionOptions
 ): Promise<{ sessionId: string; createdAt: string; expiresAt: string }> {
   // Reclaim past-due sessions so they don't block the concurrent limit.
   await expireOldSessions(userId);
@@ -108,7 +127,9 @@ export async function createSession(
     const oldest = activeSessions[activeSessions.length - 1];
     const closed = await closeSession(oldest.id, userId);
     if (!closed) {
-      const err = new Error('Session limit reached') as Error & { code: string };
+      const err = new Error('Session limit reached') as Error & {
+        code: string;
+      };
       err.code = PDF_ERROR_CODES.SESSION_LIMIT_REACHED;
       throw err;
     }
@@ -122,6 +143,7 @@ export async function createSession(
       projectId: projectId ?? null,
       status: 'active',
       pageManifest: [],
+      textOverlays: [],
       fileMetadata: [],
     })
     .returning();
@@ -143,14 +165,110 @@ export async function getSession(sessionId: string) {
 
   return {
     ...session,
+    textOverlays: session.textOverlays ?? [],
     conversionJobs: await getPdfConversionJobs(sessionId),
+  };
+}
+
+/**
+ * Persists the authoritative overlay collection as one JSONB value.
+ * Request authorization and business-rule validation are owned by FEAT-002.
+ */
+export async function replaceTextOverlays(
+  sessionId: string,
+  textOverlays: OverlayTextBox[]
+): Promise<OverlayTextBox[]> {
+  const rows = await db
+    .update(pdfSessions)
+    .set({
+      textOverlays,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(pdfSessions.id, sessionId))
+    .returning({ textOverlays: pdfSessions.textOverlays });
+
+  if (rows.length === 0) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  return rows[0].textOverlays ?? [];
+}
+
+type OverlayValidationError = Error & {
+  code: string;
+  errors: OverlayFieldError[];
+};
+
+export async function updateOverlays(
+  sessionId: string,
+  userId: string,
+  overlays: unknown
+): Promise<ReplaceOverlaysResponse> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  const validPageIds = new Set(
+    ((session.pageManifest ?? []) as PageManifestEntry[])
+      .filter((page) => !page.deleted)
+      .map((page) => page.pageId)
+  );
+  const validation = validateOverlays(overlays, validPageIds);
+  if (validation.ok === false) {
+    const err = new Error(
+      'One or more overlays are invalid.'
+    ) as OverlayValidationError;
+    err.code = PDF_ERROR_CODES.OVERLAY_VALIDATION_FAILED;
+    err.errors = validation.errors;
+    throw err;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const rows = await db
+    .update(pdfSessions)
+    .set({ textOverlays: validation.overlays, updatedAt })
+    .where(eq(pdfSessions.id, sessionId))
+    .returning({ textOverlays: pdfSessions.textOverlays });
+
+  if (rows.length === 0) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  return {
+    overlays: rows[0].textOverlays ?? [],
+    updatedAt,
   };
 }
 
 /** Active sessions for a user, newest first. */
 export async function getActiveSessions(userId: string) {
   return db.query.pdfSessions.findMany({
-    where: and(eq(pdfSessions.userId, userId), eq(pdfSessions.status, 'active')),
+    where: and(
+      eq(pdfSessions.userId, userId),
+      eq(pdfSessions.status, 'active')
+    ),
     orderBy: [desc(pdfSessions.createdAt)],
   });
 }
@@ -175,17 +293,16 @@ export async function validateAndIngest(
   sessionId: string,
   filePath: string,
   originalName: string,
-  mimeType: string,
+  mimeType: string
 ): Promise<FileUploadResult> {
   const sanitizedOriginalName = sanitizeFilename(originalName);
 
   // ── MIME type check ──────────────────────────────────────────────────────────
   const isDocx =
-    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimeType ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     path.extname(sanitizedOriginalName).toLowerCase() === '.docx';
-  const isSupportedMime =
-    mimeType === 'application/pdf' ||
-    isDocx;
+  const isSupportedMime = mimeType === 'application/pdf' || isDocx;
 
   if (!isSupportedMime) {
     await safeDeleteFile(filePath);
@@ -207,7 +324,10 @@ export async function validateAndIngest(
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.SESSION_NOT_FOUND, message: 'Session not found.' },
+      error: {
+        code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+        message: 'Session not found.',
+      },
     };
   }
 
@@ -219,7 +339,7 @@ export async function validateAndIngest(
       filePath,
       sanitizedOriginalName,
       mimeType,
-      MAX_FILE_BYTES,
+      MAX_FILE_BYTES
     );
     return result;
   }
@@ -232,7 +352,10 @@ export async function validateAndIngest(
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+      error: {
+        code: PDF_ERROR_CODES.FILE_CORRUPT,
+        message: 'File could not be read.',
+      },
     };
   }
 
@@ -243,7 +366,8 @@ export async function validateAndIngest(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.FILE_TOO_LARGE,
-        message: 'This file exceeds the 100 MB size limit. Please upload a smaller file.',
+        message:
+          'This file exceeds the 100 MB size limit. Please upload a smaller file.',
       },
     };
   }
@@ -257,7 +381,10 @@ export async function validateAndIngest(
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+      error: {
+        code: PDF_ERROR_CODES.FILE_CORRUPT,
+        message: 'File could not be read.',
+      },
     };
   }
 
@@ -322,8 +449,13 @@ export async function validateAndIngest(
 
   // ── Fetch current session state for aggregate limit checks ───────────────────
   const existingMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
-  const currentTotalBytes = existingMetadata.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
-  const currentTotalPages = (session.pageManifest ?? []).filter((p) => !p.deleted).length;
+  const currentTotalBytes = existingMetadata.reduce(
+    (sum, f) => sum + (f.sizeBytes ?? 0),
+    0
+  );
+  const currentTotalPages = (session.pageManifest ?? []).filter(
+    (p) => !p.deleted
+  ).length;
 
   if (currentTotalBytes + stat.size > MAX_SESSION_BYTES) {
     await safeDeleteFile(filePath);
@@ -355,7 +487,7 @@ export async function validateAndIngest(
   const storedName = `${fileId}.pdf`;
   await getPdfArtifactStore().putFile(
     { userId: session.userId, sessionId, fileName: storedName },
-    buffer,
+    buffer
   );
   await safeDeleteFile(filePath);
 
@@ -371,13 +503,16 @@ export async function validateAndIngest(
   };
 
   const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
-  const newPages: PageManifestEntry[] = Array.from({ length: pageCount }, (_, i) => ({
-    pageId: crypto.randomUUID(),
-    fileId,
-    sourcePageIndex: i,
-    rotation: 0 as const,
-    deleted: false,
-  }));
+  const newPages: PageManifestEntry[] = Array.from(
+    { length: pageCount },
+    (_, i) => ({
+      pageId: crypto.randomUUID(),
+      fileId,
+      sourcePageIndex: i,
+      rotation: 0 as const,
+      deleted: false,
+    })
+  );
 
   await db
     .update(pdfSessions)
@@ -403,7 +538,7 @@ export async function validateAndIngest(
 export async function removeFile(
   sessionId: string,
   userId: string,
-  fileId: string,
+  fileId: string
 ): Promise<void> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -438,12 +573,17 @@ export async function removeFile(
   const updatedMetadata = existingMetadata.filter((f) => f.fileId !== fileId);
   const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
   const updatedManifest = existingManifest.filter((p) => p.fileId !== fileId);
+  const updatedOverlays = stripOrphanOverlays(
+    updatedManifest,
+    (session.textOverlays ?? []) as OverlayTextBox[]
+  );
 
   await db
     .update(pdfSessions)
     .set({
       fileMetadata: updatedMetadata,
       pageManifest: updatedManifest,
+      textOverlays: updatedOverlays,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(pdfSessions.id, sessionId));
@@ -462,8 +602,8 @@ const VALID_ROTATIONS = new Set([0, 90, 180, 270]);
 export async function updateManifest(
   sessionId: string,
   userId: string,
-  manifest: PageManifestEntry[],
-): Promise<{ pageCount: number; updatedAt: string }> {
+  manifest: PageManifestEntry[]
+): Promise<UpdateManifestResponse> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
@@ -487,32 +627,40 @@ export async function updateManifest(
   }
 
   const knownFileIds = new Set(
-    ((session.fileMetadata ?? []) as PdfFileMetadata[]).map((f) => f.fileId),
+    ((session.fileMetadata ?? []) as PdfFileMetadata[]).map((f) => f.fileId)
   );
 
   for (const entry of manifest) {
     if (!knownFileIds.has(entry.fileId)) {
-      const err = new Error('Invalid file ID in manifest') as Error & { code: string };
+      const err = new Error('Invalid file ID in manifest') as Error & {
+        code: string;
+      };
       err.code = PDF_ERROR_CODES.MANIFEST_INVALID_FILE_ID;
       throw err;
     }
     if (!VALID_ROTATIONS.has(entry.rotation)) {
-      const err = new Error('Invalid rotation value') as Error & { code: string };
+      const err = new Error('Invalid rotation value') as Error & {
+        code: string;
+      };
       err.code = PDF_ERROR_CODES.MANIFEST_INVALID_ROTATION;
       throw err;
     }
   }
 
   const updatedAt = new Date().toISOString();
+  const textOverlays = stripOrphanOverlays(
+    manifest,
+    (session.textOverlays ?? []) as OverlayTextBox[]
+  );
 
   await db
     .update(pdfSessions)
-    .set({ pageManifest: manifest, updatedAt })
+    .set({ pageManifest: manifest, textOverlays, updatedAt })
     .where(eq(pdfSessions.id, sessionId));
 
   const pageCount = manifest.filter((p) => !p.deleted).length;
 
-  return { pageCount, updatedAt };
+  return { pageCount, updatedAt, textOverlays };
 }
 
 // ── File serving ───────────────────────────────────────────────────────────────
@@ -520,9 +668,13 @@ export async function updateManifest(
 export async function getPdfFileStream(
   sessionId: string,
   userId: string,
-  fileId: string,
+  fileId: string
 ): Promise<NodeJS.ReadableStream | null> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      fileId
+    )
+  ) {
     return null;
   }
   const ref = { userId, sessionId, fileName: `${fileId}.pdf` };
@@ -533,7 +685,7 @@ export async function getPdfFileStream(
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
 export async function expireOldSessions(
-  userId?: string,
+  userId?: string
 ): Promise<{ expired: number; errors: number }> {
   const now = new Date().toISOString();
   let expired = 0;
@@ -543,7 +695,7 @@ export async function expireOldSessions(
     where: and(
       ...(userId ? [eq(pdfSessions.userId, userId)] : []),
       or(eq(pdfSessions.status, 'active'), eq(pdfSessions.status, 'exported')),
-      lt(pdfSessions.expiresAt, now),
+      lt(pdfSessions.expiresAt, now)
     ),
   });
 
@@ -600,7 +752,7 @@ export async function assembleAndExport(
   userId: string,
   rawFilename?: string,
   pages?: number[],
-  workerOutputRef?: PdfArtifactRef,
+  workerOutputRef?: PdfArtifactRef
 ): Promise<AssembleAndExportResult> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -613,13 +765,17 @@ export async function assembleAndExport(
   }
 
   if (session.userId !== userId) {
-    const err = new Error('You do not have access to this session') as Error & { code: string };
+    const err = new Error('You do not have access to this session') as Error & {
+      code: string;
+    };
     err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
     throw err;
   }
 
   if (session.status === 'expired') {
-    const err = new Error('This session has expired') as Error & { code: string };
+    const err = new Error('This session has expired') as Error & {
+      code: string;
+    };
     err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
     throw err;
   }
@@ -628,7 +784,9 @@ export async function assembleAndExport(
   const nonDeletedPages = manifest.filter((p) => !p.deleted);
 
   if (nonDeletedPages.length === 0) {
-    const err = new Error('Session has no pages to export') as Error & { code: string };
+    const err = new Error('Session has no pages to export') as Error & {
+      code: string;
+    };
     err.code = PDF_ERROR_CODES.NO_PAGES;
     throw err;
   }
@@ -637,14 +795,35 @@ export async function assembleAndExport(
   let pagesToExport = nonDeletedPages;
   if (pages && pages.length > 0) {
     const maxIndex = nonDeletedPages.length - 1;
-    const invalidIndices = pages.filter((i) => i < 0 || i > maxIndex || !Number.isInteger(i));
+    const invalidIndices = pages.filter(
+      (i) => i < 0 || i > maxIndex || !Number.isInteger(i)
+    );
     if (invalidIndices.length > 0) {
-      const err = new Error(`Page indices out of bounds. Valid range: 0-${maxIndex}`) as Error & { code: string };
+      const err = new Error(
+        `Page indices out of bounds. Valid range: 0-${maxIndex}`
+      ) as Error & { code: string };
       err.code = PDF_ERROR_CODES.INVALID_PAGE_INDICES;
       throw err;
     }
     pagesToExport = pages.map((i) => nonDeletedPages[i]);
   }
+
+  const overlayValidation = validateOverlays(
+    session.textOverlays ?? [],
+    new Set(nonDeletedPages.map((page) => page.pageId))
+  );
+  if (overlayValidation.ok === false) {
+    const err = new Error(
+      'Saved text overlays are invalid and cannot be exported.'
+    ) as Error & { code: string; errors: OverlayFieldError[] };
+    err.code = PDF_ERROR_CODES.OVERLAY_VALIDATION_FAILED;
+    err.errors = overlayValidation.errors;
+    throw err;
+  }
+  const exportedPageIds = new Set(pagesToExport.map((page) => page.pageId));
+  const overlays = overlayValidation.overlays.filter((overlay) =>
+    exportedPageIds.has(overlay.pageId)
+  );
 
   const filename = sanitizeExportFilename(rawFilename);
 
@@ -653,7 +832,11 @@ export async function assembleAndExport(
   const artifactFiles: Record<string, PdfArtifactRef> = {};
   if (workerOutputRef) {
     for (const fm of fileMetadata) {
-      artifactFiles[fm.fileId] = { userId, sessionId, fileName: `${fm.fileId}.pdf` };
+      artifactFiles[fm.fileId] = {
+        userId,
+        sessionId,
+        fileName: `${fm.fileId}.pdf`,
+      };
     }
   } else {
     for (const fm of fileMetadata) {
@@ -665,7 +848,9 @@ export async function assembleAndExport(
 
     const missingFiles = pagesToExport.filter((p) => !fileBytes[p.fileId]);
     if (missingFiles.length > 0) {
-      const err = new Error('Source PDF artifacts are missing') as Error & { code: string };
+      const err = new Error('Source PDF artifacts are missing') as Error & {
+        code: string;
+      };
       err.code = PDF_ERROR_CODES.EXPORT_FAILED;
       throw err;
     }
@@ -673,6 +858,7 @@ export async function assembleAndExport(
 
   const workerInput: ExportWorkerInput = {
     manifest: pagesToExport,
+    overlays,
     ...(workerOutputRef
       ? { artifactFiles, outputRef: workerOutputRef }
       : { fileBytes }),
@@ -681,7 +867,9 @@ export async function assembleAndExport(
   const result = await runPdfExport(workerInput);
 
   if (!result.success || (!workerOutputRef && !result.pdfBytes)) {
-    const err = new Error(result.error ?? 'PDF assembly failed. Please retry.') as Error & { code: string };
+    const err = new Error(
+      result.error ?? 'PDF assembly failed. Please retry.'
+    ) as Error & { code: string };
     err.code = PDF_ERROR_CODES.EXPORT_FAILED;
     throw err;
   }
@@ -699,7 +887,9 @@ export async function assembleAndExport(
         status: 'exported' as const,
         exportFilename: filename,
         updatedAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + EXPORTED_SESSION_CLEANUP_GRACE_MS).toISOString(),
+        expiresAt: new Date(
+          Date.now() + EXPORTED_SESSION_CLEANUP_GRACE_MS
+        ).toISOString(),
       })
       .where(eq(pdfSessions.id, sessionId));
   }
@@ -724,7 +914,7 @@ export async function convertAndIngestDocx(
   inputKeyOrPath: string,
   sanitizedOriginalName: string,
   originalMimeType: string,
-  options: ConvertDocxOptions = {},
+  options: ConvertDocxOptions = {}
 ): Promise<FileUploadResult> {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -733,11 +923,16 @@ export async function convertAndIngestDocx(
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.SESSION_NOT_FOUND, message: 'Session not found.' },
+      error: {
+        code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+        message: 'Session not found.',
+      },
     };
   }
   const resolvedUserId = options.userId ?? session.userId;
-  const isArtifactKey = inputKeyOrPath.startsWith(`${resolvedUserId}/${sessionId}/`);
+  const isArtifactKey = inputKeyOrPath.startsWith(
+    `${resolvedUserId}/${sessionId}/`
+  );
   const inputRef = isArtifactKey
     ? {
         userId: resolvedUserId,
@@ -778,7 +973,10 @@ export async function convertAndIngestDocx(
     return {
       originalName: sanitizedOriginalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+      error: {
+        code: PDF_ERROR_CODES.FILE_CORRUPT,
+        message: 'File could not be read.',
+      },
     };
   }
 
@@ -791,7 +989,10 @@ export async function convertAndIngestDocx(
       return {
         originalName: sanitizedOriginalName,
         status: 'error',
-        error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+        error: {
+          code: PDF_ERROR_CODES.FILE_CORRUPT,
+          message: 'File could not be read.',
+        },
       };
     }
   }
@@ -803,7 +1004,8 @@ export async function convertAndIngestDocx(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.FILE_TOO_LARGE,
-        message: 'This file exceeds the 100 MB size limit. Please upload a smaller file.',
+        message:
+          'This file exceeds the 100 MB size limit. Please upload a smaller file.',
       },
     };
   }
@@ -811,7 +1013,10 @@ export async function convertAndIngestDocx(
   // Convert .docx → PDF via documentConversionService
   let pdfBuffer: Buffer;
   try {
-    pdfBuffer = await documentConversionService.convert(docxBuffer, sanitizedOriginalName);
+    pdfBuffer = await documentConversionService.convert(
+      docxBuffer,
+      sanitizedOriginalName
+    );
   } catch (err: unknown) {
     await deleteFailedInput();
     const code = (err as any)?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED;
@@ -836,7 +1041,8 @@ export async function convertAndIngestDocx(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.CONVERSION_FAILED,
-        message: 'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
+        message:
+          'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
       },
     };
   }
@@ -845,8 +1051,13 @@ export async function convertAndIngestDocx(
   const pdfSize = pdfBuffer.length;
 
   // Session-level limit checks
-  const currentTotalBytes = existingMetadata.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
-  const currentTotalPages = (session.pageManifest ?? []).filter((p) => !p.deleted).length;
+  const currentTotalBytes = existingMetadata.reduce(
+    (sum, f) => sum + (f.sizeBytes ?? 0),
+    0
+  );
+  const currentTotalPages = (session.pageManifest ?? []).filter(
+    (p) => !p.deleted
+  ).length;
 
   if (currentTotalBytes + pdfSize > MAX_SESSION_BYTES) {
     await deleteFailedInput();
@@ -855,7 +1066,8 @@ export async function convertAndIngestDocx(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.SESSION_SIZE_EXCEEDED,
-        message: 'Adding this file would exceed the 250 MB session limit. Remove files or start a new session.',
+        message:
+          'Adding this file would exceed the 250 MB session limit. Remove files or start a new session.',
       },
     };
   }
@@ -876,7 +1088,7 @@ export async function convertAndIngestDocx(
   const storedName = `${fileId}.pdf`;
   await getPdfArtifactStore().putFile(
     { userId: resolvedUserId, sessionId, fileName: storedName },
-    pdfBuffer,
+    pdfBuffer
   );
 
   // Build file metadata with convertedFrom provenance
@@ -893,13 +1105,16 @@ export async function convertAndIngestDocx(
   };
 
   const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
-  const newPages: PageManifestEntry[] = Array.from({ length: pageCount }, (_, i) => ({
-    pageId: crypto.randomUUID(),
-    fileId,
-    sourcePageIndex: i,
-    rotation: 0 as const,
-    deleted: false,
-  }));
+  const newPages: PageManifestEntry[] = Array.from(
+    { length: pageCount },
+    (_, i) => ({
+      pageId: crypto.randomUUID(),
+      fileId,
+      sourcePageIndex: i,
+      rotation: 0 as const,
+      deleted: false,
+    })
+  );
 
   await db
     .update(pdfSessions)
@@ -927,13 +1142,15 @@ export async function queuePdfExport(
   sessionId: string,
   userId: string,
   rawFilename?: string,
-  pages?: number[],
+  pages?: number[]
 ) {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
   });
   if (!session) {
-    throw Object.assign(new Error('Session not found'), { code: PDF_ERROR_CODES.SESSION_NOT_FOUND });
+    throw Object.assign(new Error('Session not found'), {
+      code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+    });
   }
   if (session.userId !== userId) {
     throw Object.assign(new Error('You do not have access to this session'), {
@@ -946,20 +1163,35 @@ export async function queuePdfExport(
     });
   }
 
-  const activePages = ((session.pageManifest ?? []) as PageManifestEntry[])
-    .filter((entry) => !entry.deleted);
+  const activePages = (
+    (session.pageManifest ?? []) as PageManifestEntry[]
+  ).filter((entry) => !entry.deleted);
   if (activePages.length === 0) {
     throw Object.assign(new Error('Session has no pages to export'), {
       code: PDF_ERROR_CODES.NO_PAGES,
     });
   }
-  if (pages?.some((index) =>
-    !Number.isInteger(index) || index < 0 || index >= activePages.length)) {
-    throw Object.assign(new Error(`Page indices out of bounds. Valid range: 0-${activePages.length - 1}`), {
-      code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
-    });
+  if (
+    pages?.some(
+      (index) =>
+        !Number.isInteger(index) || index < 0 || index >= activePages.length
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        `Page indices out of bounds. Valid range: 0-${activePages.length - 1}`
+      ),
+      {
+        code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
+      }
+    );
   }
-  return enqueuePdfExport(sessionId, userId, sanitizeExportFilename(rawFilename), pages);
+  return enqueuePdfExport(
+    sessionId,
+    userId,
+    sanitizeExportFilename(rawFilename),
+    pages
+  );
 }
 
 export async function processPdfJob(job: PdfJobRow) {
@@ -973,12 +1205,12 @@ export async function processPdfJob(job: PdfJobRow) {
         userId: job.userId,
         fileId: job.id,
         preserveInputOnFailure: true,
-      },
+      }
     );
     if (result.status !== 'success') {
       const error = Object.assign(
         new Error(result.error?.message ?? 'Word document conversion failed.'),
-        { code: result.error?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED },
+        { code: result.error?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED }
       );
       throw error;
     }
@@ -1001,7 +1233,7 @@ export async function processPdfJob(job: PdfJobRow) {
     job.userId,
     payload.filename ?? job.originalName,
     payload.pages,
-    ref,
+    ref
   );
   return {
     result: {
@@ -1029,7 +1261,9 @@ export function startPdfProcessingPoller(): void {
  * not inherit the main process's -P tsconfig.server.json, so fall back to
  * in-process assemblePdf (already exported for unit tests).
  */
-async function runPdfExport(input: ExportWorkerInput): Promise<ExportWorkerOutput> {
+async function runPdfExport(
+  input: ExportWorkerInput
+): Promise<ExportWorkerOutput> {
   const jsPath = path.join(__dirname, '../workers/pdfExportWorker.js');
   if (fs.existsSync(jsPath)) {
     return new Promise<ExportWorkerOutput>((resolve, reject) => {

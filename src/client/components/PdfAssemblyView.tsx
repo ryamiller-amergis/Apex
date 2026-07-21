@@ -1,4 +1,10 @@
-import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import React, {
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+  useEffect,
+} from 'react';
 import {
   useCreatePdfSession,
   usePdfSession,
@@ -11,6 +17,9 @@ import {
 import { usePageManipulation } from '../hooks/usePageManipulation';
 import { usePageSelection } from '../hooks/usePageSelection';
 import { useDocumentColors } from '../hooks/useDocumentColors';
+import { useOverlayEditor } from '../hooks/useOverlayEditor';
+import { useOverlayAutosave } from '../hooks/useOverlayAutosave';
+import { useOverlayMultiTabSync } from '../hooks/useOverlayMultiTabSync';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { SourceBrowser } from './SourceBrowser';
 import { AssemblyLane } from './AssemblyLane';
@@ -19,14 +28,17 @@ import { UndoSnackbar } from './UndoSnackbar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { PdfDocumentSidebar } from './PdfDocumentSidebar';
 import { PdfInlinePreview } from './PdfInlinePreview';
+import { PdfPageEditorModal } from './PdfPageEditorModal';
 import { ExportPanel } from './ExportPanel';
 import { ExportSelectedButton } from './ExportSelectedButton';
 import { RangeInput } from './RangeInput';
 import { DeduplicationToast } from './DeduplicationToast';
+import { OverlayConflictBanner } from './OverlayConflictBanner';
 import { generateDefaultFilename } from '../hooks/useExportSession';
 import { pdfFileUrl } from '../utils/pdfUrls';
 import type {
   FileUploadResult,
+  OverlayTextBox,
   PageManifestEntry,
   PdfConversionJob,
   UploadFilesResponse,
@@ -37,13 +49,16 @@ const MIN_ASSEMBLY_PANE_PERCENT = 30;
 const MAX_ASSEMBLY_PANE_PERCENT = 75;
 const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
 const PDF_SESSION_STORAGE_KEY = 'pdf-active-session';
+const EMPTY_OVERLAYS: OverlayTextBox[] = [];
 
 interface PdfAssemblyViewProps {
   userId?: string;
 }
 
 function getPdfSessionStorageKey(userId: string): string {
-  return userId ? `${PDF_SESSION_STORAGE_KEY}:${userId}` : PDF_SESSION_STORAGE_KEY;
+  return userId
+    ? `${PDF_SESSION_STORAGE_KEY}:${userId}`
+    : PDF_SESSION_STORAGE_KEY;
 }
 
 function isUnavailableSessionError(error: unknown): error is PdfApiError {
@@ -52,32 +67,46 @@ function isUnavailableSessionError(error: unknown): error is PdfApiError {
   return status === 403 || status === 404 || status === 410;
 }
 
-export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' }) => {
+export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
+  userId = '',
+}) => {
   const storageKey = getPdfSessionStorageKey(userId);
-  const [sessionId, setSessionId] = useState<string | null>(
-    () => sessionStorage.getItem(storageKey),
+  const [sessionId, setSessionId] = useState<string | null>(() =>
+    sessionStorage.getItem(storageKey)
   );
-  const [isSourceBrowserCollapsed, setIsSourceBrowserCollapsed] = useState(false);
+  const [isSourceBrowserCollapsed, setIsSourceBrowserCollapsed] =
+    useState(false);
   const [assemblyPanePercent, setAssemblyPanePercent] = useState(
-    DEFAULT_ASSEMBLY_PANE_PERCENT,
+    DEFAULT_ASSEMBLY_PANE_PERCENT
   );
   const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploadResults, setUploadResults] = useState<FileUploadResult[]>([]);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteBlockedMessage, setDeleteBlockedMessage] = useState<string | null>(null);
+  const [deleteBlockedMessage, setDeleteBlockedMessage] = useState<
+    string | null
+  >(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [fileIdToDelete, setFileIdToDelete] = useState<string | null>(null);
   const [justMovedPageId, setJustMovedPageId] = useState<string | null>(null);
-  const [dismissedConversionIds, setDismissedConversionIds] = useState<Set<string>>(new Set());
-  const [uploadProgress, setUploadProgress] = useState<PdfUploadProgress | null>(null);
+  const [dismissedConversionIds, setDismissedConversionIds] = useState<
+    Set<string>
+  >(new Set());
+  const [uploadProgress, setUploadProgress] =
+    useState<PdfUploadProgress | null>(null);
+  const [overlayFormatInvalid, setOverlayFormatInvalid] = useState(false);
+  const [isPageEditorOpen, setIsPageEditorOpen] = useState(false);
   const justMovedTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const workspacePanelsRef = useRef<HTMLDivElement>(null);
 
   const createSession = useCreatePdfSession(userId);
-  const { data: session, error: sessionError } = usePdfSession(sessionId, userId);
+  const {
+    data: session,
+    error: sessionError,
+    refetch: refetchSession,
+  } = usePdfSession(sessionId, userId);
   const uploadFiles = useUploadPdfFiles(userId);
   const { data: activeSessions } = useActivePdfSessions(userId);
   const removePdfFile = useRemovePdfFile(userId);
@@ -107,10 +136,12 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
     const serverJobs = session?.conversionJobs ?? [];
     const serverJobIds = new Set(serverJobs.map((job) => job.id));
     const optimisticJobs: PdfConversionJob[] = uploadResults
-      .filter((result) =>
-        result.status === 'queued' &&
-        !!result.conversionId &&
-        !serverJobIds.has(result.conversionId))
+      .filter(
+        (result) =>
+          result.status === 'queued' &&
+          !!result.conversionId &&
+          !serverJobIds.has(result.conversionId)
+      )
       .map((result) => ({
         id: result.conversionId!,
         sessionId: sessionId ?? '',
@@ -122,9 +153,13 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   }, [session?.conversionJobs, sessionId, uploadResults]);
 
   const errors = useMemo(() => {
-    const uploadErrors = uploadResults.filter((result) => result.status === 'error');
+    const uploadErrors = uploadResults.filter(
+      (result) => result.status === 'error'
+    );
     const conversionErrors: FileUploadResult[] = conversionJobs
-      .filter((job) => job.status === 'failed' && !dismissedConversionIds.has(job.id))
+      .filter(
+        (job) => job.status === 'failed' && !dismissedConversionIds.has(job.id)
+      )
       .map((job) => ({
         conversionId: job.id,
         originalName: job.originalName,
@@ -140,55 +175,63 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   const handleDismissUploadError = useCallback((error: FileUploadResult) => {
     setUploadResults((current) => current.filter((result) => result !== error));
     if (error.conversionId) {
-      setDismissedConversionIds((current) => new Set(current).add(error.conversionId!));
+      setDismissedConversionIds((current) =>
+        new Set(current).add(error.conversionId!)
+      );
     }
   }, []);
 
-  const handleFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
+  const handleFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
 
-    let activeSessionId = sessionId;
-    const startFreshSession = async () => {
-      const result = await createSession.mutateAsync({});
-      activeSessionId = result.sessionId;
-      setSessionId(activeSessionId);
-      sessionStorage.setItem(storageKey, activeSessionId);
-    };
+      let activeSessionId = sessionId;
+      const startFreshSession = async () => {
+        const result = await createSession.mutateAsync({});
+        activeSessionId = result.sessionId;
+        setSessionId(activeSessionId);
+        sessionStorage.setItem(storageKey, activeSessionId);
+      };
 
-    try {
-      if (!activeSessionId) await startFreshSession();
-
-      let result: UploadFilesResponse;
       try {
-        result = await uploadFiles.mutateAsync({
-          sessionId: activeSessionId!,
-          files,
-          onProgress: setUploadProgress,
-        });
-      } catch (error) {
-        if (!isUnavailableSessionError(error)) throw error;
-        sessionStorage.removeItem(storageKey);
-        await startFreshSession();
-        result = await uploadFiles.mutateAsync({
-          sessionId: activeSessionId!,
-          files,
-          onProgress: setUploadProgress,
-        });
-      }
-      setUploadResults((prev) => [...prev, ...result.files]);
-    } catch {
-      // mutation error handled by TanStack Query
-    } finally {
-      setUploadProgress(null);
-    }
-  }, [sessionId, createSession, uploadFiles, storageKey]);
+        if (!activeSessionId) await startFreshSession();
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    const files = Array.from(e.dataTransfer.files);
-    handleFiles(files);
-  }, [handleFiles]);
+        let result: UploadFilesResponse;
+        try {
+          result = await uploadFiles.mutateAsync({
+            sessionId: activeSessionId!,
+            files,
+            onProgress: setUploadProgress,
+          });
+        } catch (error) {
+          if (!isUnavailableSessionError(error)) throw error;
+          sessionStorage.removeItem(storageKey);
+          await startFreshSession();
+          result = await uploadFiles.mutateAsync({
+            sessionId: activeSessionId!,
+            files,
+            onProgress: setUploadProgress,
+          });
+        }
+        setUploadResults((prev) => [...prev, ...result.files]);
+      } catch {
+        // mutation error handled by TanStack Query
+      } finally {
+        setUploadProgress(null);
+      }
+    },
+    [sessionId, createSession, uploadFiles, storageKey]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
+      const files = Array.from(e.dataTransfer.files);
+      handleFiles(files);
+    },
+    [handleFiles]
+  );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -200,11 +243,14 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
     setDragActive(false);
   }, []);
 
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    handleFiles(files);
-    if (inputRef.current) inputRef.current.value = '';
-  }, [handleFiles]);
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      handleFiles(files);
+      if (inputRef.current) inputRef.current.value = '';
+    },
+    [handleFiles]
+  );
 
   const handleDropzoneClick = useCallback(() => {
     inputRef.current?.click();
@@ -213,7 +259,9 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   const triggerRef = useRef<HTMLElement | null>(null);
 
   const handlePreview = useCallback((pageId: string) => {
-    const el = window.document.querySelector<HTMLElement>(`[data-page-id="${pageId}"]`);
+    const el = window.document.querySelector<HTMLElement>(
+      `[data-page-id="${pageId}"]`
+    );
     triggerRef.current = el;
     setPreviewPageId(pageId);
   }, []);
@@ -231,7 +279,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
 
   const serverManifest = useMemo(
     () => session?.pageManifest ?? [],
-    [session?.pageManifest],
+    [session?.pageManifest]
   );
 
   const {
@@ -272,7 +320,9 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
 
   const [showDedupToast, setShowDedupToast] = useState(false);
   const [rangeExternalUpdate, setRangeExternalUpdate] = useState(0);
-  const [exportFilename, setExportFilename] = useState(() => generateDefaultFilename());
+  const [exportFilename, setExportFilename] = useState(() =>
+    generateDefaultFilename()
+  );
 
   const ensureManifestSaved = useCallback(async () => {
     if (hasUnsavedChanges) {
@@ -299,6 +349,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       setDeleteBlockedMessage(null);
       setJustMovedPageId(null);
       setShowDedupToast(false);
+      setIsPageEditorOpen(false);
       setRangeExternalUpdate((count) => count + 1);
       setExportFilename(generateDefaultFilename());
       setIsSourceBrowserCollapsed(false);
@@ -306,7 +357,13 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
     } catch {
       // Mutation errors are surfaced by the existing session error UI.
     }
-  }, [clearSelection, createSession, ensureManifestSaved, sessionId, storageKey]);
+  }, [
+    clearSelection,
+    createSession,
+    ensureManifestSaved,
+    sessionId,
+    storageKey,
+  ]);
 
   const handleExportComplete = useCallback(() => {
     void handleStartNewSession();
@@ -326,7 +383,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
         clearSelection();
       }
     },
-    [manipulationVisiblePages, clearSelection, selectAll],
+    [manipulationVisiblePages, clearSelection, selectAll]
   );
 
   const documentColors = useDocumentColors(fileMetadata);
@@ -336,26 +393,26 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       const page = localManifest.find((p) => p.pageId === pageId);
       return page ? !page.deleted : false;
     },
-    [localManifest],
+    [localManifest]
   );
 
   const handleTogglePageInAssembly = useCallback(
     (pageId: string) => {
       togglePageInAssembly(pageId);
     },
-    [togglePageInAssembly],
+    [togglePageInAssembly]
   );
 
   const handleAddFromSource = useCallback(
     (pageId: string, insertIndex: number) => {
       addToAssemblyAt(pageId, insertIndex);
     },
-    [addToAssemblyAt],
+    [addToAssemblyAt]
   );
 
   const allVisiblePageIds = useMemo(
     () => manipulationVisiblePages.map((p) => p.pageId),
-    [manipulationVisiblePages],
+    [manipulationVisiblePages]
   );
 
   const handleSelectAllPages = useCallback(() => {
@@ -374,19 +431,153 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
         .map((id) => manipulationVisiblePages.findIndex((p) => p.pageId === id))
         .filter((i) => i >= 0)
         .sort((a, b) => a - b),
-    [selectedPageIds, manipulationVisiblePages],
+    [selectedPageIds, manipulationVisiblePages]
   );
 
   const activePreviewPage = useMemo(() => {
     if (!activePageId) return null;
-    return localManifest.find((p: PageManifestEntry) => p.pageId === activePageId && !p.deleted) ?? null;
+    return (
+      localManifest.find(
+        (p: PageManifestEntry) => p.pageId === activePageId && !p.deleted
+      ) ?? null
+    );
   }, [activePageId, localManifest]);
 
   const activePreviewFileName = useMemo(() => {
     if (!activePreviewPage) return '';
-    const file = fileMetadata.find((f) => f.fileId === activePreviewPage.fileId);
+    const file = fileMetadata.find(
+      (f) => f.fileId === activePreviewPage.fileId
+    );
     return file?.originalName ?? 'Unknown';
   }, [activePreviewPage, fileMetadata]);
+
+  const initialOverlays = useMemo(
+    () => session?.textOverlays ?? EMPTY_OVERLAYS,
+    [session?.textOverlays]
+  );
+
+  const {
+    overlays: overlayList,
+    pageOverlays,
+    selectedOverlay,
+    selectedOverlayId,
+    textToolActive,
+    setTextToolActive,
+    isDirty: overlaysDirty,
+    createLimitMessage,
+    announcement: overlayAnnouncement,
+    canUndo: canUndoOverlay,
+    canRedo: canRedoOverlay,
+    createAt,
+    deleteSelected: deleteSelectedOverlay,
+    selectOverlay,
+    beginTextEdit,
+    updateSelectedText,
+    commitTextEdit,
+    beginGeometryEdit,
+    updateSelectedGeometry,
+    commitGeometryEdit,
+    nudgeSelected,
+    updateSelectedFormatting,
+    bringSelectedForward,
+    sendSelectedBackward,
+    undo: undoOverlay,
+    redo: redoOverlay,
+    markCleanWithOverlays,
+    replaceFromServer: replaceOverlaysFromServer,
+  } = useOverlayEditor({
+    pageId: activePageId,
+    initialOverlays,
+    historyKey: sessionId,
+  });
+
+  const loadAuthoritativeOverlays = useCallback(async () => {
+    const result = await refetchSession();
+    if (result.error) throw result.error;
+    if (!result.data) {
+      throw new Error('The current text overlays could not be loaded.');
+    }
+    return {
+      overlays: result.data.textOverlays,
+      updatedAt: result.data.updatedAt,
+    };
+  }, [refetchSession]);
+
+  const applyAuthoritativeOverlays = useCallback(
+    ({
+      overlays,
+    }: {
+      overlays: OverlayTextBox[];
+      updatedAt: string;
+    }) => {
+      replaceOverlaysFromServer(overlays);
+      setOverlayFormatInvalid(false);
+    },
+    [replaceOverlaysFromServer]
+  );
+
+  const overlayMultiTabSync = useOverlayMultiTabSync({
+    sessionId,
+    initialUpdatedAt: session?.updatedAt,
+    currentOverlays: overlayList,
+    hasLocalChanges: overlaysDirty,
+    loadAuthoritativeState: loadAuthoritativeOverlays,
+    onAuthoritativeState: applyAuthoritativeOverlays,
+  });
+
+  const {
+    status: overlaySaveStatus,
+    errorMessage: overlaySaveError,
+    flushNow: ensureOverlaysSaved,
+    retry: retryOverlaySave,
+  } = useOverlayAutosave({
+    sessionId,
+    userId,
+    overlays: overlayList,
+    isDirty: overlaysDirty,
+    blocked: overlayFormatInvalid,
+    onSaved: markCleanWithOverlays,
+    onSaveSuccess: overlayMultiTabSync.onLocalSave,
+  });
+  const overlaysReadOnly = session?.status === 'expired';
+
+  const ensureSessionSaved = useCallback(async () => {
+    await ensureManifestSaved();
+    await ensureOverlaysSaved();
+  }, [ensureManifestSaved, ensureOverlaysSaved]);
+
+  useEffect(() => {
+    setOverlayFormatInvalid(false);
+  }, [selectedOverlayId]);
+
+  const handleToggleTextTool = useCallback(async () => {
+    if (overlaysReadOnly) return;
+    try {
+      await ensureOverlaysSaved();
+      setTextToolActive((active) => !active);
+    } catch {
+      // Keep the current tool active so the user can fix or retry the save.
+    }
+  }, [ensureOverlaysSaved, overlaysReadOnly, setTextToolActive]);
+
+  const handleOpenPageEditor = useCallback(() => {
+    if (selectedPageIds.size !== 1) return;
+    const pageId = [...selectedPageIds][0];
+    setActivePageId(pageId);
+    setIsPageEditorOpen(true);
+  }, [selectedPageIds]);
+
+  const handleClosePageEditor = useCallback(async () => {
+    try {
+      await ensureOverlaysSaved();
+      setTextToolActive(false);
+      selectOverlay(null);
+      setOverlayFormatInvalid(false);
+      setIsPageEditorOpen(false);
+    } catch {
+      // Leave the editor open with the announced save error and retry action.
+    }
+  }, [ensureOverlaysSaved, selectOverlay, setTextToolActive]);
 
   const undoTimerRef = useRef<number | null>(null);
 
@@ -424,7 +615,8 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   }, [deletePages, selectedPageIds, clearSelection]);
 
   const flashMoved = useCallback((pageId: string) => {
-    if (justMovedTimerRef.current !== null) clearTimeout(justMovedTimerRef.current);
+    if (justMovedTimerRef.current !== null)
+      clearTimeout(justMovedTimerRef.current);
     setJustMovedPageId(pageId);
     justMovedTimerRef.current = window.setTimeout(() => {
       setJustMovedPageId(null);
@@ -459,11 +651,16 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
   }, [selectedPageIds, manipulationVisiblePages]);
 
   const canMoveUp = singleSelectedGlobalIndex > 0;
-  const canMoveDown = singleSelectedGlobalIndex >= 0 && singleSelectedGlobalIndex < manipulationVisiblePages.length - 1;
+  const canMoveDown =
+    singleSelectedGlobalIndex >= 0 &&
+    singleSelectedGlobalIndex < manipulationVisiblePages.length - 1;
 
-  const handleReorder = useCallback((fromIdx: number, toIdx: number) => {
-    reorder(fromIdx, toIdx);
-  }, [reorder]);
+  const handleReorder = useCallback(
+    (fromIdx: number, toIdx: number) => {
+      reorder(fromIdx, toIdx);
+    },
+    [reorder]
+  );
 
   const handlePageSelect = useCallback(
     (pageId: string, shiftKey: boolean, ctrlKey: boolean) => {
@@ -477,7 +674,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       }
       setRangeExternalUpdate((c) => c + 1);
     },
-    [toggleSelection, multiToggle, rangeSelect, allVisiblePageIds],
+    [toggleSelection, multiToggle, rangeSelect, allVisiblePageIds]
   );
 
   const handleDismissUndo = useCallback(() => {
@@ -503,12 +700,16 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
 
   const fileToDelete = useMemo(
     () => fileMetadata.find((f) => f.fileId === fileIdToDelete) ?? null,
-    [fileMetadata, fileIdToDelete],
+    [fileMetadata, fileIdToDelete]
   );
 
   const previewPage = useMemo(() => {
     if (!previewPageId) return null;
-    return localManifest.find((p: PageManifestEntry) => p.pageId === previewPageId) ?? null;
+    return (
+      localManifest.find(
+        (p: PageManifestEntry) => p.pageId === previewPageId
+      ) ?? null
+    );
   }, [previewPageId, localManifest]);
 
   const previewFileName = useMemo(() => {
@@ -530,8 +731,8 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
     setAssemblyPanePercent(
       Math.min(
         MAX_ASSEMBLY_PANE_PERCENT,
-        Math.max(MIN_ASSEMBLY_PANE_PERCENT, Math.round(nextPercent)),
-      ),
+        Math.max(MIN_ASSEMBLY_PANE_PERCENT, Math.round(nextPercent))
+      )
     );
   }, []);
 
@@ -542,7 +743,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       setIsResizingWorkspace(true);
       updateAssemblyPanePercent(event.clientX);
     },
-    [updateAssemblyPanePercent],
+    [updateAssemblyPanePercent]
   );
 
   const handleWorkspaceResizePointerMove = useCallback(
@@ -550,7 +751,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       if (!isResizingWorkspace) return;
       updateAssemblyPanePercent(event.clientX);
     },
-    [isResizingWorkspace, updateAssemblyPanePercent],
+    [isResizingWorkspace, updateAssemblyPanePercent]
   );
 
   const handleWorkspaceResizePointerUp = useCallback(
@@ -559,25 +760,28 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       event.currentTarget.releasePointerCapture?.(event.pointerId);
       setIsResizingWorkspace(false);
     },
-    [isResizingWorkspace],
+    [isResizingWorkspace]
   );
 
-  const handleWorkspaceResizeKeyDown = useCallback((event: React.KeyboardEvent) => {
-    let nextPercent: number | null = null;
-    if (event.key === 'ArrowLeft') nextPercent = assemblyPanePercent - 5;
-    if (event.key === 'ArrowRight') nextPercent = assemblyPanePercent + 5;
-    if (event.key === 'Home') nextPercent = MIN_ASSEMBLY_PANE_PERCENT;
-    if (event.key === 'End') nextPercent = MAX_ASSEMBLY_PANE_PERCENT;
-    if (nextPercent === null) return;
+  const handleWorkspaceResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      let nextPercent: number | null = null;
+      if (event.key === 'ArrowLeft') nextPercent = assemblyPanePercent - 5;
+      if (event.key === 'ArrowRight') nextPercent = assemblyPanePercent + 5;
+      if (event.key === 'Home') nextPercent = MIN_ASSEMBLY_PANE_PERCENT;
+      if (event.key === 'End') nextPercent = MAX_ASSEMBLY_PANE_PERCENT;
+      if (nextPercent === null) return;
 
-    event.preventDefault();
-    setAssemblyPanePercent(
-      Math.min(
-        MAX_ASSEMBLY_PANE_PERCENT,
-        Math.max(MIN_ASSEMBLY_PANE_PERCENT, nextPercent),
-      ),
-    );
-  }, [assemblyPanePercent]);
+      event.preventDefault();
+      setAssemblyPanePercent(
+        Math.min(
+          MAX_ASSEMBLY_PANE_PERCENT,
+          Math.max(MIN_ASSEMBLY_PANE_PERCENT, nextPercent)
+        )
+      );
+    },
+    [assemblyPanePercent]
+  );
 
   return (
     <div className={styles.container} data-testid="pdf-assembly-view">
@@ -587,7 +791,9 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
           <>
             <div className={styles.headerLeft}>
               <h1 className={styles.heading}>PDF Assembly Tool</h1>
-              <p className={styles.subheading}>Upload, validate, and assemble PDF documents</p>
+              <p className={styles.subheading}>
+                Upload, validate, and assemble PDF documents
+              </p>
             </div>
             {sessionId && (
               <span className={styles.sessionBadge}>
@@ -603,17 +809,41 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
               <button
                 type="button"
                 className={styles.headerButton}
-                onClick={() => setIsSourceBrowserCollapsed((collapsed) => !collapsed)}
+                onClick={() =>
+                  setIsSourceBrowserCollapsed((collapsed) => !collapsed)
+                }
                 aria-expanded={!isSourceBrowserCollapsed}
                 aria-controls="pdf-source-browser"
-                aria-label={isSourceBrowserCollapsed ? 'Show source documents' : 'Hide source documents'}
-                title={isSourceBrowserCollapsed ? 'Show source documents' : 'Hide source documents'}
+                aria-label={
+                  isSourceBrowserCollapsed
+                    ? 'Show source documents'
+                    : 'Hide source documents'
+                }
+                title={
+                  isSourceBrowserCollapsed
+                    ? 'Show source documents'
+                    : 'Hide source documents'
+                }
                 data-testid="pdf-toggle-source-browser"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
                   <rect x="3" y="4" width="18" height="16" rx="2" />
                   <path d="M9 4v16" />
-                  <path d={isSourceBrowserCollapsed ? 'm13 9 3 3-3 3' : 'm16 9-3 3 3 3'} />
+                  <path
+                    d={
+                      isSourceBrowserCollapsed
+                        ? 'm13 9 3 3-3 3'
+                        : 'm16 9-3 3 3 3'
+                    }
+                  />
                 </svg>
                 {isSourceBrowserCollapsed ? 'Show sources' : 'Hide sources'}
               </button>
@@ -624,7 +854,15 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
                 disabled={createSession.isPending}
                 data-testid="pdf-new-session"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M12 5v14M5 12h14" />
                 </svg>
                 {createSession.isPending ? 'Starting…' : 'New session'}
@@ -637,6 +875,14 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
           </>
         )}
       </div>
+
+      <OverlayConflictBanner
+        visible={overlayMultiTabSync.conflictVisible}
+        isReloading={overlayMultiTabSync.isReloading}
+        errorMessage={overlayMultiTabSync.errorMessage}
+        onAcknowledge={overlayMultiTabSync.acknowledge}
+        onRetry={() => void overlayMultiTabSync.retry()}
+      />
 
       {/* Hero (empty) — centred single column */}
       {isEmpty ? (
@@ -660,139 +906,228 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
             conversionJobs={conversionJobs}
             errors={errors}
             onDismissError={handleDismissUploadError}
-            sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
+            sessionLimitError={
+              createSession.error?.code === 'SESSION_LIMIT_REACHED'
+            }
           />
         </div>
       ) : (
         /* Three-panel body: SourceBrowser (left) | AssemblyLane (center) | Preview (right) */
         <PdfWorkerProvider>
-        <div className={styles.body}>
-          {!isSourceBrowserCollapsed && (
-            <div id="pdf-source-browser" className={styles.sourceBrowserPanel}>
-              <SourceBrowser
-                fileMetadata={fileMetadata}
-                localManifest={localManifest}
-                sessionId={sessionId!}
-                documentColors={documentColors}
-                isPageInAssembly={isPageInAssembly}
-                onTogglePageInAssembly={handleTogglePageInAssembly}
-                dragActive={dragActive}
-                onDrop={handleDrop}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDropzoneClick={handleDropzoneClick}
-                inputRef={inputRef}
-                onInputChange={handleInputChange}
-                isUploading={isUploading}
-                createSessionPending={createSession.isPending}
-                uploadProgress={uploadProgress}
-                conversionJobs={conversionJobs}
-                errors={errors}
-                onDismissError={handleDismissUploadError}
-                sessionLimitError={createSession.error?.code === 'SESSION_LIMIT_REACHED'}
-                onRemoveFile={handleRemoveFileClick}
-              />
-            </div>
-          )}
+          <div className={styles.body}>
+            {!isSourceBrowserCollapsed && (
+              <div
+                id="pdf-source-browser"
+                className={styles.sourceBrowserPanel}
+              >
+                <SourceBrowser
+                  fileMetadata={fileMetadata}
+                  localManifest={localManifest}
+                  sessionId={sessionId!}
+                  documentColors={documentColors}
+                  isPageInAssembly={isPageInAssembly}
+                  onTogglePageInAssembly={handleTogglePageInAssembly}
+                  dragActive={dragActive}
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDropzoneClick={handleDropzoneClick}
+                  inputRef={inputRef}
+                  onInputChange={handleInputChange}
+                  isUploading={isUploading}
+                  createSessionPending={createSession.isPending}
+                  uploadProgress={uploadProgress}
+                  conversionJobs={conversionJobs}
+                  errors={errors}
+                  onDismissError={handleDismissUploadError}
+                  sessionLimitError={
+                    createSession.error?.code === 'SESSION_LIMIT_REACHED'
+                  }
+                  onRemoveFile={handleRemoveFileClick}
+                />
+              </div>
+            )}
 
-          <div
-            ref={workspacePanelsRef}
-            className={`${styles.workspacePanels} ${isResizingWorkspace ? styles.workspaceResizing : ''}`}
-          >
             <div
-              className={styles.assemblyPanel}
-              style={{ flexBasis: `${assemblyPanePercent}%` }}
+              ref={workspacePanelsRef}
+              className={`${styles.workspacePanels} ${isResizingWorkspace ? styles.workspaceResizing : ''}`}
             >
-              <AssemblyLane
-                sessionId={sessionId!}
-                localManifest={localManifest}
-                visiblePages={manipulationVisiblePages}
-                fileMetadata={fileMetadata}
-                documentColors={documentColors}
-                isSelected={isSelected}
-                selectedCount={selectedCount}
-                onSelectAll={handleSelectAllPages}
-                onDeselectAll={handleDeselectAllPages}
-                onSelect={handlePageSelect}
-                onReorder={handleReorder}
-                onRotate={handleRotate}
-                onDelete={handleDeleteClick}
-                onMoveUp={handleMoveUp}
-                onMoveDown={handleMoveDown}
-                canMoveUp={canMoveUp}
-                canMoveDown={canMoveDown}
-                onSave={saveNow}
-                hasUnsavedChanges={hasUnsavedChanges}
-                activePageId={activePageId}
-                onActivePage={setActivePageId}
-                onPreview={handlePreview}
-                justMovedPageId={justMovedPageId}
-                onAddFromSource={handleAddFromSource}
-              />
-            </div>
+              <div
+                className={styles.assemblyPanel}
+                style={{ flexBasis: `${assemblyPanePercent}%` }}
+              >
+                <AssemblyLane
+                  sessionId={sessionId!}
+                  localManifest={localManifest}
+                  visiblePages={manipulationVisiblePages}
+                  fileMetadata={fileMetadata}
+                  documentColors={documentColors}
+                  isSelected={isSelected}
+                  selectedCount={selectedCount}
+                  onSelectAll={handleSelectAllPages}
+                  onDeselectAll={handleDeselectAllPages}
+                  onSelect={handlePageSelect}
+                  onReorder={handleReorder}
+                  onRotate={handleRotate}
+                  onDelete={handleDeleteClick}
+                  onMoveUp={handleMoveUp}
+                  onMoveDown={handleMoveDown}
+                  canMoveUp={canMoveUp}
+                  canMoveDown={canMoveDown}
+                  onSave={saveNow}
+                  hasUnsavedChanges={hasUnsavedChanges}
+                  activePageId={activePageId}
+                  onActivePage={setActivePageId}
+                  onPreview={handlePreview}
+                  justMovedPageId={justMovedPageId}
+                  onAddFromSource={handleAddFromSource}
+                  onEditPage={handleOpenPageEditor}
+                  editPageDisabled={selectedCount !== 1}
+                  overlays={overlayList}
+                />
+              </div>
 
-            {/* Focusable window-splitter: keyboard-resizable separator per WAI-ARIA */}
-            {/* eslint-disable jsx-a11y/no-noninteractive-tabindex */}
-            <div
-              className={styles.workspaceDivider}
-              role="separator"
-              aria-label="Resize assembly and preview panels"
-              aria-orientation="vertical"
-              aria-valuemin={MIN_ASSEMBLY_PANE_PERCENT}
-              aria-valuemax={MAX_ASSEMBLY_PANE_PERCENT}
-              aria-valuenow={assemblyPanePercent}
-              aria-valuetext={`Assembly lane ${assemblyPanePercent}%`}
-              tabIndex={0}
-              onPointerDown={handleWorkspaceResizePointerDown}
-              onPointerMove={handleWorkspaceResizePointerMove}
-              onPointerUp={handleWorkspaceResizePointerUp}
-              onPointerCancel={handleWorkspaceResizePointerUp}
-              onKeyDown={handleWorkspaceResizeKeyDown}
-              onDoubleClick={() => setAssemblyPanePercent(DEFAULT_ASSEMBLY_PANE_PERCENT)}
-              data-testid="pdf-workspace-divider"
-            >
-              <span className={styles.workspaceDividerHandle} aria-hidden="true" />
-            </div>
-            {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
+              {/* Focusable window-splitter: keyboard-resizable separator per WAI-ARIA */}
+              {/* eslint-disable jsx-a11y/no-noninteractive-tabindex */}
+              <div
+                className={styles.workspaceDivider}
+                role="separator"
+                aria-label="Resize assembly and preview panels"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_ASSEMBLY_PANE_PERCENT}
+                aria-valuemax={MAX_ASSEMBLY_PANE_PERCENT}
+                aria-valuenow={assemblyPanePercent}
+                aria-valuetext={`Assembly lane ${assemblyPanePercent}%`}
+                tabIndex={0}
+                onPointerDown={handleWorkspaceResizePointerDown}
+                onPointerMove={handleWorkspaceResizePointerMove}
+                onPointerUp={handleWorkspaceResizePointerUp}
+                onPointerCancel={handleWorkspaceResizePointerUp}
+                onKeyDown={handleWorkspaceResizeKeyDown}
+                onDoubleClick={() =>
+                  setAssemblyPanePercent(DEFAULT_ASSEMBLY_PANE_PERCENT)
+                }
+                data-testid="pdf-workspace-divider"
+              >
+                <span
+                  className={styles.workspaceDividerHandle}
+                  aria-hidden="true"
+                />
+              </div>
+              {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
 
-            <div className={styles.previewPanel} role="complementary" aria-label="Page preview">
-              <PdfInlinePreview
-                sessionId={sessionId!}
-                fileId={activePreviewPage?.fileId ?? null}
-                sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
-                rotation={activePreviewPage?.rotation ?? 0}
-                sourceFileName={activePreviewFileName}
-                originalPageNumber={(activePreviewPage?.sourcePageIndex ?? 0) + 1}
-              />
+              <div
+                className={styles.previewPanel}
+                role="complementary"
+                aria-label="Page preview"
+              >
+                <PdfInlinePreview
+                  sessionId={sessionId!}
+                  fileId={activePreviewPage?.fileId ?? null}
+                  sourcePageIndex={activePreviewPage?.sourcePageIndex ?? 0}
+                  rotation={activePreviewPage?.rotation ?? 0}
+                  sourceFileName={activePreviewFileName}
+                  originalPageNumber={
+                    (activePreviewPage?.sourcePageIndex ?? 0) + 1
+                  }
+                  overlay={{
+                    pageId: activePageId,
+                    overlays: pageOverlays,
+                    selectedOverlayId: null,
+                    textToolActive: false,
+                    createLimitMessage: null,
+                    announcement: '',
+                    canUndo: false,
+                    canRedo: false,
+                    saveStatus: 'idle',
+                    readOnly: true,
+                    onCreateAt: () => null,
+                    onSelectOverlay: () => {},
+                    onDeleteSelectedOverlay: () => {},
+                    onUndoOverlay: () => {},
+                    onRedoOverlay: () => {},
+                    onBeginGeometryEdit: () => false,
+                    onUpdateOverlayGeometry: () => {},
+                    onCommitGeometryEdit: () => {},
+                    onNudgeSelectedOverlay: () => {},
+                    onBringOverlayForward: () => {},
+                    onSendOverlayBackward: () => {},
+                  }}
+                />
+              </div>
             </div>
           </div>
-        </div>
-        <div className={styles.exportBar} data-testid="pdf-export-bar">
-          <ExportPanel
-            sessionId={sessionId!}
-            nonDeletedPageCount={manipulationVisiblePages.length}
-            filename={exportFilename}
-            onFilenameChange={setExportFilename}
-            onBeforeExport={ensureManifestSaved}
-            onExportComplete={handleExportComplete}
-          />
-          <div className={styles.exportBarGroup}>
-            <RangeInput
-              maxPage={manipulationVisiblePages.length}
-              selectedIndices={selectedIndicesForRange}
-              onSelectionChange={handleRangeSelectionChange}
-              externalUpdate={rangeExternalUpdate}
-            />
-            <ExportSelectedButton
+          <div className={styles.exportBar} data-testid="pdf-export-bar">
+            <ExportPanel
               sessionId={sessionId!}
-              selectedCount={selectedCount}
-              selectedPageIndices={selectedIndicesForRange}
+              nonDeletedPageCount={manipulationVisiblePages.length}
               filename={exportFilename}
-              onBeforeExport={ensureManifestSaved}
-              onExportComplete={clearSelection}
+              onFilenameChange={setExportFilename}
+              onBeforeExport={ensureSessionSaved}
+              onExportComplete={handleExportComplete}
             />
+            <div className={styles.exportBarGroup}>
+              <RangeInput
+                maxPage={manipulationVisiblePages.length}
+                selectedIndices={selectedIndicesForRange}
+                onSelectionChange={handleRangeSelectionChange}
+                externalUpdate={rangeExternalUpdate}
+              />
+              <ExportSelectedButton
+                sessionId={sessionId!}
+                selectedCount={selectedCount}
+                selectedPageIndices={selectedIndicesForRange}
+                filename={exportFilename}
+                onBeforeExport={ensureSessionSaved}
+                onExportComplete={clearSelection}
+              />
+            </div>
           </div>
-        </div>
+          {isPageEditorOpen && activePreviewPage && (
+            <PdfPageEditorModal
+              isOpen
+              sessionId={sessionId!}
+              fileId={activePreviewPage.fileId}
+              sourcePageIndex={activePreviewPage.sourcePageIndex}
+              rotation={activePreviewPage.rotation}
+              sourceFileName={activePreviewFileName}
+              originalPageNumber={activePreviewPage.sourcePageIndex + 1}
+              overlay={{
+                pageId: activePageId,
+                overlays: pageOverlays,
+                selectedOverlayId,
+                textToolActive,
+                createLimitMessage,
+                announcement: overlayAnnouncement,
+                canUndo: canUndoOverlay,
+                canRedo: canRedoOverlay,
+                saveStatus: overlaySaveStatus,
+                saveErrorMessage: overlaySaveError,
+                readOnly: overlaysReadOnly,
+                onCreateAt: createAt,
+                onSelectOverlay: selectOverlay,
+                onDeleteSelectedOverlay: deleteSelectedOverlay,
+                onUndoOverlay: undoOverlay,
+                onRedoOverlay: redoOverlay,
+                onFlushOverlays: ensureOverlaysSaved,
+                onRetryOverlaySave: retryOverlaySave,
+                onBeginOverlayTextEdit: beginTextEdit,
+                onUpdateOverlayText: updateSelectedText,
+                onCommitOverlayTextEdit: commitTextEdit,
+                onBeginGeometryEdit: beginGeometryEdit,
+                onUpdateOverlayGeometry: updateSelectedGeometry,
+                onCommitGeometryEdit: commitGeometryEdit,
+                onNudgeSelectedOverlay: nudgeSelected,
+                onBringOverlayForward: bringSelectedForward,
+                onSendOverlayBackward: sendSelectedBackward,
+              }}
+              selectedOverlay={selectedOverlay}
+              onToggleTextTool={handleToggleTextTool}
+              onFormattingChange={updateSelectedFormatting}
+              onValidationChange={setOverlayFormatInvalid}
+              onClose={handleClosePageEditor}
+            />
+          )}
         </PdfWorkerProvider>
       )}
 
@@ -847,7 +1182,11 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       )}
 
       {deleteBlockedMessage && (
-        <div className={styles.errorToast} role="alert" data-testid="delete-blocked-error">
+        <div
+          className={styles.errorToast}
+          role="alert"
+          data-testid="delete-blocked-error"
+        >
           <span className={styles.errorToastIcon}>⚠️</span>
           <span className={styles.errorToastText}>{deleteBlockedMessage}</span>
           <button
@@ -861,7 +1200,11 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({ userId = '' })
       )}
 
       {reorderSyncError && (
-        <div className={styles.errorToast} role="alert" data-testid="reorder-sync-error">
+        <div
+          className={styles.errorToast}
+          role="alert"
+          data-testid="reorder-sync-error"
+        >
           <span className={styles.errorToastIcon}>⚠️</span>
           <span className={styles.errorToastText}>{reorderSyncError}</span>
           <button

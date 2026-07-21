@@ -3,6 +3,9 @@ import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
 import { useBlankDetection } from '../hooks/useBlankDetection';
 import { BlankPageBadge } from './BlankPageBadge';
+import { OverlayTextBox } from './OverlayTextBox';
+import { OverlayThumbnailBadge } from './OverlayThumbnailBadge';
+import type { OverlayTextBox as OverlayTextBoxModel } from '../../shared/types/pdf';
 import styles from './PageThumbnail.module.css';
 
 const THUMBNAIL_WIDTH = 200;
@@ -11,6 +14,7 @@ const THUMBNAIL_HEIGHT = Math.round(THUMBNAIL_WIDTH * (22 / 17));
 type DropEdge = 'before' | 'after' | null;
 const ASSEMBLY_PAGE_DRAG_TYPE = 'application/x-pdf-assembly-page';
 const SOURCE_PAGE_DRAG_TYPE = 'application/x-pdf-page';
+const NOOP = () => {};
 
 export interface PageThumbnailProps {
   pageId: string;
@@ -33,6 +37,7 @@ export interface PageThumbnailProps {
   onDragOver?: (pageId: string, edge: DropEdge) => void;
   onDragEnd?: () => void;
   onDrop?: (pageId: string) => void;
+  overlays?: OverlayTextBoxModel[];
 }
 
 export const PageThumbnail: React.FC<PageThumbnailProps> = ({
@@ -55,17 +60,23 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   onDragOver,
   onDragEnd,
   onDrop,
+  overlays = [],
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const { document, isLoading: isDocLoading, error: docError, retry: retryDoc } = usePdfDocument(fileUrl);
+  const {
+    document,
+    isLoading: isDocLoading,
+    error: docError,
+    retry: retryDoc,
+  } = usePdfDocument(fileUrl);
   const { status, imageBitmap, hasTextContent } = useThumbnailRenderer(
     document ?? null,
     sourcePageIndex,
     rotation,
     1,
-    fileUrl,
+    fileUrl
   );
 
   useEffect(() => {
@@ -80,13 +91,17 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     }
   }, [imageBitmap]);
 
-  const { isBlank } = useBlankDetection(canvasRef.current, imageBitmap, hasTextContent);
+  const { isBlank } = useBlankDetection(
+    canvasRef.current,
+    imageBitmap,
+    hasTextContent
+  );
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       onSelect(pageId, e.shiftKey, e.ctrlKey || e.metaKey);
     },
-    [onSelect, pageId],
+    [onSelect, pageId]
   );
 
   const handleDoubleClick = useCallback(() => {
@@ -99,7 +114,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
         onPreview(pageId);
       }
     },
-    [onPreview, pageId],
+    [onPreview, pageId]
   );
 
   const handleDragStart = useCallback(
@@ -109,13 +124,16 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
       e.dataTransfer.setData('text/plain', pageId);
       onDragStart?.(pageId);
     },
-    [pageId, onDragStart],
+    [pageId, onDragStart]
   );
 
   const handleDragOver = useCallback(
     (e: React.DragEvent) => {
       // Source-browser drags are handled by the assembly grid cell.
-      if (Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)) return;
+      if (
+        Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)
+      )
+        return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       const rect = cardRef.current?.getBoundingClientRect();
@@ -127,25 +145,29 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
         onDragOver?.(pageId, 'after');
       }
     },
-    [pageId, onDragOver],
+    [pageId, onDragOver]
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       // Let source-browser drops bubble to the assembly grid cell.
-      if (Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)) return;
+      if (
+        Array.from(e.dataTransfer.types ?? []).includes(SOURCE_PAGE_DRAG_TYPE)
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
       onDrop?.(pageId);
     },
-    [pageId, onDrop],
+    [pageId, onDrop]
   );
 
   const handleDragEnd = useCallback(() => {
     onDragEnd?.();
   }, [onDragEnd]);
 
-  const isLoading = isDocLoading || status === 'loading' || (status === 'idle' && !docError);
+  const isLoading =
+    isDocLoading || status === 'loading' || (status === 'idle' && !docError);
   const isError = status === 'error' || !!docError;
 
   const cardClassName = [
@@ -165,7 +187,11 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     <div
       ref={cardRef}
       className={cardClassName}
-      style={colorIndicator ? { borderLeftWidth: '3px', borderLeftColor: colorIndicator } : undefined}
+      style={
+        colorIndicator
+          ? { borderLeftWidth: '3px', borderLeftColor: colorIndicator }
+          : undefined
+      }
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
@@ -182,7 +208,9 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
       data-page-id={pageId}
     >
       <div className={styles.canvasWrapper}>
-        {isLoading && <div className={styles.skeleton} data-testid="thumbnail-skeleton" />}
+        {isLoading && (
+          <div className={styles.skeleton} data-testid="thumbnail-skeleton" />
+        )}
         {isError && (
           <div className={styles.errorState} data-testid="thumbnail-error">
             <span className={styles.errorIcon}>⚠</span>
@@ -190,7 +218,10 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
             {docError && (
               <button
                 className={styles.retryButton}
-                onClick={(e) => { e.stopPropagation(); retryDoc(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  retryDoc();
+                }}
                 title="Retry loading"
               >
                 Retry
@@ -198,11 +229,22 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
             )}
           </div>
         )}
-        <canvas
-          ref={canvasRef}
-          className={styles.canvas}
-        />
+        <canvas ref={canvasRef} className={styles.canvas} />
+        {overlays.length > 0 && (
+          <div className={styles.overlayPreview} aria-hidden="true">
+            {overlays.map((overlay) => (
+              <OverlayTextBox
+                key={overlay.id}
+                overlay={overlay}
+                selected={false}
+                displayOnly
+                onSelect={NOOP}
+              />
+            ))}
+          </div>
+        )}
         <BlankPageBadge isBlank={isBlank} pageIndex={assemblyPosition - 1} />
+        {overlays.length > 0 && <OverlayThumbnailBadge pageId={pageId} />}
         <div className={styles.previewOverlay}>
           <span className={styles.previewIcon}>🔍</span>
         </div>

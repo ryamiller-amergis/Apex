@@ -22,6 +22,7 @@ import { assemblePdf } from '../workers/pdfExportWorker';
 import {
   PDF_MVP_PERFORMANCE_TARGETS,
   type ExportWorkerInput,
+  type OverlayTextBox,
   type PageManifestEntry,
 } from '../../shared/types/pdf';
 
@@ -44,6 +45,35 @@ async function createTestPdf(pageCount: number, filePath: string): Promise<void>
   }
   const bytes = await doc.save();
   fs.writeFileSync(filePath, bytes);
+}
+
+function makeOverlay(
+  pageId: string,
+  overrides: Partial<OverlayTextBox> = {},
+): OverlayTextBox {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    pageId,
+    x: 10,
+    y: 10,
+    width: 30,
+    height: 10,
+    text: 'Burned overlay',
+    fontFamily: 'Helvetica',
+    fontSize: 14,
+    bold: false,
+    italic: false,
+    color: '#000000',
+    horizontalAlign: 'left',
+    verticalAlign: 'top',
+    opacity: 100,
+    rotation: 0,
+    listStyle: 'none',
+    linkUrl: null,
+    linkDisplayText: null,
+    zIndex: 1,
+    ...overrides,
+  };
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -133,6 +163,34 @@ describe('assemblePdf (worker core logic)', () => {
       fileName: 'file-1.pdf',
     }));
     expect(mockArtifactPut).toHaveBeenCalledWith(outputRef, expect.any(Uint8Array));
+  });
+
+  it('VT-04: burns only the included page overlays into an extraction', async () => {
+    const file = path.join(tmpDir, 'overlay-extraction.pdf');
+    await createTestPdf(2, file);
+
+    const result = await assemblePdf({
+      manifest: [
+        {
+          pageId: 'included-page',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
+      overlays: [
+        makeOverlay('included-page', {
+          linkUrl: 'https://example.com/included',
+        }),
+      ],
+      filePaths: { f1: file },
+    });
+
+    expect(result.success).toBe(true);
+    const outputDoc = await PDFDocument.load(result.pdfBytes!);
+    expect(outputDoc.getPageCount()).toBe(1);
+    expect(outputDoc.getPage(0).node.Annots()?.size()).toBe(1);
   });
 
   // DoD-1: deleted pages excluded

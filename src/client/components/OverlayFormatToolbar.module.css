@@ -1,0 +1,385 @@
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.toolbarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
+}
+
+.toolbarHeader > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.eyebrow {
+  color: var(--accent-color);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.title {
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.autoSaveStatus {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.formatRow {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.controlGroup {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border-color-light);
+  flex-shrink: 0;
+}
+
+.controlGroup:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.fontField select {
+  width: 116px;
+}
+
+.field input,
+.field select {
+  box-sizing: border-box;
+  min-width: 60px;
+  height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.field input[type='number'] {
+  width: 44px;
+  min-width: 0;
+  padding-inline: 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.field input[type='number']::-webkit-inner-spin-button,
+.field input[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.numberStepper {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.numberStepper:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--accent-color) 55%,
+    var(--border-color)
+  );
+}
+
+.numberStepper:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+
+.stepButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.stepButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+}
+
+.stepButton:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.stepButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.field input[type='range'] {
+  width: 104px;
+  padding: 0;
+  accent-color: var(--accent-color);
+}
+
+.field input[data-testid='overlay-format-color'] {
+  width: 82px;
+}
+
+.toggle,
+.segmented button,
+.applyButton {
+  min-width: 32px;
+  height: 32px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.toggle:hover,
+.segmented button:hover,
+.applyButton:hover {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+.active {
+  border-color: var(--accent-color) !important;
+  background: var(--bg-tertiary) !important;
+  color: var(--accent-color) !important;
+}
+
+.segmented {
+  display: inline-flex;
+}
+
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.segmented button:first-child {
+  border-radius: 4px 0 0 4px;
+  margin-left: 0;
+}
+
+.segmented button:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.labeledControl {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.opacityField {
+  min-width: 104px;
+}
+
+.linkRow {
+  width: 100%;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.linkEditor {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, 0.8fr) auto;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+.linkEditor .field input {
+  width: 100%;
+}
+
+.applyButton {
+  min-width: 88px;
+  font-weight: 600;
+}
+
+.error {
+  align-self: flex-start;
+  color: var(--error-color);
+  font-size: 0.6875rem;
+}
+
+.toolbar button:focus-visible,
+.toolbar input:focus-visible,
+.toolbar select:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.vertical {
+  height: 100%;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.vertical .toolbarHeader {
+  align-items: flex-start;
+}
+
+.vertical .toolbarHeader > div {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vertical .autoSaveStatus {
+  display: none;
+}
+
+.vertical .formatRow {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  overflow: visible;
+}
+
+.vertical .controlGroup {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 0;
+  border-right: 0;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.vertical .controlGroup:last-child {
+  border-bottom: 0;
+}
+
+.vertical .field,
+.vertical .labeledControl {
+  min-width: 0;
+}
+
+.vertical .field input,
+.vertical .field select,
+.vertical .fontField select,
+.vertical .opacityField {
+  width: 100%;
+}
+
+.vertical .numberStepper {
+  width: 100%;
+}
+
+.vertical .numberStepper input {
+  flex: 1;
+  width: 0;
+}
+
+.vertical .segmented {
+  width: 100%;
+}
+
+.vertical .segmented button {
+  flex: 1;
+}
+
+.vertical .linkRow {
+  margin-top: 2px;
+}
+
+.vertical .linkEditor {
+  grid-template-columns: 1fr;
+}
+
+.vertical .applyButton {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .toolbarHeader {
+    align-items: flex-start;
+  }
+
+  .autoSaveStatus {
+    display: none;
+  }
+
+  .linkEditor {
+    grid-template-columns: 1fr;
+  }
+
+  .applyButton {
+    width: fit-content;
+  }
+}

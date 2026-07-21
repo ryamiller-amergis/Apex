@@ -1,0 +1,162 @@
+.box {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: visible;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  word-break: break-word;
+  transform-origin: center center;
+  background: transparent;
+  transition:
+    outline-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.unselected {
+  outline: 1px dashed color-mix(in srgb, var(--accent-color) 45%, transparent);
+  outline-offset: -1px;
+}
+
+.selected {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+
+.box:focus-visible {
+  outline: 3px solid var(--accent-color);
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 2px var(--bg-primary),
+    0 0 0 5px color-mix(in srgb, var(--accent-color) 45%, transparent);
+}
+
+.displayOnly {
+  cursor: default;
+  pointer-events: none;
+}
+
+.text {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.selected .text {
+  cursor: text;
+}
+
+.textEditor {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: auto;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  white-space: pre-wrap;
+}
+
+.resizeHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 2px solid var(--accent-color);
+  border-radius: 50%;
+  background: var(--bg-primary);
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+.resizeHandle[data-handle='n'] {
+  top: 0;
+  left: 50%;
+  cursor: ns-resize;
+}
+
+.resizeHandle[data-handle='ne'] {
+  top: 0;
+  left: 100%;
+  cursor: nesw-resize;
+}
+
+.resizeHandle[data-handle='e'] {
+  top: 50%;
+  left: 100%;
+  cursor: ew-resize;
+}
+
+.resizeHandle[data-handle='se'] {
+  top: 100%;
+  left: 100%;
+  cursor: nwse-resize;
+}
+
+.resizeHandle[data-handle='s'] {
+  top: 100%;
+  left: 50%;
+  cursor: ns-resize;
+}
+
+.resizeHandle[data-handle='sw'] {
+  top: 100%;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.resizeHandle[data-handle='w'] {
+  top: 50%;
+  left: 0;
+  cursor: ew-resize;
+}
+
+.resizeHandle[data-handle='nw'] {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.resizeHandle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.deleteButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.deleteButton:hover {
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.deleteButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}

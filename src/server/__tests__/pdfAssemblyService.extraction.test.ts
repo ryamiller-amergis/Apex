@@ -11,6 +11,7 @@ const mockSet = jest.fn().mockReturnThis();
 const mockWhere = jest.fn().mockResolvedValue([]);
 const mockUpdate = jest.fn().mockReturnValue({ set: mockSet });
 const mockRm = jest.fn().mockResolvedValue(undefined);
+const mockWorkerInputs: unknown[] = [];
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -38,7 +39,8 @@ jest.mock('worker_threads', () => {
   const actualWt = jest.requireActual('worker_threads');
   return {
     ...actualWt,
-    Worker: jest.fn().mockImplementation((_path: string, _opts: any) => {
+    Worker: jest.fn().mockImplementation((_path: string, opts: any) => {
+      mockWorkerInputs.push(opts.workerData);
       const handlers: Record<string, (...args: unknown[]) => void> = {};
       const instance = {
         on: jest.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -95,6 +97,7 @@ import {
   expireOldSessions,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import type { OverlayTextBox } from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -113,10 +116,36 @@ function makeSession(pageCount: number, userId = 'user-1') {
     userId,
     status: 'active',
     pageManifest: pages,
+    textOverlays: [] as OverlayTextBox[],
     fileMetadata: [{ fileId: FILE_ID, storedName: `${FILE_ID}.pdf`, sizeBytes: 1000 }],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+function makeOverlay(pageId: string, idSuffix: string): OverlayTextBox {
+  return {
+    id: `11111111-1111-4111-8111-${idSuffix.padStart(12, '0')}`,
+    pageId,
+    x: 10,
+    y: 10,
+    width: 30,
+    height: 10,
+    text: `Overlay ${pageId}`,
+    fontFamily: 'Helvetica',
+    fontSize: 14,
+    bold: false,
+    italic: false,
+    color: '#000000',
+    horizontalAlign: 'left',
+    verticalAlign: 'top',
+    opacity: 100,
+    rotation: 0,
+    listStyle: 'none',
+    linkUrl: null,
+    linkDisplayText: null,
+    zIndex: 1,
   };
 }
 
@@ -125,6 +154,7 @@ function makeSession(pageCount: number, userId = 'user-1') {
 describe('assembleAndExport — page extraction (pages filter)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockWorkerInputs.length = 0;
   });
 
   // VT-09: Subset export produces correct page subset
@@ -136,6 +166,23 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
 
     expect(result.pdfBytes).toBeDefined();
     expect(result.filename).toMatch(/^merged-document-.*\.pdf$/);
+  });
+
+  it('VT-04: passes only selected-page overlays to extraction', async () => {
+    const session = makeSession(3);
+    session.textOverlays = [
+      makeOverlay('page-0', '1'),
+      makeOverlay('page-1', '2'),
+      makeOverlay('page-2', '3'),
+    ];
+    mockFindFirst.mockResolvedValue(session);
+
+    await assembleAndExport('session-1', 'user-1', undefined, [1]);
+
+    expect(mockWorkerInputs).toHaveLength(1);
+    expect(
+      (mockWorkerInputs[0] as { overlays: OverlayTextBox[] }).overlays
+    ).toEqual([makeOverlay('page-1', '2')]);
   });
 
   it('keeps the session active after exporting selected pages', async () => {

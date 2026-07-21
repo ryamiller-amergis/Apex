@@ -149,6 +149,7 @@ describe('pdfAssemblyService session lifecycle', () => {
           userId: 'user-1',
           projectId: 'proj-1',
           status: 'active',
+          textOverlays: [],
         }),
       );
       expect(mockMkdirSync).not.toHaveBeenCalled();

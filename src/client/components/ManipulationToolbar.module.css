@@ -2,43 +2,46 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  padding: 6px 10px;
-  background: var(--bg-secondary);
+  min-height: 44px;
+  padding: 6px 8px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
 .button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
+  min-height: 32px;
+  gap: 6px;
+  padding: 5px 9px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
   white-space: nowrap;
 }
 
 .button:hover:not(:disabled) {
   background: var(--bg-tertiary);
-  border-color: var(--border-color);
+  border-color: var(--border-color-light);
 }
 
 .button:disabled {
-  opacity: 0.4;
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
@@ -54,9 +57,9 @@
 
 .separator {
   width: 1px;
-  height: 20px;
-  background: var(--border-color);
-  margin: 0 2px;
+  height: 24px;
+  background: var(--border-color-light);
+  margin: 0 4px;
 }
 
 .saveActive {
@@ -70,6 +73,28 @@
   border-color: var(--accent-hover);
 }
 
+.toolActive {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-primary));
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.toolActive:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-color);
+}
+
+.editButton {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.editButton:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-primary));
+}
+
 .spacer {
   flex: 1;
 }
@@ -77,12 +102,16 @@
 .infoSection {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .selectionInfo {
-  font-size: 13px;
-  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  font-size: 0.75rem;
+  color: var(--accent-color);
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -90,4 +119,9 @@
   font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }

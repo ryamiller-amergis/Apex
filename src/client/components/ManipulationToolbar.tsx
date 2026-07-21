@@ -14,6 +14,9 @@ interface ManipulationToolbarProps {
   hasUnsavedChanges?: boolean;
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
+  /** Opens the full-page editor for the single selected assembly page. */
+  onEditPage?: () => void;
+  editPageDisabled?: boolean;
 }
 
 export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
@@ -29,6 +32,8 @@ export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
   totalPages,
   onSelectAll,
   onDeselectAll,
+  onEditPage,
+  editPageDisabled = false,
 }) => {
   const hasSelection = selectedCount > 0;
   const isSingleSelection = selectedCount === 1;
@@ -114,6 +119,27 @@ export const ManipulationToolbar: React.FC<ManipulationToolbarProps> = ({
           </svg>
           <span className={styles.label}>Down</span>
         </button>
+
+        {onEditPage && (
+          <>
+            <div className={styles.separator} />
+            <button
+              type="button"
+              className={`${styles.button} ${styles.editButton}`}
+              data-testid="toolbar-edit-page"
+              disabled={editPageDisabled}
+              aria-label="Edit selected page"
+              title="Edit selected page"
+              onClick={onEditPage}
+            >
+              <svg className={styles.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
+              </svg>
+              <span className={styles.label}>Edit page</span>
+            </button>
+          </>
+        )}
 
         {onSave && (
           <>

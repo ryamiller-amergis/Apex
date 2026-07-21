@@ -4,6 +4,9 @@ import type {
   CreateSessionResponse,
   UploadFilesResponse,
   PageManifestEntry,
+  UpdateManifestResponse,
+  OverlayTextBox,
+  ReplaceOverlaysResponse,
 } from '../../shared/types/pdf';
 import { apexProjectHeaders, getSelectedApexProject } from '../utils/apiFetch';
 
@@ -28,7 +31,9 @@ async function pdfApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as PdfApiError;
+    const err = new Error(
+      body.error?.message ?? body.error ?? `HTTP ${res.status}`
+    ) as PdfApiError;
     err.code = body.error?.code;
     err.status = res.status;
     throw err;
@@ -49,7 +54,9 @@ export function usePdfSession(sessionId: string | null, userId = '') {
       failureCount < 3,
     refetchInterval: (query) => {
       const jobs = query.state.data?.conversionJobs ?? [];
-      return jobs.some((job) => job.status === 'queued' || job.status === 'processing')
+      return jobs.some(
+        (job) => job.status === 'queued' || job.status === 'processing'
+      )
         ? 2_000
         : false;
     },
@@ -80,7 +87,9 @@ export function useCreatePdfSession(userId = '') {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pdf-session', userId] });
-      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
+      queryClient.invalidateQueries({
+        queryKey: ['pdf-sessions-active', userId],
+      });
     },
   });
 }
@@ -97,7 +106,7 @@ export function useClosePdfSession(userId = '') {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const err = new Error(
-          body.error?.message ?? body.error ?? `HTTP ${res.status}`,
+          body.error?.message ?? body.error ?? `HTTP ${res.status}`
         ) as PdfApiError;
         err.code = body.error?.code;
         err.status = res.status;
@@ -105,93 +114,112 @@ export function useClosePdfSession(userId = '') {
       }
     },
     onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
-      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
+      queryClient.invalidateQueries({
+        queryKey: ['pdf-session', userId, sessionId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['pdf-sessions-active', userId],
+      });
     },
   });
 }
 
 export function useUploadPdfFiles(userId = '') {
   const queryClient = useQueryClient();
-  return useMutation<UploadFilesResponse, PdfApiError, UploadPdfFilesVariables>({
-    mutationFn: async ({ sessionId, files, onProgress }) => {
-      const formData = new FormData();
-      for (const f of files) {
-        formData.append('files', f);
-      }
-
-      return new Promise<UploadFilesResponse>((resolve, reject) => {
-        const request = new XMLHttpRequest();
-        request.open('POST', `/api/pdf/sessions/${sessionId}/upload`);
-        request.withCredentials = true;
-
-        const project = getSelectedApexProject();
-        if (project) {
-          request.setRequestHeader('X-Apex-Project', project);
+  return useMutation<UploadFilesResponse, PdfApiError, UploadPdfFilesVariables>(
+    {
+      mutationFn: async ({ sessionId, files, onProgress }) => {
+        const formData = new FormData();
+        for (const f of files) {
+          formData.append('files', f);
         }
 
-        request.upload.onprogress = (event) => {
-          if (!event.lengthComputable) return;
-          onProgress?.({
-            phase: 'uploading',
-            percent: Math.round((event.loaded / event.total) * 100),
-          });
-        };
-        request.upload.onload = () => {
-          onProgress?.({ phase: 'processing', percent: 100 });
-        };
-        request.onerror = () => {
-          reject(new Error('Upload failed. Check your connection and retry.'));
-        };
-        request.onload = () => {
-          let body: any = {};
-          try {
-            body = request.responseText ? JSON.parse(request.responseText) : {};
-          } catch {
-            // The status fallback below provides a useful error for invalid JSON.
+        return new Promise<UploadFilesResponse>((resolve, reject) => {
+          const request = new XMLHttpRequest();
+          request.open('POST', `/api/pdf/sessions/${sessionId}/upload`);
+          request.withCredentials = true;
+
+          const project = getSelectedApexProject();
+          if (project) {
+            request.setRequestHeader('X-Apex-Project', project);
           }
 
-          if (request.status >= 200 && request.status < 300) {
-            resolve(body as UploadFilesResponse);
-            return;
-          }
+          request.upload.onprogress = (event) => {
+            if (!event.lengthComputable) return;
+            onProgress?.({
+              phase: 'uploading',
+              percent: Math.round((event.loaded / event.total) * 100),
+            });
+          };
+          request.upload.onload = () => {
+            onProgress?.({ phase: 'processing', percent: 100 });
+          };
+          request.onerror = () => {
+            reject(
+              new Error('Upload failed. Check your connection and retry.')
+            );
+          };
+          request.onload = () => {
+            let body: any = {};
+            try {
+              body = request.responseText
+                ? JSON.parse(request.responseText)
+                : {};
+            } catch {
+              // The status fallback below provides a useful error for invalid JSON.
+            }
 
-          const error = new Error(
-            body.error?.message ?? body.error ?? `HTTP ${request.status}`,
-          ) as PdfApiError;
-          error.code = body.error?.code;
-          error.status = request.status;
-          reject(error);
-        };
+            if (request.status >= 200 && request.status < 300) {
+              resolve(body as UploadFilesResponse);
+              return;
+            }
 
-        onProgress?.({ phase: 'uploading', percent: 0 });
-        request.send(formData);
-      });
-    },
-    onSuccess: (_data, { sessionId }) =>
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] }),
-  });
+            const error = new Error(
+              body.error?.message ?? body.error ?? `HTTP ${request.status}`
+            ) as PdfApiError;
+            error.code = body.error?.code;
+            error.status = request.status;
+            reject(error);
+          };
+
+          onProgress?.({ phase: 'uploading', percent: 0 });
+          request.send(formData);
+        });
+      },
+      onSuccess: (_data, { sessionId }) =>
+        queryClient.invalidateQueries({
+          queryKey: ['pdf-session', userId, sessionId],
+        }),
+    }
+  );
 }
 
 export function useRemovePdfFile(userId = '') {
   const queryClient = useQueryClient();
   return useMutation<void, PdfApiError, { sessionId: string; fileId: string }>({
     mutationFn: async ({ sessionId, fileId }) => {
-      const res = await fetch(`/api/pdf/sessions/${sessionId}/files/${fileId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-        headers: apexProjectHeaders(),
-      });
+      const res = await fetch(
+        `/api/pdf/sessions/${sessionId}/files/${fileId}`,
+        {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: apexProjectHeaders(),
+        }
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as PdfApiError;
+        const err = new Error(
+          body.error?.message ?? body.error ?? `HTTP ${res.status}`
+        ) as PdfApiError;
         err.code = body.error?.code;
         err.status = res.status;
         throw err;
       }
     },
     onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
+      queryClient.invalidateQueries({
+        queryKey: ['pdf-session', userId, sessionId],
+      });
     },
   });
 }
@@ -199,7 +227,7 @@ export function useRemovePdfFile(userId = '') {
 export function useUpdateManifest(userId = '') {
   const queryClient = useQueryClient();
   return useMutation<
-    { pageCount: number; updatedAt: string },
+    UpdateManifestResponse,
     Error & { code?: string },
     { sessionId: string; manifest: PageManifestEntry[] }
   >({
@@ -209,8 +237,50 @@ export function useUpdateManifest(userId = '') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ manifest }),
       }),
-    onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
+    onSuccess: (data, { sessionId }) => {
+      queryClient.setQueryData<PdfSession>(
+        ['pdf-session', userId, sessionId],
+        (session) =>
+          session
+            ? {
+                ...session,
+                textOverlays: data.textOverlays,
+                updatedAt: data.updatedAt,
+              }
+            : session
+      );
+      queryClient.invalidateQueries({
+        queryKey: ['pdf-session', userId, sessionId],
+      });
+    },
+  });
+}
+
+export function useUpdateOverlays(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReplaceOverlaysResponse,
+    PdfApiError,
+    { sessionId: string; overlays: OverlayTextBox[] }
+  >({
+    mutationFn: ({ sessionId, overlays }) =>
+      pdfApiFetch(`/api/pdf/sessions/${sessionId}/overlays`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overlays }),
+      }),
+    onSuccess: (data, { sessionId }) => {
+      queryClient.setQueryData<PdfSession>(
+        ['pdf-session', userId, sessionId],
+        (session) =>
+          session
+            ? {
+                ...session,
+                textOverlays: data.overlays,
+                updatedAt: data.updatedAt,
+              }
+            : session
+      );
     },
   });
 }

@@ -8,7 +8,7 @@
 }
 
 .filenameLabel {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -18,18 +18,20 @@
   flex: 1 1 320px;
   min-width: 220px;
   max-width: 360px;
-  padding: 5px 8px;
+  height: 36px;
+  padding: 6px 10px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 12px;
-  outline: none;
+  font-size: 0.8125rem;
   transition: border-color 0.2s ease;
 }
 
 .filenameInput:focus {
   border-color: var(--accent-color);
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .filenameInput:disabled {
@@ -41,12 +43,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  min-height: 36px;
+  padding: 6px 16px;
   border: 1px solid var(--accent-color);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--accent-color);
   color: #fff;
-  font-size: 12px;
+  font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -61,6 +64,11 @@
 .exportButton:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.exportButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .spinner {

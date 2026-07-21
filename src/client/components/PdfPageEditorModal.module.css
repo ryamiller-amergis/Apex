@@ -1,0 +1,265 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(1500px, 96vw);
+  height: 94vh;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 24px;
+  min-height: 64px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color-light);
+  background: var(--bg-primary);
+}
+
+.headerText {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 10px;
+}
+
+.eyebrow {
+  color: var(--accent-color);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.fileName {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.toolsButton,
+.addTextButton,
+.doneButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toolsButton,
+.addTextButton {
+  border: 1px solid var(--accent-color);
+  background: var(--bg-primary);
+  color: var(--accent-color);
+}
+
+.toolsButton svg,
+.addTextButton svg {
+  width: 17px;
+  height: 17px;
+}
+
+.toolsButton:hover,
+.addTextButton:hover,
+.addTextActive {
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
+}
+
+.doneButton {
+  min-width: 72px;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.doneButton:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.toolsButton:focus-visible,
+.addTextButton:focus-visible,
+.doneButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.editorBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.toolRail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  transition:
+    width 180ms ease,
+    opacity 150ms ease;
+}
+
+.toolRailOpen {
+  width: 340px;
+  opacity: 1;
+}
+
+.toolRailClosed {
+  width: 0;
+  border-right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toolRailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.collapseButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.collapseButton:hover {
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
+}
+
+.toolRail > .addTextButton {
+  justify-content: flex-start;
+  flex-shrink: 0;
+  margin: 12px;
+}
+
+.formatPanel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.guidance {
+  margin: 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-color) 7%, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 700px) {
+  .backdrop {
+    padding: 0;
+  }
+
+  .dialog {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .header {
+    padding: 10px 12px;
+  }
+
+  .eyebrow,
+  .fileName {
+    display: none;
+  }
+
+  .addTextButton {
+    padding-inline: 10px;
+  }
+
+  .toolRail {
+    position: absolute;
+    top: 64px;
+    bottom: 0;
+    left: 0;
+    z-index: 3;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .toolRailOpen {
+    width: min(340px, 88vw);
+  }
+}

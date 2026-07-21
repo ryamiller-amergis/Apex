@@ -84,7 +84,11 @@ jest.mock('fs', () => {
 
 import { assembleAndExport, sanitizeExportFilename } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
-import type { PageManifestEntry, PdfFileMetadata } from '../../shared/types/pdf';
+import type {
+  OverlayTextBox,
+  PageManifestEntry,
+  PdfFileMetadata,
+} from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -112,6 +116,32 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     expiresAt: '2026-01-01T04:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeOverlay(overrides: Partial<OverlayTextBox> = {}): OverlayTextBox {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    pageId: 'p1',
+    x: 10,
+    y: 10,
+    width: 30,
+    height: 10,
+    text: 'Export me',
+    fontFamily: 'Helvetica',
+    fontSize: 14,
+    bold: false,
+    italic: false,
+    color: '#000000',
+    horizontalAlign: 'left',
+    verticalAlign: 'top',
+    opacity: 100,
+    rotation: 0,
+    listStyle: 'none',
+    linkUrl: null,
+    linkDisplayText: null,
+    zIndex: 1,
     ...overrides,
   };
 }
@@ -152,6 +182,46 @@ describe('assembleAndExport', () => {
     // Deleted page (p3) should be filtered out
     expect(workerData.manifest).toHaveLength(3);
     expect(workerData.manifest.every((p: any) => !p.deleted)).toBe(true);
+  });
+
+  it('PBI-017: passes validated persisted overlays to the export worker', async () => {
+    mockFindFirst.mockResolvedValue(
+      makeSession({ textOverlays: [makeOverlay()] })
+    );
+    const { Worker } = await import('worker_threads');
+
+    await assembleAndExport(SESSION_ID, USER_ID);
+
+    const workerData = (
+      jest.mocked(Worker).mock.calls[0][1] as {
+        workerData: { overlays: OverlayTextBox[] };
+      }
+    ).workerData;
+    expect(workerData.overlays).toEqual([makeOverlay()]);
+  });
+
+  it('VT-07: rejects invalid persisted overlays before starting the worker', async () => {
+    mockFindFirst.mockResolvedValue(
+      makeSession({
+        textOverlays: [
+          makeOverlay({ linkUrl: 'javascript:alert(1)' }),
+        ],
+      })
+    );
+    const { Worker } = await import('worker_threads');
+
+    await expect(
+      assembleAndExport(SESSION_ID, USER_ID)
+    ).rejects.toMatchObject({
+      code: PDF_ERROR_CODES.OVERLAY_VALIDATION_FAILED,
+      errors: [
+        expect.objectContaining({
+          field: 'linkUrl',
+          code: 'OVERLAY_LINK_INVALID',
+        }),
+      ],
+    });
+    expect(Worker).not.toHaveBeenCalled();
   });
 
   // DoD-3: error — session not found

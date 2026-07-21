@@ -14,6 +14,8 @@ const defaultProps = {
   hasUnsavedChanges: false,
   onSelectAll: jest.fn(),
   onDeselectAll: jest.fn(),
+  onEditPage: undefined as undefined | (() => void),
+  editPageDisabled: false,
 };
 
 function renderToolbar(overrides: Partial<typeof defaultProps> = {}) {
@@ -191,5 +193,24 @@ describe('ManipulationToolbar', () => {
     renderToolbar({ totalPages: 1 });
 
     expect(screen.getByText('1 page in assembly')).toBeInTheDocument();
+  });
+
+  it('renders Edit page when onEditPage is provided', () => {
+    const onEditPage = jest.fn();
+    renderToolbar({ onEditPage });
+
+    const button = screen.getByTestId('toolbar-edit-page');
+    expect(button).toHaveTextContent('Edit page');
+    fireEvent.click(button);
+    expect(onEditPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Edit page when editPageDisabled is true', () => {
+    renderToolbar({
+      onEditPage: jest.fn(),
+      editPageDisabled: true,
+    });
+
+    expect(screen.getByTestId('toolbar-edit-page')).toBeDisabled();
   });
 });

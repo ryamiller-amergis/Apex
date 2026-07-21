@@ -1,8 +1,79 @@
 // ── PDF Assembly — Shared Types ────────────────────────────────────────────────
 
 export type PdfSessionStatus = 'active' | 'exported' | 'expired';
-export type PdfConversionStatus = 'queued' | 'processing' | 'completed' | 'failed';
+export type PdfConversionStatus =
+  | 'queued'
+  | 'processing'
+  | 'completed'
+  | 'failed';
 export type PdfJobType = 'docx_convert' | 'export';
+export type OverlayFontFamily = 'Helvetica' | 'Times-Roman' | 'Courier';
+export type OverlayHorizontalAlign = 'left' | 'center' | 'right';
+export type OverlayVerticalAlign = 'top' | 'middle' | 'bottom';
+export type OverlayListStyle = 'none' | 'bullet' | 'numbered';
+
+export interface OverlayTextBox {
+  id: string;
+  pageId: string;
+  /** Page-relative percentage geometry using a top-left origin. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontFamily: OverlayFontFamily;
+  fontSize: number;
+  bold: boolean;
+  italic: boolean;
+  color: string;
+  horizontalAlign: OverlayHorizontalAlign;
+  verticalAlign: OverlayVerticalAlign;
+  opacity: number;
+  rotation: number;
+  listStyle: OverlayListStyle;
+  linkUrl?: string | null;
+  linkDisplayText?: string | null;
+  zIndex: number;
+}
+
+/**
+ * Checks the persisted overlay shape only. Business-rule validation (bounds,
+ * allowlists, page identity, and URL schemes) belongs to the overlay sync API.
+ */
+export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
+  if (!value || typeof value !== 'object') return false;
+  const overlay = value as Record<string, unknown>;
+  const isNumber = (field: string) => typeof overlay[field] === 'number';
+  const isOptionalString = (field: string) =>
+    overlay[field] === undefined ||
+    overlay[field] === null ||
+    typeof overlay[field] === 'string';
+
+  return (
+    typeof overlay.id === 'string' &&
+    typeof overlay.pageId === 'string' &&
+    isNumber('x') &&
+    isNumber('y') &&
+    isNumber('width') &&
+    isNumber('height') &&
+    typeof overlay.text === 'string' &&
+    ['Helvetica', 'Times-Roman', 'Courier'].includes(
+      overlay.fontFamily as string
+    ) &&
+    isNumber('fontSize') &&
+    typeof overlay.bold === 'boolean' &&
+    typeof overlay.italic === 'boolean' &&
+    typeof overlay.color === 'string' &&
+    ['left', 'center', 'right'].includes(overlay.horizontalAlign as string) &&
+    ['top', 'middle', 'bottom'].includes(overlay.verticalAlign as string) &&
+    isNumber('opacity') &&
+    isNumber('rotation') &&
+    ['none', 'bullet', 'numbered'].includes(overlay.listStyle as string) &&
+    isOptionalString('linkUrl') &&
+    isOptionalString('linkDisplayText') &&
+    isNumber('zIndex')
+  );
+}
 
 export interface PdfConversionJob {
   id: string;
@@ -51,6 +122,7 @@ export interface PdfSession {
   projectId?: string | null;
   status: PdfSessionStatus;
   pageManifest: PageManifestEntry[];
+  textOverlays: OverlayTextBox[];
   fileMetadata: PdfFileMetadata[];
   conversionJobs: PdfConversionJob[];
   exportFilename?: string | null;
@@ -72,6 +144,29 @@ export interface CreateSessionResponse {
   status: PdfSessionStatus;
   createdAt: string;
   expiresAt: string;
+}
+
+export interface ReplaceOverlaysRequest {
+  overlays: OverlayTextBox[];
+}
+
+export interface ReplaceOverlaysResponse {
+  overlays: OverlayTextBox[];
+  updatedAt: string;
+}
+
+export interface UpdateManifestResponse {
+  pageCount: number;
+  updatedAt: string;
+  /** Authoritative post-cleanup overlays for immediate client synchronization. */
+  textOverlays: OverlayTextBox[];
+}
+
+export interface OverlayFieldError {
+  overlayId: string | null;
+  field: string;
+  code: string;
+  message: string;
 }
 
 export interface FileUploadResult {
@@ -129,6 +224,8 @@ export interface ExportArtifactRef {
 
 export interface ExportWorkerInput {
   manifest: PageManifestEntry[];
+  /** Server-persisted, validated overlays for pages included in this export. */
+  overlays?: OverlayTextBox[];
   filePaths?: Record<string, string>;
   fileBytes?: Record<string, Uint8Array>;
   artifactFiles?: Record<string, ExportArtifactRef>;
@@ -157,6 +254,7 @@ export const PDF_ERROR_CODES = {
   SESSION_LIMIT_REACHED: 'SESSION_LIMIT_REACHED',
   MANIFEST_INVALID_FILE_ID: 'MANIFEST_INVALID_FILE_ID',
   MANIFEST_INVALID_ROTATION: 'MANIFEST_INVALID_ROTATION',
+  OVERLAY_VALIDATION_FAILED: 'OVERLAY_VALIDATION_FAILED',
   SESSION_FORBIDDEN: 'SESSION_FORBIDDEN',
   SESSION_EXPIRED: 'SESSION_EXPIRED',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
@@ -166,7 +264,8 @@ export const PDF_ERROR_CODES = {
   INVALID_PAGE_INDICES: 'INVALID_PAGE_INDICES',
 } as const;
 
-export type PdfErrorCode = typeof PDF_ERROR_CODES[keyof typeof PDF_ERROR_CODES];
+export type PdfErrorCode =
+  (typeof PDF_ERROR_CODES)[keyof typeof PDF_ERROR_CODES];
 
 // ── Thumbnail Rendering ─────────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
+  OverlayTextBox,
   PageManifestEntry,
   PdfConversionStatus,
   PdfFileMetadata,
@@ -1265,6 +1266,7 @@ export const pdfSessions = pgTable('pdf_sessions', {
   projectId: text('project_id'),
   status: text('status').$type<PdfSessionStatus>().notNull().default('active'),
   pageManifest: jsonb('page_manifest').$type<PageManifestEntry[]>().notNull().default([]),
+  textOverlays: jsonb('text_overlays').$type<OverlayTextBox[]>().notNull().default([]),
   fileMetadata: jsonb('file_metadata').$type<PdfFileMetadata[]>().notNull().default([]),
   exportFilename: text('export_filename'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
