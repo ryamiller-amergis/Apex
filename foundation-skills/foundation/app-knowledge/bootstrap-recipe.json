@@ -1,1 +1,0 @@
-{ "scanScope": "full-repo", "description": "Full-repo context for knowledge base", "detectors": ["stack", "conventions", "routes", "terminology"] }

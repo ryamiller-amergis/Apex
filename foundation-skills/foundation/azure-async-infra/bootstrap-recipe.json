@@ -1,1 +1,0 @@
-{ "scanScope": "targeted", "description": "Detect stack and infra conventions", "detectors": ["stack", "conventions"] }

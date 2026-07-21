@@ -19,15 +19,15 @@ export function loadCatalog() {
 export function _resetCatalog() { _catalog = null; }
 
 /**
- * Find a skill entry by id.
+ * Find a skill entry by name (the canonical skill identifier).
  * @returns {object|null}
  */
 export function getSkillEntry(id) {
   const catalog = loadCatalog();
-  return catalog.skills.find(s => s.id === id) ?? null;
+  return catalog.skills.find(s => s.name === id) ?? null;
 }
 
-/** Returns all skill ids. */
+/** Returns all skill ids (using 'name' field as the canonical identifier). */
 export function allSkillIds() {
-  return loadCatalog().skills.map(s => s.id);
+  return loadCatalog().skills.map(s => s.name);
 }
