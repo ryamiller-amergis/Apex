@@ -1,0 +1,1 @@
+{ "scanScope": "targeted", "description": "Detect testing patterns and persona conventions", "detectors": ["conventions", "terminology"] }
