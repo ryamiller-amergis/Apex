@@ -38,6 +38,15 @@
       "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
       "dependsOn": [],
       "supportingOwners": {}
+    },
+    {
+      "name": "design-doc-validation",
+      "summary": "Automated scoring engine that grades design docs against a weighted rubric and emits a ValidationScorecard.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json", "rubric.md"],
+      "dependsOn": [],
+      "supportingOwners": { "rubric.md": "adapter" }
     }
   ]
 }
