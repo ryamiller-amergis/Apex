@@ -11,6 +11,33 @@
       "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
       "dependsOn": [],
       "supportingOwners": {}
+    },
+    {
+      "name": "issue-analysis",
+      "summary": "Evaluate a reported issue and produce a structured priority/risk analysis.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "technical-analysis",
+      "summary": "Evaluate a technical backlog item and produce a structured priority/risk analysis.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "feature-request-analysis",
+      "summary": "Evaluate a product feature request across clarity, feasibility, impact, and alignment.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
     }
   ]
 }

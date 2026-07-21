@@ -1,0 +1,12 @@
+{
+  "skill": "issue-analysis",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md"],
+  "detectors": ["stack", "glossary"],
+  "capFiles": 500,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "glossary": { "type": "table", "detector": "glossary", "columns": ["key", "value"], "limit": 30 }
+  }
+}
