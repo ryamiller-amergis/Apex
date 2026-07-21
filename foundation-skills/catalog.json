@@ -1,0 +1,16 @@
+{
+  "suiteVersion": "0.1.0",
+  "package": "@apex/skills",
+  "contractApiVersion": 1,
+  "skills": [
+    {
+      "name": "ui-lab",
+      "summary": "Generate and edit interactive UI prototypes using the project's own design system.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    }
+  ]
+}

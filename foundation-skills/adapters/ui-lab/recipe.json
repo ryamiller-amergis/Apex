@@ -1,0 +1,21 @@
+{
+  "skill": "ui-lab",
+  "scanScope": "targeted",
+  "targetedGlobs": [
+    "package.json",
+    "**/*.css",
+    "**/*.scss",
+    "src/**/components/**/*.tsx",
+    "src/**/components/**/*.jsx"
+  ],
+  "detectors": ["stack", "css-variables", "components", "dir-conventions"],
+  "capFiles": 3000,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "stack": { "type": "list", "detector": "stack", "format": "  - {key}: {value}", "limit": 20 },
+    "designTokens": { "type": "table", "detector": "css-variables", "columns": ["key", "value"], "limit": 60 },
+    "components": { "type": "list", "detector": "components", "format": "- {key}", "limit": 80 },
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" }
+  }
+}
