@@ -332,7 +332,8 @@ jobs:
               PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
-              GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}"
+              GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
+              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
           # feature shells out to git at runtime. Install it on boot before
