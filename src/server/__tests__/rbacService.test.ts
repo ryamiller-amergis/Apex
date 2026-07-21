@@ -274,7 +274,7 @@ describe('createRole', () => {
 
   it('inserts role-permission links when permissionIds are provided', async () => {
     const newRole = { id: 'role-dev', name: 'developer', description: null, isDefault: false, createdAt: '2026-05-14T00:00:00Z' };
-    let capturedInsertValues: any[] = [];
+    const capturedInsertValues: any[] = [];
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const insertMock = jest.fn().mockImplementation(() => ({

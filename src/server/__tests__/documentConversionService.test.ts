@@ -7,7 +7,8 @@
 
 // ── Mock state ──────────────────────────────────────────────────────────────────
 
-let mockWorkerHandlers: Record<string, Function[]>;
+type WorkerHandler = (...args: unknown[]) => void;
+let mockWorkerHandlers: Record<string, WorkerHandler[]>;
 const mockPostMessage = jest.fn();
 const mockTerminate = jest.fn();
 let mockWorkerConstructorThrows = false;
@@ -39,12 +40,12 @@ jest.mock('worker_threads', () => {
       self.postMessage = mockPostMessage;
       self.terminate = mockTerminate;
       self.removeAllListeners = jest.fn();
-      self.on = jest.fn((event: string, handler: Function) => {
+      self.on = jest.fn((event: string, handler: WorkerHandler) => {
         if (!mockWorkerHandlers[event]) mockWorkerHandlers[event] = [];
         mockWorkerHandlers[event].push(handler);
         return self;
       });
-      self.off = jest.fn((event: string, handler: Function) => {
+      self.off = jest.fn((event: string, handler: WorkerHandler) => {
         if (mockWorkerHandlers[event]) {
           mockWorkerHandlers[event] = mockWorkerHandlers[event].filter(
             (h) => h !== handler,
@@ -226,7 +227,7 @@ describe('documentConversionService', () => {
   // ── Queue: sequential processing ───────────────────────────────────────────
 
   test('DoD-1: queues concurrent requests and processes sequentially', async () => {
-    let resolveOrder: string[] = [];
+    const resolveOrder: string[] = [];
 
     mockPostMessage.mockImplementation((msg: any) => {
       process.nextTick(() => {

@@ -39,9 +39,9 @@ jest.mock('worker_threads', () => {
   return {
     ...actualWt,
     Worker: jest.fn().mockImplementation((_path: string, _opts: any) => {
-      const handlers: Record<string, Function> = {};
+      const handlers: Record<string, (...args: unknown[]) => void> = {};
       const instance = {
-        on: jest.fn((event: string, handler: Function) => {
+        on: jest.fn((event: string, handler: (...args: unknown[]) => void) => {
           handlers[event] = handler;
         }),
         postMessage: jest.fn(),

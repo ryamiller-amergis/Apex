@@ -270,7 +270,7 @@ function buildEditPrompt(
 ${selectedHtml}
 \`\`\`
 Only change this element and its children unless the instruction explicitly requires structural changes elsewhere. Preserve all \`<!-- STATE:*:START/END -->\` markers and the complete surrounding HTML exactly.`
-    : 'Apply the changes across the full design as appropriate. Preserve all \`<!-- STATE:*:START/END -->\` markers.';
+    : 'Apply the changes across the full design as appropriate. Preserve all `<!-- STATE:*:START/END -->` markers.';
 
   const ctx = contextSection ? `${contextSection}\n\n---\n\n` : '';
 

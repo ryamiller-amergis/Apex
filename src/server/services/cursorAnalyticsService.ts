@@ -138,7 +138,7 @@ export async function getCursorDailyUsageData(
 
   // Chunk into <=30-day windows
   const chunks: Array<{ start: Date; end: Date }> = [];
-  let cursor = new Date(fromDate);
+  const cursor = new Date(fromDate);
   while (cursor < toDate) {
     const chunkEnd = new Date(cursor);
     chunkEnd.setDate(chunkEnd.getDate() + MAX_DAYS_PER_CHUNK - 1);

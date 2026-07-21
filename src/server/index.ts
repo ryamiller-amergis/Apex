@@ -1,4 +1,4 @@
-import './services/telemetry';
+import { telemetryClient } from './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -245,7 +245,6 @@ if (process.env.NODE_ENV === 'production') {
 
 // Global error-handling middleware — sends unhandled errors to App Insights
 app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  const { telemetryClient } = require('./services/telemetry');
   if (telemetryClient) {
     telemetryClient.trackException({
       exception: err instanceof Error ? err : new Error(String(err)),

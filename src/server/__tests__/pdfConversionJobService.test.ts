@@ -30,7 +30,7 @@ jest.mock('../services/pdfArtifactStore', () => ({
 jest.mock('../db/drizzle', () => ({
   db: {
     execute: (...args: unknown[]) => mockExecute(...args),
-    transaction: jest.fn((callback: Function) => callback({
+    transaction: jest.fn((callback: (tx: { execute: (...args: unknown[]) => unknown }) => unknown) => callback({
       execute: (...args: unknown[]) => mockTxExecute(...args),
     })),
     insert: jest.fn(() => ({ values: mockInsertValues })),

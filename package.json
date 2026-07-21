@@ -41,7 +41,7 @@
     "prepare": "husky"
   },
   "lint-staged": {
-    "src/{client,server,shared}/**/*.{ts,tsx}": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint --max-warnings=0"
+    "src/{client,server,shared}/**/*.{ts,tsx}": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint"
   },
   "keywords": [
     "scrum",

@@ -47,7 +47,6 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
     let settled = false;
     let idleTimer: NodeJS.Timeout | undefined;
     let terminationError: Error | undefined;
-    let timer: NodeJS.Timeout;
     const knownCommands = new Set(['clone', 'fetch', 'push', 'pull', 'ls-remote']);
     const commandName = args.find((arg) => knownCommands.has(arg)) ?? args[0];
 
@@ -101,7 +100,7 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
       }, idleTimeout);
     };
 
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       rejectAndKill(`git ${commandName} timed out after ${timeout}ms`);
     }, timeout);
     const onAbort = () => {

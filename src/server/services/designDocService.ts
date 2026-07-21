@@ -1018,22 +1018,13 @@ function rowToSummary(
 }
 
 export async function autoStartValidation(designDocId: string): Promise<void> {
-  // #region agent log
-  try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:entry',message:'autoStartValidation called',data:{designDocId},timestamp:Date.now(),hypothesisId:'H-B'})+'\n');}catch(_){}
-  // #endregion
   const doc = await getDesignDoc(designDocId);
   if (!doc) {
-    // #region agent log
-    try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:no-doc',message:'autoStartValidation early exit: doc not found',data:{designDocId},timestamp:Date.now(),hypothesisId:'H-B'})+'\n');}catch(_){}
-    // #endregion
     return;
   }
 
   const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
   if (!skillConfig?.designDocValidationSkillPath) {
-    // #region agent log
-    try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:no-skill',message:'autoStartValidation early exit: no skill config',data:{designDocId,project:doc.project,hasSkillConfig:!!skillConfig,validationSkillPath:skillConfig?.designDocValidationSkillPath??null},timestamp:Date.now(),hypothesisId:'H-B'})+'\n');}catch(_){}
-    // #endregion
     return;
   }
 
@@ -1071,9 +1062,6 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     model,
   }, { skipAutoKickoff: true });
 
-  // #region agent log
-  try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:thread-created',message:'new validation thread created',data:{designDocId,newThreadId:thread.id,docStatus:doc.status,prevValidationThreadId:doc.validationThreadId??null,skillRepo:skillConfig.skillRepo,skillBranch:skillConfig.skillBranch??'main',skillPath:skillConfig.designDocValidationSkillPath,model},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-  // #endregion
 
   // Stop any existing watcher before starting a new one
   stopValidationWatcher(designDocId);
@@ -1093,9 +1081,6 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     })
     .where(eq(designDocs.id, designDocId));
 
-  // #region agent log
-  try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:autoStartValidation:db-updated',message:'DB updated, watcher starting',data:{designDocId,newThreadId:thread.id,newStatus:newStatus??'not-updated'},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-  // #endregion
 
   startValidationWatcher(designDocId, thread.id);
 
@@ -1133,18 +1118,8 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
       return;
     }
 
-    // #region agent log
-    if (attempts <= 3) {
-      try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:watcher:tick',message:`watcher tick #${attempts}`,data:{designDocId,validationThreadId,attempts},timestamp:Date.now(),hypothesisId:'H-D'})+'\n');}catch(_){}
-    }
-    // #endregion
 
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
-    // #region agent log
-    if (attempts <= 3) {
-      try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:watcher:scorecard-check',message:`watcher tick #${attempts} scorecard result`,data:{designDocId,validationThreadId,found:scorecardRaw!==null},timestamp:Date.now(),hypothesisId:'H-D'})+'\n');}catch(_){}
-    }
-    // #endregion
 
     if (!scorecardRaw) {
       // If the agent has completed or errored without producing a scorecard,
@@ -1160,9 +1135,6 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
         clearInterval(interval);
         activeValidationWatchers.delete(designDocId);
         console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);
-        // #region agent log
-        try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:watcher:agent-error-reset',message:'agent completed without scorecard, setting to pending_review',data:{designDocId,validationThreadId,attempts},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-        // #endregion
         await db.update(designDocs)
           .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
           .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
@@ -1297,9 +1269,6 @@ export async function cancelValidation(id: string, requestingUserId: string): Pr
   }
   if (row.status !== 'validating') throw conflict(`Cannot cancel validation from status '${row.status}'`);
 
-  // #region agent log
-  try{fs.appendFileSync('debug-d6e0f6.log',JSON.stringify({sessionId:'d6e0f6',location:'designDocService.ts:cancelValidation',message:'cancelValidation called — old thread NOT SDK-cancelled',data:{designDocId:id,oldValidationThreadId:row.validationThreadId??null},timestamp:Date.now(),hypothesisId:'H-A'})+'\n');}catch(_){}
-  // #endregion
 
   stopValidationWatcher(id);
 

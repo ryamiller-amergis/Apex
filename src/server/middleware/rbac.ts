@@ -5,6 +5,8 @@ import { getUserGroupNames } from '../services/groupService';
 import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
 
 declare global {
+  // Express request augmentation requires the namespace form.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       _permissions?: Set<string>;

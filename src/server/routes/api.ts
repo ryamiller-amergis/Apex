@@ -2554,7 +2554,7 @@ router.post('/backlog/generate-pbi-view', async (req: Request, res: Response) =>
     const featureMock = feature.uiMock as any | undefined;
     const siblingViews: any[] = featureMock?.views ?? [];
 
-    let featurePlan = feature.uiSurfacePlan
+    const featurePlan = feature.uiSurfacePlan
       ?? parentEpic?.uiSurfacePlan
       ?? (featureMock?.decision
           ? synthesisePlanFromUiMock(feature.id, feature.title, featureMock)

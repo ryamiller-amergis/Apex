@@ -1481,7 +1481,7 @@ export class AzureDevOpsService {
 
             // Track due date changes and state transitions
             let dueDateChangeCount = 0;
-            let dueDateChangeReasons: string[] = [];
+            const dueDateChangeReasons: string[] = [];
             let previousDueDate: string | null = null;
             let transitionDate: string | null = null;
             let dueDateAtTransition: string | null = null;
@@ -5042,6 +5042,8 @@ export class AzureDevOpsService {
       // non-standard Unicode spaces with regular spaces so parsing succeeds.
       const rawJson = match[1]
         .replace(/\u00A0/g, ' ')
+        // Strip NUL and other non-JSON whitespace/zero-width chars from ADO wiki content.
+        // eslint-disable-next-line no-control-regex -- intentional: wiki pages can embed \u0000
         .replace(/[\u0000\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
       try {
         parsed = JSON.parse(rawJson);
@@ -5829,7 +5831,8 @@ export class AzureDevOpsService {
     try {
       wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', true), this.project, 'Test Case');
     } catch (firstErr: any) {
-      if (firstErr?.status === 400 || /identity/i.test(String(firstErr?.message))) {
+      // Identity errors: retry without assignee. Other 400s: hierarchy likely rejected → TestedBy.
+      if (/identity/i.test(String(firstErr?.message))) {
         try {
           wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', false), this.project, 'Test Case');
         } catch (noAssigneeErr: any) {

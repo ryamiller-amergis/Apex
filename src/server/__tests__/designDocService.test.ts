@@ -1438,7 +1438,6 @@ describe('startSingleFeatureDesignDocWatcher — routing context injection', () 
 // ── finalizeSingleFeatureDoc — idempotency guard ───────────────────────────────
 
 describe('finalizeSingleFeatureDoc — idempotency guard', () => {
-  const { finalizeSingleFeatureDoc } = require('../services/designDocService');
   const { readOutputDesignDoc: mockDesign, readOutputTechSpec: mockTech, readOutputAssumptions: mockAssumptions } =
     jest.requireMock('../services/chatAgentService') as {
       readOutputDesignDoc: jest.Mock;
