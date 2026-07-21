@@ -1,0 +1,57 @@
+{
+  "slug": "notification-preferences",
+  "sourceBacklog": "notification-preferences.backlog.json",
+  "sourceTestCases": "notification-preferences.test-cases.json",
+  "generatedAt": "2026-07-02T14:00:00.000Z",
+  "features": [
+    {
+      "id": "FEAT-001",
+      "title": "Foundations: shared notification types & preferences API",
+      "epic": "Platform Foundations",
+      "phase": 1,
+      "dependsOn": []
+    },
+    {
+      "id": "FEAT-002",
+      "title": "Notification preferences settings UI",
+      "epic": "Notification Preferences",
+      "phase": 2,
+      "dependsOn": ["FEAT-001"]
+    },
+    {
+      "id": "FEAT-003",
+      "title": "Preference-aware delivery service",
+      "epic": "Notification Preferences",
+      "phase": 2,
+      "dependsOn": ["FEAT-001"]
+    }
+  ],
+  "waves": [
+    {
+      "wave": 1,
+      "featureIds": ["FEAT-001"],
+      "rationale": "Phase 1 foundational Feature — owns the shared types and preferences API that both Phase 2 Features depend on."
+    },
+    {
+      "wave": 2,
+      "featureIds": ["FEAT-002", "FEAT-003"],
+      "rationale": "Both depend only on FEAT-001 and have no edge between each other, so they are safe to build in parallel once Wave 1 merges."
+    }
+  ],
+  "syncPoints": [
+    {
+      "afterWave": 1,
+      "mustMergeFeatureIds": ["FEAT-001"],
+      "description": "FEAT-001 must merge before FEAT-002 and FEAT-003 branches are cut, so downstream work builds on the shared types and API."
+    }
+  ],
+  "conflicts": [],
+  "deferredE2E": [
+    {
+      "testCaseId": "TC-PBI-004-002",
+      "pbiId": "PBI-004",
+      "featureId": "FEAT-002",
+      "note": "deferred: e2e"
+    }
+  ]
+}

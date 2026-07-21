@@ -1,0 +1,11 @@
+{
+  "skill": "prd-design-spec",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/context.md", "**/CONTEXT.md", "**/AGENTS.md"],
+  "detectors": ["stack", "glossary", "routes"],
+  "capFiles": 800,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" }
+  }
+}

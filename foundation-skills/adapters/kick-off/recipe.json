@@ -1,0 +1,12 @@
+{
+  "skill": "kick-off",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/context.md", "**/AGENTS.md"],
+  "detectors": ["stack", "routes", "dir-conventions"],
+  "capFiles": 800,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 15 }
+  }
+}

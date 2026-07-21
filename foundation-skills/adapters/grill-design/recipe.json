@@ -1,0 +1,12 @@
+{
+  "skill": "grill-design",
+  "scanScope": "full-repo",
+  "ignore": ["node_modules", ".git", "dist", "build", "coverage", ".apex"],
+  "detectors": ["stack", "glossary", "routes", "dir-conventions"],
+  "capFiles": 4000,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 15 }
+  }
+}

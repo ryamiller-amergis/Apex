@@ -1,43 +1,64 @@
 ---
 name: issue-analysis
-description: Project-agnostic method for evaluating a reported issue and producing a structured priority/risk analysis as JSON. Project framing and file locations come from the adapter.
+description: Evaluates a reported issue and produces a structured priority/risk analysis to support triage and response decisions.
 ---
 
-# Issue Analysis — Foundation (project-agnostic)
+# Issue Analysis — Foundation
 
-Evaluate a reported issue from the supplied context and produce a structured
-priority/risk analysis. The adapter supplies the product framing and the exact
-input/output locations.
+Evaluate a reported issue and produce a structured triage analysis.
 
-## Assess
+## Inputs
 
-- Affected workflow and likely breadth of user or system impact.
-- Evidence about frequency, reproducibility, regression risk, and available workarounds.
-- Potential for data loss, security exposure, service degradation, or blocked delivery.
-- Likely diagnostic and remediation complexity, dependencies, and safe rollback options.
+Load the issue description from the current context or the project's issue tracking system.
 
-## Priority
+## Analysis framework
 
-Assign `priority` as `low`, `medium`, `high`, or `critical`. Reserve `critical`
-for active security exposure, data loss, widespread outage, or a core workflow
-blocker without a workaround.
+Score each dimension 1–5:
 
-## Risk
+| Dimension | 1 | 5 |
+|-----------|---|---|
+| **Severity** | Cosmetic / minor inconvenience | Data loss or security breach |
+| **User impact** | Affects <1% of users | Affects all users or core workflow |
+| **Frequency** | Rare / hard to reproduce | Happens on every use |
+| **Workaround available** | Easy workaround exists | No workaround |
+| **Root cause clarity** | Unknown / complex | Clearly identified |
 
-Assign `risk` as `low`, `medium`, or `high`, reflecting uncertainty, blast
-radius, remediation complexity, sensitive-data or auth impact, and regression
-potential.
+## Output format
 
-## Output
+```
+## Issue Analysis
 
-Write exactly this JSON shape (valid JSON, no comments or trailing commas):
+**Title:** [Issue name]
+**Reported by / Source:** [Source]
 
-```json
-{
-  "priority": "low | medium | high | critical",
-  "risk": "low | medium | high",
-  "rationale": "A single 2-4 sentence explanation"
-}
+### Scores
+| Dimension | Score | Rationale |
+|-----------|-------|-----------|
+| Severity | X/5 | ... |
+| User impact | X/5 | ... |
+| Frequency | X/5 | ... |
+| Workaround | X/5 | ... |
+| Root cause clarity | X/5 | ... |
+
+**Priority recommendation:** [Critical / High / Medium / Low]
+**Suggested SLA:** [Immediate / This sprint / Next sprint / Backlog]
+
+### Root cause hypothesis
+- ...
+
+### Reproduction steps (if known)
+1. ...
+
+### Affected components
+- ...
+
+### Open questions
+- ...
 ```
 
-Do not ask questions; analyze the supplied context and write the result autonomously.
+## Guidance
+
+- Distinguish user-reported symptoms from root causes.
+- Identify if the issue is data-related, code-related, or configuration-related.
+- Check if similar issues have been reported before.
+- Consider blast radius: what else could be affected by the same root cause.

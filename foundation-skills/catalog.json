@@ -47,6 +47,231 @@
       "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json", "rubric.md"],
       "dependsOn": [],
       "supportingOwners": { "rubric.md": "adapter" }
+    },
+    {
+      "name": "prd-spec-review",
+      "summary": "Interactive quality gate for PRD artifacts: score, report, remediate, patch, re-score.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json", "rubric.md"],
+      "dependsOn": [],
+      "supportingOwners": { "rubric.md": "adapter" }
+    },
+    {
+      "name": "design-spec-review",
+      "summary": "Interactive quality gate for design/tech-spec/assumptions artifacts. Shares prd-spec-review foundation.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json", "rubric.md"],
+      "dependsOn": ["prd-spec-review"],
+      "supportingOwners": { "rubric.md": "adapter" }
+    },
+    {
+      "name": "to-prd",
+      "summary": "Synthesize a PRD markdown and structured backlog JSON from a requirements transcript.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "prd-template.md", "backlog-schema.json", "backlog-example.json"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": { "prd-template.md": "foundation", "backlog-schema.json": "foundation", "backlog-example.json": "foundation" }
+    },
+    {
+      "name": "prd-design-spec",
+      "summary": "Synthesize per-Feature design doc, tech spec, and assumptions from PRD + backlog.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "design-template.md", "tech-spec-template.md", "assumptions-template.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": ["to-prd"],
+      "supportingOwners": { "design-template.md": "foundation", "tech-spec-template.md": "foundation", "assumptions-template.md": "foundation" }
+    },
+    {
+      "name": "kick-off",
+      "summary": "Orchestrate significant development work through classification, interview, design doc, and TDD decomposition.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "design-doc-template.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": { "design-doc-template.md": "foundation" }
+    },
+    {
+      "name": "create-test-case",
+      "summary": "Derive senior-QA test cases from a structured backlog JSON with full PBI traceability.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "test-case-schema.json", "test-case-example.json"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": ["to-prd"],
+      "supportingOwners": { "test-case-schema.json": "foundation", "test-case-example.json": "foundation" }
+    },
+    {
+      "name": "grill-with-docs",
+      "summary": "Relentless interview that stress-tests a plan against the codebase and product context.",
+      "scanScope": "full-repo",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "grill-design",
+      "summary": "Technical design interview that explores architecture before PRD generation.",
+      "scanScope": "full-repo",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "app-knowledge",
+      "summary": "Product guide that answers questions about the application using repo documentation and code.",
+      "scanScope": "full-repo",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "daily-standup",
+      "summary": "Facilitate a daily standup ceremony and produce a structured summary.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "in-app-notifications",
+      "summary": "Implement and extend in-app notification features.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "update-changelog",
+      "summary": "Update the application changelog and bump the version from recent git changes.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "feature-flags",
+      "summary": "Add feature flags to existing features using the top-level split pattern.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "rbac-management",
+      "summary": "Add or modify role-based access control permissions and role assignments.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "dev-orchestrator",
+      "summary": "Orchestrate multi-agent implementation from a structured dev plan.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "dev-plan-schema.json", "dev-plan-example.json"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": { "dev-plan-schema.json": "foundation", "dev-plan-example.json": "foundation" }
+    },
+    {
+      "name": "build-test-push",
+      "summary": "Run build, lint, type-check, and test pipeline to confirm a branch is push-ready.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "fullstack-node-bff",
+      "summary": "Coding standards for a fullstack Node.js BFF with Express API, React client, and shared types.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "postgresql-migrations",
+      "summary": "Write and apply PostgreSQL schema migrations safely with ORM sync.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "design-module-doc",
+      "summary": "Generate a technical design document for a specific module or subsystem.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "adr-interview",
+      "summary": "Structured ADR interview that stress-tests architecture options and produces a decision transcript.",
+      "scanScope": "full-repo",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "adr-finalize",
+      "summary": "Convert an ADR interview transcript into a consistent MADR-style ADR document.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md", "adr-template.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json", "adr-template.md"],
+      "dependsOn": ["adr-interview"],
+      "supportingOwners": { "adr-template.md": "adapter" }
+    },
+    {
+      "name": "adr-assistant",
+      "summary": "Find, explain, update, and supersede existing ADRs.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": ["adr-interview", "adr-finalize"],
+      "supportingOwners": {}
+    },
+    {
+      "name": "azure-async-infra",
+      "summary": "Azure async infrastructure patterns: Blob Storage, Service Bus, worker compute, and auth.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "terraform-infra",
+      "summary": "Terraform IaC coding standards for Azure infrastructure.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "create-pull-request",
+      "summary": "Create a pull request from the current branch with a structured description.",
+      "scanScope": "targeted",
+      "foundationFiles": ["SKILL.md"],
+      "adapterFiles": ["SKILL.md", "apex-skill.json", "recipe.json"],
+      "dependsOn": [],
+      "supportingOwners": {}
     }
   ]
 }

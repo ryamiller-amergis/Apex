@@ -1,0 +1,12 @@
+{
+  "skill": "app-knowledge",
+  "scanScope": "full-repo",
+  "ignore": ["node_modules", ".git", "dist", "build", "coverage", ".apex"],
+  "detectors": ["stack", "glossary", "routes", "dir-conventions", "components"],
+  "capFiles": 4000,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" }
+  }
+}

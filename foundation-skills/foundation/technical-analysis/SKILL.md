@@ -1,42 +1,57 @@
 ---
 name: technical-analysis
-description: Project-agnostic method for evaluating a technical backlog item and producing a structured priority/risk analysis as JSON. Project framing and file locations come from the adapter.
+description: Evaluates a technical backlog item (TBI) and produces a structured priority/risk analysis covering complexity, risk, dependencies, and effort.
 ---
 
-# Technical Analysis — Foundation (project-agnostic)
+# Technical Analysis — Foundation
 
-Evaluate a technical work item from the supplied context and produce a
-structured priority/risk analysis.
+Evaluate a technical backlog item and produce a structured analysis to support implementation planning.
 
-## Assess
+## Inputs
 
-- Clarity and actionability of the technical objective.
-- Architectural fit and whether the approach reduces debt or enables product work.
-- Dependencies, migration or operational impact, reversibility, and estimated complexity.
-- Urgency, including whether the item blocks delivery, reliability, security, or maintainability.
+Load the TBI description, acceptance criteria, and business rules from the current context.
 
-## Priority
+## Analysis framework
 
-Assign `priority` as `low`, `medium`, `high`, or `critical`. Reserve `critical`
-for a broad delivery, security, reliability, or production blocker with no
-reasonable workaround.
+Score each dimension 1–5:
 
-## Risk
+| Dimension | 1 | 5 |
+|-----------|---|---|
+| **Technical complexity** | Single file change | Cross-cutting architecture change |
+| **Risk to existing functionality** | No existing code touched | Core platform component changed |
+| **External dependencies** | None | Multiple external systems |
+| **Team knowledge** | Well-understood pattern | Novel technology or unknown domain |
+| **Testability** | Unit testable | Requires complex integration setup |
 
-Assign `risk` as `low`, `medium`, or `high`, based on cross-cutting impact, data
-or infrastructure changes, dependency uncertainty, rollout complexity, and
-reversibility.
+## Output format
 
-## Output
-
-Write exactly this JSON shape (valid JSON, no comments or trailing commas):
-
-```json
-{
-  "priority": "low | medium | high | critical",
-  "risk": "low | medium | high",
-  "rationale": "A single 2-4 sentence explanation"
-}
 ```
+## Technical Analysis
 
-Do not ask questions; analyze the supplied context and write the result autonomously.
+**TBI:** [TBI ID and title]
+
+### Scores
+| Dimension | Score | Rationale |
+|-----------|-------|-----------|
+| Technical complexity | X/5 | ... |
+| Risk to existing | X/5 | ... |
+| External dependencies | X/5 | ... |
+| Team knowledge | X/5 | ... |
+| Testability | X/5 | ... |
+
+**Effort estimate:** [S / M / L / XL]
+**Risk level:** [High / Medium / Low]
+**Implementation wave recommendation:** [Wave N — rationale]
+
+### Key technical decisions required
+- ...
+
+### Dependencies on other TBIs or PBIs
+- ...
+
+### Risks and mitigations
+- ...
+
+### Definition of done
+- [ ] ...
+```

@@ -1,0 +1,11 @@
+{
+  "skill": "terraform-infra",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "infra/**/*.tf"],
+  "detectors": ["stack"],
+  "capFiles": 200,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" }
+  }
+}

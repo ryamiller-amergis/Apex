@@ -1,55 +1,61 @@
 ---
 name: feature-request-analysis
-description: Project-agnostic method for evaluating a product feature request across clarity, feasibility, impact, and alignment, producing a structured priority/risk analysis as JSON. Product framing and file locations come from the adapter.
+description: Evaluates a product feature request and produces a structured priority/risk analysis with impact, effort, and risk scores.
 ---
 
-# Feature Request Analysis — Foundation (project-agnostic)
+# Feature Request Analysis — Foundation
 
-Evaluate a product feature request and produce a structured analysis. The
-adapter supplies the product's mission, existing feature set, and file locations.
+Evaluate a feature request and produce a structured analysis to support prioritization decisions.
 
-## Evaluate four dimensions
+## Inputs
 
-1. **Clarity** — Is the request well-defined? Are the problem and desired outcome clear enough to build from?
-2. **Feasibility** — Achievable within the product's architecture? Does it need new infrastructure, integrations, or fundamental change? Complexity (small/medium/large)?
-3. **Impact** — How many users benefit? Frequent pain point or edge case? Improves retention, onboarding, or daily workflow?
-4. **Alignment** — Does it fit the product's mission and complement existing features without conflict or duplication?
+Load the feature request description from the current context or the project's feature request system.
 
-## Priority
+## Analysis framework
 
-Assign `low`, `medium`, `high`, or `critical`:
+Score each dimension 1–5:
 
-| Priority | Criteria |
-|----------|----------|
-| critical | Blocks core workflows for many users; no workaround exists |
-| high | Significant improvement to a common workflow; strong demand signal |
-| medium | Useful enhancement; moderate or subset-limited impact |
-| low | Nice-to-have; minimal impact, niche use, or easy workaround |
+| Dimension | 1 | 5 |
+|-----------|---|---|
+| **User impact** | Affects <1% of users | Affects >50% of users or core workflow |
+| **Business value** | Nice-to-have | Critical differentiator or revenue driver |
+| **Implementation effort** | Hours | Months |
+| **Technical risk** | Well-understood | Novel or high-dependency |
+| **Strategic alignment** | Tangential | Core product direction |
 
-Weight: user impact (40%), frequency of similar requests (30%), implementation
-complexity as inverse weight (30% — higher complexity lowers priority unless impact is critical).
+## Output format
 
-## Risk
+```
+## Feature Request Analysis
 
-Assign `low`, `medium`, or `high`, considering technical complexity, scope-creep
-potential, dependency risk, and reversibility.
+**Title:** [Feature name]
+**Requested by:** [Source]
 
-## Rationale
+### Scores
+| Dimension | Score | Rationale |
+|-----------|-------|-----------|
+| User impact | X/5 | ... |
+| Business value | X/5 | ... |
+| Implementation effort | X/5 | ... |
+| Technical risk | X/5 | ... |
+| Strategic alignment | X/5 | ... |
 
-2-4 sentences: why these levels, the most important factors, and any caveats
-(e.g. "priority would increase if X").
+**Priority recommendation:** [High / Medium / Low / Defer]
+**Confidence:** [High / Medium / Low]
 
-## Output
+### Key considerations
+- ...
 
-Write exactly this JSON shape (valid JSON, no comments or trailing commas;
-`rationale` is a single string with no newlines):
+### Risks and dependencies
+- ...
 
-```json
-{
-  "priority": "low | medium | high | critical",
-  "risk": "low | medium | high",
-  "rationale": "string explaining the assessment"
-}
+### Open questions
+- ...
 ```
 
-Do not ask questions. Read the input, analyze, write the output autonomously.
+## Guidance
+
+- Be concrete about user impact: which personas, which workflows, what frequency.
+- Surface hidden costs: maintenance burden, support overhead, downstream dependencies.
+- Call out requirements that are likely to change before delivery.
+- Recommend deferral when strategic alignment is unclear, not just when effort is high.

@@ -1,0 +1,11 @@
+{
+  "skill": "to-prd",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md"],
+  "detectors": ["stack", "glossary"],
+  "capFiles": 500,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" }
+  }
+}

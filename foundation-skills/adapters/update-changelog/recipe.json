@@ -1,0 +1,11 @@
+{
+  "skill": "update-changelog",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "public/CHANGELOG.json"],
+  "detectors": ["stack"],
+  "capFiles": 100,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" }
+  }
+}

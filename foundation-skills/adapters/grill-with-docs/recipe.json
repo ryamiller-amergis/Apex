@@ -1,0 +1,13 @@
+{
+  "skill": "grill-with-docs",
+  "scanScope": "full-repo",
+  "targetedGlobs": [],
+  "ignore": ["node_modules", ".git", "dist", "build", "coverage", ".apex"],
+  "detectors": ["stack", "glossary", "routes", "dir-conventions"],
+  "capFiles": 4000,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "glossary": { "type": "table", "detector": "glossary", "columns": ["key", "value"], "limit": 30 }
+  }
+}

@@ -1,39 +1,35 @@
 {
   "name": "@apex/skills",
-  "version": "0.1.0",
-  "description": "APEX foundation-skill suite: project-agnostic skill foundations plus an installer that vendors foundations and scaffolds pre-filled, per-project adapters.",
+  "version": "1.0.0",
+  "description": "APEX Foundation Skills — project-agnostic AI agent skill foundations for Cursor",
   "type": "module",
   "bin": {
-    "apex-skills": "bin/apex-skills.mjs"
+    "apex-skills": "./bin/apex-skills.mjs"
   },
+  "main": "./lib/index.mjs",
   "exports": {
-    ".": "./lib/index.mjs"
+    ".": "./lib/index.mjs",
+    "./catalog": "./catalog.json",
+    "./lockfile": "./lib/lockfile.mjs"
   },
   "files": [
     "bin/",
     "lib/",
     "foundation/",
-    "adapters/",
-    "schemas/",
     "catalog.json",
     "README.md"
   ],
-  "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "validate": "node bin/apex-skills.mjs validate --package ."
-  },
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": [
-    "apex",
-    "skills",
-    "cursor",
-    "foundation",
-    "scaffold"
-  ],
-  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "validate": "node scripts/validate.mjs",
+    "lint": "node --check bin/apex-skills.mjs lib/**/*.mjs"
+  },
+  "keywords": ["apex", "cursor", "ai-skills", "foundation-skills", "sdlc"],
+  "license": "UNLICENSED",
   "publishConfig": {
-    "access": "restricted"
+    "registry": "https://pkgs.dev.azure.com/{AZURE_ARTIFACTS_ORG}/_packaging/{AZURE_ARTIFACTS_FEED}/npm/registry/"
   }
 }

@@ -1,0 +1,12 @@
+{
+  "skill": "design-module-doc",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/context.md", "**/AGENTS.md"],
+  "detectors": ["stack", "dir-conventions"],
+  "capFiles": 500,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" }
+  }
+}
