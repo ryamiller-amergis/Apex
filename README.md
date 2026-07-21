@@ -4,7 +4,7 @@ Apex is an internal product-building and project-management platform. It central
 
 **Core idea:** one place for delivery work — work items, documents, ceremonies, and analytics — with AI agents that automate repetitive steps and keep outputs consistent.
 
-For a full product overview, see `[context.md](./context.md)`. For agent and contributor orientation, see `[AGENTS.md](./AGENTS.md)`.
+For a full product overview, see [`context.md`](./context.md). For agent and contributor orientation, see [`AGENTS.md`](./AGENTS.md).
 
 ## Tech Stack
 
@@ -21,65 +21,93 @@ For a full product overview, see `[context.md](./context.md)`. For agent and con
 ## Prerequisites
 
 - Node.js 24+
-- PostgreSQL 14+
-- Azure DevOps Personal Access Token (PAT) with Work Items (Read, Write) permissions
-- Azure AD app registration (for sign-in in full environments)
+- PostgreSQL 14+ (only if you run a local database; skip if your shared env points at a cloud/dev DB)
+- Shared local env files from the team (preferred) — or values to fill `.env` yourself
+- Azure DevOps access / PAT with Work Items (Read, Write) permissions
+- Azure AD app registration configured for local sign-in (redirect: `http://localhost:3001/auth/callback`)
+
+## First-run checklist
+
+1. Clone and `npm install`
+2. Place the shared `.env` (and `.env.local` if provided) in the repo root — **do not commit them**
+3. Ensure Postgres is reachable (`DATABASE_URL` in the shared env, or create a local `aipilot` DB)
+4. Apply migrations (`npm run migrate:local:up` or `npm run migrate:up`, depending on which env file holds `DATABASE_URL`)
+5. `npm run dev` → open `http://localhost:3000` and sign in with Azure AD
+6. Smoke-check: home loads, you can open a project view, ADO-backed data appears when configured
+
+Optional for AI agent flows: `CURSOR_API_KEY` and Bedrock vars must be present in the shared env (see [`.env.example`](./.env.example)).
 
 ## Setup
 
 ### 1. Clone and install
 
 ```bash
-git clone <repository-url>
-cd AI-Pilot
+git clone https://github.com/ryamiller-amergis/Apex.git
+cd Apex
 npm install
 ```
 
 ### 2. Environment
 
+**Preferred:** request the team's shared local env files and place them at the repo root as `.env` (and `.env.local` if your team splits DB settings). Never commit `.env`, `.env.local`, or other credential files.
+
+**Alternative:** copy the example and fill values yourself:
+
 ```bash
 cp .env.example .env
 ```
 
-Minimum local values to set in `.env` (and/or `.env.local` for the database):
+Minimum variables for a working local app:
 
 
-| Variable                          | Purpose                                                  |
-| --------------------------------- | -------------------------------------------------------- |
-| `ADO_ORG`                         | Azure DevOps organization URL                            |
-| `ADO_PROJECT`                     | Default ADO project name                                 |
-| `ADO_PAT`                         | Personal Access Token                                    |
-| `ADO_AREA_PATH`                   | Optional area-path filter                                |
-| `PORT`                            | API server port (default `3001`)                         |
-| `POLL_INTERVAL`                   | ADO poll interval in seconds (default `30`)              |
-| `DATABASE_URL`                    | PostgreSQL connection string                             |
-| `AWS_REGION` / `BEDROCK_MODEL_ID` | Bedrock region and default model (when using Bedrock)    |
-| `BACKLOG_AGENT_SIGNING_SECRET`    | HMAC secret for agent callbacks (required in production) |
+| Variable | Purpose |
+| -------- | ------- |
+| `ADO_ORG` / `ADO_PROJECT` / `ADO_PAT` | Azure DevOps connection |
+| `ADO_AREA_PATH` | Optional area-path filter |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Azure AD sign-in |
+| `AZURE_REDIRECT_URL` | Usually `http://localhost:3001/auth/callback` for local |
+| `SESSION_SECRET` | Express session secret |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `PORT` | API server port (default `3001`) |
+| `POLL_INTERVAL` | ADO poll interval in seconds (default `30`) |
+| `CURSOR_API_KEY` | Cursor agents / Ask Apex (optional for basic UI smoke) |
+| `AWS_REGION` / `BEDROCK_MODEL_ID` | Bedrock models (optional; when using Bedrock) |
+| `BACKLOG_AGENT_SIGNING_SECRET` | HMAC secret for agent callbacks (required in production) |
 
+Auth setup details: [`docs/AUTHENTICATION_SETUP.md`](./docs/AUTHENTICATION_SETUP.md).
 
-See `[.env.example](./.env.example)` for the full list, including Application Insights, SendGrid, and MaxView MCP options.
+See [`.env.example`](./.env.example) for the full list, including Application Insights, SendGrid, and MaxView MCP options.
 
 ### 3. Database
 
-Apex uses PostgreSQL with SQL migrations in `migrations/`. There are two common targets: a **local** database for development and a **cloud** database (Azure PostgreSQL) pointed to by `DATABASE_URL` in `.env`.
+Apex uses PostgreSQL with SQL migrations in `migrations/`. `aipilot` is the conventional database name used in local examples, CI, and Terraform — not a separate service.
 
-#### First-time local database
+**Option A — local Postgres**
 
 ```bash
-createdb -U pgadmin aipilot
+# Use your local Postgres superuser (often `postgres` or `pgadmin`)
+createdb -U postgres aipilot
 # or in psql: CREATE DATABASE aipilot;
 ```
 
-Create `.env.local` (git-ignored):
+Point `DATABASE_URL` at that database (in `.env` or git-ignored `.env.local`):
 
 ```bash
-DATABASE_URL=postgresql://pgadmin:yourpassword@localhost:5432/aipilot
+DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/aipilot
 ```
 
-Apply migrations:
+Apply migrations (when `DATABASE_URL` is in `.env.local`):
 
 ```bash
 npm run migrate:local:up
+```
+
+**Option B — shared / cloud (or tunnel) database**
+
+If the shared env already has a working `DATABASE_URL` (Azure PostgreSQL or a tunnel), skip `createdb` and apply migrations against that URL:
+
+```bash
+npm run migrate:up
 ```
 
 #### Migration commands
@@ -88,13 +116,13 @@ npm run migrate:local:up
 | Command                                  | What it does                                                          |
 | ---------------------------------------- | --------------------------------------------------------------------- |
 | `npm run migrate:local:create -- <name>` | Scaffold a new `.sql` migration                                       |
-| `npm run migrate:local:up`               | Apply pending migrations to local DB                                  |
-| `npm run migrate:local:down`             | Roll back the last local migration                                    |
-| `npm run migrate:up`                     | Apply pending migrations using `DATABASE_URL` from `.env` (cloud/dev) |
+| `npm run migrate:local:up`               | Apply pending migrations using `.env.local`                           |
+| `npm run migrate:local:down`             | Roll back the last migration using `.env.local`                       |
+| `npm run migrate:up`                     | Apply pending migrations using `DATABASE_URL` from `.env`             |
 | `npm run migrate:down`                   | Roll back the last migration on that target                           |
 
 
-Always develop and verify migrations locally first, then apply to cloud when ready. In production, migrations run as part of the CI/CD deploy pipeline before the app starts.
+Always develop and verify migrations locally first when possible, then apply to shared/cloud when ready. In production, migrations run as part of the CI/CD deploy pipeline before the app starts.
 
 ### 4. Run
 
@@ -102,22 +130,28 @@ Always develop and verify migrations locally first, then apply to cloud when rea
 npm run dev
 ```
 
-Starts the Express API (default port `3001`) and the Vite frontend (default port `3000`).
+Starts the Express API (default port `3001`) and the Vite frontend (default port `3000`). Sign in via Azure AD when prompted.
 
-### Build and start (production)
-
-```bash
-npm run build
-npm start
-```
-
-### Test and lint
+### Day-to-day commands
 
 ```bash
-npm test
-npm run lint
-npm run lint:check
+npm run dev          # local API + frontend
+npm test             # Jest
+npm run lint         # Prettier check
+npm run lint:check   # ESLint (client)
+npm run format       # Prettier write
+npm run changelog    # helper for release notes
+npm run build && npm start   # production-style build/run
 ```
+
+A Husky **pre-commit** hook runs ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
+
+Where to look while developing:
+
+- [`context.md`](./context.md) — product overview and workflows
+- [`AGENTS.md`](./AGENTS.md) — feature map, key services/components
+- [`design-docs/`](./design-docs/) — design decisions for major features
+- [`docs/`](./docs/) — auth, security, cost, release process
 
 ## Project layout
 
@@ -174,13 +208,14 @@ AGENTS.md                   # Agent / contributor quick reference
 ## Documentation
 
 
-| Doc                                                | Use it for                                               |
-| -------------------------------------------------- | -------------------------------------------------------- |
-| `[context.md](./context.md)`                       | Product overview, workflows, modules, admin capabilities |
-| `[AGENTS.md](./AGENTS.md)`                         | Feature map, key services/components, agent guidelines   |
-| `[design-docs/](./design-docs/)`                   | Design decisions behind major features                   |
-| `[public/CHANGELOG.json](./public/CHANGELOG.json)` | What shipped, newest first                               |
-| `[.cursor/skills/](./.cursor/skills/)`             | Procedures for interviews, PRDs, standups, flags, etc.   |
+| Doc | Use it for |
+| --- | ---------- |
+| [`context.md`](./context.md) | Product overview, workflows, modules, admin capabilities |
+| [`AGENTS.md`](./AGENTS.md) | Feature map, key services/components, agent guidelines |
+| [`design-docs/`](./design-docs/) | Design decisions behind major features |
+| [`docs/AUTHENTICATION_SETUP.md`](./docs/AUTHENTICATION_SETUP.md) | Azure AD app registration and local callback setup |
+| [`public/CHANGELOG.json`](./public/CHANGELOG.json) | What shipped, newest first |
+| [`.cursor/skills/`](./.cursor/skills/) | Procedures for interviews, PRDs, standups, flags, etc. |
 
 
 ## Security notes
@@ -188,7 +223,3 @@ AGENTS.md                   # Agent / contributor quick reference
 - ADO PAT and other secrets stay on the server; the frontend talks only to Apex APIs.
 - Prefer short-lived agent signing secrets in production (`BACKLOG_AGENT_SIGNING_SECRET`).
 - Do not commit `.env`, `.env.local`, or credential files.
-
-## License
-
-MIT
