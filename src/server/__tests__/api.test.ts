@@ -654,6 +654,88 @@ describe('GET /api/skill-config', () => {
     });
   });
 
+  it('defaults greenfield fields (web research off, no web MCP, bedrock engine) when unset', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-gamma',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-gamma');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      interviewWebResearchEnabled: false,
+      interviewWebMcp: null,
+      prototypeEngine: 'bedrock',
+    });
+  });
+
+  it('returns greenfield web-research + agent prototype fields when configured', async () => {
+    const webMcp = {
+      label: 'Web Research',
+      mcpServerName: 'web',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', 'tavily-mcp'],
+      env: { TAVILY_API_KEY: '${TAVILY_API_KEY}' },
+    };
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-greenfield',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      interviewWebResearchEnabled: true,
+      interviewWebMcp: webMcp,
+      prototypeEngine: 'agent',
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-greenfield');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      interviewWebResearchEnabled: true,
+      interviewWebMcp: webMcp,
+      prototypeEngine: 'agent',
+    });
+  });
+
+  it('defaults prototype design system fields when unset', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-default-proto',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-default-proto');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      prototypeDesignSystemPath: null,
+      screenInventoryPath: null,
+      prototypeWebReferencesEnabled: false,
+    });
+  });
+
+  it('returns prototype design system fields when configured', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'proj-amego',
+      skillRepo: 'org/Amego',
+      skillBranch: 'main',
+      prototypeDesignSystemPath: '.cursor/skills/design-system/SKILL.md',
+      screenInventoryPath: null,
+      prototypeWebReferencesEnabled: true,
+    });
+
+    const res = await request(app).get('/api/skill-config?project=proj-amego');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      prototypeDesignSystemPath: '.cursor/skills/design-system/SKILL.md',
+      screenInventoryPath: null,
+      prototypeWebReferencesEnabled: true,
+    });
+  });
+
   it('returns 400 when project query param is missing', async () => {
     const res = await request(app).get('/api/skill-config');
 

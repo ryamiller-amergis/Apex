@@ -737,6 +737,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
                   onClick={() => handleAddUser(user.userId)}
                   disabled={pending}
                   role="option"
+                  aria-selected={false}
                 >
                   <span className={styles.userName}>{getUserLabel(user)}</span>
                   {user.email && <span className={styles.userEmail}>{user.email}</span>}
@@ -986,6 +987,7 @@ const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
                 onClick={() => handleAdd(option.value)}
                 disabled={disabled}
                 role="option"
+                aria-selected={false}
               >
                 <span className={styles.userName}>{option.label}</span>
               </button>

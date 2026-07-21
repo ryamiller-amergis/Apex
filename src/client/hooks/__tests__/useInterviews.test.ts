@@ -38,6 +38,7 @@ import {
   useAcceptFixPrdValidation,
   useRevertPrdSection,
   useGenerateTestCases,
+  useRecalculateTestCaseCoverage,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -355,6 +356,20 @@ describe('useActiveUsers', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toEqual([]);
+  });
+
+  it('requests active users for the selected project', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useActiveUsers('Project A/B'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/active-users?project=Project%20A%2FB',
+      expect.any(Object),
+    );
   });
 });
 
@@ -1184,5 +1199,35 @@ describe('useGenerateTestCases', () => {
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+describe('useRecalculateTestCaseCoverage', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POSTs to the test-case coverage recalculation endpoint', async () => {
+    mockFetchOk({
+      coverageSummary: {
+        totalCases: 3,
+        pbisCovered: 1,
+        acCovered: '2/2',
+        brCovered: '1/1',
+        gaps: 0,
+      },
+    });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useRecalculateTestCaseCoverage(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/test-cases/recalculate',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

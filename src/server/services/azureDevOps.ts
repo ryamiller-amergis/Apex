@@ -4,6 +4,30 @@ import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackin
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
+import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+
+/**
+ * Ensures the canonical APEX origin tag is present in a tag list without
+ * duplicating it (case-insensitive). Applied only to Features APEX creates so
+ * Start Development can identify Features that carry APEX-generated design docs.
+ */
+function withApexOriginTag(tags?: string[]): string[] {
+  const base = tags ?? [];
+  const hasApex = base.some((t) => t.trim().toLowerCase() === APEX_ORIGIN_TAG);
+  return hasApex ? base : [...base, APEX_ORIGIN_TAG];
+}
+
+/** Walk the parent chain to compute depth (0 = root). */
+function computeDepth(id: number, parentMap: Map<number, number | null>): number {
+  let depth = 0;
+  let current: number | null | undefined = parentMap.get(id);
+  while (current !== undefined && current !== null) {
+    depth++;
+    current = parentMap.get(current);
+    if (depth > 20) break; // guard against cycles
+  }
+  return depth;
+}
 
 export class AzureDevOpsService {
   private connection: azdev.WebApi;
@@ -458,6 +482,169 @@ export class AzureDevOpsService {
         }));
     });
   }
+
+  // ── Calendar Work-Item Assistant: hierarchy reads and content updates ────────
+
+  /**
+   * Returns the full recursive hierarchy rooted at `rootId`, including the root
+   * itself. Each node carries its ADO `rev` for optimistic concurrency on apply.
+   * Only returns item types relevant to the assistant (Epic, Feature, PBI, TBI, Bug).
+   */
+  async getWorkItemHierarchy(rootId: number): Promise<import('../../shared/types/calendarWorkItemAssistant').WorkItemHierarchyNode[]> {
+    return retryWithBackoff(async () => {
+      const { DESCRIPTION_SUPPORTED_TYPES, ACCEPTANCE_CRITERIA_SUPPORTED_TYPES } = await import('../../shared/types/calendarWorkItemAssistant');
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      // Recursive WIQL: all descendants (including root at depth 0)
+      const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] = ${rootId}) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+      const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      const allRelations = queryResult?.workItemRelations ?? [];
+
+      // Build parentId map from relations
+      const parentMap = new Map<number, number | null>();
+      parentMap.set(rootId, null);
+      for (const rel of allRelations) {
+        if (rel.source?.id && rel.target?.id) {
+          parentMap.set(rel.target.id, rel.source.id);
+        }
+      }
+
+      const allIds = Array.from(parentMap.keys());
+      if (allIds.length === 0) return [];
+
+      const fields = [
+        'System.Id', 'System.Rev', 'System.Title', 'System.State',
+        'System.WorkItemType', 'System.AreaPath', 'System.ChangedDate',
+        'System.Description', 'Microsoft.VSTS.Common.AcceptanceCriteria',
+      ];
+
+      const rawItems = await this.getWorkItemsInBatches(witApi, allIds, fields);
+
+      const nodes: import('../../shared/types/calendarWorkItemAssistant').WorkItemHierarchyNode[] = [];
+      for (const wi of rawItems) {
+        if (!wi?.id || !wi.fields) continue;
+        const workItemType: string = wi.fields['System.WorkItemType'] || '';
+        const supportedFields: import('../../shared/types/calendarWorkItemAssistant').EditableContentField[] = [];
+        if ((DESCRIPTION_SUPPORTED_TYPES as readonly string[]).includes(workItemType)) {
+          supportedFields.push('description');
+        }
+        if ((ACCEPTANCE_CRITERIA_SUPPORTED_TYPES as readonly string[]).includes(workItemType)) {
+          supportedFields.push('acceptanceCriteria');
+        }
+        if (supportedFields.length === 0) continue; // skip unsupported types (Bug, etc.) from hierarchy
+
+        const depth = computeDepth(wi.id, parentMap);
+        nodes.push({
+          id: wi.id,
+          parentId: parentMap.get(wi.id) ?? null,
+          depth,
+          workItemType,
+          title: wi.fields['System.Title'] || '',
+          state: wi.fields['System.State'] || '',
+          areaPath: wi.fields['System.AreaPath'] || '',
+          rev: wi.fields['System.Rev'] ?? 0,
+          changedDate: wi.fields['System.ChangedDate'] || '',
+          description: wi.fields['System.Description'] || undefined,
+          acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || undefined,
+          supportedFields,
+        });
+      }
+
+      nodes.sort((a, b) => a.depth - b.depth || a.id - b.id);
+      return nodes;
+    });
+  }
+
+  /**
+   * Fetch current Description, AcceptanceCriteria, state, and rev for an
+   * authoritative refresh (used before apply to detect stale items).
+   */
+  async getWorkItemContentByIds(ids: number[]): Promise<Array<{
+    id: number;
+    rev: number;
+    state: string;
+    workItemType: string;
+    description: string;
+    acceptanceCriteria: string;
+    changedDate: string;
+  }>> {
+    return retryWithBackoff(async () => {
+      if (ids.length === 0) return [];
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const fields = [
+        'System.Id', 'System.Rev', 'System.State', 'System.WorkItemType',
+        'System.ChangedDate', 'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria',
+      ];
+      const rawItems = await this.getWorkItemsInBatches(witApi, ids, fields);
+      return rawItems
+        .filter((wi) => wi?.id && wi.fields)
+        .map((wi) => ({
+          id: wi.id!,
+          rev: wi.fields['System.Rev'] ?? 0,
+          state: wi.fields['System.State'] || '',
+          workItemType: wi.fields['System.WorkItemType'] || '',
+          description: wi.fields['System.Description'] || '',
+          acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || '',
+          changedDate: wi.fields['System.ChangedDate'] || '',
+        }));
+    });
+  }
+
+  /**
+   * Apply Description and/or AcceptanceCriteria changes to a single work item
+   * with a revision guard. If `expectedRev` is provided and the item's current
+   * rev differs, throws an error with code 'STALE_REV'.
+   *
+   * Returns the new revision number after the update.
+   */
+  async updateWorkItemContent(
+    id: number,
+    fields: { description?: string; acceptanceCriteria?: string },
+    expectedRev: number,
+    historyMessage: string,
+  ): Promise<{ newRev: number }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      const patch: any[] = [];
+
+      // Whitelist: only these two content fields are allowed through this path
+      if (fields.description !== undefined) {
+        patch.push({ op: 'add', path: '/fields/System.Description', value: fields.description });
+      }
+      if (fields.acceptanceCriteria !== undefined) {
+        patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: fields.acceptanceCriteria });
+      }
+      if (patch.length === 0) {
+        throw new Error('updateWorkItemContent: no fields to update');
+      }
+
+      // History entry (metadata only — no field content)
+      patch.push({ op: 'add', path: '/fields/System.History', value: historyMessage });
+
+      try {
+        const updated = await witApi.updateWorkItem(
+          { 'If-Match': String(expectedRev) },
+          patch,
+          id,
+          this.project,
+        );
+        const newRev: number = updated?.rev ?? expectedRev + 1;
+        return { newRev };
+      } catch (err: any) {
+        // ADO responds 412 when the etag/rev does not match
+        if (err?.statusCode === 412 || (typeof err?.message === 'string' && err.message.includes('precondition'))) {
+          const staleErr = new Error(`Work item ${id} has been modified since this session was created (expected rev ${expectedRev}).`);
+          (staleErr as any).code = 'STALE_REV';
+          throw staleErr;
+        }
+        throw err;
+      }
+    });
+  }
+
+  // ── End Calendar Work-Item Assistant methods ───────────────────────────────
 
   async calculateCycleTime(workItemId: number): Promise<CycleTimeData | undefined> {
     try {
@@ -1975,6 +2162,94 @@ export class AzureDevOpsService {
         uatReadyForTestFeatures,
         deploymentHistory: [],
       };
+    });
+  }
+
+  /**
+   * Fetch a release Epic by ID and return its current title, state, and tags.
+   * Used during rename preflight.
+   */
+  async getReleaseEpicById(epicId: number): Promise<{ id: number; title: string; state: string; tags: string } | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(
+        epicId,
+        ['System.Title', 'System.State', 'System.Tags'],
+        undefined,
+        undefined,
+        this.project,
+      );
+      if (!wi?.fields) return null;
+      return {
+        id: epicId,
+        title: (wi.fields['System.Title'] as string) || '',
+        state: (wi.fields['System.State'] as string) || '',
+        tags: (wi.fields['System.Tags'] as string) || '',
+      };
+    });
+  }
+
+  /**
+   * Find all work-item IDs that carry the given release tag (Release:<version>).
+   * Searches across Features and Epics (and falls through to all types).
+   */
+  async findWorkItemsWithReleaseTag(releaseVersion: string): Promise<number[]> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.Tags] CONTAINS 'Release:${releaseVersion}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      return (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+    });
+  }
+
+  /**
+   * Replace Release:<oldName> with Release:<newName> on a single work item,
+   * preserving all other tags.
+   */
+  async renameReleaseTagOnWorkItem(workItemId: number, oldVersion: string, newVersion: string): Promise<void> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wi = await witApi.getWorkItem(workItemId, ['System.Tags'], undefined, undefined, this.project);
+      const currentTags = (wi?.fields?.['System.Tags'] as string) || '';
+
+      const oldTag = `Release:${oldVersion}`;
+      const newTag = `Release:${newVersion}`;
+
+      if (!currentTags.includes(oldTag)) return; // nothing to change
+
+      const updatedTags = currentTags
+        .split(';')
+        .map((t) => t.trim())
+        .map((t) => (t === oldTag ? newTag : t))
+        .join('; ');
+
+      await witApi.updateWorkItem(
+        {},
+        [{ op: 'add', path: '/fields/System.Tags', value: updatedTags }],
+        workItemId,
+        this.project,
+      );
+    });
+  }
+
+  /**
+   * Check whether any other release Epic (excluding `excludeEpicId`) has the given title.
+   * Returns true if a duplicate exists.
+   */
+  async releaseNameExists(name: string, excludeEpicId: number): Promise<boolean> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const escapedName = name.replace(/'/g, "''");
+      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion' AND [System.Title] = '${escapedName}'`;
+      if (this.areaPath) {
+        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+      }
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      const ids = (result?.workItems ?? []).map((wi) => wi.id!).filter(Boolean);
+      return ids.some((id) => id !== excludeEpicId);
     });
   }
 
@@ -4993,7 +5268,7 @@ export class AzureDevOpsService {
         const num = priorityMap[feature.priority];
         if (num) featureFields.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: num });
       }
-      if (feature.tags && feature.tags.length > 0) featureFields.push({ op: 'add', path: '/fields/System.Tags', value: feature.tags.join('; ') });
+      featureFields.push({ op: 'add', path: '/fields/System.Tags', value: withApexOriginTag(feature.tags).join('; ') });
       if (this.areaPath) featureFields.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
       if (parentEpicAdoId) featureFields.push(buildParentRelation(parentEpicAdoId));
 
@@ -5152,7 +5427,7 @@ export class AzureDevOpsService {
       const featureMap: Record<string, number> = {};
       for (const feature of acceptedFeatures) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           buildParentRelation(epicAdoId),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5275,7 +5550,7 @@ export class AzureDevOpsService {
       let featureAdoUrl: string | undefined;
       if (!featureAdoId) {
         const featureFields = [
-          ...buildBaseFields(feature.title, feature.description, feature.priority, feature.tags, feature.figmaUrl),
+          ...buildBaseFields(feature.title, feature.description, feature.priority, withApexOriginTag(feature.tags), feature.figmaUrl),
           ...(parentEpicAdoId ? [buildParentRelation(parentEpicAdoId)] : []),
         ];
         const featureItem = await witApi.createWorkItem({}, featureFields, this.project, 'Feature');
@@ -5360,8 +5635,9 @@ export class AzureDevOpsService {
           }
         }
 
-        if (spec.tags && spec.tags.length > 0) {
-          patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
+        const effectiveTags = spec.type === 'Feature' ? withApexOriginTag(spec.tags) : (spec.tags ?? []);
+        if (effectiveTags.length > 0) {
+          patch.push({ op: 'add', path: '/fields/System.Tags', value: effectiveTags.join('; ') });
         }
 
         if (includeAssignedTo && spec.assignedTo) {
@@ -5607,6 +5883,7 @@ export class AzureDevOpsService {
           'System.AssignedTo',
           'System.AreaPath',
           'System.IterationPath',
+          'System.Tags',
         ],
         maxResults: 200,
       });
@@ -5620,6 +5897,7 @@ export class AzureDevOpsService {
         project,
         areaPath: (wi.fields['System.AreaPath'] ?? undefined) as string | undefined,
         iterationPath: (wi.fields['System.IterationPath'] ?? undefined) as string | undefined,
+        tags: (wi.fields['System.Tags'] ?? '') as string,
       }));
 
       console.log(`=== getWorkItemsAssignedToUser END === found ${items.length} items`);

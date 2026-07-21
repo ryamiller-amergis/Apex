@@ -148,14 +148,16 @@ const DesignPrototypeReviewView: React.FC = () => {
   }, [selectedProto, prototypes, review, navigate, prdId]);
 
   const handleOwnerApprove = useCallback(() => {
-    ownerApproveProto.mutate({ status: 'approved' }, {
+    if (!selectedProto) return;
+    ownerApproveProto.mutate({ status: 'approved', prototypeId: selectedProto.id }, {
       onSuccess: () => navigate(`/backlog/prd/${prdId}`),
     });
-  }, [ownerApproveProto, navigate, prdId]);
+  }, [ownerApproveProto, navigate, prdId, selectedProto]);
 
   const handleOwnerRevision = useCallback(() => {
-    ownerApproveProto.mutate({ status: 'revision_requested', comment: 'Revision requested by owner' });
-  }, [ownerApproveProto]);
+    if (!selectedProto) return;
+    ownerApproveProto.mutate({ status: 'revision_requested', comment: 'Revision requested by owner', prototypeId: selectedProto.id });
+  }, [ownerApproveProto, selectedProto]);
 
   const handleRequestRevision = useCallback((comment: string) => {
     if (!selectedProto) return;

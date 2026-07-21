@@ -12,6 +12,10 @@ import {
   FEATURE_REQUEST_PRIORITIES,
   FEATURE_REQUEST_RISKS,
 } from '../../shared/types/featureRequest';
+import {
+  isInterviewableWorkItemType,
+  toFeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
 import listStyles from './FeatureRequestsView.module.css';
 import styles from './FeatureRequestDetailPanel.module.css';
 
@@ -155,16 +159,35 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
 
         <div className={styles['body']}>
           <section className={styles['section']}>
-            <h3 className={styles['sectionTitle']}>Request</h3>
+            <h3 className={styles['sectionTitle']}>Description</h3>
             <div className={styles['prose']}>{formatBody(fr.request)}</div>
           </section>
 
           <section className={styles['section']}>
             <h3 className={styles['sectionTitle']}>Advantage</h3>
-            <div className={styles['prose']}>{formatBody(fr.advantage)}</div>
+            <div className={styles['prose']}>{fr.advantage ? formatBody(fr.advantage) : null}</div>
           </section>
 
-          {fr.interviewId && (
+          {(fr.linkedAdrs?.length ?? 0) > 0 && (
+            <section className={styles['section']}>
+              <h3 className={styles['sectionTitle']}>Linked ADRs</h3>
+              <div className={styles['adrChips']}>
+                {fr.linkedAdrs.map((adr) => (
+                  <button
+                    className={styles['adrChip']}
+                    key={adr.id}
+                    type="button"
+                    onClick={() => navigate(`/adr/${adr.id}`)}
+                    title={`${adr.repo} / ${adr.slug ?? adr.id}`}
+                  >
+                    {adr.title}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {isInterviewableWorkItemType(fr.type) && fr.interviewId && (
             <section className={styles['section']}>
               <h3 className={styles['sectionTitle']}>Interview</h3>
               <button
@@ -273,7 +296,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
           )}
         </div>
 
-        {(canManage || (canKickOff && !fr.interviewId)) && (
+        {(canManage || (isInterviewableWorkItemType(fr.type) && canKickOff && !fr.interviewId)) && (
           <footer className={styles['footer']}>
             {canManage && (
               <button
@@ -285,18 +308,13 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
               </button>
             )}
-            {canKickOff && !fr.interviewId && (
+            {isInterviewableWorkItemType(fr.type) && canKickOff && !fr.interviewId && (
               <button
                 className={styles['primaryAction']}
                 type="button"
                 onClick={() => navigate('/backlog/interview/new', {
                   state: {
-                    featureRequest: {
-                      id: fr.id,
-                      title: fr.title,
-                      request: fr.request,
-                      advantage: fr.advantage,
-                    },
+                    featureRequest: toFeatureRequestInterviewPrefill(fr),
                   },
                 })}
               >

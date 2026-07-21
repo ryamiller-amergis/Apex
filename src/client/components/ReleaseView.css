@@ -2082,3 +2082,87 @@
   }
 }
 
+/* ── Drag-to-reorder ─────────────────────────────────────────────────────── */
+
+.drag-handle-cell {
+  text-align: center;
+  padding: 0 4px;
+  width: 32px;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  user-select: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle-disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.row-dragging {
+  opacity: 0.4;
+}
+
+.row-drop-target > td {
+  border-top: 2px solid var(--accent-color);
+}
+
+/* ── Inline rename ───────────────────────────────────────────────────────── */
+
+.version-editable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.version-editable:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.edit-pencil {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.version-editable:hover .edit-pencil {
+  opacity: 1;
+  color: var(--accent-color);
+}
+
+.inline-rename-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inline-rename-input {
+  padding: 2px 6px;
+  border: 1px solid var(--accent-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  min-width: 120px;
+}
+
+.inline-rename-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 25%, transparent);
+}
+
+.rename-error {
+  font-size: 11px;
+  color: var(--error-color, #ef4444);
+}
+

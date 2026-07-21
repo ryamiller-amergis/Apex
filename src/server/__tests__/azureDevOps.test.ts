@@ -35,6 +35,7 @@ describe('AzureDevOpsService', () => {
       getWorkItems: jest.fn(),
       getRevisions: jest.fn(),
       updateWorkItem: jest.fn(),
+      createWorkItem: jest.fn(),
     };
 
     // Mock Core API
@@ -712,6 +713,7 @@ describe('AzureDevOpsService', () => {
             'System.AssignedTo': { uniqueName: 'jane@example.com' },
             'System.AreaPath': 'MaxView\\Team',
             'System.IterationPath': 'MaxView\\Sprint 1',
+            'System.Tags': 'apex; wave-1',
           },
         },
         {
@@ -748,6 +750,7 @@ describe('AzureDevOpsService', () => {
         project: 'MaxView',
         areaPath: 'MaxView\\Team',
         iterationPath: 'MaxView\\Sprint 1',
+        tags: 'apex; wave-1',
       });
       expect(result[1]).toMatchObject({
         id: 102,
@@ -776,6 +779,47 @@ describe('AzureDevOpsService', () => {
 
       const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
       expect(wiql).not.toContain("[System.State] NOT IN");
+    });
+  });
+
+  describe('createWorkItemForPrd — APEX origin tagging', () => {
+    function tagsFromLastCreate(): string | undefined {
+      const patch = mockWitApi.createWorkItem.mock.calls[0][1] as Array<{ path: string; value: unknown }>;
+      const tagOp = patch.find((op) => op.path === '/fields/System.Tags');
+      return tagOp?.value as string | undefined;
+    }
+
+    it('stamps the apex tag on a created Feature', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 501 });
+
+      await service.createWorkItemForPrd({ type: 'Feature', title: 'Shift scheduler' });
+
+      const tags = tagsFromLastCreate();
+      expect(tags).toBeDefined();
+      expect(tags!.split(';').map((t) => t.trim())).toContain('apex');
+    });
+
+    it('merges apex with caller-supplied tags without duplicating it', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 502 });
+
+      await service.createWorkItemForPrd({ type: 'Feature', title: 'Shift scheduler', tags: ['wave-1', 'apex'] });
+
+      const tags = (tagsFromLastCreate() ?? '').split(';').map((t) => t.trim());
+      expect(tags).toContain('apex');
+      expect(tags).toContain('wave-1');
+      expect(tags.filter((t) => t === 'apex')).toHaveLength(1);
+    });
+
+    it('does not add the apex tag to non-Feature types', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 503 });
+
+      await service.createWorkItemForPrd({ type: 'Product Backlog Item', title: 'A PBI' });
+
+      // No tags provided and not a Feature → no System.Tags op at all.
+      expect(tagsFromLastCreate()).toBeUndefined();
     });
   });
 });

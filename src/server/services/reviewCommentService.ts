@@ -6,6 +6,7 @@ import {
   appUsers,
   prds,
   designDocs,
+  adrs,
   interviews,
   documentApproverAssignments,
 } from '../db/schema';
@@ -16,6 +17,7 @@ import type {
   ReviewComment,
   ReviewReply,
   ReviewCommentWithReplies,
+  ReviewDocumentType,
   ReviewSectionKey,
 } from '../../shared/types/reviewComments';
 
@@ -41,7 +43,7 @@ function notFound(msg: string): Error {
 
 async function getDocumentAuthorId(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<string> {
   if (documentType === 'prd') {
     const rows = await db
@@ -52,18 +54,27 @@ async function getDocumentAuthorId(
     if (!rows[0]) throw notFound('PRD not found');
     return rows[0].authorId;
   }
+  if (documentType === 'design_doc') {
+    const rows = await db
+      .select({ authorId: designDocs.authorId })
+      .from(designDocs)
+      .where(eq(designDocs.id, documentId))
+      .limit(1);
+    if (!rows[0]) throw notFound('Design doc not found');
+    return rows[0].authorId;
+  }
   const rows = await db
-    .select({ authorId: designDocs.authorId })
-    .from(designDocs)
-    .where(eq(designDocs.id, documentId))
+    .select({ authorId: adrs.authorId })
+    .from(adrs)
+    .where(eq(adrs.id, documentId))
     .limit(1);
-  if (!rows[0]) throw notFound('Design doc not found');
+  if (!rows[0]) throw notFound('ADR not found');
   return rows[0].authorId;
 }
 
 async function getDocumentOwnerIds(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<string[]> {
   const authorId = await getDocumentAuthorId(documentId, documentType);
   if (documentType !== 'prd') return [authorId];
@@ -82,20 +93,26 @@ async function getDocumentOwnerIds(
 
 async function getDocumentTitle(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<string> {
   if (documentType === 'prd') {
     const rows = await db.select({ title: prds.title }).from(prds).where(eq(prds.id, documentId)).limit(1);
     return rows[0]?.title ?? 'Untitled PRD';
   }
-  const rows = await db.select({ title: designDocs.title }).from(designDocs).where(eq(designDocs.id, documentId)).limit(1);
-  return rows[0]?.title ?? 'Untitled Design Doc';
+  if (documentType === 'design_doc') {
+    const rows = await db.select({ title: designDocs.title }).from(designDocs).where(eq(designDocs.id, documentId)).limit(1);
+    return rows[0]?.title ?? 'Untitled Design Doc';
+  }
+  const rows = await db.select({ title: adrs.title }).from(adrs).where(eq(adrs.id, documentId)).limit(1);
+  return rows[0]?.title ?? 'Untitled ADR';
 }
 
-function documentLink(documentId: string, documentType: 'prd' | 'design_doc'): string {
+function documentLink(documentId: string, documentType: ReviewDocumentType): string {
   return documentType === 'prd'
     ? `/backlog/prd/${documentId}`
-    : `/backlog/design-doc/${documentId}`;
+    : documentType === 'adr'
+      ? `/adr/${documentId}`
+      : `/backlog/design-doc/${documentId}`;
 }
 
 // ── Row → shared type mappers ────────────────────────────────────────────────
@@ -107,7 +124,7 @@ function toReviewComment(
   return {
     id: row.id,
     documentId: row.documentId,
-    documentType: row.documentType as 'prd' | 'design_doc',
+    documentType: row.documentType as ReviewDocumentType,
     sectionKey: row.sectionKey as ReviewSectionKey,
     authorUserId: row.authorUserId,
     authorDisplayName: authorDisplayName ?? undefined,
@@ -145,7 +162,7 @@ function toReviewReply(
 
 async function autoTransitionToRevisionRequested(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<void> {
   const [existing] = await db
     .select({ value: count() })
@@ -158,7 +175,7 @@ async function autoTransitionToRevisionRequested(
       ),
     );
 
-  if ((existing?.value ?? 0) === 1) {
+  if ((existing?.value ?? 0) === 1 && documentType !== 'adr') {
     const table = documentType === 'prd' ? prds : designDocs;
     await db
       .update(table)
@@ -171,7 +188,7 @@ async function autoTransitionToRevisionRequested(
 
 export async function createComment(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
   sectionKey: ReviewSectionKey,
   authorUserId: string,
   body: string,
@@ -246,7 +263,7 @@ export async function addReply(
     .values({ commentId, authorUserId, body })
     .returning();
 
-  const docType = comment.documentType as 'prd' | 'design_doc';
+  const docType = comment.documentType as ReviewDocumentType;
   const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
   const docTitle = await getDocumentTitle(comment.documentId, docType);
   const link = documentLink(comment.documentId, docType);
@@ -289,7 +306,7 @@ export async function resolveComment(
   });
   if (!comment) throw notFound('Comment not found');
 
-  const docType = comment.documentType as 'prd' | 'design_doc';
+  const docType = comment.documentType as ReviewDocumentType;
   const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
   if (!ownerIds.includes(userId)) {
     const approver = await isAssignedApprover(comment.documentId, docType, userId);
@@ -318,7 +335,7 @@ export async function reopenComment(
   });
   if (!comment) throw notFound('Comment not found');
 
-  const docType = comment.documentType as 'prd' | 'design_doc';
+  const docType = comment.documentType as ReviewDocumentType;
   const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
   if (!ownerIds.includes(userId)) {
     const approver = await isAssignedApprover(comment.documentId, docType, userId);
@@ -340,7 +357,7 @@ export async function reopenComment(
 
 export async function getComments(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<ReviewCommentWithReplies[]> {
   const commentRows = await db
     .select({
@@ -386,7 +403,7 @@ export async function getComments(
 
 export async function getUnresolvedCount(
   documentId: string,
-  documentType: 'prd' | 'design_doc',
+  documentType: ReviewDocumentType,
 ): Promise<number> {
   const [result] = await db
     .select({ value: count() })
@@ -412,7 +429,7 @@ export async function deleteComment(
   if (!comment) throw notFound('Comment not found');
 
   if (comment.authorUserId !== userId) {
-    const docType = comment.documentType as 'prd' | 'design_doc';
+    const docType = comment.documentType as ReviewDocumentType;
     const ownerIds = await getDocumentOwnerIds(comment.documentId, docType);
     if (!ownerIds.includes(userId)) {
       const approver = await isAssignedApprover(comment.documentId, docType, userId);

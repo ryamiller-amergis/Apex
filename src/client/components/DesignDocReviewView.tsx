@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import mermaid from 'mermaid';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useDesignDoc,
@@ -28,6 +27,7 @@ import {
   useFixDesignDocCommentWithAi,
   useDesignDocOwnerApproval,
   useDesignDocOwnerApprove,
+  useRetryGenerateDesignDoc,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useChatStream } from '../hooks/useChatStream';
@@ -49,6 +49,7 @@ import {
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../utils/apexFixSession';
+import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   useReviewComments,
   useUnresolvedCommentCount,
@@ -57,22 +58,12 @@ import {
   useReopenComment as useReopenReviewComment,
   useDeleteComment,
 } from '../hooks/useReviewComments';
-import { normalizeMermaidBlocks, normalizeMermaidChart } from '../utils/mermaidMarkdown';
+import { normalizeMermaidBlocks } from '../utils/mermaidMarkdown';
+import { MarkdownWithMermaid, MermaidDiagram } from './MarkdownWithMermaid';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
 
 type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
-
-mermaid.initialize({
-  startOnLoad: false,
-  // Prevent Mermaid from appending orphan "Syntax error in text" SVGs to <body>
-  // on parse/render failure (they survive SPA navigations and show up on other pages).
-  suppressErrorRendering: true,
-  securityLevel: 'strict',
-  theme: 'base',
-});
-
-let mermaidDiagramCounter = 0;
 
 // ── Fix Validation Flow state machine ─────────────────────────────────────────
 
@@ -132,6 +123,7 @@ function fixFlowReducer(state: FixFlowState, action: FixFlowAction): FixFlowStat
 function statusBadgeClass(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return styles.badgeGenerating;
+    case 'generation_failed': return styles.badgeRevisionRequested;
     case 'validating': return styles.badgeValidating;
     case 'draft': return styles.badgeDraft;
     case 'pending_review': return styles.badgePendingReview;
@@ -144,6 +136,7 @@ function statusBadgeClass(status: DesignDocStatus): string {
 function statusLabel(status: DesignDocStatus): string {
   switch (status) {
     case 'generating': return 'Generating';
+    case 'generation_failed': return 'Failed';
     case 'validating': return 'Validating';
     case 'draft': return 'Draft';
     case 'pending_review': return 'Pending Review';
@@ -225,122 +218,6 @@ const MIN_SPLIT_PERCENT = 0.20; // right pane minimum 20 % of center
 const MAX_SPLIT_PERCENT = 0.75; // right pane maximum 75 % of center
 const DEFAULT_SPLIT_PERCENT = 0.50; // 50 / 50
 
-function buildMermaidThemeVariables(source: HTMLElement | null): Record<string, string> {
-  const styles = window.getComputedStyle(source ?? document.body);
-  const token = (name: string, fallback: string): string => styles.getPropertyValue(name).trim() || fallback;
-
-  const bgPrimary = token('--bg-primary', '#ffffff');
-  const bgSecondary = token('--bg-secondary', '#f5f5f5');
-  const bgTertiary = token('--bg-tertiary', '#e8e8e8');
-  const textPrimary = token('--text-primary', '#1a1a1a');
-  const textSecondary = token('--text-secondary', '#555555');
-  const borderColor = token('--border-color', '#e0e0e0');
-  const accentColor = token('--accent-color', '#142A67');
-
-  return {
-    background: bgSecondary,
-    mainBkg: bgSecondary,
-    primaryColor: bgTertiary,
-    primaryBorderColor: accentColor,
-    primaryTextColor: textPrimary,
-    secondaryColor: bgPrimary,
-    secondaryBorderColor: borderColor,
-    secondaryTextColor: textPrimary,
-    tertiaryColor: bgTertiary,
-    tertiaryBorderColor: borderColor,
-    tertiaryTextColor: textPrimary,
-    lineColor: accentColor,
-    textColor: textPrimary,
-    titleColor: textPrimary,
-    nodeTextColor: textPrimary,
-    edgeLabelBackground: bgPrimary,
-    clusterBkg: bgSecondary,
-    clusterBorder: borderColor,
-    actorBkg: bgTertiary,
-    actorBorder: accentColor,
-    actorTextColor: textPrimary,
-    actorLineColor: accentColor,
-    signalColor: accentColor,
-    signalTextColor: textPrimary,
-    labelBoxBkgColor: bgPrimary,
-    labelBoxBorderColor: borderColor,
-    labelTextColor: textPrimary,
-    loopTextColor: textPrimary,
-    noteBkgColor: bgTertiary,
-    noteTextColor: textPrimary,
-    noteBorderColor: borderColor,
-    activationBkgColor: bgTertiary,
-    activationBorderColor: accentColor,
-    sequenceNumberColor: textSecondary,
-  };
-}
-
-interface MermaidDiagramProps {
-  chart: string;
-}
-
-const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const renderIdRef = useRef(`design-doc-mermaid-${mermaidDiagramCounter++}`);
-  const renderChart = normalizeMermaidChart(chart);
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [themeRevision, setThemeRevision] = useState(0);
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => setThemeRevision((revision) => revision + 1));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
-
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    setSvg(null);
-    setError(null);
-    mermaid.initialize({
-      startOnLoad: false,
-      suppressErrorRendering: true,
-      securityLevel: 'strict',
-      theme: 'base',
-      themeVariables: buildMermaidThemeVariables(containerRef.current),
-    });
-
-    mermaid.render(renderIdRef.current, renderChart)
-      .then(({ svg: renderedSvg }) => {
-        if (!isCancelled) setSvg(renderedSvg);
-      })
-      .catch((err: unknown) => {
-        // Mermaid may still leave a temp/error node with this id; remove it.
-        document.getElementById(renderIdRef.current)?.remove();
-        document.getElementById(`d${renderIdRef.current}`)?.remove();
-        if (!isCancelled) setError(err instanceof Error ? err.message : 'Unable to render Mermaid diagram.');
-      });
-
-    return () => {
-      isCancelled = true;
-      document.getElementById(renderIdRef.current)?.remove();
-      document.getElementById(`d${renderIdRef.current}`)?.remove();
-    };
-  }, [renderChart, themeRevision]);
-
-  if (error) {
-    return (
-      <div ref={containerRef} className={styles.mermaidError}>
-        <div className={styles.mermaidErrorTitle}>Unable to render Mermaid diagram.</div>
-        {error && <div className={styles.mermaidErrorMessage}>{error}</div>}
-        <pre>{chart}</pre>
-      </div>
-    );
-  }
-
-  if (!svg) return <div ref={containerRef} className={styles.mermaidLoading}>Rendering diagram…</div>;
-
-  return <div ref={containerRef} className={styles.mermaidDiagram} dangerouslySetInnerHTML={{ __html: svg }} />;
-};
-
 interface ContentPaneProps {
   content: string;
   isEditing: boolean;
@@ -398,13 +275,11 @@ const ContentPane: React.FC<ContentPaneProps> = ({
     );
   }
 
-  const previewContent = normalizeMermaidBlocks(content);
-
   return (
     <div className={styles.previewWrapper}>
       <div className={styles.preview}>
         {content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{previewContent}</ReactMarkdown>
+          <MarkdownWithMermaid content={content} components={markdownComponents} />
         ) : (
           <div className={styles.emptyPreview}>
             No content yet.{canEdit ? ' Click Edit to write this section.' : ''}
@@ -1223,9 +1098,22 @@ export const DesignDocReviewView: React.FC = () => {
   useDesignDocOwnerApproval(id);
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
+  const retryGenerate = useRetryGenerateDesignDoc();
+
   const isGenerating = !!doc && doc.status === 'generating' && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
   );
+  const isGenerationFailed = !!doc && doc.status === 'generation_failed';
+
+  const handleDownload = useCallback(() => {
+    if (!doc) return;
+    const exportName = sanitizeArtifactName(doc.title, 'design-doc');
+    downloadArtifactZip(`${exportName}-design-doc.zip`, [
+      { name: 'design.md', content: doc.designContent ?? '' },
+      { name: 'tech-spec.md', content: doc.techSpecContent ?? '' },
+      { name: 'assumptions.md', content: doc.assumptionsContent ?? '' },
+    ]);
+  }, [doc]);
 
   const handleEditToggle = useCallback((tab: TabId) => {
     if (!doc) return;
@@ -1964,6 +1852,20 @@ export const DesignDocReviewView: React.FC = () => {
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
 
+          <button
+            className={styles.actionBtn}
+            onClick={handleDownload}
+            disabled={!hasAnyContent}
+            type="button"
+            title="Download design doc, tech spec, and assumptions"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M8 2v8M5 7l3 3 3-3" />
+              <path d="M3 13h10" />
+            </svg>
+            Download
+          </button>
+
           {canUseAssistant && (
             <button
               className={`${styles.actionBtn} ${assistantOpen ? styles.actionBtnActive : ''}`}
@@ -2120,6 +2022,26 @@ export const DesignDocReviewView: React.FC = () => {
           title={apexFixRunningBanner.title}
           subtitle={apexFixRunningBanner.subtitle}
         />
+      )}
+
+      {isGenerationFailed && (
+        /* ── Generation failed banner ────────────────────────────────── */
+        <div className={styles.generatingBanner} style={{ borderColor: 'var(--error-color)' }}>
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--error-color)' }}>Generation failed</div>
+            <div style={{ marginTop: 4, color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+              {doc?.generationError ?? 'The AI agent did not produce the required output files.'}
+            </div>
+          </div>
+          <button
+            className={styles.btnApprove}
+            onClick={() => id && retryGenerate.mutate(id)}
+            disabled={retryGenerate.isPending}
+            type="button"
+          >
+            {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
+          </button>
+        </div>
       )}
 
       {isGenerating ? (

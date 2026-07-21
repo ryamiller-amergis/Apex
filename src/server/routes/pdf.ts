@@ -10,13 +10,18 @@ import {
   getSession,
   getActiveSessions,
   validateAndIngest,
-  resolveFilePath,
+  getPdfFileStream,
   getPdfTempDir,
   updateManifest,
   removeFile,
-  assembleAndExport,
-  cleanupSessionFiles,
+  queuePdfExport,
+  closeSession,
 } from '../services/pdfAssemblyService';
+import {
+  getPdfJob,
+  PdfQueueSaturatedError,
+} from '../services/pdfConversionJobService';
+import { getPdfArtifactStore } from '../services/pdfArtifactStore';
 import {
   PDF_ERROR_CODES,
   PDF_MVP_PERFORMANCE_TARGETS,
@@ -59,6 +64,11 @@ function getUserId(req: express.Request): string {
   return (req.user as any)?.profile?.oid as string;
 }
 
+async function cleanupMulterFiles(req: express.Request): Promise<void> {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  await Promise.all(files.map((file) => fs.promises.rm(file.path, { force: true })));
+}
+
 async function loadAndValidateSession(
   sessionId: string,
   userId: string,
@@ -98,9 +108,12 @@ router.get('/sessions', async (req, res): Promise<void> => {
 router.post('/sessions', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { projectId } = req.body as { projectId?: string };
+    const { projectId, replaceSessionId } = req.body as {
+      projectId?: string;
+      replaceSessionId?: string;
+    };
 
-    const result = await createSession(userId, projectId);
+    const result = await createSession(userId, projectId, { replaceSessionId });
 
     res.status(201).json({
       sessionId: result.sessionId,
@@ -115,6 +128,26 @@ router.post('/sessions', async (req, res): Promise<void> => {
       return;
     }
     console.error('[pdf] POST /sessions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── DELETE /api/pdf/sessions/:sessionId ───────────────────────────────────────
+
+router.delete('/sessions/:sessionId', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { sessionId } = req.params;
+
+    const closed = await closeSession(sessionId, userId);
+    if (!closed) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    res.status(204).end();
+  } catch (err) {
+    console.error('[pdf] DELETE session error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -161,7 +194,10 @@ router.post(
       const { sessionId } = req.params;
 
       const session = await loadAndValidateSession(sessionId, userId, res);
-      if (!session) return;
+      if (!session) {
+        await cleanupMulterFiles(req);
+        return;
+      }
 
       const files = (req.files as Express.Multer.File[]) ?? [];
 
@@ -200,6 +236,15 @@ router.post(
 
       res.status(200).json({ files: results });
     } catch (err) {
+      await cleanupMulterFiles(req);
+      if (err instanceof PdfQueueSaturatedError) {
+        res.setHeader('Retry-After', String(err.retryAfterSeconds));
+        res.status(429).json({
+          error: { code: err.code, message: err.message },
+          retryAfterSeconds: err.retryAfterSeconds,
+        });
+        return;
+      }
       console.error('[pdf] POST upload error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -260,7 +305,6 @@ router.delete('/sessions/:sessionId/files/:fileId', async (req, res): Promise<vo
 
 router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   try {
-    const exportStartedAt = performance.now();
     const userId = getUserId(req);
     const { sessionId } = req.params;
     const { filename, pages } = req.body as { filename?: string; pages?: number[] };
@@ -276,36 +320,17 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       }
     }
 
-    const result = await assembleAndExport(sessionId, userId, filename, pages);
-    const durationMs = Math.round(performance.now() - exportStartedAt);
-
-    res.setHeader(
-      'Server-Timing',
-      `pdf-assemble-export;dur=${durationMs};desc="PDF assembly and export"`,
-    );
-    if (
-      result.pageCount >= PDF_MVP_PERFORMANCE_TARGETS.exportPageCount &&
-      durationMs > PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs
-    ) {
-      console.warn('[pdf-performance] Assembly and export exceeded MVP target', {
-        durationMs,
-        targetMs: PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs,
-        pageCount: result.pageCount,
-      });
-    }
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
-    res.setHeader('Content-Length', result.pdfBytes.length);
-    if (!pages || pages.length === 0) {
-      res.once('finish', () => {
-        void cleanupSessionFiles(sessionId).catch((cleanupError) => {
-          console.error('[pdf] Failed to clean exported session files:', cleanupError);
-        });
-      });
-    }
-    res.end(Buffer.from(result.pdfBytes));
+    const result = await queuePdfExport(sessionId, userId, filename, pages);
+    res.status(202).json(result);
   } catch (err: unknown) {
+    if (err instanceof PdfQueueSaturatedError) {
+      res.setHeader('Retry-After', String(err.retryAfterSeconds));
+      res.status(429).json({
+        error: { code: err.code, message: err.message },
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+      return;
+    }
     const code = (err as any)?.code;
     const message = (err as Error)?.message ?? 'Internal server error';
 
@@ -343,6 +368,60 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   }
 });
 
+// ── GET /api/pdf/jobs/:jobId ─────────────────────────────────────────────────
+
+router.get('/jobs/:jobId', async (req, res): Promise<void> => {
+  try {
+    const job = await getPdfJob(req.params.jobId, getUserId(req));
+    if (!job) {
+      res.status(404).json({ error: 'PDF job not found' });
+      return;
+    }
+    res.json(job);
+  } catch (err) {
+    console.error('[pdf] GET job error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── GET /api/pdf/jobs/:jobId/result ──────────────────────────────────────────
+
+router.get('/jobs/:jobId/result', async (req, res): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const job = await getPdfJob(req.params.jobId, userId);
+    if (!job || job.jobType !== 'export') {
+      res.status(404).json({ error: 'PDF export not found' });
+      return;
+    }
+    if (job.status !== 'completed') {
+      res.status(409).json({ error: 'PDF export is not complete' });
+      return;
+    }
+
+    const ref = { userId, sessionId: job.sessionId, fileName: `${job.id}.pdf` };
+    if (!(await getPdfArtifactStore().exists(ref))) {
+      res.status(404).json({ error: 'PDF export artifact not found' });
+      return;
+    }
+    const stream = await getPdfArtifactStore().getStream(ref);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${job.resultFilename ?? job.originalName}"`,
+    );
+    stream.on('error', (error) => {
+      console.error('[pdf] Export result stream failed:', error);
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy(error as Error);
+    });
+    stream.pipe(res);
+  } catch (err) {
+    console.error('[pdf] GET job result error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── GET /api/pdf/sessions/:sessionId/files/:fileId ────────────────────────────
 
 router.get('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void> => {
@@ -360,15 +439,20 @@ router.get('/sessions/:sessionId/files/:fileId', async (req, res): Promise<void>
       return;
     }
 
-    const filePath = resolveFilePath(sessionId, fileId);
-    if (!filePath) {
-      res.status(404).json({ error: 'File not found on disk' });
+    const stream = await getPdfFileStream(sessionId, userId, fileId);
+    if (!stream) {
+      res.status(404).json({ error: 'File not found' });
       return;
     }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
-    res.sendFile(filePath);
+    stream.on('error', (error) => {
+      console.error('[pdf] Preview stream failed:', error);
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy(error as Error);
+    });
+    stream.pipe(res);
   } catch (err) {
     console.error('[pdf] GET file error:', err);
     res.status(500).json({ error: 'Internal server error' });

@@ -10,6 +10,7 @@ import { usePdfDocument } from '../hooks/usePdfDocument';
 import { useThumbnailRenderer } from '../hooks/useThumbnailRenderer';
 import { PdfConversionStatus } from './PdfConversionStatus';
 import type { PdfUploadProgress } from '../hooks/usePdfSession';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import styles from './SourceBrowser.module.css';
 
 function formatBytes(bytes: number): string {
@@ -322,7 +323,8 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
         <div className={styles['error-card']} data-testid="pdf-session-limit">
           <span className={styles['error-icon']}>⚠️</span>
           <p className={styles['error-text']}>
-            Maximum 3 concurrent sessions reached. Close an existing session first.
+            Too many open PDF sessions. Starting a new session should free space
+            automatically — try New session again, or refresh the page.
           </p>
         </div>
       )}
@@ -355,14 +357,13 @@ export const SourceBrowser: React.FC<SourceBrowserProps> = ({
               const isExpanded = expandedFileIds.has(f.fileId);
               const color = documentColors.get(f.fileId);
               const filePages = pagesByFile.get(f.fileId) ?? [];
-              const fileUrl = `/api/pdf/sessions/${sessionId}/files/${f.fileId}`;
+              const fileUrl = pdfFileUrl(sessionId, f.fileId);
 
               return (
                 <React.Fragment key={f.fileId}>
                   <div
                     className={`${styles['file-card']} ${isExpanded ? styles['file-card-expanded'] : ''}`}
                     role="listitem"
-                    tabIndex={0}
                     aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
                   >
                     <div

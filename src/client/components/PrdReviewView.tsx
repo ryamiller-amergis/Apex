@@ -31,6 +31,7 @@ import {
   useRevertPrdSection,
   usePrdValidationReport,
   useGenerateTestCases,
+  useRecalculateTestCaseCoverage,
   useScreenInventoryRoutes,
   useCreateDesignDoc,
   useOwnerApprove,
@@ -69,6 +70,7 @@ import {
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../utils/apexFixSession';
+import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   derivePrdReadiness,
   type PrdReadiness,
@@ -396,6 +398,7 @@ export const PrdReviewView: React.FC = () => {
   const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
 
   const generateTestCases = useGenerateTestCases();
+  const recalculateTestCaseCoverage = useRecalculateTestCaseCoverage();
 
   // PRD Validation hooks
   const createPrdValidationThread = useCreatePrdValidationThread();
@@ -674,6 +677,18 @@ export const PrdReviewView: React.FC = () => {
   ]);
 
   /* ── Other handlers ──────────────────────────────────────────────────────── */
+
+  const handleDownload = useCallback(() => {
+    if (!prd) return;
+    const exportName = sanitizeArtifactName(prd.title, 'prd');
+    downloadArtifactZip(`${exportName}-prd.zip`, [
+      { name: 'prd.md', content: prd.content ?? '' },
+      {
+        name: 'backlog.json',
+        content: JSON.stringify(prd.backlogJson ?? null, null, 2),
+      },
+    ]);
+  }, [prd]);
 
   const handleSubmit = useCallback(async () => {
     if (!id || !readiness?.readyForReviewActions) return;
@@ -1100,6 +1115,10 @@ export const PrdReviewView: React.FC = () => {
     !!prd.content &&
     (readiness.state === 'test_cases_pending' ||
       readiness.state === 'test_case_generation_failed');
+  const canRecalculateTestCaseCoverageAction =
+    canManage &&
+    prd.status !== 'approved' &&
+    readiness.state === 'coverage_gaps';
   const canRunValidationAction =
     canManage &&
     prd.prdValidationEnabled &&
@@ -1362,6 +1381,28 @@ export const PrdReviewView: React.FC = () => {
             <span className={styles.reviewOnlyBadge}>Read-only</span>
           )}
 
+          <button
+            className={styles.actionBtn}
+            onClick={handleDownload}
+            disabled={!prd.content && !prd.backlogJson}
+            type="button"
+            title="Download PRD Markdown and backlog JSON"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M8 2v8M5 7l3 3 3-3" />
+              <path d="M3 13h10" />
+            </svg>
+            Download
+          </button>
+
           {canGenerateTestCasesAction && (
             <button
               className={styles.actionBtn}
@@ -1370,6 +1411,19 @@ export const PrdReviewView: React.FC = () => {
               type="button"
             >
               {readiness.state === 'test_case_generation_failed' ? 'Regenerate Test Cases' : 'Generate Test Cases'}
+            </button>
+          )}
+
+          {canRecalculateTestCaseCoverageAction && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => void recalculateTestCaseCoverage.mutateAsync(prd.id)}
+              disabled={recalculateTestCaseCoverage.isPending}
+              type="button"
+            >
+              {recalculateTestCaseCoverage.isPending
+                ? 'Re-evaluating Coverage…'
+                : 'Re-evaluate Coverage'}
             </button>
           )}
 

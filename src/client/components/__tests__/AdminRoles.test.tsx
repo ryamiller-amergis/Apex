@@ -17,6 +17,8 @@ jest.mock('../../hooks/useRbac', () => ({
   useUsers: jest.fn(),
   useAssignRole: jest.fn(),
   useRemoveRole: jest.fn(),
+  useAssignProjectRole: jest.fn(),
+  useRemoveProjectRole: jest.fn(),
 }));
 
 import {
@@ -29,6 +31,8 @@ import {
   useUsers,
   useAssignRole,
   useRemoveRole,
+  useAssignProjectRole,
+  useRemoveProjectRole,
 } from '../../hooks/useRbac';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -71,6 +75,8 @@ function setupDefaultMocks() {
   (useUsers as jest.Mock).mockReturnValue({ data: [], isLoading: false });
   (useAssignRole as jest.Mock).mockReturnValue(noop);
   (useRemoveRole as jest.Mock).mockReturnValue(noop);
+  (useAssignProjectRole as jest.Mock).mockReturnValue(noop);
+  (useRemoveProjectRole as jest.Mock).mockReturnValue(noop);
 
   return { mutateAsync, mutate };
 }
@@ -385,13 +391,15 @@ describe('AdminRoles — members modal', () => {
     (useUpdateRolePermissions as jest.Mock).mockReturnValue(noop);
     (useUsers as jest.Mock).mockReturnValue({
       data: [
-        { oid: 'u1', displayName: 'Alice', email: 'alice@test.com', lastSeenAt: null, roles: ['admin'] },
-        { oid: 'u2', displayName: 'Bob', email: 'bob@test.com', lastSeenAt: null, roles: ['member'] },
+        { oid: 'u1', displayName: 'Alice', email: 'alice@test.com', lastSeenAt: null, roles: ['admin'], projectRoles: ['admin'] },
+        { oid: 'u2', displayName: 'Bob', email: 'bob@test.com', lastSeenAt: null, roles: ['member'], projectRoles: ['member'] },
       ],
       isLoading: false,
     });
     (useAssignRole as jest.Mock).mockReturnValue(noop);
     (useRemoveRole as jest.Mock).mockReturnValue(noop);
+    (useAssignProjectRole as jest.Mock).mockReturnValue(noop);
+    (useRemoveProjectRole as jest.Mock).mockReturnValue(noop);
   });
 
   it('opens a members modal when "Members" is clicked', () => {
@@ -402,6 +410,33 @@ describe('AdminRoles — members modal', () => {
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText(/members — admin/i)).toBeInTheDocument();
+  });
+
+  it('loads role member candidates only from the selected project', () => {
+    render(<AdminRoles selectedProject="Apex" />);
+
+    fireEvent.click(screen.getAllByTitle('Manage members')[0]);
+
+    expect(useUsers).toHaveBeenCalledWith('Apex');
+  });
+
+  it('assigns the role as a project role when a project is selected', () => {
+    const mutate = jest.fn();
+    (useAssignProjectRole as jest.Mock).mockReturnValue({
+      mutate,
+      isPending: false,
+      error: null,
+    });
+    render(<AdminRoles selectedProject="Apex" />);
+
+    fireEvent.click(screen.getAllByTitle('Manage members')[0]);
+    fireEvent.change(screen.getByLabelText('Select user to add'), { target: { value: 'u2' } });
+    fireEvent.click(screen.getByLabelText('Add selected user to role'));
+
+    expect(mutate).toHaveBeenCalledWith(
+      { oid: 'u2', project: 'Apex', roleId: 'role-admin' },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
   });
 
   it('lists current members of the role', () => {

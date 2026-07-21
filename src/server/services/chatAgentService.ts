@@ -30,7 +30,7 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -327,9 +327,20 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
 function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
-  options?: { maxviewEnabled?: boolean },
+  options?: { maxviewEnabled?: boolean; calendarSessionId?: string },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
+
+  const port = process.env.PORT ?? '3001';
+
+  // Calendar assistant threads use a restricted MCP that only exposes the
+  // propose_work_item_changes tool — never the general ado-skills MCP.
+  if (kickoff.assistantType === 'calendar-work-item' && options?.calendarSessionId) {
+    servers['calendar-assistant'] = {
+      url: `http://localhost:${port}/mcp/calendar-assistant/${options.calendarSessionId}`,
+    };
+    return servers;
+  }
 
   // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
   if (kickoff.skillProvider !== 'github') {
@@ -393,7 +404,7 @@ function buildMaxviewPromptHint(): string {
 function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
   if (kickoff.pillBypassScopePolicy) return [];
   const project = kickoff.project;
-  return [
+  const lines = [
     ``,
     `# Scope policy — STRICTLY ENFORCED`,
     `This assistant exists exclusively to help the ${project} team with internal organisational and project work. You MUST NOT answer questions that have no connection to this project, its codebase, team processes, or org-level work.`,
@@ -414,6 +425,62 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
     ``,
     `You MAY draw on your training knowledge to give richer answers on in-scope topics (e.g. TypeScript patterns, REST design, testing strategies) — but only when the question is clearly related to this project's work.`,
   ];
+
+  // Narrow carve-out for greenfield product-discovery interviews with live web research enabled.
+  // This relaxes the "refuse web/general" rule ONLY for research in service of building this project —
+  // it is not a full bypass, and unrelated general-knowledge requests are still refused.
+  if (kickoff.webResearchEnabled) {
+    lines.push(
+      ``,
+      `# Live web research — ENABLED for this interview`,
+      `This is a product-discovery interview for building **${project}**. You MAY use the available web-search MCP tools to research competitors, market context, industry/regulatory standards, UX patterns, and technical approaches when doing so sharpens the requirements for this project.`,
+      `Every web lookup must be in service of this project's interview. Do NOT use web access for unrelated general knowledge, trivia, entertainment, or personal requests — the out-of-scope refusal above still applies to anything not tied to building ${project}.`,
+      `Cite what you found and tie it back to a concrete requirement, trade-off, or decision for ${project}.`,
+    );
+  }
+
+  return lines;
+}
+
+/**
+ * For interview-style threads, opt into live web research when the project's skill config
+ * enables it. Wires the configured web-search MCP into the thread and flags the kickoff so
+ * the scope policy applies the narrow web-research carve-out. Additive and fail-safe:
+ * never overrides an explicit Agent Home MCP pill and returns the kickoff unchanged on any error.
+ */
+async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff): Promise<ChatThreadKickoff> {
+  // Only interview-style threads with a skill path are candidates; never override an explicit pill.
+  if (kickoff.mcpPill || kickoff.webResearchEnabled) return kickoff;
+  if (!kickoff.skillPath || !kickoff.project) return kickoff;
+  try {
+    const { resolveSkillConfig } = await import('./projectSettingsService');
+    const cfg = await resolveSkillConfig({
+      project: kickoff.project,
+      settingsId: kickoff.skillSettingsId ?? undefined,
+    });
+    if (!cfg?.interviewWebResearchEnabled) return kickoff;
+
+    const interviewPaths = new Set<string>();
+    if (cfg.interviewSkillPath) interviewPaths.add(cfg.interviewSkillPath);
+    for (const opt of cfg.interviewSkillOptions ?? []) {
+      if (opt.path) interviewPaths.add(opt.path);
+    }
+    if (!interviewPaths.has(kickoff.skillPath)) return kickoff;
+
+    // Only activate web research when there is actually an MCP server configured to
+    // perform it. Setting webResearchEnabled without a tool gives the agent a
+    // scope carve-out but nothing to search with.
+    if (!cfg.interviewWebMcp) return kickoff;
+
+    return {
+      ...kickoff,
+      webResearchEnabled: true,
+      mcpPill: cfg.interviewWebMcp,
+    };
+  } catch (err) {
+    console.error('[chat] interview web-research enrichment failed:', (err as Error).message);
+    return kickoff;
+  }
 }
 
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
@@ -468,7 +535,28 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    if (kickoff.assistantType === 'prd') {
+    if (kickoff.assistantType === 'adr') {
+      const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
+      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+      const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+      parts.push(
+        ``,
+        `# ADR session identifiers`,
+        `Use these exact values when calling MCP tools:`,
+        `  adr_id:    ${adrId}`,
+        `  thread_id: ${threadId}`,
+        ``,
+        `# ADR context and repository grounding`,
+        `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
+        `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
+        ``,
+        `# Applying edits — MANDATORY tool use`,
+        `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
+        `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
+        `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
+      );
+    } else if (kickoff.assistantType === 'prd') {
       // Extract prd_id and thread_id from the freeform context so the agent
       // has them directly in the system prompt — no file-read required.
       const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
@@ -694,7 +782,71 @@ function buildStandupFollowupPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
+function buildCalendarWorkItemAssistantPrompt(kickoff: ChatThreadKickoff): string {
+  const sessionId = kickoff.calendarAssistantSessionId ?? '(unknown)';
+  const threadId = '(read from .ai-pilot/session.json)';
+  const anchorId = kickoff.calendarAnchorWorkItemId ?? '(unknown)';
+  const selectedIds = (kickoff.calendarSelectedWorkItemIds ?? []).join(', ') || '(none)';
+
+  return [
+    `# Calendar Work-Item Assistant`,
+    ``,
+    `You are an expert technical writer helping to improve Azure DevOps work items.`,
+    `Your role is to propose changes to Description and/or Acceptance Criteria for the`,
+    `selected work items below. You MUST use the \`propose_work_item_changes\` MCP tool`,
+    `to stage your proposals — chat-only descriptions are NOT proposals and will not be applied.`,
+    ``,
+    `# Session identifiers — use these exact values when calling MCP tools`,
+    `  session_id: ${sessionId}`,
+    `  thread_id:  ${threadId}`,
+    `  anchor_work_item_id: ${anchorId}`,
+    `  selected_work_item_ids: [${selectedIds}]`,
+    ``,
+    `# Work-item context`,
+    `The current content of all selected work items has been written to \`.ai-pilot/kickoff-context.md\`.`,
+    `Read this file first to understand the current state before proposing any changes.`,
+    ``,
+    `# Editable fields`,
+    `- **Description** — supported for Epic, Feature, PBI, and TBI`,
+    `- **Acceptance Criteria** — supported for Epic, Feature, and PBI only`,
+    ``,
+    `# What you may propose`,
+    `- Improve clarity, completeness, or consistency of Description and/or Acceptance Criteria`,
+    `- Add missing Given/When/Then acceptance criteria for PBIs/Features`,
+    `- Align child items with the parent Epic's updated description`,
+    `- Only propose for work items in the selected_work_item_ids list above`,
+    ``,
+    `# What you must NOT do`,
+    `- Do NOT claim that changes have been applied — they have not been written to ADO until the user reviews and confirms`,
+    `- Do NOT propose changes to fields other than Description and Acceptance Criteria`,
+    `- Do NOT call \`update_work_item\` — that tool is not available in this assistant`,
+    `- Do NOT propose for work items outside the selected_work_item_ids list`,
+    ``,
+    `# Applying your proposals — MANDATORY tool use`,
+    `When you have decided on changes for one or more items:`,
+    `1. Read \`.ai-pilot/kickoff-context.md\` to confirm the current content.`,
+    `2. Compose the full replacement text for each changed field (Markdown).`,
+    `3. Call \`propose_work_item_changes\` with session_id and thread_id from above.`,
+    `   Each item entry must include the work_item_id and an array of field changes.`,
+    `4. After the tool succeeds, briefly tell the user which items were staged and`,
+    `   that they will see a diff review panel to approve or reject each change.`,
+    ``,
+    `# Available MCP tool`,
+    `- \`propose_work_item_changes\` — stage Description/AC proposals for review (no ADO writes)`,
+    ``,
+    `# Content constraints`,
+    `- Write in clear, professional language suitable for an engineering team`,
+    `- Use Markdown: bold (**text**), unordered lists (- item), inline code (\`text\`)`,
+    `- For Acceptance Criteria use Given/When/Then format where appropriate`,
+    `- Keep each field under 64 KB`,
+    ...buildScopePolicyLines(kickoff),
+  ].join('\n');
+}
+
 function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
+  if (kickoff.assistantType === 'calendar-work-item') {
+    return buildCalendarWorkItemAssistantPrompt(kickoff);
+  }
   if (kickoff.mode === 'standup-participant') {
     return buildStandupParticipantPrompt(kickoff);
   }
@@ -1180,11 +1332,16 @@ function resetIdleTimer(state: ThreadState) {
 }
 
 async function checkIsInterviewThread(threadId: string): Promise<boolean> {
-  const row = await db.query.interviews.findFirst({
+  const interviewRow = await db.query.interviews.findFirst({
     where: eq(interviews.chatThreadId, threadId),
     columns: { id: true },
   });
-  return row !== undefined;
+  if (interviewRow) return true;
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  return adrRow !== undefined;
 }
 
 /**
@@ -1195,6 +1352,12 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
  * ON DELETE CASCADE FK would silently destroy the parent document.
  */
 async function threadBacksDocument(threadId: string): Promise<string | null> {
+  const adrRow = await db.query.adrs.findFirst({
+    where: eq(adrs.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  if (adrRow) return 'adr';
+
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
     columns: { id: true },
@@ -1334,13 +1497,16 @@ export async function createThread(
   const threadId = uuidv4();
   const workspaceDir = options?.workspaceDirOverride ?? path.join(WORKSPACE_BASE, threadId);
 
+  // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
+  const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
+
   // Resolve branch
-  const branch = kickoff.branch ?? 'main';
+  const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...kickoff,
+    ...enrichedKickoff,
     branch,
     dependenciesPrepared:
-      options?.dependenciesPrepared ?? kickoff.dependenciesPrepared,
+      options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
 
   if (!options?.workspaceDirOverride) {
@@ -1640,10 +1806,20 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   // Check if this thread belongs to a design doc (generation thread)
   const ddGenRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.chatThreadId, threadId),
+    columns: { id: true, prdId: true, project: true, authorId: true, designPrototypeId: true },
   });
   if (ddGenRow) {
-    await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
-    console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
+    if (ddGenRow.designPrototypeId) {
+      // Prototype-linked single-feature doc — update the existing row. The watcher
+      // may have already handled this; finalizeSingleFeatureDoc is idempotent.
+      const { finalizeSingleFeatureDoc } = await import('./designDocService');
+      await finalizeSingleFeatureDoc(ddGenRow.id, threadId, ddGenRow.project);
+      console.log(`[chat] post-run: finalised prototype-linked design doc (designDocId=${ddGenRow.id})`);
+    } else {
+      // Legacy multi-feature or direct-from-PRD seed doc — fan out to child rows.
+      await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
+      console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
+    }
     return;
   }
 
@@ -1690,18 +1866,20 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
         console.error(`[chat] post-run: failed to parse validation scorecard`, err);
       }
     } else {
-      // Agent completed (success path) but wrote no scorecard file.
-      // Reset the doc from 'validating' → 'draft' so the user can re-run.
-      // The WHERE status='validating' guard prevents overwriting an already-scored doc.
+      // Agent completed but wrote no scorecard file.
+      // Keep the generated content accessible by moving to pending_review (matching the
+      // watcher's own idle-without-scorecard path). The approval gate will still require a
+      // valid validation score if a skill is configured — this just unblocks the author
+      // from seeing and reviewing the content rather than hiding it in a Draft state.
       const freshDoc = await db.query.designDocs.findFirst({
         where: eq(designDocs.id, ddValRow.id),
         columns: { validationThreadId: true, status: true },
       });
       if (freshDoc?.validationThreadId === threadId && freshDoc?.status === 'validating') {
         await db.update(designDocs)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
           .where(eq(designDocs.id, ddValRow.id));
-        console.warn(`[chat] post-run: validation agent wrote no scorecard, reset to draft (designDocId=${ddValRow.id})`);
+        console.warn(`[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`);
       }
       fullySynced = true; // workspace can be cleaned
     }
@@ -1809,12 +1987,12 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
   }
 
   const [ddResult] = await db.update(designDocs)
-    .set({ status: 'draft', updatedAt: new Date().toISOString() })
+    .set({ status: 'generation_failed', generationError: 'Agent run failed before output was written', updatedAt: new Date().toISOString() })
     .where(and(eq(designDocs.chatThreadId, threadId), eq(designDocs.status, 'generating')))
     .returning({ id: designDocs.id });
 
   if (ddResult) {
-    console.warn(`[chat] failGeneratingDocuments: reset design doc to draft (designDocId=${ddResult.id}, threadId=${threadId})`);
+    console.warn(`[chat] failGeneratingDocuments: marked design doc generation_failed (designDocId=${ddResult.id}, threadId=${threadId})`);
   }
 
   const [testCaseResult] = await db.update(testCases)
@@ -1945,7 +2123,10 @@ export async function sendMessage(
 
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled });
+  const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
+    ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
+    : undefined;
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled, calendarSessionId });
   console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),
@@ -1979,6 +2160,22 @@ export async function sendMessage(
   broadcast(state, { type: 'status', status: 'running' });
   persistThread(state.thread);
   resetIdleTimer(state);
+
+  // Insert a provisional agent_runs row so cross-instance liveness checks
+  // (isThreadRunAlive) see a live run during the slow Agent.create / agent.send
+  // window. The real run ID is unknown until after agent.send, so use a
+  // thread-scoped provisional ID; the definitive insert at ~2222 will either
+  // reuse this row (onConflictDoNothing) or create the real one alongside it.
+  const provisionalRunId = `${threadId}:provisional`;
+  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  await db.insert(agentRuns).values({
+    id: provisionalRunId,
+    threadId,
+    status: 'queued',
+    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
+  }).onConflictDoNothing().catch((e) =>
+    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
+  );
 
   // Build initial prompt on first turn
   const isFirstTurn = !state.thread.cursorAgentId;
@@ -2103,6 +2300,12 @@ export async function sendMessage(
       status: 'queued',
       timeoutAt: runTimeoutAt,
     }).onConflictDoNothing();
+
+    // Clean up provisional liveness row now that the real row exists
+    if (agentRunId !== provisionalRunId) {
+      db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
+        .catch((e) => console.warn('[chat] Failed to delete provisional agent_runs row:', e));
+    }
 
     // Atomic lease claim: only one worker transitions queued → running
     const [claimed] = await db.update(agentRuns)
@@ -2576,6 +2779,9 @@ export async function sendMessage(
       clearInterval(backgroundHeartbeatId);
       backgroundHeartbeatId = null;
     }
+    // Clean up provisional liveness row if it was never replaced by the real one
+    db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
+      .catch(() => {});
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);
@@ -2719,6 +2925,14 @@ export function readOutputPrd(threadId: string): string | null {
   if (named) return fs.readFileSync(named, 'utf-8');
   const legacy = path.join(outputDir, 'PRD.md');
   return fs.existsSync(legacy) ? fs.readFileSync(legacy, 'utf-8') : null;
+}
+
+/** Read a generated MADR document from the ephemeral workspace. */
+export function readOutputAdr(threadId: string): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const file = findOutputFile(outputDir, /\.adr\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**

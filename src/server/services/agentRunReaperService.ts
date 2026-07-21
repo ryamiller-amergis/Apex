@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, chatThreads } from '../db/schema';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventStatus,
@@ -125,6 +125,70 @@ export function assessAgentRunHealth(
   if (ageMs(meaningfulProgressAt, nowMs) >= config.progressStaleMs) return 'progress_stale';
   if (ageMs(runStartedAt, nowMs) >= config.longRunMs) return 'long_running';
   return 'healthy';
+}
+
+/**
+ * Cross-instance liveness check for a thread's agent run.
+ *
+ * Unlike in-memory `isThreadIdle`, this reads `agent_runs` and treats a run as
+ * alive while any queued/running row is not terminal (`worker_lost`,
+ * `hard_timeout`, `never_claimed`). Use this before failing generation so
+ * non-owner instances do not discard work still owned by another worker.
+ */
+export async function isThreadRunAlive(
+  threadId: string,
+  options: ReaperOptions = {},
+): Promise<boolean> {
+  const config = options.config ?? resolveAgentRunHealthConfig();
+  const nowMs = options.now?.() ?? Date.now();
+  const rows = await db.query.agentRuns.findMany({
+    where: and(eq(agentRuns.threadId, threadId), inArray(agentRuns.status, ['queued', 'running'])),
+  });
+  return rows.some((row) => {
+    const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
+    const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
+    return health !== 'worker_lost' && health !== 'hard_timeout' && health !== 'never_claimed';
+  });
+}
+
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+export function isTerminalAgentRunStatus(status: string): boolean {
+  return TERMINAL_RUN_STATUSES.has(status);
+}
+
+/**
+ * Return the most recent agent_runs row for a thread (by createdAt DESC).
+ */
+export async function getLatestThreadRun(threadId: string): Promise<{
+  status: string;
+  ownerInstance: string | null;
+} | null> {
+  const row = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.threadId, threadId),
+    orderBy: desc(agentRuns.createdAt),
+    columns: { status: true, ownerInstance: true },
+  });
+  return row ?? null;
+}
+
+/**
+ * Decides whether *this* server instance is allowed to mark a design doc as
+ * `generation_failed`. Returns false when:
+ * - No agent_runs row exists yet (kickoff still starting — keep polling).
+ * - The latest run is non-terminal (still alive — the liveness gate handles it).
+ * - The latest run is terminal but owned by a different instance (that instance
+ *   is responsible for finalization).
+ *
+ * Returns true when this instance owned the terminal run (or ownerInstance is
+ * null — legacy/reaped rows where no owner was recorded).
+ */
+export async function canThisInstanceFailGeneration(threadId: string): Promise<boolean> {
+  const latest = await getLatestThreadRun(threadId);
+  if (!latest) return false;
+  if (!isTerminalAgentRunStatus(latest.status)) return false;
+  if (latest.ownerInstance && latest.ownerInstance !== RUN_EVENT_SOURCE_INSTANCE) return false;
+  return true;
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {

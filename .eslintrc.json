@@ -33,7 +33,11 @@
       "plugins": ["react-hooks", "jsx-a11y"],
       "rules": {
         "react-hooks/rules-of-hooks": "error",
-        "react-hooks/exhaustive-deps": "warn"
+        "react-hooks/exhaustive-deps": "warn",
+        "react-hooks/set-state-in-effect": "warn",
+        "react-hooks/immutability": "warn",
+        "react-hooks/refs": "warn",
+        "react-hooks/preserve-manual-memoization": "warn"
       }
     },
     {

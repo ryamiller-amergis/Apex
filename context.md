@@ -17,6 +17,14 @@ Apex provides a structured interview workflow where a BA, Product Owner, or Mana
 - **Mark complete** when the conversation has captured sufficient requirements
 - **Generate a PRD** with one click from a completed interview — the AI uses the `/to-prd` skill to produce a structured PRD with epics, features, PBIs, and TBIs organized into delivery waves
 
+### Architecture Decision Records
+
+Apex provides repository-grounded architecture decision interviews for developers. A senior-principal-engineer agent challenges constraints and alternatives, then generates a consistent MADR-style record that can be accepted or superseded.
+
+- **Structured decision interview** — one question at a time, grounded in the selected project repository
+- **Explicit trade-offs** — captures decision drivers, considered options, and positive and negative consequences
+- **Durable ADR artifact** — generated markdown is stored in PostgreSQL and remains available after the agent workspace is cleaned up
+
 ### 2. PRD Generation & Review
 
 PRDs are automatically generated from interview transcripts by an AI agent. The output includes a structured markdown document and a `backlog.json` with a full work item hierarchy.
@@ -198,7 +206,7 @@ A developer-focused view for managing personal work items and development sessio
 - **Centralized platform** — everything lives in one place with consistent navigation and search
 - **Consistent UI** — all views share the same design language, theming (Light/Dark/Amergis), and interaction patterns
 - **Real-time updates** — SSE-powered notifications, live chat streaming, and polling-based ADO sync keep everything current
-- **Role-based access** — RBAC ensures users see exactly what they need and nothing they don't
+- **Role-based access** — admins can assign global roles or project-specific roles; project roles override global roles when present so access and navigation can differ by project
 - **AI assistance everywhere** — from interviews to PRD generation to design doc validation to standup facilitation, AI agents reduce manual effort at every step
 - **Mobile responsive** — hamburger menu and responsive layouts work on mobile devices
 - **Accessible** — keyboard navigation, ARIA labels, and focus management throughout
@@ -244,6 +252,7 @@ A developer-focused view for managing personal work items and development sessio
 | Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |
 | Interview | `/backlog` | `interviews:view` + menu enabled | Interview dashboard, PRD review, design docs, prototypes |
+| ADR | `/adr` | `adr:view` + menu enabled | Architecture decision interviews and MADR records |
 | My Work | `/my-work` | `dev-workbench:view` + Developer group + menu enabled | Developer workbench and sessions |
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
 | Feature Requests | `/feature-requests` | `feature-requests:view` + Apex project only + menu enabled | Feature request review and triage (Apex admins) |
@@ -251,7 +260,7 @@ A developer-focused view for managing personal work items and development sessio
 | Platform Admin | `/platform-admin` | Super admin only | Access & Users, Menu Visibility, Feature Flags |
 
 Navigation is controlled by three layers:
-1. **RBAC permissions** — determines if the user has the right to access the module
+1. **RBAC permissions** — determined from project-specific roles when assigned, otherwise from global roles; permissions refresh when the user switches projects
 2. **Menu visibility** — per-project menu settings configured in Platform Admin control which modules appear
 3. **Group membership** — some modules (My Work, Standup) require membership in specific groups
 
@@ -259,8 +268,8 @@ Navigation is controlled by three layers:
 
 ### Project Admin (`/admin`)
 - **Roles** — create, edit, delete roles; manage permission assignments per role
-- **Users** — view all users, assign/revoke roles, search by name or email
-- **Groups** — manage project groups (Developer, BA, QA, etc.) that gate certain features
+- **Users** — view project users and assign/revoke global or project-specific roles; project assignments override global roles for that project
+- **Groups** — manage project groups (Developer, BA, QA, etc.) that gate certain features; member selection is limited to users assigned to the active project
 - **Project Settings** — per-project configuration for AI skills, models, approval mode, designated approvers
 - **Notifications** — admin notification management
 
@@ -274,6 +283,7 @@ Navigation is controlled by three layers:
 | Capability | Skill | What it Does |
 |-----------|-------|-------------|
 | Design Interview | `/grill-with-docs` | Structured interview that challenges design decisions using project context |
+| ADR Interview and Generation | `/adr-interview`, `/adr-finalize` | Challenges an architecture decision against repository evidence and writes a MADR record |
 | PRD Generation | `/to-prd` | Generates structured PRD + backlog hierarchy from interview transcript |
 | Design Doc Generation | (project-configured) | Auto-generates design docs from approved prototypes |
 | Design Doc Validation | (project-configured) | Scores design docs against a validation rubric; blocks approval below 90% |

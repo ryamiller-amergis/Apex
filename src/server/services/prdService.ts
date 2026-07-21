@@ -609,6 +609,21 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   const interval = setInterval(async () => {
     attempts += 1;
 
+    // Multi-instance / orphan safety: deletePrd only clears the watcher on the
+    // instance that handled the delete. Bail if the PRD is gone or no longer generating.
+    const prdRow = await db.query.prds.findFirst({
+      where: eq(prds.id, prdId),
+      columns: { id: true, status: true },
+    });
+    if (!prdRow || prdRow.status !== 'generating') {
+      clearInterval(interval);
+      activePrdWatchers.delete(prdId);
+      console.log(
+        `[prdWatcher] Stopped — PRD ${!prdRow ? 'deleted' : `status=${prdRow.status}`} (prdId=${prdId})`,
+      );
+      return;
+    }
+
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activePrdWatchers.delete(prdId);

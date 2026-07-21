@@ -47,6 +47,8 @@ const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ def
 const AiCostAnalytics = lazy(() => import('./components/AiCostAnalytics').then(m => ({ default: m.AiCostAnalytics })));
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
+const AdrsDashboard = lazy(() => import('./components/AdrsDashboard'));
+const AdrChatView = lazy(() => import('./components/AdrChatView'));
 const PrdReviewView = lazy(() => import('./components/PrdReviewView'));
 const DesignDocReviewView = lazy(() => import('./components/DesignDocReviewView'));
 const DesignPrototypeReviewView = lazy(() => import('./components/DesignPrototypeReviewView'));
@@ -66,6 +68,8 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
+const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
@@ -92,6 +96,18 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
+  const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
+  const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
+    id: number;
+    title: string;
+  } | null>(null);
+
+  const handleOpenCalendarAssistant = useCallback((anchorId: number, anchorTitle: string) => {
+    // Close the global chat panel to avoid two competing drawers
+    setChatOpen(false);
+    setCalendarAssistantAnchor({ id: anchorId, title: anchorTitle });
+    setCalendarAssistantOpen(true);
+  }, []);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -109,7 +125,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -125,6 +141,8 @@ function App() {
                 ? 'cloudcost'
                 : location.pathname.startsWith('/backlog')
                   ? 'backlog'
+                  : location.pathname.startsWith('/adr')
+                    ? 'adr'
                   : location.pathname === '/notifications'
                     ? 'notifications'
                     : location.pathname.startsWith('/admin')
@@ -145,6 +163,8 @@ function App() {
                     ? 'pdf-tools'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
+                    : location.pathname === '/design-module'
+                    ? 'design-module'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -170,6 +190,7 @@ function App() {
     authenticatedUser,
     can,
     isInAnyGroup,
+    userId,
     isSuperAdmin,
     permissionsLoaded,
     workItems,
@@ -255,6 +276,7 @@ function App() {
     if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
     if (currentView === 'ai-cost'       && !isSuperAdmin && (!enabledViews.includes('ai-cost')    || !can('analytics:ai-cost:view'))) navigate('/home');
     if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
+    if (currentView === 'adr'           && !isSuperAdmin && (!enabledViews.includes('adr')       || !can('adr:view'))) navigate('/home');
     if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
     if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
     if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
@@ -263,6 +285,7 @@ function App() {
     if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate('/home');
+    if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -415,12 +438,14 @@ function App() {
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateAdr={() => navigate('/adr')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigatePdfTools={() => navigate('/pdf-tools')}
             onNavigateAiCost={() => navigate('/ai-cost')}
+            onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -460,12 +485,14 @@ function App() {
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
             onNavigateBacklog={() => navigate('/backlog')}
+            onNavigateAdr={() => navigate('/adr')}
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onNavigateAiCost={() => navigate('/ai-cost')}
+            onNavigateDesignModule={() => navigate('/design-module')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -523,7 +550,20 @@ function App() {
                         project={selectedProject}
                         areaPath={selectedAreaPath}
                         onSelectItem={setSelectedItem}
+                        onOpenAssistant={handleOpenCalendarAssistant}
                       />
+                    )}
+                    {calendarAssistantOpen && calendarAssistantAnchor && (
+                      <Suspense fallback={null}>
+                        <CalendarWorkItemAssistantPanel
+                          anchorWorkItemId={calendarAssistantAnchor.id}
+                          anchorTitle={calendarAssistantAnchor.title}
+                          project={selectedProject}
+                          areaPath={selectedAreaPath}
+                          open={calendarAssistantOpen}
+                          onClose={() => setCalendarAssistantOpen(false)}
+                        />
+                      </Suspense>
                     )}
                     {pendingDueDateChange && (
                       <DueDateReasonModal
@@ -551,6 +591,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <AiCostAnalytics project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'adr' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                {location.pathname === '/adr' ? <AdrsDashboard /> : <AdrChatView />}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'backlog' ? (
@@ -621,7 +667,7 @@ function App() {
                     </button>
                   </div>
                   {location.pathname === '/admin/users' ? (
-                    <AdminUsers />
+                    <AdminUsers selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/groups' ? (
                     <AdminGroups selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/project-settings' ? (
@@ -629,7 +675,7 @@ function App() {
                   ) : location.pathname === '/admin/notifications' ? (
                     <AdminNotifications />
                   ) : (
-                    <AdminRoles />
+                    <AdminRoles selectedProject={selectedProject} />
                   )}
                 </div>
               </Suspense>
@@ -690,11 +736,17 @@ function App() {
                 <DesktopOnlyGate>
                   <Suspense fallback={<div data-testid="pdf-tools-loading"><ViewSkeleton /></div>}>
                     <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                      <PdfAssemblyView />
+                      <PdfAssemblyView key={userId} userId={userId} />
                     </div>
                   </Suspense>
                 </DesktopOnlyGate>
               </PdfToolsRouteGuard>
+            </ErrorBoundary>
+          ) : currentView === 'design-module' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <DesignModuleView selectedProject={selectedProject} />
+              </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>

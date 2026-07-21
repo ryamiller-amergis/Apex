@@ -167,10 +167,14 @@ function extractCoverageSummary(
     asRecord(root?.coverageMatrix) ?? asRecord(root?.coverage_matrix);
   const acceptanceCriteria = Array.isArray(matrix?.acceptanceCriteria)
     ? matrix.acceptanceCriteria
-    : [];
+    : Array.isArray(matrix?.acceptance_criteria)
+      ? matrix.acceptance_criteria
+      : [];
   const businessRules = Array.isArray(matrix?.businessRules)
     ? matrix.businessRules
-    : [];
+    : Array.isArray(matrix?.business_rules)
+      ? matrix.business_rules
+      : [];
   const coveredPbis = new Set<string>();
 
   for (const item of acceptanceCriteria) {
@@ -181,10 +185,13 @@ function extractCoverageSummary(
     }
   }
 
+  const countedCases = countCaseLikeItems(testCasesJson);
   const totalCases =
-    numberFrom(direct?.totalCases) ??
-    numberFrom(direct?.total_cases) ??
-    countCaseLikeItems(testCasesJson);
+    countedCases > 0
+      ? countedCases
+      : numberFrom(direct?.totalCases) ??
+        numberFrom(direct?.total_cases) ??
+        0;
 
   if (coveredPbis.size === 0) {
     const suiteCounts = extractSuiteTestCaseCounts(testCasesJson);
@@ -192,20 +199,34 @@ function extractCoverageSummary(
   }
 
   const pbisCovered =
-    numberFrom(direct?.pbisCovered) ??
-    numberFrom(direct?.pbis_covered) ??
-    coveredPbis.size;
+    coveredPbis.size > 0
+      ? coveredPbis.size
+      : numberFrom(direct?.pbisCovered) ??
+        numberFrom(direct?.pbis_covered) ??
+        0;
+  const hasAcceptanceCriteriaMatrix =
+    Array.isArray(matrix?.acceptanceCriteria) ||
+    Array.isArray(matrix?.acceptance_criteria);
+  const hasBusinessRulesMatrix =
+    Array.isArray(matrix?.businessRules) ||
+    Array.isArray(matrix?.business_rules);
   const acCovered =
-    stringFrom(direct?.acCovered) ??
-    stringFrom(direct?.ac_covered) ??
-    `${acceptanceCriteria.filter((item) => asRecord(item)?.covered === true).length}/${acceptanceCriteria.length}`;
+    hasAcceptanceCriteriaMatrix
+      ? `${acceptanceCriteria.filter((item) => asRecord(item)?.covered === true).length}/${acceptanceCriteria.length}`
+      : stringFrom(direct?.acCovered) ??
+        stringFrom(direct?.ac_covered) ??
+        '0/0';
   const brCovered =
-    stringFrom(direct?.brCovered) ??
-    stringFrom(direct?.br_covered) ??
-    `${businessRules.filter((item) => asRecord(item)?.covered === true).length}/${businessRules.length}`;
+    hasBusinessRulesMatrix
+      ? `${businessRules.filter((item) => asRecord(item)?.covered === true).length}/${businessRules.length}`
+      : stringFrom(direct?.brCovered) ??
+        stringFrom(direct?.br_covered) ??
+        '0/0';
   const gapsValue = direct?.gaps ?? matrix?.gaps;
   const gaps =
-    numberFrom(gapsValue) ?? (Array.isArray(gapsValue) ? gapsValue.length : 0);
+    Array.isArray(matrix?.gaps)
+      ? matrix.gaps.length
+      : numberFrom(gapsValue) ?? (Array.isArray(gapsValue) ? gapsValue.length : 0);
 
   if (!direct && totalCases === 0) return null;
   return { totalCases, pbisCovered, acCovered, brCovered, gaps };
@@ -268,6 +289,175 @@ function extractSuiteTestCaseCounts(
   }
 
   return counts;
+}
+
+function addCoverageId(
+  coverage: Map<string, Set<string>>,
+  key: string | null,
+  testCaseId: string | null
+): void {
+  if (!key || !testCaseId) return;
+  const ids = coverage.get(key) ?? new Set<string>();
+  ids.add(testCaseId);
+  coverage.set(key, ids);
+}
+
+function collectTraceabilityCoverage(testCasesJson: unknown): {
+  acceptanceCriteria: Map<string, Set<string>>;
+  businessRules: Map<string, Set<string>>;
+} {
+  const acceptanceCriteria = new Map<string, Set<string>>();
+  const businessRules = new Map<string, Set<string>>();
+  const root = asRecord(testCasesJson);
+  if (!root) return { acceptanceCriteria, businessRules };
+
+  const collectCase = (value: unknown, fallbackPbiId: string | null): void => {
+    const record = asRecord(value);
+    if (!record) return;
+    const traceability = asRecord(record.traceability);
+    const testCaseId =
+      stringFrom(record.id) ??
+      stringFrom(record.testCaseId) ??
+      stringFrom(record.test_case_id) ??
+      stringFrom(record.caseId);
+    const pbiId =
+      stringFrom(traceability?.pbiId) ??
+      stringFrom(traceability?.pbi_id) ??
+      stringFrom(record.pbiId) ??
+      stringFrom(record.pbi_id) ??
+      fallbackPbiId;
+    const acIndex =
+      numberFrom(traceability?.acceptanceCriteriaIndex) ??
+      numberFrom(traceability?.acceptance_criteria_index) ??
+      numberFrom(record.acceptanceCriteriaIndex);
+
+    if (pbiId && acIndex !== null) {
+      addCoverageId(acceptanceCriteria, `${pbiId}:${acIndex}`, testCaseId);
+    }
+
+    const tracedBusinessRules = Array.isArray(traceability?.businessRules)
+      ? traceability.businessRules
+      : Array.isArray(traceability?.business_rules)
+        ? traceability.business_rules
+        : [];
+    for (const rule of tracedBusinessRules) {
+      addCoverageId(businessRules, stringFrom(rule), testCaseId);
+    }
+  };
+
+  const suites = Array.isArray(root.suites) ? root.suites : [];
+  for (const suite of suites) {
+    const suiteRecord = asRecord(suite);
+    if (!suiteRecord) continue;
+    const pbiId =
+      stringFrom(suiteRecord.pbiId) ??
+      stringFrom(suiteRecord.pbi_id) ??
+      stringFrom(suiteRecord.workItemId) ??
+      stringFrom(suiteRecord.work_item_id);
+    const cases = Array.isArray(suiteRecord.testCases)
+      ? suiteRecord.testCases
+      : Array.isArray(suiteRecord.test_cases)
+        ? suiteRecord.test_cases
+        : Array.isArray(suiteRecord.cases)
+          ? suiteRecord.cases
+          : [];
+    cases.forEach((testCase) => collectCase(testCase, pbiId));
+  }
+
+  const flatCases = Array.isArray(root.testCases)
+    ? root.testCases
+    : Array.isArray(root.test_cases)
+      ? root.test_cases
+      : [];
+  flatCases.forEach((testCase) => collectCase(testCase, null));
+
+  return { acceptanceCriteria, businessRules };
+}
+
+function mergeTestCaseIds(existing: unknown, discovered: Set<string> | undefined): string[] {
+  const ids = new Set<string>();
+  if (Array.isArray(existing)) {
+    existing.forEach((id) => {
+      const value = stringFrom(id);
+      if (value) ids.add(value);
+    });
+  }
+  discovered?.forEach((id) => ids.add(id));
+  return Array.from(ids);
+}
+
+function refreshCoverageMatrix(testCasesJson: Record<string, unknown>): void {
+  const matrix =
+    asRecord(testCasesJson.coverageMatrix) ??
+    asRecord(testCasesJson.coverage_matrix);
+  if (!matrix) return;
+
+  const traced = collectTraceabilityCoverage(testCasesJson);
+  const acceptanceCriteria = Array.isArray(matrix.acceptanceCriteria)
+    ? matrix.acceptanceCriteria
+    : Array.isArray(matrix.acceptance_criteria)
+      ? matrix.acceptance_criteria
+      : [];
+  for (const item of acceptanceCriteria) {
+    const record = asRecord(item);
+    if (!record) continue;
+    const pbiId = stringFrom(record.pbiId) ?? stringFrom(record.pbi_id);
+    const index = numberFrom(record.index);
+    if (!pbiId || index === null) continue;
+    const ids = mergeTestCaseIds(
+      record.testCaseIds ?? record.test_case_ids,
+      traced.acceptanceCriteria.get(`${pbiId}:${index}`)
+    );
+    if ('test_case_ids' in record && !('testCaseIds' in record)) {
+      record.test_case_ids = ids;
+    } else {
+      record.testCaseIds = ids;
+    }
+    if (ids.length > 0) record.covered = true;
+  }
+
+  const businessRules = Array.isArray(matrix.businessRules)
+    ? matrix.businessRules
+    : Array.isArray(matrix.business_rules)
+      ? matrix.business_rules
+      : [];
+  for (const item of businessRules) {
+    const record = asRecord(item);
+    if (!record) continue;
+    const id = stringFrom(record.id);
+    if (!id) continue;
+    const ids = mergeTestCaseIds(
+      record.testCaseIds ?? record.test_case_ids,
+      traced.businessRules.get(id)
+    );
+    if ('test_case_ids' in record && !('testCaseIds' in record)) {
+      record.test_case_ids = ids;
+    } else {
+      record.testCaseIds = ids;
+    }
+    if (ids.length > 0) record.covered = true;
+  }
+}
+
+function syncEmbeddedCoverageSummary(
+  testCasesJson: Record<string, unknown>,
+  summary: TestCaseCoverageSummary
+): void {
+  const embedded =
+    asRecord(testCasesJson.coverageSummary) ??
+    asRecord(testCasesJson.coverage_summary) ??
+    asRecord(testCasesJson.summary);
+  if (!embedded) return;
+
+  embedded.totalCases = summary.totalCases;
+  embedded.pbisCovered = summary.pbisCovered;
+  embedded.acCovered = summary.acCovered;
+  embedded.brCovered = summary.brCovered;
+  embedded.gaps = summary.gaps;
+  if ('total_cases' in embedded) embedded.total_cases = summary.totalCases;
+  if ('pbis_covered' in embedded) embedded.pbis_covered = summary.pbisCovered;
+  if ('ac_covered' in embedded) embedded.ac_covered = summary.acCovered;
+  if ('br_covered' in embedded) embedded.br_covered = summary.brCovered;
 }
 
 function cloneJson(value: unknown): unknown {
@@ -676,6 +866,7 @@ export interface AddTestCaseInput {
   title: string;
   steps: TestCaseStepInput[];
   acceptanceCriteriaIndex?: number;
+  businessRules?: string[];
 }
 
 export interface AddTestCaseResult {
@@ -766,28 +957,28 @@ export async function addTestCaseToPrd(
     id: testCaseId,
     title,
     steps,
+    traceability: {
+      pbiId: input.pbiId,
+      ...(typeof input.acceptanceCriteriaIndex === 'number'
+        ? { acceptanceCriteriaIndex: input.acceptanceCriteriaIndex }
+        : {}),
+      ...(input.businessRules?.length
+        ? { businessRules: Array.from(new Set(input.businessRules)) }
+        : {}),
+    },
   };
-  if (typeof input.acceptanceCriteriaIndex === 'number') {
-    newCase.traceability = {
-      acceptanceCriteriaIndex: input.acceptanceCriteriaIndex,
-    };
-  }
   cases.push(newCase);
   suite.testCaseCount = cases.length;
 
-  // Keep any embedded coverage summary's total in sync so the recompute below is
-  // accurate (extractCoverageSummary prefers a cached totalCases when present).
+  refreshCoverageMatrix(root);
   const totalCases = countCaseLikeItems(root);
-  const embeddedSummary =
+  const existingEmbeddedSummary =
     asRecord(root.coverageSummary) ??
     asRecord(root.coverage_summary) ??
     asRecord(root.summary);
-  if (embeddedSummary) {
-    if ('totalCases' in embeddedSummary) embeddedSummary.totalCases = totalCases;
-    if ('total_cases' in embeddedSummary) embeddedSummary.total_cases = totalCases;
-  }
-
+  if (existingEmbeddedSummary) existingEmbeddedSummary.totalCases = totalCases;
   const coverageSummary = extractCoverageSummary(root);
+  if (coverageSummary) syncEmbeddedCoverageSummary(root, coverageSummary);
   const now = new Date().toISOString();
 
   let rowId: string;
@@ -832,6 +1023,50 @@ export async function addTestCaseToPrd(
   );
 
   return { testCaseId, rowId, totalCases };
+}
+
+export async function recalculateTestCaseCoverage(
+  prdId: string
+): Promise<TestCaseCoverageSummary> {
+  const existing = await getTestCases(prdId);
+  if (!existing?.testCasesJson) {
+    throw new Error('No generated test cases are available to re-evaluate');
+  }
+
+  const root = cloneJson(existing.testCasesJson) as Record<string, unknown>;
+  refreshCoverageMatrix(root);
+  const summary = extractCoverageSummary(root);
+  if (!summary) {
+    throw new Error('Test-case coverage could not be calculated');
+  }
+  syncEmbeddedCoverageSummary(root, summary);
+
+  const now = new Date().toISOString();
+  await db
+    .update(testCases)
+    .set({
+      testCasesJson: root as any,
+      coverageSummary: summary,
+      updatedAt: now,
+    })
+    .where(eq(testCases.id, existing.id));
+
+  const prdRow = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { backlogJson: true },
+  });
+  const updatedBacklog = applyTestCaseCountsToBacklog(prdRow?.backlogJson, root);
+  if (updatedBacklog !== null) {
+    await db
+      .update(prds)
+      .set({ backlogJson: updatedBacklog as any, updatedAt: now })
+      .where(eq(prds.id, prdId));
+  }
+
+  console.log(
+    `[testCase] Recalculated coverage (prdId=${prdId}, testCaseId=${existing.id}, ac=${summary.acCovered}, br=${summary.brCovered})`
+  );
+  return summary;
 }
 
 /** Re-apply test-case suite counts onto the live PRD backlog JSON after backlog edits. */

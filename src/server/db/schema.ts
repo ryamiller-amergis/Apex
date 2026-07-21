@@ -4,8 +4,16 @@ import type {
   PageManifestEntry,
   PdfConversionStatus,
   PdfFileMetadata,
+  PdfJobType,
   PdfSessionStatus,
 } from '../../shared/types/pdf';
+import type {
+  WorkItemHierarchyNode,
+  WorkItemChangeSet,
+  WorkItemProposalStatus,
+  WorkItemAssistantSessionStatus,
+  WorkItemApplyItemResult,
+} from '../../shared/types/calendarWorkItemAssistant';
 import type {
   AgentRunCancelEvent,
   AgentRunEventStatus,
@@ -19,11 +27,13 @@ import type { DesignPrototypeHistoryEntry } from '../../shared/types/designProto
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
-import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption } from '../../shared/types/projectSettings';
+import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
+import type { WorkItemType } from '../../shared/types/featureRequest';
+import type { DesignModuleIconKey } from '../../shared/types/designModule';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -173,10 +183,23 @@ export const appUserRoles = pgTable('app_user_roles', {
   pk: primaryKey({ columns: [t.userId, t.roleId] }),
 }));
 
+export const appUserProjectRoles = pgTable('app_user_project_roles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'cascade' }),
+  assignedBy: text('assigned_by'),
+  assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userProjectRoleUniq: unique('app_user_project_roles_user_project_role_key').on(t.userId, t.project, t.roleId),
+  userProjectIdx: index('idx_app_user_project_roles_user_project').on(t.userId, t.project),
+}));
+
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
 export const appUsersRelations = relations(appUsers, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
@@ -185,6 +208,7 @@ export const appUsersRelations = relations(appUsers, ({ many }) => ({
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
   userRoles: many(appUserRoles),
+  projectRoles: many(appUserProjectRoles),
   rolePermissions: many(appRolePermissions),
 }));
 
@@ -200,6 +224,11 @@ export const appRolePermissionsRelations = relations(appRolePermissions, ({ one 
 export const appUserRolesRelations = relations(appUserRoles, ({ one }) => ({
   user: one(appUsers, { fields: [appUserRoles.userId], references: [appUsers.oid] }),
   role: one(appRoles, { fields: [appUserRoles.roleId], references: [appRoles.id] }),
+}));
+
+export const appUserProjectRolesRelations = relations(appUserProjectRoles, ({ one }) => ({
+  user: one(appUsers, { fields: [appUserProjectRoles.userId], references: [appUsers.oid] }),
+  role: one(appRoles, { fields: [appUserProjectRoles.roleId], references: [appRoles.id] }),
 }));
 
 // ── User Project Assignments ──────────────────────────────────────────────────
@@ -314,6 +343,26 @@ export const interviews = pgTable('interviews', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const adrs = pgTable('adrs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  adrAssistantThreadId: uuid('adr_assistant_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  reviewerIds: jsonb('reviewer_ids').$type<string[]>(),
+  title: text('title').notNull().default('Untitled ADR'),
+  project: text('project').notNull(),
+  repo: text('repo').notNull(),
+  model: text('model'),
+  skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
+  status: text('status').notNull().default('in_progress'),
+  content: text('content').notNull().default(''),
+  proposedContent: text('proposed_content'),
+  fixCommentId: uuid('fix_comment_id'),
+  slug: text('slug'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 export const prds = pgTable('prds', {
   id: uuid('id').primaryKey().defaultRandom(),
   interviewId: uuid('interview_id'),
@@ -384,6 +433,7 @@ export const designDocs = pgTable('design_docs', {
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
   skillSettingsId: uuid('skill_settings_id'),
+  generationError: text('generation_error'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
   reviewComment: text('review_comment'),
@@ -420,6 +470,27 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
     relationName: 'interviewTestCaseOwner',
   }),
   prds: many(prds),
+}));
+
+export const adrsRelations = relations(adrs, ({ one, many }) => ({
+  chatThread: one(chatThreads, {
+    fields: [adrs.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  assistantThread: one(chatThreads, {
+    relationName: 'adrAssistantThread',
+    fields: [adrs.adrAssistantThreadId],
+    references: [chatThreads.id],
+  }),
+  author: one(appUsers, {
+    fields: [adrs.authorId],
+    references: [appUsers.oid],
+  }),
+  skillSettings: one(projectSkillSettings, {
+    fields: [adrs.skillSettingsId],
+    references: [projectSkillSettings.id],
+  }),
+  featureRequestLinks: many(featureRequestAdrs),
 }));
 
 export const prdsRelations = relations(prds, ({ one, many }) => ({
@@ -480,12 +551,16 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   updatedBy: text('updated_by'),
   interviewSkillPath: text('interview_skill_path'),
   prdSkillPath: text('prd_skill_path'),
+  adrInterviewSkillPath: text('adr_interview_skill_path'),
+  adrFinalizeSkillPath: text('adr_finalize_skill_path'),
+  adrAssistantSkillPath: text('adr_assistant_skill_path'),
   designDocSkillPath: text('design_doc_skill_path'),
   designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
   designPrototypeSkillPath: text('design_prototype_skill_path'),
   testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
   prdModel: text('prd_model'),
+  adrModel: text('adr_model'),
   designDocModel: text('design_doc_model'),
   designDocAssistantModel: text('design_doc_assistant_model'),
   designPrototypeModel: text('design_prototype_model'),
@@ -520,14 +595,26 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   standupModel: text('standup_model'),
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
+  technicalSkillPath: text('technical_skill_path'),
+  technicalModel: text('technical_model'),
+  issueSkillPath: text('issue_skill_path'),
+  issueModel: text('issue_model'),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
+  interviewWebResearchEnabled: boolean('interview_web_research_enabled').notNull().default(false),
+  interviewWebMcp: jsonb('interview_web_mcp').$type<QuickMcpPill>(),
+  prototypeEngine: text('prototype_engine').$type<PrototypeEngine>().notNull().default('bedrock'),
+  prototypeDesignSystemPath: text('prototype_design_system_path'),
+  screenInventoryPath: text('screen_inventory_path'),
+  prototypeWebReferencesEnabled: boolean('prototype_web_references_enabled').notNull().default(false),
   quickSkillPills: jsonb('quick_skill_pills').$type<QuickSkillPill[]>(),
   quickMcpPills: jsonb('quick_mcp_pills').$type<QuickMcpPill[]>(),
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   cursorApiKeyEnvRef: text('cursor_api_key_env_ref'),
   cursorServiceAccountId: text('cursor_service_account_id'),
+  calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
+  calendarAssistantModel: text('calendar_assistant_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -653,6 +740,29 @@ export const appSettings = pgTable('app_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+// ── Design Module Architecture Explorer ──────────────────────────────────────
+
+export const designModules = pgTable('design_modules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  label: text('label').notNull(),
+  description: text('description'),
+  iconKey: text('icon_key').$type<DesignModuleIconKey>().notNull().default('default'),
+  sourceGlobs: jsonb('source_globs').$type<string[]>().notNull().default([]),
+  content: text('content'),
+  sourceFingerprint: text('source_fingerprint'),
+  sourceCommit: text('source_commit'),
+  lastGeneratedAt: timestamp('last_generated_at', { withTimezone: true, mode: 'string' }),
+  generatedByModel: text('generated_by_model'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdBy: text('created_by'),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
+}));
+
 export const teamsConversationReferences = pgTable('teams_conversation_references', {
   userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
   conversationReference: jsonb('conversation_reference').notNull(),
@@ -732,6 +842,25 @@ export const deploymentOutcomes = pgTable('deployment_outcomes', {
   reportedAt: timestamp('reported_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }),
 });
+
+// ── Release Epic Orders ───────────────────────────────────────────────────────
+
+export const releaseEpicOrders = pgTable(
+  'release_epic_orders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    areaPath: text('area_path').notNull(),
+    adoEpicId: integer('ado_epic_id').notNull(),
+    sortRank: integer('sort_rank').notNull(),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_release_epic_orders_scope_epic').on(t.project, t.areaPath, t.adoEpicId),
+    index('idx_release_epic_orders_scope').on(t.project, t.areaPath, t.sortRank),
+  ],
+);
 
 // ── Project Menu Settings ─────────────────────────────────────────────────────
 
@@ -1069,9 +1198,10 @@ export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
 
 export const featureRequests = pgTable('feature_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
+  type: text('type').$type<WorkItemType>().notNull().default('feature'),
   title: text('title').notNull(),
   request: text('request').notNull(),
-  advantage: text('advantage').notNull(),
+  advantage: text('advantage'),
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
@@ -1089,10 +1219,22 @@ export const featureRequests = pgTable('feature_requests', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
+  typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
 }));
 
-export const featureRequestsRelations = relations(featureRequests, ({ one }) => ({
+export const featureRequestAdrs = pgTable('feature_request_adrs', {
+  featureRequestId: uuid('feature_request_id').notNull()
+    .references(() => featureRequests.id, { onDelete: 'cascade' }),
+  adrId: uuid('adr_id').notNull()
+    .references(() => adrs.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.featureRequestId, t.adrId] }),
+  adrIdx: index('idx_feature_request_adrs_adr_id').on(t.adrId),
+}));
+
+export const featureRequestsRelations = relations(featureRequests, ({ one, many }) => ({
   interview: one(interviews, {
     fields: [featureRequests.interviewId],
     references: [interviews.id],
@@ -1100,6 +1242,18 @@ export const featureRequestsRelations = relations(featureRequests, ({ one }) => 
   submitter: one(appUsers, {
     fields: [featureRequests.submittedBy],
     references: [appUsers.oid],
+  }),
+  adrLinks: many(featureRequestAdrs),
+}));
+
+export const featureRequestAdrsRelations = relations(featureRequestAdrs, ({ one }) => ({
+  featureRequest: one(featureRequests, {
+    fields: [featureRequestAdrs.featureRequestId],
+    references: [featureRequests.id],
+  }),
+  adr: one(adrs, {
+    fields: [featureRequestAdrs.adrId],
+    references: [adrs.id],
   }),
 }));
 
@@ -1131,15 +1285,22 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
 export const pdfConversionJobs = pgTable('pdf_conversion_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   sessionId: uuid('session_id').notNull().references(() => pdfSessions.id, { onDelete: 'cascade' }),
+  jobType: text('job_type').$type<PdfJobType>().notNull().default('docx_convert'),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   originalName: text('original_name').notNull(),
   originalMimeType: text('original_mime_type').notNull(),
-  inputPath: text('input_path').notNull(),
+  inputKey: text('input_key').notNull(),
   status: text('status').$type<PdfConversionStatus>().notNull().default('queued'),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb('result').$type<Record<string, unknown>>(),
   fileId: uuid('file_id'),
   errorCode: text('error_code'),
   errorMessage: text('error_message'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true, mode: 'string' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -1147,6 +1308,10 @@ export const pdfConversionJobs = pgTable('pdf_conversion_jobs', {
 }, (t) => ({
   sessionCreatedIdx: index('idx_pdf_conversion_jobs_session_created').on(t.sessionId, t.createdAt),
   statusCreatedIdx: index('idx_pdf_conversion_jobs_status_created').on(t.status, t.createdAt),
+  claimIdx: index('idx_pdf_conversion_jobs_claim').on(t.createdAt).where(sql`status = 'queued'`),
+  processingUserIdx: index('idx_pdf_conversion_jobs_processing_user')
+    .on(t.userId, t.lockExpiresAt)
+    .where(sql`status = 'processing'`),
 }));
 
 export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one }) => ({
@@ -1314,3 +1479,55 @@ export const aiCostDailyBrief = pgTable('ai_cost_daily_brief', {
 }, (t) => ({
   projectDateTypeIdx: unique('ai_cost_daily_brief_project_date_type').on(t.project, t.briefDate, t.briefType),
 }));
+
+// ── Calendar Work-Item Assistant ──────────────────────────────────────────────
+
+export const workItemAssistantSessions = pgTable('work_item_assistant_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerUserId: text('owner_user_id').notNull(),
+  project: text('project').notNull(),
+  areaPath: text('area_path').notNull().default(''),
+  anchorWorkItemId: integer('anchor_work_item_id').notNull(),
+  selectedWorkItemIds: jsonb('selected_work_item_ids').$type<number[]>().notNull().default([]),
+  contextSnapshot: jsonb('context_snapshot').$type<WorkItemHierarchyNode[]>().notNull().default([]),
+  threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  status: text('status').$type<WorkItemAssistantSessionStatus>().notNull().default('active'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  ownerIdx: index('idx_work_item_assistant_sessions_owner').on(t.ownerUserId),
+  projectAnchorIdx: index('idx_work_item_assistant_sessions_project_anchor').on(t.project, t.anchorWorkItemId),
+  threadIdx: index('idx_work_item_assistant_sessions_thread').on(t.threadId),
+}));
+
+export const workItemChangeProposals = pgTable('work_item_change_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => workItemAssistantSessions.id, { onDelete: 'cascade' }),
+  changeSet: jsonb('change_set').$type<WorkItemChangeSet>().notNull(),
+  status: text('status').$type<WorkItemProposalStatus>().notNull().default('pending'),
+  itemResults: jsonb('item_results').$type<WorkItemApplyItemResult[]>(),
+  resolvedBy: text('resolved_by'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionCreatedIdx: index('idx_work_item_change_proposals_session_created').on(t.sessionId, t.createdAt),
+}));
+
+export const workItemAssistantSessionsRelations = relations(workItemAssistantSessions, ({ one, many }) => ({
+  thread: one(chatThreads, {
+    fields: [workItemAssistantSessions.threadId],
+    references: [chatThreads.id],
+  }),
+  proposals: many(workItemChangeProposals),
+}));
+
+export const workItemChangeProposalsRelations = relations(workItemChangeProposals, ({ one }) => ({
+  session: one(workItemAssistantSessions, {
+    fields: [workItemChangeProposals.sessionId],
+    references: [workItemAssistantSessions.id],
+  }),
+}));
+
+// Add calendar assistant columns to projectSkillSettings (applied via migration)
+// Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql

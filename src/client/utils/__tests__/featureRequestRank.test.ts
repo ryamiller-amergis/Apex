@@ -4,12 +4,14 @@ import { reorderWithSequentialRanks, sortFeatureRequestsByRank } from '../featur
 function makeRequest(id: string, rank: number | null, createdAt: string): FeatureRequest {
   return {
     id,
+    type: 'feature',
     title: `Request ${id}`,
     request: 'details',
     advantage: 'benefit',
     interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    linkedAdrs: [],
     status: 'new',
     aiStatus: 'complete',
     aiPriority: null,

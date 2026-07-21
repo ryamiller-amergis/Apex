@@ -1,6 +1,7 @@
 import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createAdoMcpServer } from './server';
+import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
 
 /**
  * Mount the ADO MCP server as a Streamable HTTP transport on the given Express app.
@@ -42,4 +43,8 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
   });
 
   console.log(`[mcp/ado] Mounted at POST ${basePath}`);
+
+  // Mount the session-bound calendar assistant MCP alongside ado-skills.
+  // URL: POST /mcp/calendar-assistant/:sessionId
+  mountCalendarAssistantMcp(app);
 }

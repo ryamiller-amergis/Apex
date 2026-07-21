@@ -145,7 +145,7 @@
 .hint {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ── Skill picker ──────────────────────────────────────────────────────────── */

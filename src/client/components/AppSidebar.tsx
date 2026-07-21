@@ -24,12 +24,14 @@ interface AppSidebarProps {
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
+  onNavigateAdr?: () => void;
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
+  onNavigateDesignModule?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -66,6 +68,13 @@ const IconInterview: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 5a2 2 0 012-2h8a2 2 0 012 2v7a2 2 0 01-2 2H8l-3 3v-3H6a2 2 0 01-2-2V5z" />
     <path d="M7 7h6M7 10h4" />
+  </svg>
+);
+
+const IconAdr: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 2.5h7l3 3V17.5H5z" />
+    <path d="M12 2.5v3h3M8 9h4M8 12h4" />
   </svg>
 );
 
@@ -108,6 +117,15 @@ const IconPdfTools: React.FC = () => (
   </svg>
 );
 
+const IconDesignModule: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="5" height="5" rx="1" />
+    <rect x="12" y="3" width="5" height="5" rx="1" />
+    <rect x="7.5" y="12" width="5" height="5" rx="1" />
+    <path d="M5.5 8v2h9V8M10 10v2" />
+  </svg>
+);
+
 const IconAdmin: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -141,12 +159,14 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePlanning,
   onNavigateCloudCost,
   onNavigateBacklog,
+  onNavigateAdr = () => {},
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigatePdfTools,
   onNavigateAiCost,
+  onNavigateDesignModule,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -164,11 +184,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </svg>
       ), permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
+    { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-    { label: 'Feature Requests', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
+    { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
   ];
 
   const visibleModuleItems = moduleItems.filter((item) => {

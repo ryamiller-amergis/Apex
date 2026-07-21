@@ -9,6 +9,7 @@ jest.mock('../db/drizzle', () => ({
     query: {
       interviews: { findFirst: jest.fn() },
       prds: { findFirst: jest.fn() },
+      adrs: { findFirst: jest.fn() },
       designDocs: { findFirst: jest.fn() },
     },
   },
@@ -56,6 +57,7 @@ const mockDb = db as unknown as {
   query: {
     interviews: { findFirst: jest.Mock };
     prds: { findFirst: jest.Mock };
+    adrs: { findFirst: jest.Mock };
     designDocs: { findFirst: jest.Mock };
   };
 };
@@ -81,6 +83,7 @@ beforeEach(() => {
   mockIsAssignedApprover.mockResolvedValue(false);
   mockDb.query.interviews.findFirst.mockResolvedValue(null);
   mockDb.query.prds.findFirst.mockResolvedValue(null);
+  mockDb.query.adrs.findFirst.mockResolvedValue(null);
   mockDb.query.designDocs.findFirst.mockResolvedValue(null);
 });
 
@@ -92,6 +95,19 @@ describe('resolveThreadAccess', () => {
 
   it('returns read for a viewer with interviews:view on an interview-linked thread', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({ id: 'iv-1' });
+
+    const result = await resolveThreadAccess('viewer-1', 'thread-1');
+
+    expect(result).toEqual({ access: 'read', thread: baseThread });
+  });
+
+  it('returns read for adr:view on an ADR assistant thread', async () => {
+    mockDb.query.adrs.findFirst.mockResolvedValue({
+      id: 'adr-1',
+      chatThreadId: 'interview-thread',
+      adrAssistantThreadId: 'thread-1',
+    });
+    mockGetUserPermissions.mockResolvedValue(new Set(['adr:view']));
 
     const result = await resolveThreadAccess('viewer-1', 'thread-1');
 

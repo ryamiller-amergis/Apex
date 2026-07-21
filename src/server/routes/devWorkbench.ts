@@ -39,9 +39,16 @@ import {
   touchDevSessionSetup,
 } from '../services/devSessionSetupService';
 import { getUserId } from '../utils/requestUser';
-import type { StartDevSessionRequest, ApexBacklogGroup, BacklogFeatureItem } from '../../shared/types/devWorkbench';
+import type {
+  StartDevSessionRequest,
+  ApexBacklogGroup,
+  BacklogFeatureItem,
+} from '../../shared/types/devWorkbench';
+import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
+import { buildLocalDevContext } from '../services/localDevContextService';
 
 const router = Router();
 
@@ -147,6 +154,47 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   }
 });
 
+// GET /local-dev-context — assemble an in-memory context pack for local Cursor/VS Code
+// (no cloud session, no git clone). Query: project + (workItemId | prdId+featureId).
+router.get('/local-dev-context', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const workItemIdRaw = req.query.workItemId as string | undefined;
+    const prdId = req.query.prdId as string | undefined;
+    const featureId = req.query.featureId as string | undefined;
+
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+
+    let workItemId: number | undefined;
+    if (workItemIdRaw !== undefined && workItemIdRaw !== '') {
+      workItemId = Number(workItemIdRaw);
+      if (!Number.isFinite(workItemId) || workItemId <= 0) {
+        res.status(400).json({ error: 'workItemId must be a positive number' });
+        return;
+      }
+    }
+
+    const payload = await buildLocalDevContext({
+      project,
+      workItemId,
+      prdId,
+      featureId,
+    });
+    res.json(payload);
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 400 || status === 404) {
+      res.status(status).json({ error: (err as Error).message });
+      return;
+    }
+    console.error('[dev-workbench] local-dev-context failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to build local development context' });
+  }
+});
+
 // POST /features/complete — mark a feature as complete by inserting a synthetic
 // completed session, which unblocks any downstream features that depend on it.
 router.post('/features/complete', async (req: Request, res: Response) => {
@@ -196,7 +244,13 @@ router.post('/features/complete', async (req: Request, res: Response) => {
 // POST /start — creates a session record immediately, then clones + sets up the thread async
 router.post('/start', async (req: Request, res: Response) => {
   try {
-    const { workItemId, project, model, prdId, featureId } = req.body as StartDevSessionRequest;
+    const {
+      workItemId,
+      project,
+      model,
+      prdId,
+      featureId,
+    } = req.body as StartDevSessionRequest;
 
     if (!project) {
       res.status(400).json({ error: 'project is required' });
@@ -205,10 +259,49 @@ router.post('/start', async (req: Request, res: Response) => {
 
     const hasAdoPath = !!workItemId;
     const hasApexPath = !!prdId && !!featureId;
+    const sourcePathCount = [hasAdoPath, hasApexPath].filter(Boolean).length;
 
-    if (!hasAdoPath && !hasApexPath) {
-      res.status(400).json({ error: 'Either workItemId or prdId + featureId are required' });
+    if (sourcePathCount !== 1) {
+      res.status(400).json({
+        error: 'Exactly one source is required: workItemId or prdId + featureId',
+      });
       return;
+    }
+    if ((prdId && !featureId) || (!prdId && featureId)) {
+      res.status(400).json({ error: 'prdId and featureId must be provided together' });
+      return;
+    }
+    // Gate ADO work items: non-admins may only start APEX-generated Features in
+    // an allowed state (so the required design docs are present); super admins
+    // ("platform admins") bypass the type/origin restriction and are limited only
+    // by state. Defense-in-depth behind the disabled button; fail-open on a
+    // transient ADO lookup error (the UI already gates, and the async setup +
+    // resolver still apply).
+    if (hasAdoPath) {
+      try {
+        const stateService = new AzureDevOpsService(project);
+        const wiResult = await stateService.queryWorkItemsByWiql({
+          wiql: `SELECT [System.Id],[System.State],[System.WorkItemType],[System.Tags] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+          fields: ['System.Id', 'System.State', 'System.WorkItemType', 'System.Tags'],
+        });
+        const fields = wiResult.items[0]?.fields;
+        if (fields) {
+          const eligibility = evaluateDevStartEligibility(
+            {
+              state: (fields['System.State'] ?? '') as string,
+              workItemType: (fields['System.WorkItemType'] ?? '') as string,
+              tags: (fields['System.Tags'] ?? '') as string,
+            },
+            { isSuperAdmin: isSuperAdminRequest(req) },
+          );
+          if (!eligibility.allowed) {
+            res.status(403).json({ error: eligibility.reason ?? 'Start Development is not available for this work item.' });
+            return;
+          }
+        }
+      } catch (gateErr) {
+        console.warn('[dev-workbench] work item start pre-check failed (non-fatal):', (gateErr as Error).message);
+      }
     }
 
     const userId = getUserId(req);
@@ -242,14 +335,16 @@ router.post('/start', async (req: Request, res: Response) => {
             'Server dependency bootstrap was disabled; the agent may install dependencies as needed',
         };
 
-    await db.insert(devSessions).values({
-      id: sessionId,
-      workItemId: workItemId ?? null,
-      project,
-      authorId: userId,
-      prdId: prdId ?? null,
-      featureId: featureId ?? null,
-      status: 'setting_up',
+    await db.transaction(async (tx) => {
+      await tx.insert(devSessions).values({
+        id: sessionId,
+        workItemId: workItemId ?? null,
+        project,
+        authorId: userId,
+        prdId: prdId ?? null,
+        featureId: featureId ?? null,
+        status: 'setting_up',
+      });
     });
 
     logMyWorkSession('session.created', {
@@ -271,7 +366,10 @@ router.post('/start', async (req: Request, res: Response) => {
         const skillConfig = await getSkillConfig(project);
         const developmentSkillPath = skillConfig?.developmentSkillPath ?? undefined;
         const developmentModel = model ?? skillConfig?.developmentModel ?? undefined;
-        const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, project);
+        const { provider, repo, baseBranch } = await resolveCheckoutContext(
+          skillConfig,
+          project,
+        );
         const remote = resolveGitRemote(provider, project, repo);
 
         if (hasApexPath) {
@@ -486,13 +584,17 @@ router.post('/start', async (req: Request, res: Response) => {
             setupProgressAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(devSessions.id, sessionId));
+          .where(and(
+            eq(devSessions.id, sessionId),
+            eq(devSessions.status, 'setting_up'),
+          ));
       }
     })();
   } catch (err) {
     const message = (err as Error).message;
     console.error('[dev-workbench] start session failed:', message);
-    res.status(500).json({ error: `Failed to start development session: ${message}` });
+    const status = (err as Error & { status?: number }).status ?? 500;
+    res.status(status).json({ error: status === 500 ? `Failed to start development session: ${message}` : message });
   }
 });
 
@@ -630,10 +732,8 @@ router.post('/sessions/:id/push', async (req: Request, res: Response) => {
       return;
     }
 
-    const skillConfig = await getSkillConfig(session.project);
-    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
-    const remote = resolveGitRemote(provider, session.project, repo);
-    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
+    const { sourceProject, provider, repo, baseBranch } = await resolveSessionCheckoutContext(session);
+    const remote = resolveGitRemote(provider, sourceProject, repo);
 
     const workspaceDir = getWorkspaceDir(sessionId);
     const workspaceExists = fs.existsSync(workspaceDir);
@@ -763,9 +863,8 @@ router.post('/sessions/:id/conflicts/complete', async (req: Request, res: Respon
     const workspaceDir = getWorkspaceDir(sessionId);
     await completeMerge(workspaceDir);
 
-    const skillConfig = await getSkillConfig(session.project);
-    const { provider, repo } = await resolveCheckoutContext(skillConfig, session.project);
-    const remote = resolveGitRemote(provider, session.project, repo);
+    const { sourceProject, provider, repo } = await resolveSessionCheckoutContext(session);
+    const remote = resolveGitRemote(provider, sourceProject, repo);
     await pushFeatureBranch(sessionId, session.branchName, remote);
 
     logMyWorkSession('branch.conflict_resolved', {
@@ -841,16 +940,15 @@ router.post('/sessions/:id/pr', async (req: Request, res: Response) => {
       return;
     }
 
-    const skillConfig = await getSkillConfig(session.project);
-    const { provider, repo, baseBranch } = await resolveCheckoutContext(skillConfig, session.project);
-    const adoService = provider === 'ado' ? await adoWriteForRequest(req, session.project) : null;
+    const { sourceProject, provider, repo, baseBranch } = await resolveSessionCheckoutContext(session);
+    const adoService = provider === 'ado' ? await adoWriteForRequest(req, sourceProject) : null;
 
     await createSessionPr(
       sessionId,
       session.branchName,
       baseBranch,
       repo,
-      session.project,
+      sourceProject,
       session.workItemId,
       provider,
       adoService,
@@ -1092,6 +1190,20 @@ async function injectAdoAttachments(
   if (!fs.existsSync(backlogPath)) {
     fs.writeFileSync(backlogPath, '{}', 'utf-8');
   }
+}
+
+async function resolveSessionCheckoutContext(session: {
+  project: string;
+}): Promise<{
+  sourceProject: string;
+  provider: SkillProvider;
+  repo: string;
+  baseBranch: string;
+}> {
+  const sourceProject = session.project;
+  const skillConfig = await getSkillConfig(sourceProject);
+  const checkout = await resolveCheckoutContext(skillConfig, sourceProject);
+  return { sourceProject, ...checkout };
 }
 
 async function resolveCheckoutContext(

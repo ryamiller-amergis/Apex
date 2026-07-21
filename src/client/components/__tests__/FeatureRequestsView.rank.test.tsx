@@ -1,7 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { FeatureRequest } from '../../../shared/types/featureRequest';
+import type { FeatureRequest, WorkItemType } from '../../../shared/types/featureRequest';
 import { FeatureRequestsView } from '../FeatureRequestsView';
 
 const reorderMutateMock = jest.fn();
@@ -32,14 +32,23 @@ jest.mock('../FeatureRequestDetailPanel', () => ({
   FeatureRequestDetailPanel: () => null,
 }));
 
+jest.mock('../FeatureRequestModal', () => ({
+  FeatureRequestModal: ({ selectedProject, type }: { selectedProject: string; type: WorkItemType }) => (
+    <div role="dialog">New {type} item for {selectedProject}</div>
+  ),
+}));
+
 import { useFeatureRequests } from '../../hooks/useFeatureRequests';
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     can: (permission: string) =>
-      permission === 'feature-requests:manage' || permission === 'interviews:manage',
+      permission === 'feature-requests:manage' ||
+      permission === 'feature-requests:submit' ||
+      permission === 'interviews:manage',
     isInAnyGroup: () => true,
     permissionsLoaded: true,
+    selectedProject: 'Apex',
   }),
 }));
 
@@ -48,15 +57,18 @@ function makeRequest(
   title: string,
   rank: number | null,
   interviewId: string | null = null,
+  type: WorkItemType = 'feature',
 ): FeatureRequest {
   return {
     id,
+    type,
     title,
     request: 'details',
     advantage: 'benefit',
     interviewId,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    linkedAdrs: [],
     status: 'new',
     aiStatus: 'complete',
     aiPriority: 'medium',
@@ -72,7 +84,7 @@ function makeRequest(
   };
 }
 
-function renderView(requests: FeatureRequest[]) {
+function renderView(requests: FeatureRequest[], initialEntry = '/feature-requests') {
   (useFeatureRequests as jest.Mock).mockReturnValue({
     data: requests,
     isLoading: false,
@@ -85,10 +97,10 @@ function renderView(requests: FeatureRequest[]) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <FeatureRequestsView />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -104,8 +116,9 @@ describe('FeatureRequestsView rank reordering', () => {
       makeRequest('c', 'Gamma', 9),
     ]);
 
-    const rankValues = screen.getAllByText(/^[123]$/);
-    expect(rankValues.map((el) => el.textContent)).toEqual(['1', '2', '3']);
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows.map((row, index) => within(row).getByText(String(index + 1)).textContent))
+      .toEqual(['1', '2', '3']);
   });
 
   it('persists sequential ranks when move-down is clicked', () => {
@@ -132,7 +145,11 @@ describe('FeatureRequestsView rank reordering', () => {
       makeRequest('c', 'Gamma', 3),
     ]);
 
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: jest.fn() };
+    const dataTransfer = {
+      effectAllowed: '',
+      dropEffect: '',
+      setData: jest.fn(),
+    };
     const dragHandles = screen.getAllByLabelText('Drag to reorder');
     const rows = screen.getAllByRole('row').slice(1);
 
@@ -161,14 +178,18 @@ describe('FeatureRequestsView action menu', () => {
     ]);
 
     fireEvent.click(screen.getByLabelText('Actions for Alpha'));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Kick Off Interview' }));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: 'Kick Off Interview' })
+    );
     expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
       state: {
         featureRequest: {
           id: 'a',
+          type: 'feature',
           title: 'Alpha',
           request: 'details',
           advantage: 'benefit',
+          linkedAdrs: [],
         },
       },
     });
@@ -176,5 +197,70 @@ describe('FeatureRequestsView action menu', () => {
     fireEvent.click(screen.getByLabelText('Actions for Beta'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'View Interview' }));
     expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/interview-1');
+  });
+});
+
+describe('FeatureRequestsView submission', () => {
+  it('opens the feature request form from the grid toolbar when the grid is empty', () => {
+    renderView([]);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'New feature request' })
+    );
+
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'New feature item for Apex'
+    );
+  });
+});
+
+describe('FeatureRequestsView work item tabs', () => {
+  it('shows counts and filters items by the selected query-param tab', () => {
+    renderView(
+      [
+        makeRequest('f', 'Feature Alpha', 1),
+        makeRequest('t', 'Technical Beta', 1, null, 'technical'),
+        makeRequest('i', 'Issue Gamma', 1, null, 'issue'),
+      ],
+      '/feature-requests?tab=technical',
+    );
+
+    expect(screen.getByRole('tab', { name: /Technical 1/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByText('Technical Beta')).toBeInTheDocument();
+    expect(screen.queryByText('Feature Alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText('Issue Gamma')).not.toBeInTheDocument();
+  });
+
+  it('opens a type-aware modal from the active tab', () => {
+    renderView([], '/feature-requests?tab=issue');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New issue' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('New issue item for Apex');
+  });
+
+  it('allows kicking off an interview from a technical item', () => {
+    renderView(
+      [makeRequest('t', 'Technical Beta', 1, null, 'technical')],
+      '/feature-requests?tab=technical',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Technical Beta' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Kick Off Interview' }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
+      state: {
+        featureRequest: {
+          id: 't',
+          type: 'technical',
+          title: 'Technical Beta',
+          request: 'details',
+          advantage: 'benefit',
+          linkedAdrs: [],
+        },
+      },
+    });
   });
 });

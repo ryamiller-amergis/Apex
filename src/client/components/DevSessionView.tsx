@@ -499,6 +499,20 @@ interface FileEditorState {
   resolved: boolean;
 }
 
+/** Number of conflict-start markers left in a file's content. */
+function countConflictMarkers(content: string): number {
+  return (content.match(/^<<<<<<< /gm) ?? []).length;
+}
+
+/**
+ * True while a file still contains git conflict markers. Checks the start/end
+ * markers (which effectively never appear in real source) so legitimate
+ * `=======` dividers in markdown/SQL do not count as unresolved.
+ */
+function hasConflictMarkers(content: string): boolean {
+  return /^<<<<<<< /m.test(content) || /^>>>>>>> /m.test(content);
+}
+
 const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const { data: conflictsData, isLoading } = useSessionConflicts(sessionId);
   const resolveConflict = useResolveConflict(sessionId);
@@ -523,6 +537,8 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const handleMarkResolved = useCallback(async (filePath: string) => {
     const editor = editors[filePath];
     if (!editor) return;
+    // Guard: never let a file with leftover conflict markers be marked resolved.
+    if (hasConflictMarkers(editor.content)) return;
     try {
       await resolveConflict.mutateAsync({ path: filePath, content: editor.content });
       setEditors((prev) => ({ ...prev, [filePath]: { ...prev[filePath], resolved: true } }));
@@ -557,22 +573,31 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
         <span className={styles['merge-resolver-title']}>Merge Conflicts</span>
       </div>
       <p className={styles['merge-resolver-desc']}>
-        The base branch has diverged. Resolve each conflict below, then complete the merge to push.
+        The base branch has diverged. These {files.length} file{files.length === 1 ? '' : 's'} conflict —
+        remove the <code>{'<<<<<<<'}</code> / <code>{'======='}</code> / <code>{'>>>>>>>'}</code> markers in each,
+        mark it resolved, then complete the merge to push.
       </p>
 
       {files.map((f) => {
         const editor = editors[f.path];
+        const content = editor?.content ?? f.content;
+        const markersRemaining = countConflictMarkers(content);
+        const stillConflicted = hasConflictMarkers(content);
         return (
           <div key={f.path} className={styles['conflict-file']}>
             <div className={styles['conflict-file-header']}>
               <code className={styles['conflict-file-path']}>{f.path}</code>
-              {editor?.resolved && (
+              {editor?.resolved ? (
                 <span className={styles['conflict-resolved-badge']}>Resolved</span>
-              )}
+              ) : stillConflicted ? (
+                <span className={styles['conflict-marker-hint']}>
+                  {markersRemaining} conflict{markersRemaining === 1 ? '' : 's'} to resolve
+                </span>
+              ) : null}
             </div>
             <textarea
               className={styles['conflict-editor']}
-              value={editor?.content ?? f.content}
+              value={content}
               onChange={(e) =>
                 setEditors((prev) => ({
                   ...prev,
@@ -587,7 +612,8 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
                 type="button"
                 className={styles['resolve-btn']}
                 onClick={() => void handleMarkResolved(f.path)}
-                disabled={resolveConflict.isPending || editor?.resolved}
+                disabled={resolveConflict.isPending || editor?.resolved || stillConflicted}
+                title={stillConflicted ? 'Remove all conflict markers first' : undefined}
               >
                 {resolveConflict.isPending ? 'Saving…' : editor?.resolved ? 'Saved' : 'Mark as Resolved'}
               </button>

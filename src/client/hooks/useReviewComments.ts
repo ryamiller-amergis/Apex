@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateReviewCommentRequest,
   CreateReviewReplyRequest,
+  ReviewDocumentType,
   ReviewCommentWithReplies,
 } from '../../shared/types/reviewComments';
 
@@ -15,7 +16,7 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export function useReviewComments(documentId: string | null, documentType: 'prd' | 'design_doc') {
+export function useReviewComments(documentId: string | null, documentType: ReviewDocumentType) {
   return useQuery<ReviewCommentWithReplies[]>({
     queryKey: ['review-comments', documentType, documentId],
     queryFn: () => apiFetch(`/api/review-comments/${documentType}/${documentId}`),
@@ -25,7 +26,7 @@ export function useReviewComments(documentId: string | null, documentType: 'prd'
   });
 }
 
-export function useUnresolvedCommentCount(documentId: string | null, documentType: 'prd' | 'design_doc') {
+export function useUnresolvedCommentCount(documentId: string | null, documentType: ReviewDocumentType) {
   return useQuery<ReviewCommentWithReplies[], Error, { count: number }>({
     queryKey: ['review-comments', documentType, documentId],
     queryFn: () => apiFetch(`/api/review-comments/${documentType}/${documentId}`),
@@ -36,7 +37,7 @@ export function useUnresolvedCommentCount(documentId: string | null, documentTyp
   });
 }
 
-export function useCreateComment(documentType: 'prd' | 'design_doc', documentId: string | null) {
+export function useCreateComment(documentType: ReviewDocumentType, documentId: string | null) {
   const qc = useQueryClient();
   return useMutation<ReviewCommentWithReplies, Error, CreateReviewCommentRequest>({
     mutationFn: (body) =>

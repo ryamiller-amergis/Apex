@@ -11,6 +11,7 @@ Apex is an internal product-building and project-management platform. It central
 | Feature | Design Docs | Skills | Key Services | Key Components |
 |---------|------------|--------|-------------|----------------|
 | Design Interviews | `design-docs/interview-prd-workflow.md` | `.cursor/skills/kick-off/SKILL.md`, `.cursor/skills/grill-with-docs/SKILL.md`, `.cursor/skills/grill-design/SKILL.md` | `interviewService.ts` | `InterviewChatView.tsx`, `InterviewsDashboard.tsx` |
+| Architecture Decision Records | — | `.cursor/skills/adr-interview/SKILL.md`, `.cursor/skills/adr-finalize/SKILL.md`, `.cursor/skills/azure-async-infra/SKILL.md` (messaging/storage/workers), `.cursor/skills/terraform-infra/SKILL.md` (Terraform changes) | `adrService.ts` | `AdrChatView.tsx`, `AdrsDashboard.tsx` |
 | PRD Generation & Review | `design-docs/interview-prd-workflow.md`, `design-docs/prd-spec-review.md`, `design-docs/prd-generation-ux.md` | `.cursor/skills/to-prd/SKILL.md`, `.cursor/skills/prd-spec-review/SKILL.md`, `.cursor/skills/create-test-case/SKILL.md` | `prdService.ts`, `chatAgentService.ts` | `PrdReviewView.tsx`, `PrdAssistantPanel.tsx`, `BacklogViewer.tsx` |
 | Design Documents | `design-docs/claude-design-prototype.md`, `design-docs/per-feature-design-doc-kickoff.md` | `.cursor/skills/prd-design-spec/SKILL.md`, `.cursor/skills/design-spec-review/SKILL.md`, `.cursor/skills/design-doc-validation/SKILL.md` | `designDocService.ts`, `documentValidationService.ts` | `DesignDocReviewView.tsx`, `DesignPrototypeReviewView.tsx` |
 | Design Prototypes | `design-docs/claude-design-prototype.md` | — | `designPrototypeService.ts`, `designSystemService.ts` | `DesignPrototypeReviewView.tsx`, `DesignPlanReviewView.tsx` |
@@ -18,7 +19,7 @@ Apex is an internal product-building and project-management platform. It central
 | In-App Notifications | `design-docs/in-app-notifications.md`, `design-docs/ai-completion-notifications.md` | `.cursor/skills/in-app-notifications/SKILL.md` | `notificationService.ts`, `aiCompletionNotifier.ts` | `NotificationBell.tsx`, `NotificationCenter.tsx`, `ToastContainer.tsx` |
 | Feature Flags | `design-docs/feature_flags_system_84747609.plan.md` | `.cursor/skills/feature-flags/SKILL.md` | `featureFlagService.ts` | `PlatformAdmin.tsx`, `FeatureFlagDemo.tsx` |
 | Feature Requests | `design-docs/feature-requests.md` | `.cursor/skills/feature-request-analysis/SKILL.md` | `featureRequestService.ts`, `featureRequestAnalysisService.ts` | `FeatureRequestsView.tsx`, `FeatureRequestModal.tsx`, `FeatureRequestFab.tsx` |
-| RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
+| RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md`, `design-docs/per-user-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
 | Calendar & Work Items | — | — | `azureDevOps.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx` |
 | Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
@@ -43,7 +44,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Skill Pill** | A clickable shortcut button on the Agent Home page that routes messages through a specific skill and model |
 | **PBI** | Product Backlog Item (Azure DevOps work item type) |
 | **TBI** | Technical Backlog Item (Azure DevOps work item type) |
-| **RBAC** | Role-Based Access Control — permissions assigned to roles, roles assigned to users |
+| **RBAC** | Role-Based Access Control — permissions assigned to roles; users may have global roles or project-specific roles that override global roles for that project |
 | **Super Admin** | A platform-level administrator who bypasses all menu visibility and most permission checks |
 | **Platform Admin** | The admin panel for cross-project settings: access management, menu visibility, feature flags |
 | **Project Admin** | Per-project admin panel for roles, users, groups, project settings, and notifications |
@@ -102,6 +103,8 @@ src/
 | How are skills resolved per project? | `src/server/services/projectSettingsService.ts` |
 | What AI models are available? | `src/client/config/models.ts`, `src/server/services/modelsService.ts` |
 | How does ADO integration work? | `src/server/services/azureDevOps.ts` |
+| How should Blob / async workers be designed? | `.cursor/skills/azure-async-infra/SKILL.md`, `infra/shared-async.tf`, `.cursor/rules/azure-async-infra.mdc` |
+| How should Apex Terraform be written? | `.cursor/skills/terraform-infra/SKILL.md`, `.cursor/rules/terraform-infra.mdc`, `infra/README.md` |
 | What are the project settings? | `src/server/services/projectSettingsService.ts`, `src/client/components/AdminProjectSettings.tsx` |
 | How do I start a feature interview? | `.cursor/skills/grill-with-docs/SKILL.md` (feature building) or `.cursor/skills/grill-design/SKILL.md` (technical design) |
 | How do I generate a PRD from an interview? | `.cursor/skills/to-prd/SKILL.md` — reads `.ai-pilot/kickoff-transcript.md` |

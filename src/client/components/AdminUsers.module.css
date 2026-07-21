@@ -319,6 +319,21 @@
   transition: all 0.15s ease;
 }
 
+.badge-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-secondary));
+  color: var(--accent-color);
+  border: 1px dashed color-mix(in srgb, var(--accent-color) 40%, transparent);
+  transition: all 0.15s ease;
+}
+
 /* Per-role color overrides */
 .badge--admin {
   background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));

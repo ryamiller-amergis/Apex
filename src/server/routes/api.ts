@@ -1,6 +1,9 @@
 import express, { Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { adoWriteForRequest, adoWritePreferUser, isAdoUserAuthError } from '../services/adoFactory';
+import { getAdoTokenForUser } from '../services/adoUserToken';
 import { generateBacklogId } from '../../shared/utils/backlogId';
 import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
@@ -10,11 +13,14 @@ import { DeploymentTrackingService } from '../services/deploymentTracking';
 import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionService';
 import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
 import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
-import { sql } from 'drizzle-orm';
+import { sql, eq as drizzleEq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject } from '../services/projectSettingsService';
+import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
-import { getAgentHealthStats } from '../services/chatAgentService';
+import { getDefaultModel } from '../services/appSettingsService';
+import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { isFeatureEnabled } from '../services/featureFlagService';
+import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import {
   filterProjectCatalogByNames,
@@ -29,6 +35,31 @@ import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
+import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
+import {
+  getReleaseOrder,
+  applyOrderToEpics,
+  bulkUpdateReleaseOrder,
+  pruneStaleOrders,
+} from '../services/releaseOrderService';
+import { renameRelease } from '../services/releaseManagementService';
+import { chatThreads as chatThreadsSchema } from '../db/schema';
+import {
+  createOrReuseSession,
+  setSessionThread,
+  getSession,
+  getLatestProposal,
+  getProposal,
+  rejectProposal,
+  applyProposal,
+  updateProposalFieldContent,
+  buildContextMarkdown,
+} from '../services/calendarWorkItemAssistantService';
+import {
+  CreateSessionRequestSchema,
+  ApplyProposalRequestSchema,
+  RejectProposalRequestSchema,
+} from '../../shared/types/calendarWorkItemAssistant';
 
 const router = express.Router();
 
@@ -290,7 +321,18 @@ router.patch('/workitems/:id/due-date', async (req: Request, res: Response) => {
   }
 });
 
-// PATCH /api/workitems/:id/field - Update a specific field for a work item
+// Allowed fields for the general PATCH /api/workitems/:id/field endpoint.
+// Description and AcceptanceCriteria are intentionally excluded — they must go
+// through the calendar assistant's proposal + diff-review + apply path.
+const CALENDAR_FIELD_PATCH_ALLOWLIST = new Set([
+  'state', 'assignedTo', 'iterationPath', 'areaPath', 'title', 'tags',
+  'qaCompleteDate', 'targetDate',
+  'System.State', 'System.AssignedTo', 'System.IterationPath', 'System.AreaPath',
+  'System.Title', 'System.Tags', 'Custom.QACompleteDate',
+  'Microsoft.VSTS.Scheduling.TargetDate',
+]);
+
+// PATCH /api/workitems/:id/field - Update a specific non-content field for a work item
 router.patch('/workitems/:id/field', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -302,6 +344,13 @@ router.patch('/workitems/:id/field', async (req: Request, res: Response) => {
 
     if (!field) {
       return res.status(400).json({ error: 'Field name is required' });
+    }
+
+    // Reject content-field writes — use the calendar assistant apply path instead
+    if (!CALENDAR_FIELD_PATCH_ALLOWLIST.has(field)) {
+      return res.status(422).json({
+        error: `Field '${field}' cannot be updated via this endpoint. Use the Calendar Assistant to propose and apply content changes.`,
+      });
     }
 
     const adoService = await adoWriteForRequest(req, project, areaPath);
@@ -1084,26 +1133,101 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 
 // ============= RELEASE MANAGEMENT ROUTES =============
 
-// GET /api/releases/epics - Get all release Epics with progress
+// GET /api/releases/epics - Get all release Epics with progress, sorted by Apex manual order
 router.get('/releases/epics', async (req: Request, res: Response) => {
   try {
     const { project, areaPath } = req.query as { project?: string; areaPath?: string };
     if (project?.toLowerCase() === 'apex') return res.json([]);
+    const normalizedArea = areaPath ?? '';
     const adoService = new AzureDevOpsService(project, areaPath);
     const epics = await adoService.getReleaseEpics();
-    res.json(epics);
+
+    // Prune and apply Apex order
+    const liveIds = epics.map((e: any) => e.id as number);
+    await pruneStaleOrders(project ?? '', normalizedArea, liveIds);
+    const { orders } = await getReleaseOrder(project ?? '', normalizedArea);
+    const sorted = applyOrderToEpics(epics as Array<{ id: number } & Record<string, unknown>>, orders);
+
+    res.json(sorted);
   } catch (error: any) {
     console.error('Error fetching release epics:', error);
     res.status(500).json({ error: 'Failed to fetch release epics' });
   }
 });
 
-// PATCH /api/releases/:epicId - Update a release Epic
+// PUT /api/releases/order - Save Apex-specific display order for releases (BA/admin only)
+router.put('/releases/order', requireGroupMembership('BA'), async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath, epicIds } = req.body as {
+      project?: string;
+      areaPath?: string;
+      epicIds?: unknown;
+    };
+
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project is required' });
+    }
+
+    if (!Array.isArray(epicIds) || epicIds.length === 0 || !epicIds.every((id) => typeof id === 'number' && Number.isInteger(id))) {
+      return res.status(400).json({ error: 'epicIds must be a non-empty array of integers' });
+    }
+
+    if (new Set(epicIds).size !== epicIds.length) {
+      return res.status(400).json({ error: 'epicIds must not contain duplicates' });
+    }
+
+    const normalizedArea = typeof areaPath === 'string' ? areaPath : '';
+    const updatedBy = getProfileOid(req) ?? 'unknown';
+
+    await bulkUpdateReleaseOrder(project.trim(), normalizedArea, epicIds, updatedBy);
+    res.json({ success: true, count: epicIds.length, updatedAt: new Date().toISOString() });
+  } catch (error: any) {
+    console.error('Error saving release order:', error);
+    res.status(500).json({ error: 'Failed to save release order' });
+  }
+});
+
+// PATCH /api/releases/:epicId/rename - Rename a release (BA/admin only, status-locked)
+router.patch('/releases/:epicId/rename', requireGroupMembership('BA'), async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const { newName, project, areaPath } = req.body as {
+      newName?: string;
+      project?: string;
+      areaPath?: string;
+    };
+
+    if (!newName || typeof newName !== 'string' || !newName.trim()) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+
+    const adoService = await adoWriteForRequest(req, project, areaPath);
+    const result = await renameRelease(epicId, newName, adoService);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    if (isAdoUserAuthError(error)) {
+      return res.status(403).json({ error: error.message });
+    }
+    const code = error?.code;
+    if (code === 'NOT_FOUND') return res.status(404).json({ error: error.message });
+    if (code === 'LOCKED_STATUS') return res.status(409).json({ error: error.message });
+    if (code === 'DUPLICATE_NAME') return res.status(409).json({ error: error.message });
+    if (code === 'BLANK_NAME') return res.status(400).json({ error: error.message });
+    console.error('Error renaming release:', error);
+    res.status(500).json({ error: 'Failed to rename release' });
+  }
+});
+
+// PATCH /api/releases/:epicId - Update a release Epic metadata (dates, description, status)
+// Note: title/name changes must go through PATCH /releases/:epicId/rename to keep integrations aligned.
 router.patch('/releases/:epicId', async (req: Request, res: Response) => {
   try {
     const epicId = parseInt(req.params.epicId, 10);
-    const { title, startDate, targetDate, description, status, project, areaPath } = req.body as {
-      title?: string;
+    const { startDate, targetDate, description, status, project, areaPath } = req.body as {
       startDate?: string;
       targetDate?: string;
       description?: string;
@@ -1117,7 +1241,8 @@ router.patch('/releases/:epicId', async (req: Request, res: Response) => {
     }
 
     const adoService = await adoWriteForRequest(req, project, areaPath);
-    await adoService.updateReleaseEpic(epicId, title, startDate, targetDate, description, status);
+    // title intentionally omitted — use PATCH /releases/:epicId/rename instead
+    await adoService.updateReleaseEpic(epicId, undefined, startDate, targetDate, description, status);
     res.json({ success: true });
   } catch (error: any) {
     if (isAdoUserAuthError(error)) {
@@ -3907,8 +4032,9 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
+    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
     const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
-      getUserPermissions(userId),
+      getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       getChangelogPrefs(userId),
@@ -4009,16 +4135,30 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       skillBranch: config.skillBranch,
       interviewSkillPath: config.interviewSkillPath ?? null,
       prdSkillPath: config.prdSkillPath ?? null,
+      adrInterviewSkillPath: config.adrInterviewSkillPath ?? null,
+      adrFinalizeSkillPath: config.adrFinalizeSkillPath ?? null,
+      adrAssistantSkillPath: config.adrAssistantSkillPath ?? null,
       designDocSkillPath: config.designDocSkillPath ?? null,
       testCaseSkillPath: config.testCaseSkillPath ?? null,
       interviewModel: config.interviewModel ?? null,
       prdModel: config.prdModel ?? null,
+      adrModel: config.adrModel ?? null,
       designDocModel: config.designDocModel ?? null,
       testCaseModel: config.testCaseModel ?? null,
       featureRequestSkillPath: config.featureRequestSkillPath ?? null,
       featureRequestModel: config.featureRequestModel ?? null,
+      technicalSkillPath: config.technicalSkillPath ?? null,
+      technicalModel: config.technicalModel ?? null,
+      issueSkillPath: config.issueSkillPath ?? null,
+      issueModel: config.issueModel ?? null,
       interviewSkillOptions: config.interviewSkillOptions ?? null,
       prototypeStageEnabled: config.prototypeStageEnabled ?? true,
+      interviewWebResearchEnabled: config.interviewWebResearchEnabled ?? false,
+      interviewWebMcp: config.interviewWebMcp ?? null,
+      prototypeEngine: config.prototypeEngine ?? 'bedrock',
+      prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? null,
+      screenInventoryPath: config.screenInventoryPath ?? null,
+      prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
     });
@@ -4041,5 +4181,325 @@ router.get('/menu-config', async (req: Request, res: Response): Promise<void> =>
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ── Calendar Work-Item Assistant routes ───────────────────────────────────────
+//
+// All routes are gated by the 'calendar-work-item-assistant' feature flag.
+// Context/session/proposal reads require calendar:view + project assignment.
+// Apply requires workitems:write + project assignment + valid ADO user token.
+
+const CALENDAR_ASSISTANT_FLAG = 'calendar-work-item-assistant';
+
+async function assertCalendarAssistantEnabled(req: Request, res: Response): Promise<boolean> {
+  // Super admins bypass the flag — they can always pilot the feature
+  if (isSuperAdminRequest(req)) return true;
+
+  const userId = getUserId(req);
+  const project = (req.body?.project ?? req.query?.project ?? '') as string;
+  const enabled = await isFeatureEnabled(CALENDAR_ASSISTANT_FLAG, { userId, project: project || 'unknown' });
+  if (!enabled) {
+    res.status(404).json({ error: 'Feature not available' });
+    return false;
+  }
+  return true;
+}
+
+// POST /api/calendar-assistant/context
+// Returns the authoritative ADO hierarchy for an anchor item.
+router.post(
+  '/calendar-assistant/context',
+  requirePermission('calendar:view'),
+  requireProjectAccess((req) => req.body?.project),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const { project, areaPath, anchorWorkItemId } = req.body as {
+        project?: string;
+        areaPath?: string;
+        anchorWorkItemId?: number;
+      };
+
+      if (!project) return res.status(400).json({ error: 'project is required' });
+      if (!anchorWorkItemId || typeof anchorWorkItemId !== 'number') {
+        return res.status(400).json({ error: 'anchorWorkItemId is required and must be a number' });
+      }
+
+      const adoToken = await getAdoTokenForUser(req).catch(() => null);
+      const adoService = adoToken
+        ? new AzureDevOpsService(project, areaPath ?? '', { bearerToken: adoToken })
+        : new AzureDevOpsService(project, areaPath ?? '');
+
+      const nodes = await adoService.getWorkItemHierarchy(anchorWorkItemId);
+      res.json({ nodes });
+    } catch (err: any) {
+      if (isAdoUserAuthError(err)) return res.status(403).json({ error: err.message });
+      console.error('[calendar-assistant] context error:', err.message);
+      res.status(500).json({ error: 'Failed to load work item hierarchy' });
+    }
+  },
+);
+
+// POST /api/calendar-assistant/sessions
+// Create or reuse an assistant session for a selected work-item scope.
+router.post(
+  '/calendar-assistant/sessions',
+  requirePermission('calendar:view'),
+  requireProjectAccess((req) => req.body?.project),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const parse = CreateSessionRequestSchema.safeParse(req.body);
+      if (!parse.success) {
+        return res.status(422).json({ error: parse.error.issues.map(i => i.message).join('; ') });
+      }
+
+      const { project, areaPath, anchorWorkItemId, selectedWorkItemIds, forceNew } = parse.data;
+      const userId = getUserId(req);
+      const adoToken = await getAdoTokenForUser(req).catch(() => null);
+
+      const { session, isNew } = await createOrReuseSession({
+        ownerUserId: userId,
+        project,
+        areaPath: areaPath ?? '',
+        anchorWorkItemId,
+        selectedWorkItemIds,
+        forceNew: forceNew ?? false,
+        adoToken,
+      });
+
+      // Lazily create or refresh the chat thread
+      let threadId = session.threadId;
+      if (!threadId || forceNew) {
+        const skillConfig = await resolveSkillConfig({ project }).catch(() => null);
+        const globalModel = await getDefaultModel();
+        const model = (skillConfig as any)?.calendarAssistantModel ?? skillConfig?.defaultModel ?? globalModel;
+
+        const contextMd = buildContextMarkdown(session.contextSnapshot);
+
+        const thread = await createThread(userId, {
+          project,
+          repo: skillConfig?.skillRepo ?? project,
+          branch: skillConfig?.skillBranch ?? 'main',
+          skillProvider: (skillConfig?.skillProvider as any) ?? 'ado',
+          skillPath: (skillConfig as any)?.calendarAssistantSkillPath ?? undefined,
+          freeformContext: contextMd,
+          model,
+          assistantType: 'calendar-work-item',
+          calendarAnchorWorkItemId: anchorWorkItemId,
+          calendarSelectedWorkItemIds: selectedWorkItemIds,
+          calendarAssistantSessionId: session.id,
+        }, { skipAutoKickoff: true });
+
+        threadId = thread.id;
+        await setSessionThread(session.id, threadId);
+      } else {
+        // Refresh context file in existing workspace
+        const [threadRow] = await db
+          .select({ workspaceDir: chatThreadsSchema.workspaceDir })
+          .from(chatThreadsSchema)
+          .where(drizzleEq(chatThreadsSchema.id, threadId))
+          .limit(1);
+        if (threadRow?.workspaceDir) {
+          const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
+          try {
+            fs.writeFileSync(contextPath, buildContextMarkdown(session.contextSnapshot), 'utf-8');
+          } catch { /* non-fatal */ }
+        }
+      }
+
+      res.status(isNew ? 201 : 200).json({
+        sessionId: session.id,
+        threadId,
+        isNew,
+        anchorWorkItemId: session.anchorWorkItemId,
+        selectedWorkItemIds: session.selectedWorkItemIds,
+        status: session.status,
+      });
+    } catch (err: any) {
+      if (isAdoUserAuthError(err)) return res.status(403).json({ error: err.message });
+      console.error('[calendar-assistant] sessions POST error:', err.message);
+      res.status(500).json({ error: err.message ?? 'Failed to create session' });
+    }
+  },
+);
+
+// GET /api/calendar-assistant/sessions/:id
+router.get(
+  '/calendar-assistant/sessions/:id',
+  requirePermission('calendar:view'),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const session = await getSession(req.params.id);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+
+      const userId = getUserId(req);
+      if (session.ownerUserId !== userId && !isSuperAdminRequest(req)) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      const proposal = await getLatestProposal(session.id);
+      res.json({ session, latestProposal: proposal });
+    } catch (err: any) {
+      console.error('[calendar-assistant] sessions GET error:', err.message);
+      res.status(500).json({ error: 'Failed to load session' });
+    }
+  },
+);
+
+// GET /api/calendar-assistant/sessions/:id/proposals
+router.get(
+  '/calendar-assistant/sessions/:id/proposals',
+  requirePermission('calendar:view'),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const session = await getSession(req.params.id);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+
+      const userId = getUserId(req);
+      if (session.ownerUserId !== userId && !isSuperAdminRequest(req)) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      const proposal = await getLatestProposal(session.id);
+      res.json({ proposal });
+    } catch (err: any) {
+      console.error('[calendar-assistant] proposals GET error:', err.message);
+      res.status(500).json({ error: 'Failed to load proposals' });
+    }
+  },
+);
+
+// POST /api/calendar-assistant/proposals/:id/apply
+router.post(
+  '/calendar-assistant/proposals/:id/apply',
+  requirePermission('workitems:write'),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const proposal = await getProposal(req.params.id);
+      if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+      const session = await getSession(proposal.sessionId);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+
+      const userId = getUserId(req);
+      if (session.ownerUserId !== userId && !isSuperAdminRequest(req)) {
+        return res.status(404).json({ error: 'Proposal not found' });
+      }
+
+      if (proposal.status !== 'pending') {
+        return res.status(409).json({
+          error: `Proposal is not pending (current status: ${proposal.status})`,
+        });
+      }
+
+      const parse = ApplyProposalRequestSchema.safeParse(req.body);
+      if (!parse.success) {
+        return res.status(422).json({ error: parse.error.issues.map(i => i.message).join('; ') });
+      }
+
+      const adoToken = await getAdoTokenForUser(req).catch(() => null);
+      if (!adoToken && process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ error: 'An Azure DevOps user token is required to apply changes.' });
+      }
+
+      const result = await applyProposal(
+        proposal.id,
+        parse.data.approvedWorkItemIds,
+        userId,
+        adoToken,
+      );
+
+      res.json(result);
+    } catch (err: any) {
+      if (isAdoUserAuthError(err)) return res.status(403).json({ error: err.message });
+      console.error('[calendar-assistant] proposals apply error:', err.message);
+      res.status(500).json({ error: err.message ?? 'Failed to apply proposal' });
+    }
+  },
+);
+
+// PATCH /api/calendar-assistant/proposals/:id/field — manually edit a field before applying
+router.patch(
+  '/calendar-assistant/proposals/:id/field',
+  requirePermission('calendar:view'),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const proposal = await getProposal(req.params.id);
+      if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+      const session = await getSession(proposal.sessionId);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+
+      const userId = getUserId(req);
+      if (session.ownerUserId !== userId && !isSuperAdminRequest(req)) {
+        return res.status(404).json({ error: 'Proposal not found' });
+      }
+
+      if (proposal.status !== 'pending') {
+        return res.status(409).json({ error: `Proposal is not pending (status: ${proposal.status})` });
+      }
+
+      const { workItemId, field, after } = req.body as { workItemId?: number; field?: string; after?: string };
+      if (!workItemId || typeof workItemId !== 'number') return res.status(422).json({ error: 'workItemId is required' });
+      if (!field || !['description', 'acceptanceCriteria'].includes(field)) {
+        return res.status(422).json({ error: "field must be 'description' or 'acceptanceCriteria'" });
+      }
+      if (typeof after !== 'string') return res.status(422).json({ error: 'after is required' });
+
+      await updateProposalFieldContent(
+        proposal.id,
+        workItemId,
+        field as 'description' | 'acceptanceCriteria',
+        after,
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[calendar-assistant] proposals field PATCH error:', err.message);
+      res.status(500).json({ error: err.message ?? 'Failed to update field' });
+    }
+  },
+);
+
+// POST /api/calendar-assistant/proposals/:id/reject
+router.post(
+  '/calendar-assistant/proposals/:id/reject',
+  requirePermission('calendar:view'),
+  async (req: Request, res: Response) => {
+    if (!await assertCalendarAssistantEnabled(req, res)) return;
+    try {
+      const proposal = await getProposal(req.params.id);
+      if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+      const session = await getSession(proposal.sessionId);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+
+      const userId = getUserId(req);
+      if (session.ownerUserId !== userId && !isSuperAdminRequest(req)) {
+        return res.status(404).json({ error: 'Proposal not found' });
+      }
+
+      if (proposal.status !== 'pending') {
+        return res.status(409).json({
+          error: `Proposal is not pending (current status: ${proposal.status})`,
+        });
+      }
+
+      const parse = RejectProposalRequestSchema.safeParse(req.body);
+      if (!parse.success) {
+        return res.status(422).json({ error: parse.error.issues.map(i => i.message).join('; ') });
+      }
+
+      await rejectProposal(proposal.id, userId);
+      res.json({ ok: true, proposalId: proposal.id });
+    } catch (err: any) {
+      console.error('[calendar-assistant] proposals reject error:', err.message);
+      res.status(500).json({ error: 'Failed to reject proposal' });
+    }
+  },
+);
 
 export default router;

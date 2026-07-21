@@ -29,12 +29,19 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn(),
 }));
 
+jest.mock('../services/adrService', () => ({
+  stageAdrProposedContent: jest.fn(),
+}));
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
-import { handleUpdatePrd } from '../mcp/ado/server';
+import { handleUpdateAdr, handleUpdatePrd } from '../mcp/ado/server';
 
 const { getThread: mockGetThread } = jest.requireMock('../services/chatAgentService') as { getThread: jest.Mock };
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { stageAdrProposedContent: mockStageAdrProposedContent } = jest.requireMock('../services/adrService') as {
+  stageAdrProposedContent: jest.Mock;
+};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -118,5 +125,39 @@ describe('handleUpdatePrd', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.ok).toBe(true);
     expect(parsed.section).toBe('content');
+  });
+});
+
+describe('handleUpdateAdr', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockStageAdrProposedContent.mockResolvedValue(undefined);
+  });
+
+  it('rejects an unknown assistant thread', async () => {
+    mockGetThread.mockResolvedValue(null);
+    const result = await handleUpdateAdr({
+      threadId: 'missing',
+      adrId: 'adr-1',
+      content: '# Revised ADR',
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual({ error: 'Thread not found' });
+    expect(mockStageAdrProposedContent).not.toHaveBeenCalled();
+  });
+
+  it('stages content through the ADR service using the thread owner', async () => {
+    mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'author-1' });
+    const result = await handleUpdateAdr({
+      threadId: 'thread-1',
+      adrId: 'adr-1',
+      content: '# Revised ADR',
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual({ ok: true });
+    expect(mockStageAdrProposedContent).toHaveBeenCalledWith(
+      'adr-1',
+      'author-1',
+      'thread-1',
+      '# Revised ADR',
+    );
   });
 });

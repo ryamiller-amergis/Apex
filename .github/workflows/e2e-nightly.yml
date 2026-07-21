@@ -1,0 +1,149 @@
+name: E2E Nightly Regression
+
+on:
+  schedule:
+    # Run at 02:00 UTC daily (off-peak for the team).
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      grep:
+        description: 'Playwright --grep filter (leave empty for full suite)'
+        required: false
+        default: ''
+
+env:
+  NODE_VERSION: '24.x'
+
+jobs:
+  e2e-full:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+        run: npm run migrate:up
+
+      - name: Run full E2E suite (excluding @a11y)
+        env:
+          CI: true
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          SESSION_SECRET: e2e-nightly-secret-not-for-production
+          VITE_TEAMS: 'false'
+          PLAYWRIGHT_GREP: ${{ github.event.inputs.grep || '' }}
+        run: |
+          if [ -n "$PLAYWRIGHT_GREP" ]; then
+            npx playwright test --grep "$PLAYWRIGHT_GREP"
+          else
+            npx playwright test --grep-invert @a11y
+          fi
+
+      - name: Run accessibility suite
+        if: always()
+        env:
+          CI: true
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          SESSION_SECRET: e2e-nightly-secret-not-for-production
+          VITE_TEAMS: 'false'
+        run: npm run test:e2e:a11y
+
+      - name: Upload Playwright results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-nightly-results-${{ github.run_id }}
+          path: playwright-results/
+          retention-days: 30
+
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-a11y-results-${{ github.run_id }}
+          path: playwright-results/html/
+          retention-days: 30
+
+  e2e-integration-nightly:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+        run: npm run migrate:up
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+        run: npm run test:integration
+
+  notify-on-failure:
+    needs: [e2e-full, e2e-integration-nightly]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log nightly failure
+        run: |
+          echo "Nightly E2E or integration regression failed."
+          echo "Review artifacts: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

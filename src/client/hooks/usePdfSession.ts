@@ -5,6 +5,7 @@ import type {
   UploadFilesResponse,
   PageManifestEntry,
 } from '../../shared/types/pdf';
+import { apexProjectHeaders, getSelectedApexProject } from '../utils/apiFetch';
 
 export interface PdfUploadProgress {
   phase: 'uploading' | 'processing';
@@ -19,8 +20,12 @@ interface UploadPdfFilesVariables {
   onProgress?: (progress: PdfUploadProgress) => void;
 }
 
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', ...options });
+async function pdfApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...options,
+    headers: apexProjectHeaders(options?.headers),
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error?.message ?? body.error ?? `HTTP ${res.status}`) as PdfApiError;
@@ -31,14 +36,17 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function usePdfSession(sessionId: string | null) {
+export function usePdfSession(sessionId: string | null, userId = '') {
   return useQuery<PdfSession, PdfApiError>({
-    queryKey: ['pdf-session', sessionId],
-    queryFn: () => apiFetch(`/api/pdf/sessions/${sessionId}`),
-    enabled: !!sessionId,
+    queryKey: ['pdf-session', userId, sessionId],
+    queryFn: () => pdfApiFetch(`/api/pdf/sessions/${sessionId}`),
+    enabled: !!sessionId && !!userId,
     staleTime: 5_000,
     retry: (failureCount, error) =>
-      error.status !== 404 && error.status !== 410 && failureCount < 3,
+      error.status !== 403 &&
+      error.status !== 404 &&
+      error.status !== 410 &&
+      failureCount < 3,
     refetchInterval: (query) => {
       const jobs = query.state.data?.conversionJobs ?? [];
       return jobs.some((job) => job.status === 'queued' || job.status === 'processing')
@@ -48,31 +56,62 @@ export function usePdfSession(sessionId: string | null) {
   });
 }
 
-export function useActivePdfSessions() {
+export function useActivePdfSessions(userId = '') {
   return useQuery<PdfSession[]>({
-    queryKey: ['pdf-sessions-active'],
-    queryFn: () => apiFetch('/api/pdf/sessions'),
+    queryKey: ['pdf-sessions-active', userId],
+    queryFn: () => pdfApiFetch('/api/pdf/sessions'),
+    enabled: !!userId,
     staleTime: 10_000,
   });
 }
 
-export function useCreatePdfSession() {
+export function useCreatePdfSession(userId = '') {
   const queryClient = useQueryClient();
-  return useMutation<CreateSessionResponse, PdfApiError, { projectId?: string }>({
+  return useMutation<
+    CreateSessionResponse,
+    PdfApiError,
+    { projectId?: string; replaceSessionId?: string }
+  >({
     mutationFn: (body) =>
-      apiFetch('/api/pdf/sessions', {
+      pdfApiFetch('/api/pdf/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session'] });
-      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active'] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
     },
   });
 }
 
-export function useUploadPdfFiles() {
+export function useClosePdfSession(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<void, PdfApiError, { sessionId: string }>({
+    mutationFn: async ({ sessionId }) => {
+      const res = await fetch(`/api/pdf/sessions/${sessionId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: apexProjectHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err = new Error(
+          body.error?.message ?? body.error ?? `HTTP ${res.status}`,
+        ) as PdfApiError;
+        err.code = body.error?.code;
+        err.status = res.status;
+        throw err;
+      }
+    },
+    onSuccess: (_data, { sessionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-sessions-active', userId] });
+    },
+  });
+}
+
+export function useUploadPdfFiles(userId = '') {
   const queryClient = useQueryClient();
   return useMutation<UploadFilesResponse, PdfApiError, UploadPdfFilesVariables>({
     mutationFn: async ({ sessionId, files, onProgress }) => {
@@ -85,6 +124,11 @@ export function useUploadPdfFiles() {
         const request = new XMLHttpRequest();
         request.open('POST', `/api/pdf/sessions/${sessionId}/upload`);
         request.withCredentials = true;
+
+        const project = getSelectedApexProject();
+        if (project) {
+          request.setRequestHeader('X-Apex-Project', project);
+        }
 
         request.upload.onprogress = (event) => {
           if (!event.lengthComputable) return;
@@ -125,17 +169,18 @@ export function useUploadPdfFiles() {
       });
     },
     onSuccess: (_data, { sessionId }) =>
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] }),
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] }),
   });
 }
 
-export function useRemovePdfFile() {
+export function useRemovePdfFile(userId = '') {
   const queryClient = useQueryClient();
   return useMutation<void, PdfApiError, { sessionId: string; fileId: string }>({
     mutationFn: async ({ sessionId, fileId }) => {
       const res = await fetch(`/api/pdf/sessions/${sessionId}/files/${fileId}`, {
         method: 'DELETE',
         credentials: 'include',
+        headers: apexProjectHeaders(),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -146,12 +191,12 @@ export function useRemovePdfFile() {
       }
     },
     onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
     },
   });
 }
 
-export function useUpdateManifest() {
+export function useUpdateManifest(userId = '') {
   const queryClient = useQueryClient();
   return useMutation<
     { pageCount: number; updatedAt: string },
@@ -159,13 +204,13 @@ export function useUpdateManifest() {
     { sessionId: string; manifest: PageManifestEntry[] }
   >({
     mutationFn: ({ sessionId, manifest }) =>
-      apiFetch(`/api/pdf/sessions/${sessionId}/manifest`, {
+      pdfApiFetch(`/api/pdf/sessions/${sessionId}/manifest`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ manifest }),
       }),
     onSuccess: (_data, { sessionId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pdf-session', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
     },
   });
 }

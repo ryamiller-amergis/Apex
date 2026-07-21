@@ -13,7 +13,7 @@ export const PdfToolsRouteGuard: React.FC<PdfToolsRouteGuardProps> = ({
   selectedProject,
   isSuperAdmin = false,
 }) => {
-  const { can, isLoading: permLoading } = useMyPermissions();
+  const { can, isLoading: permLoading } = useMyPermissions(selectedProject);
   const { enabledViews, isLoading: menuLoading } = useProjectMenuConfig(selectedProject);
 
   const isLoading = permLoading || menuLoading;

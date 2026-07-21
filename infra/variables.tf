@@ -41,7 +41,7 @@ variable "app_service_zone_redundant" {
 }
 
 variable "app_service_worker_count" {
-  description = "App Service plan worker count. Use 3 when app_service_zone_redundant is true."
+  description = "Fixed App Service plan worker count. Use 3 when app_service_zone_redundant is true."
   type        = number
   default     = null
 }
@@ -281,4 +281,44 @@ variable "postgresql_standby_availability_zone" {
   description = "Standby zone for zone-redundant PostgreSQL HA (must differ from primary zone)."
   type        = string
   default     = null
+}
+
+# Shared async Blob platform — one private storage account per env.
+# Add containers for new modules; do not provision a second account unless
+# isolation requirements demand it. PDF job delivery uses Postgres (not Service Bus).
+variable "shared_storage_account_name" {
+  description = "Globally unique shared Storage Account for private async artifacts. Defaults to stapex<environment>async when null."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.shared_storage_account_name == null || can(regex("^[a-z0-9]{3,24}$", var.shared_storage_account_name))
+    error_message = "shared_storage_account_name must contain 3-24 lowercase letters or numbers."
+  }
+}
+
+variable "shared_storage_replication_type" {
+  description = "Replication type for the shared async storage account."
+  type        = string
+  default     = "LRS"
+
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.shared_storage_replication_type)
+    error_message = "shared_storage_replication_type must be a supported Azure Storage replication type."
+  }
+}
+
+variable "blob_containers" {
+  description = "Private blob containers on the shared storage account. Key = container name. Add one container per workload."
+  type        = map(object({}))
+  default = {
+    pdf-artifacts = {}
+  }
+}
+
+# PDF workload selector — must match a key in blob_containers.
+variable "pdf_blob_container_name" {
+  description = "Shared-account container used by PDF session and job artifacts. Must exist as a key in blob_containers."
+  type        = string
+  default     = "pdf-artifacts"
 }

@@ -40,6 +40,11 @@ jest.mock('../services/chatAgentService', () => ({
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
 }));
 
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
+  canThisInstanceFailGeneration: jest.fn().mockResolvedValue(true),
+}));
+
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
@@ -436,10 +441,55 @@ describe('autoStartValidation', () => {
 
     await autoStartValidation('doc-1');
 
-    expect(agentSvc.createThread).toHaveBeenCalledTimes(1);
+    expect(agentSvc.createThread).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ skillPath: '/skills/validate.md' }),
+      expect.objectContaining({ skipAutoKickoff: true }),
+    );
     expect(updateChain.set).toHaveBeenCalledWith(
       expect.objectContaining({ validationThreadId: 'thread-v1' }),
     );
+    expect(agentSvc.sendMessage).toHaveBeenCalledWith(
+      'thread-v1',
+      expect.stringContaining('review-scorecard.json'),
+      undefined,
+      [],
+      { hidden: true },
+    );
+  });
+
+  it('attaches the DB validationThreadId before kicking off the agent', async () => {
+    const docRow = makeDocRow({ status: 'draft' });
+    mockDb.select.mockReturnValue(
+      makeSelectChain([{ designDoc: docRow, reviewerDisplayName: null }]),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      designDocValidationSkillPath: '/skills/validate.md',
+      skillRepo: 'my-repo',
+      skillBranch: 'main',
+    });
+    const callOrder: string[] = [];
+    agentSvc.createThread.mockImplementation(async () => {
+      callOrder.push('createThread');
+      return { id: 'thread-v1', workspaceDir: '/tmp/ws' };
+    });
+    const updateChain = makeUpdateChain();
+    updateChain.set.mockImplementation((payload: unknown) => {
+      callOrder.push(`db.set:${(payload as { validationThreadId?: string }).validationThreadId ?? ''}`);
+      return updateChain;
+    });
+    mockDb.update.mockReturnValue(updateChain);
+    agentSvc.sendMessage.mockImplementation(async () => {
+      callOrder.push('sendMessage');
+    });
+
+    await autoStartValidation('doc-1');
+
+    expect(callOrder).toEqual([
+      'createThread',
+      'db.set:thread-v1',
+      'sendMessage',
+    ]);
   });
 
   it('sets status to "validating" when the doc is in a status that allows it', async () => {
@@ -805,6 +855,26 @@ describe('startValidationWatcher', () => {
     expect(updateChain.set).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_review' }),
     );
+  });
+
+  it('does not reset when idle but another instance still owns the run', async () => {
+    const reaper = jest.requireMock('../services/agentRunReaperService') as {
+      isThreadRunAlive: jest.Mock;
+      canThisInstanceFailGeneration: jest.Mock;
+    };
+    agentSvc.readOutputValidationScorecard.mockReturnValue(null);
+    agentSvc.isThreadIdle.mockReturnValue(true);
+    reaper.isThreadRunAlive.mockResolvedValue(true);
+    reaper.canThisInstanceFailGeneration.mockResolvedValue(false);
+    const updateChain = makeUpdateChain();
+    mockDb.update.mockReturnValue(updateChain);
+
+    startValidationWatcher('doc-alive-elsewhere', 'thread-elsewhere');
+    jest.advanceTimersByTime(TICK);
+    await flushAllPromises();
+
+    expect(isValidationWatcherActive('doc-alive-elsewhere')).toBe(true);
+    expect(updateChain.set).not.toHaveBeenCalled();
   });
 
   it('keeps polling and does not update DB while agent is still running', async () => {

@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
 import {
   startSingleFeatureDocWatcher,
@@ -16,6 +17,7 @@ import {
   clearStaleRun,
 } from './chatThreadRepository';
 import { expireOldSessions } from './pdfAssemblyService';
+import { recoverAnalyzingFeatureRequests } from './featureRequestAnalysisService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -152,7 +154,17 @@ export async function recoverInFlightWork(): Promise<void> {
     columns: { id: true, validationThreadId: true },
   });
   for (const doc of validatingDocs) {
-    if (!doc.validationThreadId) continue;
+    if (!doc.validationThreadId) {
+      // No thread at all — stuck without any way to resume
+      await db.update(designDocs)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] Design doc validating with no thread — reset to pending_review (designDocId=${doc.id})`
+      );
+      continue;
+    }
     // Skip docs that already have an active watcher — avoids clobbering a
     // watcher that was just started by autoStartValidation or acceptFixValidation.
     if (isValidationWatcherActive(doc.id)) continue;
@@ -166,7 +178,8 @@ export async function recoverInFlightWork(): Promise<void> {
 
       // If the agent was killed mid-run (thread is idle after hydration), re-kick
       // it so the validation run actually resumes rather than the watcher polling forever.
-      if (isThreadIdle(doc.validationThreadId)) {
+      // Skip re-kick when another instance still owns a live run.
+      if (isThreadIdle(doc.validationThreadId) && !(await isThreadRunAlive(doc.validationThreadId))) {
         sendMessage(doc.validationThreadId, 'Begin.').catch((err: Error) => {
           console.error(
             `[recovery] Failed to re-kick validation agent (designDocId=${doc.id}, threadId=${doc.validationThreadId}):`,
@@ -177,9 +190,19 @@ export async function recoverInFlightWork(): Promise<void> {
           `[recovery] Re-kicked dead validation agent (designDocId=${doc.id})`
         );
       }
+    } else if (!(await isThreadRunAlive(doc.validationThreadId))) {
+      // Thread is unrecoverable and no other instance owns a live run —
+      // reset so the doc is not stuck forever.
+      await db.update(designDocs)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] Could not hydrate validation thread — reset to pending_review (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+      );
     } else {
       console.warn(
-        `[recovery] Could not hydrate thread for validation (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+        `[recovery] Could not hydrate validation thread but run is still alive elsewhere — leaving validating (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
       );
     }
   }
@@ -195,7 +218,16 @@ export async function recoverInFlightWork(): Promise<void> {
     columns: { id: true, validationThreadId: true },
   });
   for (const prd of validatingPrds) {
-    if (!prd.validationThreadId) continue;
+    if (!prd.validationThreadId) {
+      await db.update(prds)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] PRD validating with no thread — reset to pending_review (prdId=${prd.id})`
+      );
+      continue;
+    }
     if (isPrdValidationWatcherActive(prd.id)) continue;
     const ok = await hydrateThread(prd.validationThreadId);
     if (ok) {
@@ -205,7 +237,7 @@ export async function recoverInFlightWork(): Promise<void> {
         `[recovery] Restarted PRD validation watcher (prdId=${prd.id})`
       );
 
-      if (isThreadIdle(prd.validationThreadId)) {
+      if (isThreadIdle(prd.validationThreadId) && !(await isThreadRunAlive(prd.validationThreadId))) {
         sendMessage(prd.validationThreadId, 'Begin.').catch((err: Error) => {
           console.error(
             `[recovery] Failed to re-kick PRD validation agent (prdId=${prd.id}, threadId=${prd.validationThreadId}):`,
@@ -216,9 +248,17 @@ export async function recoverInFlightWork(): Promise<void> {
           `[recovery] Re-kicked dead PRD validation agent (prdId=${prd.id})`
         );
       }
+    } else if (!(await isThreadRunAlive(prd.validationThreadId))) {
+      await db.update(prds)
+        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      recovered++;
+      console.warn(
+        `[recovery] Could not hydrate PRD validation thread — reset to pending_review (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+      );
     } else {
       console.warn(
-        `[recovery] Could not hydrate thread for PRD validation (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+        `[recovery] Could not hydrate PRD validation thread but run is still alive elsewhere — leaving validating (prdId=${prd.id}, threadId=${prd.validationThreadId})`
       );
     }
   }
@@ -309,6 +349,18 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   } catch (err) {
     console.error('[recovery] Failed to clean expired PDF sessions:', err);
+  }
+
+  try {
+    const featureRequestRecovered = await recoverAnalyzingFeatureRequests();
+    if (featureRequestRecovered > 0) {
+      recovered += featureRequestRecovered;
+      console.log(
+        `[recovery] Restarted ${featureRequestRecovered} feature-request analysis watcher(s)`,
+      );
+    }
+  } catch (err) {
+    console.error('[recovery] Failed to recover feature-request analysis:', err);
   }
 
   if (recovered > 0) {

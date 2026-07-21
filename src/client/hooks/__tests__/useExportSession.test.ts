@@ -3,7 +3,14 @@
  * Covers: AC-2 (.pdf extension), BR-008 (default filename format)
  */
 
-import { generateDefaultFilename, ensurePdfExtension } from '../useExportSession';
+import React from 'react';
+import { act, renderHook } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  generateDefaultFilename,
+  ensurePdfExtension,
+  useExportSession,
+} from '../useExportSession';
 
 describe('generateDefaultFilename', () => {
   // BR-008: default filename follows merged-document-YYYYMMDD-HHMM.pdf format
@@ -33,5 +40,80 @@ describe('ensurePdfExtension', () => {
 
   it('trims whitespace before checking', () => {
     expect(ensurePdfExtension('  my-doc  ')).toBe('my-doc.pdf');
+  });
+});
+
+describe('useExportSession queued workflow', () => {
+  it('enqueues, polls completion, then downloads the authenticated result', async () => {
+    const originalFetch = global.fetch;
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'job-1',
+          status: 'queued',
+          queuePosition: 1,
+          statusUrl: '/api/pdf/jobs/job-1',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'job-1',
+          sessionId: 'session-1',
+          jobType: 'export',
+          originalName: 'report.pdf',
+          status: 'completed',
+          resultUrl: '/api/pdf/jobs/job-1/result',
+          createdAt: new Date().toISOString(),
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        blob: async () => new Blob(['%PDF-test'], { type: 'application/pdf' }),
+        headers: new Headers({ 'Content-Disposition': 'attachment; filename="report.pdf"' }),
+      } as Response);
+    global.fetch = fetchMock;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:test');
+    URL.revokeObjectURL = jest.fn();
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useExportSession(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        sessionId: 'session-1',
+        filename: 'report',
+      });
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/pdf/sessions/session-1/export',
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/pdf/jobs/job-1',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/pdf/jobs/job-1/result',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+
+    global.fetch = originalFetch;
+    URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+    click.mockRestore();
   });
 });

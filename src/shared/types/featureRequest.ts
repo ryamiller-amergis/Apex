@@ -8,6 +8,9 @@ export type FeatureRequestStatus =
 export type FeatureRequestAiStatus = 'pending' | 'analyzing' | 'complete' | 'failed';
 export type FeatureRequestPriority = 'low' | 'medium' | 'high' | 'critical';
 export type FeatureRequestRisk = 'low' | 'medium' | 'high';
+export type WorkItemType = 'feature' | 'technical' | 'issue';
+
+export const WORK_ITEM_TYPES: WorkItemType[] = ['feature', 'technical', 'issue'];
 
 export const FEATURE_REQUEST_STATUSES: FeatureRequestStatus[] = [
   'new', 'under-review', 'in-interview', 'planned', 'declined', 'done',
@@ -25,11 +28,21 @@ export const FEATURE_REQUEST_RISKS: FeatureRequestRisk[] = [
   'low', 'medium', 'high',
 ];
 
-export interface FeatureRequest {
+export interface LinkedAdrSummary {
   id: string;
   title: string;
+  project: string;
+  repo: string;
+  slug: string | null;
+  status: 'accepted';
+}
+
+export interface FeatureRequest {
+  id: string;
+  type: WorkItemType;
+  title: string;
   request: string;
-  advantage: string;
+  advantage: string | null;
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
@@ -47,13 +60,16 @@ export interface FeatureRequest {
   updatedAt: string;
   /** Joined from app_users for display */
   submitterName?: string;
+  linkedAdrs: LinkedAdrSummary[];
 }
 
 export interface CreateFeatureRequestDTO {
+  type: WorkItemType;
   title: string;
   request: string;
-  advantage: string;
+  advantage?: string | null;
   project: string;
+  adrIds?: string[];
 }
 
 export interface UpdateFeatureRequestDTO {

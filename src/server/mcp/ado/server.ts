@@ -20,6 +20,7 @@ import { getThread } from '../../services/chatAgentService';
 import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
+import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
@@ -64,6 +65,26 @@ export async function handleUpdatePrd(params: {
   }
 }
 
+export async function handleUpdateAdr(params: {
+  threadId: string;
+  adrId: string;
+  content: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  try {
+    await stageAdrProposedContent(params.adrId, thread.userId, params.threadId, params.content);
+    console.log(`[MCP] update_adr: staged content for adr ${params.adrId}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
 export async function handleResolvePrdComment(params: {
   threadId: string;
   commentId: string;
@@ -88,6 +109,7 @@ export async function handleAddTestCase(params: {
   prdId: string;
   pbiId: string;
   acceptanceCriteriaIndex?: number;
+  businessRules?: string[];
   title: string;
   steps: string[];
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
@@ -102,6 +124,7 @@ export async function handleAddTestCase(params: {
       title: params.title,
       steps: params.steps,
       acceptanceCriteriaIndex: params.acceptanceCriteriaIndex,
+      businessRules: params.businessRules,
     });
     console.log(
       `[MCP] add_test_case: added ${result.testCaseId} to pbi ${params.pbiId} for prd ${params.prdId}`,
@@ -328,6 +351,17 @@ export function createAdoMcpServer(): McpServer {
   );
 
   server.tool(
+    'update_adr',
+    'Stage a complete revised Architecture Decision Record for explicit author review. This writes only proposed content and never changes the live ADR or its status.',
+    {
+      threadId: z.string().describe('The ADR assistant thread ID from kickoff-context.md'),
+      adrId: z.string().describe('The ADR ID from kickoff-context.md'),
+      content: z.string().describe('The complete revised ADR markdown, including frontmatter'),
+    },
+    async (params) => handleUpdateAdr(params),
+  );
+
+  server.tool(
     'resolve_prd_comment',
     'Mark a review comment on the current PRD as resolved. Call this after you have addressed a comment by updating the PRD or backlog.',
     {
@@ -357,6 +391,10 @@ export function createAdoMcpServer(): McpServer {
         .min(0)
         .optional()
         .describe('Optional zero-based index of the acceptance criterion this case traces to'),
+      businessRules: z
+        .array(z.string())
+        .optional()
+        .describe('Business-rule IDs this case covers, e.g. ["BR-001"]'),
     },
     async (params) => handleAddTestCase(params),
   );

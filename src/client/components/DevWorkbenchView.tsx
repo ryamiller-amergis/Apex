@@ -1,9 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
-import { useAssignedWorkItems, useStartDevSession, useActiveSessions, useCloseDevSession, useCompleteFeature } from '../hooks/useDevWorkbench';
+import {
+  useActiveSessions,
+  useAssignedWorkItems,
+  useCloseDevSession,
+  useCompleteFeature,
+  useStartDevSession,
+} from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession } from '../../shared/types/devWorkbench';
+import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import styles from './DevWorkbenchView.module.css';
 
 interface FeatureReadiness {
@@ -66,6 +74,7 @@ const ApexBacklogView: React.FC<{
   const [completingFeature, setCompletingFeature] = useState<string | null>(null);
   const [openPrds, setOpenPrds] = useState<Set<string>>(new Set());
   const [openEpics, setOpenEpics] = useState<Set<string>>(new Set());
+  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
 
   const allSessions = activeSessions ?? [];
 
@@ -248,6 +257,22 @@ const ApexBacklogView: React.FC<{
                                 </button>
                               </>
                             )}
+                            <button
+                              className={styles['local-dev-btn']}
+                              onClick={() =>
+                                setLocalDevTarget({
+                                  kind: 'apex',
+                                  project,
+                                  prdId: feature.prdId,
+                                  featureId: feature.featureId,
+                                  title: feature.featureTitle,
+                                })
+                              }
+                              type="button"
+                              title="Download a context pack and open Cursor or VS Code locally"
+                            >
+                              Start Local Development
+                            </button>
                           </div>
                         </div>
                       );
@@ -259,13 +284,20 @@ const ApexBacklogView: React.FC<{
           })}
         </div>
       ))}
+
+      {localDevTarget && (
+        <StartLocalDevModal
+          target={localDevTarget}
+          onClose={() => setLocalDevTarget(null)}
+        />
+      )}
     </div>
   );
 };
 
 export const DevWorkbenchView: React.FC = () => {
   const navigate = useNavigate();
-  const { selectedProject } = useAppShell();
+  const { selectedProject, isSuperAdmin } = useAppShell();
   const isApex = selectedProject === 'Apex';
 
   const { data: workItems, isLoading, error } = useAssignedWorkItems(isApex ? null : (selectedProject || null));
@@ -274,6 +306,7 @@ export const DevWorkbenchView: React.FC = () => {
   const closeSession = useCloseDevSession();
   const [startingId, setStartingId] = useState<number | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
 
   const sessionByWorkItem = useMemo(() => {
     const map = new Map<number, { sessionId: string }>();
@@ -325,9 +358,15 @@ export const DevWorkbenchView: React.FC = () => {
       <div className={styles.container}>
         <div className={styles.header}>
           <h1 className={styles.title}>My Work</h1>
-          <p className={styles.subtitle}>Approved PRD features — start a development session to begin coding</p>
+          <p className={styles.subtitle}>Approved PRD features ready for development</p>
         </div>
-        <ApexBacklogView project="Apex" activeSessions={activeSessions ?? []} />
+        <section className={styles.section} aria-labelledby="feature-backlog-heading">
+          <div className={styles['section-header']}>
+            <h2 id="feature-backlog-heading">Feature Backlog</h2>
+            <p>Approved PRD features</p>
+          </div>
+          <ApexBacklogView project="Apex" activeSessions={activeSessions ?? []} />
+        </section>
       </div>
     );
   }
@@ -365,6 +404,7 @@ export const DevWorkbenchView: React.FC = () => {
         <div className={styles.list}>
           {sortedWorkItems.map((item) => {
             const active = sessionByWorkItem.get(item.id);
+            const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
             return (
               <div key={item.id} className={styles.item}>
                 <div className={styles['item-info']}>
@@ -399,17 +439,40 @@ export const DevWorkbenchView: React.FC = () => {
                     <button
                       className={styles['start-btn']}
                       onClick={() => handleStart(item.id)}
-                      disabled={startingId !== null}
+                      disabled={startingId !== null || !eligibility.allowed}
+                      title={eligibility.allowed ? undefined : eligibility.reason}
                       type="button"
                     >
                       {startingId === item.id ? 'Starting...' : 'Start Development'}
                     </button>
                   )}
+                  <button
+                    className={styles['local-dev-btn']}
+                    onClick={() =>
+                      setLocalDevTarget({
+                        kind: 'ado',
+                        project: selectedProject!,
+                        workItemId: item.id,
+                        title: item.title,
+                      })
+                    }
+                    type="button"
+                    title="Download a context pack and open Cursor or VS Code locally"
+                  >
+                    Start Local Development
+                  </button>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {localDevTarget && (
+        <StartLocalDevModal
+          target={localDevTarget}
+          onClose={() => setLocalDevTarget(null)}
+        />
       )}
     </div>
   );

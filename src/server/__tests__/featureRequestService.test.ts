@@ -32,6 +32,7 @@ jest.mock('../db/drizzle', () => {
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
       select: jest.fn().mockImplementation(makeSelectChain),
+      transaction: jest.fn(),
     },
   };
 });
@@ -52,6 +53,7 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'fr-1',
+    type: 'feature',
     title: 'Dark mode',
     request: 'Add dark mode support',
     advantage: 'Better UX at night',
@@ -78,7 +80,10 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
 // ── createFeatureRequest ──────────────────────────────────────────────────────
 
 describe('createFeatureRequest', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.transaction.mockImplementation((callback: (tx: any) => unknown) => callback(mockDb));
+  });
 
   it('inserts a row with pending/new defaults and returns mapped FeatureRequest', async () => {
     const row = makeRow();
@@ -87,6 +92,7 @@ describe('createFeatureRequest', () => {
     mockDb.insert.mockReturnValue({ values: valuesMock });
 
     const result = await createFeatureRequest('user-1', 'Apex', {
+      type: 'feature',
       title: 'Dark mode',
       request: 'Add dark mode support',
       advantage: 'Better UX at night',
@@ -96,6 +102,7 @@ describe('createFeatureRequest', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: 'Dark mode',
+        type: 'feature',
         request: 'Add dark mode support',
         advantage: 'Better UX at night',
         submittedBy: 'user-1',
@@ -115,19 +122,69 @@ describe('createFeatureRequest', () => {
   });
 
   it('maps null submitterName to undefined', async () => {
-    const row = makeRow({ submitterName: null });
+    const row = makeRow({ type: 'technical', advantage: null, submitterName: null });
     const returningMock = jest.fn().mockResolvedValue([row]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
     mockDb.insert.mockReturnValue({ values: valuesMock });
 
     const result = await createFeatureRequest('user-1', 'Apex', {
+      type: 'technical',
       title: 'Test',
       request: 'req',
-      advantage: 'adv',
+      advantage: null,
     });
 
     expect(result.submitterName).toBeUndefined();
+    expect(result.type).toBe('technical');
   });
+
+  it('validates, deduplicates, and transactionally links accepted ADRs', async () => {
+    const adrId = '11111111-1111-4111-8111-111111111111';
+    const row = makeRow();
+    const linkedAdr = {
+      id: adrId,
+      title: 'Use an event bus',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      slug: 'use-event-bus',
+      status: 'accepted',
+    };
+    mockDb.select.mockReturnValue({
+      from: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([linkedAdr]) }),
+    });
+    const requestValues = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([row]) });
+    const linkValues = jest.fn().mockResolvedValue(undefined);
+    mockDb.insert
+      .mockReturnValueOnce({ values: requestValues })
+      .mockReturnValueOnce({ values: linkValues });
+
+    const result = await createFeatureRequest('user-1', 'Apex', {
+      type: 'feature',
+      title: 'Dark mode',
+      request: 'Add dark mode support',
+      adrIds: [adrId, adrId],
+    });
+
+    expect(linkValues).toHaveBeenCalledWith([{ featureRequestId: 'fr-1', adrId }]);
+    expect(result.linkedAdrs).toEqual([expect.objectContaining({ id: adrId, status: 'accepted' })]);
+  });
+
+  it.each(['missing', 'non-accepted', 'cross-project'])(
+    'rejects %s ADR links',
+    async () => {
+      mockDb.select.mockReturnValue({
+        from: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([]) }),
+      });
+
+      await expect(createFeatureRequest('user-1', 'Apex', {
+        type: 'technical',
+        title: 'Refactor',
+        request: 'Refactor the queue',
+        adrIds: ['11111111-1111-4111-8111-111111111111'],
+      })).rejects.toThrow(/exist, be accepted, and belong/);
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ── listFeatureRequests ───────────────────────────────────────────────────────
@@ -140,12 +197,30 @@ describe('listFeatureRequests', () => {
     const orderByMock = jest.fn().mockResolvedValue(rows);
     const leftJoinMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select
+      .mockReturnValueOnce({ from: fromMock })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          innerJoin: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([{
+            featureRequestId: 'fr-1',
+            id: 'adr-1',
+            title: 'Use an event bus',
+            project: 'Apex',
+            repo: 'AI-Pilot',
+            slug: 'use-event-bus',
+            status: 'accepted',
+          }]) }),
+        }),
+      });
 
     const result = await listFeatureRequests();
 
     expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({ id: 'fr-1', submitterName: 'Alice' });
+    expect(result[0]).toMatchObject({
+      id: 'fr-1',
+      submitterName: 'Alice',
+      linkedAdrs: [expect.objectContaining({ id: 'adr-1' })],
+    });
     expect(result[1]).toMatchObject({ id: 'fr-2', submitterName: 'Bob' });
   });
 
@@ -171,11 +246,30 @@ describe('getFeatureRequest', () => {
     const whereMock = jest.fn().mockResolvedValue([row]);
     const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
-    mockDb.select.mockReturnValue({ from: fromMock });
+    mockDb.select
+      .mockReturnValueOnce({ from: fromMock })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          innerJoin: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([{
+            featureRequestId: 'fr-1',
+            id: 'adr-1',
+            title: 'Use an event bus',
+            project: 'Apex',
+            repo: 'AI-Pilot',
+            slug: 'use-event-bus',
+            status: 'accepted',
+          }]) }),
+        }),
+      });
 
     const result = await getFeatureRequest('fr-1');
 
-    expect(result).toMatchObject({ id: 'fr-1', title: 'Dark mode', submitterName: 'Alice' });
+    expect(result).toMatchObject({
+      id: 'fr-1',
+      title: 'Dark mode',
+      submitterName: 'Alice',
+      linkedAdrs: [expect.objectContaining({ id: 'adr-1' })],
+    });
   });
 
   it('returns null when not found', async () => {

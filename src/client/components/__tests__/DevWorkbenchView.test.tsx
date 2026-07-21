@@ -42,10 +42,11 @@ const workItems = [
   {
     id: 42,
     title: 'Implement login',
-    workItemType: 'Product Backlog Item',
+    workItemType: 'Feature',
     state: 'In Progress',
     assignedTo: 'jane@example.com',
     project: 'MaxView',
+    tags: 'apex; wave-1',
   },
   {
     id: 99,
@@ -69,7 +70,7 @@ describe('DevWorkbenchView', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView' });
+    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: false });
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
       data: workItems,
       isLoading: false,
@@ -101,7 +102,7 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText('Implement login')).toBeInTheDocument();
     expect(screen.getByText('Fix crash')).toBeInTheDocument();
     expect(screen.getByText('#42')).toBeInTheDocument();
-    expect(screen.getByText('Product Backlog Item')).toBeInTheDocument();
+    expect(screen.getByText('Feature')).toBeInTheDocument();
   });
 
   it('shows a loading state while work items are loading', () => {
@@ -151,6 +152,86 @@ describe('DevWorkbenchView', () => {
       expect(mockStartMutateAsync).toHaveBeenCalledWith({ workItemId: 42, project: 'MaxView' });
       expect(mockNavigate).toHaveBeenCalledWith('/my-work/session/session-1');
     });
+  });
+
+  it('disables Start Development for work items not in an allowed state', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        id: 7, title: 'In review', workItemType: 'Feature',
+        state: 'In Pull Request', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex',
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: /start development/i })).toBeDisabled();
+  });
+
+  it('enables Start Development for an APEX Feature in an allowed state (Committed)', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        id: 8, title: 'Ready to code', workItemType: 'Feature',
+        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex; wave-2',
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: /start development/i })).not.toBeDisabled();
+  });
+
+  it('disables Start Development for a Feature without the apex tag (non-admin)', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        id: 9, title: 'Legacy feature', workItemType: 'Feature',
+        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'wave-1',
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    const btn = screen.getByRole('button', { name: /start development/i });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', expect.stringMatching(/APEX-generated Features/i));
+  });
+
+  it('disables Start Development for a PBI even when tagged apex and startable (non-admin)', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        id: 10, title: 'A PBI', workItemType: 'Product Backlog Item',
+        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex',
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    const btn = screen.getByRole('button', { name: /start development/i });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', expect.stringMatching(/only available on Features/i));
+  });
+
+  it('enables Start Development on any type for super admins (Bug in an allowed state)', () => {
+    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        id: 11, title: 'Admin bug', workItemType: 'Bug',
+        state: 'Active', assignedTo: 'jane@example.com', project: 'MaxView',
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: /start development/i })).not.toBeDisabled();
   });
 
   it('shows resume and close actions for work items with an active session', () => {

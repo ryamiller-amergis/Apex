@@ -243,7 +243,8 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
             <div className={styles.errorCard} data-testid="pdf-session-limit">
               <span className={styles.errorIcon}>⚠️</span>
               <p className={styles.errorText}>
-                Maximum 3 concurrent sessions reached. Close an existing session first.
+                Too many open PDF sessions. Starting a new session should free space
+                automatically — try New session again, or refresh the page.
               </p>
             </div>
           )}
@@ -347,7 +348,8 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
         <div className={styles.errorCard} data-testid="pdf-session-limit">
           <span className={styles.errorIcon}>⚠️</span>
           <p className={styles.errorText}>
-            Maximum 3 concurrent sessions reached. Close an existing session first.
+            Too many open PDF sessions. Starting a new session should free space
+            automatically — try New session again, or refresh the page.
           </p>
         </div>
       )}
@@ -384,7 +386,7 @@ export const PdfDocumentSidebar: React.FC<PdfDocumentSidebarProps> = ({
                     className={`${styles.fileCard} ${f.fileId === selectedFileId ? styles.fileCardSelected : ''}`}
                     onClick={() => onSelectFile(f.fileId)}
                     tabIndex={0}
-                    role="listitem"
+                    role="option"
                     aria-label={`${f.originalName}, ${formatBytes(f.sizeBytes)}, ${f.pageCount} ${f.pageCount === 1 ? 'page' : 'pages'}`}
                     aria-selected={f.fileId === selectedFileId}
                     onKeyDown={(e) => {

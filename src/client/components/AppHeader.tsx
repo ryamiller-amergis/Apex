@@ -8,6 +8,7 @@ import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
+import type { WorkItemType } from '../../shared/types/featureRequest';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -18,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -39,11 +40,13 @@ interface AppHeaderProps {
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
   onNavigateBacklog: () => void;
+  onNavigateAdr?: () => void;
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
+  onNavigateDesignModule?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -70,11 +73,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigatePlanning,
   onNavigateCloudCost,
   onNavigateBacklog,
+  onNavigateAdr = () => {},
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
+  onNavigateDesignModule,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -83,7 +88,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenAgentChat: _onOpenAgentChat,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
+  const [workItemType, setWorkItemType] = useState<WorkItemType | null>(null);
   const { isMobile } = useBreakpoint();
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -108,10 +113,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
+    { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-    { label: 'Feature Requests', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -249,13 +256,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
 
       {can('feature-requests:submit') && selectedProject && (
-        <FeatureRequestFab onRequestFeature={() => setFeatureRequestOpen(true)} />
+        <FeatureRequestFab onSubmit={setWorkItemType} />
       )}
 
-      {featureRequestOpen && selectedProject && (
+      {workItemType && selectedProject && (
         <FeatureRequestModal
           selectedProject={selectedProject}
-          onClose={() => setFeatureRequestOpen(false)}
+          type={workItemType}
+          onClose={() => setWorkItemType(null)}
         />
       )}
     </div>

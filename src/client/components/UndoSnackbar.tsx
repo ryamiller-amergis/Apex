@@ -21,6 +21,7 @@ export const UndoSnackbar: React.FC<UndoSnackbarProps> = ({
     >
       <span className={styles.message}>{message}</span>
       <button
+        type="button"
         className={styles.undoButton}
         data-testid="undo-snackbar-action"
         onClick={onUndo}
@@ -28,6 +29,7 @@ export const UndoSnackbar: React.FC<UndoSnackbarProps> = ({
         Undo
       </button>
       <button
+        type="button"
         className={styles.dismissButton}
         onClick={onDismiss}
         aria-label="Dismiss"

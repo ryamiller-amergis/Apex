@@ -27,6 +27,8 @@ jest.mock('../db/drizzle', () => {
         prds: { findFirst: jest.fn() },
         interviews: { findFirst: jest.fn() },
         designDocs: { findFirst: jest.fn() },
+        designPrototypes: { findFirst: jest.fn() },
+        adrs: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -94,6 +96,14 @@ describe('ownerApprovalService', () => {
   });
 
   describe('resolveDocumentOwnerId', () => {
+    it('resolves ADR owner from the author', async () => {
+      mockDb.query.adrs.findFirst.mockResolvedValue({ authorId: 'adr-owner' });
+
+      const result = await resolveDocumentOwnerId('adr-1', 'adr');
+
+      expect(result).toBe('adr-owner');
+    });
+
     it('resolves PRD owner via prds → interviews', async () => {
       mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
       mockDb.query.interviews.findFirst.mockResolvedValue({ prdOwnerId: 'user-prd-owner' });
@@ -110,12 +120,20 @@ describe('ownerApprovalService', () => {
       expect(result).toBe('user-tc-owner');
     });
 
-    it('resolves design_prototype owner via prds → interviews', async () => {
+    it('resolves design_prototype owner via prototype → prd → interviews', async () => {
+      mockDb.query.designPrototypes.findFirst.mockResolvedValue({ prdId: 'prd-1' });
       mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
       mockDb.query.interviews.findFirst.mockResolvedValue({ designPrototypeOwnerId: 'user-dp-owner' });
 
-      const result = await resolveDocumentOwnerId('prd-1', 'design_prototype');
+      const result = await resolveDocumentOwnerId('proto-1', 'design_prototype');
       expect(result).toBe('user-dp-owner');
+    });
+
+    it('returns null when design_prototype has no prdId', async () => {
+      mockDb.query.designPrototypes.findFirst.mockResolvedValue({ prdId: null });
+
+      const result = await resolveDocumentOwnerId('proto-1', 'design_prototype');
+      expect(result).toBeNull();
     });
 
     it('resolves design_doc owner via designDocs → prds → interviews', async () => {

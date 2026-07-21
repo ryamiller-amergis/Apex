@@ -423,7 +423,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   // background — the route returns immediately and the UI polls per-prototype.
   if (pending.length > 0) {
     runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
-      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
+      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
         console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
       }),
     ).catch(err => {
@@ -479,7 +479,16 @@ function planFeatureToInput(planFeature?: DesignPlanFeature): DesignPrototypeInp
   };
 }
 
-async function generateSinglePrototype(prototypeId: string, feature: BacklogFeature, modelId?: string, maxTokens?: number, planFeature?: DesignPlanFeature, timeoutMs?: number): Promise<void> {
+async function generateSinglePrototype(
+  prototypeId: string,
+  feature: BacklogFeature,
+  modelId?: string,
+  maxTokens?: number,
+  planFeature?: DesignPlanFeature,
+  timeoutMs?: number,
+  project?: string,
+  skillSettingsId?: string | null,
+): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
@@ -487,6 +496,7 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
     // The reviewed plan is authoritative: prefer its route decision over the raw backlog route.
     const planRoute = planFeature?.decision === 'update-page' ? planFeature.targetRoute?.trim() : undefined;
     const targetRoute = planRoute || feature.route?.trim() || undefined;
+    const extendMode = Boolean(targetRoute);
 
     let pageScreenshot: { base64: string; mediaType: string } | undefined;
     if (targetRoute) {
@@ -499,6 +509,41 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
       }
     }
 
+    // Resolve project-specific prototype context (design system from the project's own repo).
+    // When absent (or unresolvable), the legacy MaxView fallback path runs inside bedrockService.
+    let prototypeContext: import('./prototypeContextService').PrototypeContext | undefined;
+    let webReferences: string | undefined;
+    if (project) {
+      try {
+        const { resolvePrototypeContext } = await import('./prototypeContextService');
+        const resolved = await resolvePrototypeContext(project, skillSettingsId);
+        if (resolved) {
+          prototypeContext = resolved;
+          console.log(`[designPrototypeService] Using project-specific design system for "${feature.title}" (${project}, isProjectSpecific=${resolved.isProjectSpecific})`);
+        }
+      } catch (err: any) {
+        console.warn(`[designPrototypeService] resolvePrototypeContext failed for "${project}": ${err.message}`);
+      }
+    }
+
+    // Resolve live web design references (NEW-page only, toggle-gated).
+    if (prototypeContext && !extendMode) {
+      try {
+        const { resolveSkillConfig } = await import('./projectSettingsService');
+        const cfg = project ? await resolveSkillConfig({ project, settingsId: skillSettingsId ?? undefined }) : null;
+        if (cfg?.prototypeWebReferencesEnabled) {
+          const { getDesignReferences } = await import('./webDesignReferenceService');
+          webReferences = await getDesignReferences({
+            featureName: feature.title,
+            featureDescription: feature.description,
+            designSystemName: prototypeContext.appName,
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[designPrototypeService] Web design references failed for "${feature.title}": ${err.message}`);
+      }
+    }
+
     const rawHtml = await generateDesignPrototypeHtml({
       featureName: feature.title,
       featureDescription: feature.description,
@@ -506,14 +551,19 @@ async function generateSinglePrototype(prototypeId: string, feature: BacklogFeat
       targetRoute,
       pageScreenshot,
       plan: planFeatureToInput(planFeature),
+      prototypeContext,
+      webReferences,
     }, modelId, maxTokens, timeoutMs);
 
     const html = sanitizeMockHtml(rawHtml);
 
+    // Only check for the MaxView purple-annotation convention when using the legacy path.
+    // Project-specific (NEW-page) prototypes don't use the MaxView purple delta marker.
+    const isLegacyPath = !prototypeContext?.isProjectSpecific;
     const hasAnnotation = /#a46bff/.test(html) && /NEW:/i.test(html);
     const hasFeatureMarkers = /<!--\s*NEW_FEATURE:START\s*-->/.test(html)
       && /<!--\s*NEW_FEATURE:END\s*-->/.test(html);
-    if (!hasAnnotation || !hasFeatureMarkers) {
+    if (isLegacyPath && (!hasAnnotation || !hasFeatureMarkers)) {
       const missing: string[] = [];
       if (!hasAnnotation) missing.push('purple annotation border');
       if (!hasFeatureMarkers) missing.push('NEW_FEATURE comment markers');
@@ -594,6 +644,40 @@ export async function regeneratePrototype(
       ?? undefined;
     const prototypeTimeoutMs = skillConfig?.designPrototypeBedrockTimeoutMs ?? undefined;
 
+    // Resolve project-specific prototype context for project-driven regeneration.
+    let regenProtoContext: import('./prototypeContextService').PrototypeContext | undefined;
+    if (prd?.project) {
+      try {
+        const { resolvePrototypeContext } = await import('./prototypeContextService');
+        const resolved = await resolvePrototypeContext(prd.project, prd.skillSettingsId ?? undefined);
+        if (resolved) regenProtoContext = resolved;
+      } catch (err: any) {
+        console.warn(`[designPrototypeService] resolvePrototypeContext (regen) failed: ${err.message}`);
+      }
+    }
+
+    // Resolve web references for regen (NEW-page only, same rule as initial generation).
+    // This keeps the web-inspiration section consistent across generations.
+    const regenExtendMode = Boolean(targetRoute);
+    let regenWebReferences: string | undefined;
+    if (regenProtoContext && !regenExtendMode && prd?.project) {
+      try {
+        const { resolveSkillConfig } = await import('./projectSettingsService');
+        const cfg = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+        if (cfg?.prototypeWebReferencesEnabled) {
+          const { getDesignReferences } = await import('./webDesignReferenceService');
+          const feature = prd ? extractFeatures(prd.backlogJson)[proto.featureIndex] : undefined;
+          regenWebReferences = await getDesignReferences({
+            featureName: feature?.title ?? prototypeId,
+            featureDescription: feature?.description,
+            designSystemName: regenProtoContext.appName,
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[designPrototypeService] Web design references (regen) failed: ${err.message}`);
+      }
+    }
+
     const comments = await db
       .select()
       .from(designPrototypeComments)
@@ -627,6 +711,9 @@ export async function regeneratePrototype(
       targetStates,
       prototypeTimeoutMs,
       regenScreenshot,
+      undefined,
+      regenProtoContext,
+      regenWebReferences,
     );
 
     const html = sanitizeMockHtml(rawHtml);
@@ -714,7 +801,7 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
     })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }

@@ -52,13 +52,24 @@ export interface ChatThreadKickoff {
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
   /** Identifies the type of assistant thread — controls system prompt behavior */
-  assistantType?: 'design-doc' | 'prd';
+  assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
+  /** Calendar assistant: anchor work item ID */
+  calendarAnchorWorkItemId?: number;
+  /** Calendar assistant: selected work item IDs (immutable after session start) */
+  calendarSelectedWorkItemIds?: number[];
+  /** Calendar assistant: session ID in work_item_assistant_sessions */
+  calendarAssistantSessionId?: string;
   /** Human-readable label from the QuickSkillPill or QuickMcpPill selected on the home page */
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */
   pillDescription?: string;
   /** When true, the scope guardrail is omitted from the system prompt for this thread */
   pillBypassScopePolicy?: boolean;
+  /**
+   * Server-set for interview threads when the project enables live web research.
+   * Relaxes the scope policy with a narrow web-research carve-out (does NOT fully bypass it).
+   */
+  webResearchEnabled?: boolean;
   /** Thread mode — controls system prompt behavior */
   mode?: 'development' | 'standup-participant' | 'standup-facilitator' | 'standup-followup';
   /** Work item ID driving the development session */

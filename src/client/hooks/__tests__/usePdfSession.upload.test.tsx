@@ -35,6 +35,7 @@ class MockXMLHttpRequest {
   }
 
   open = jest.fn();
+  setRequestHeader = jest.fn();
 
   send = jest.fn(() => {
     this.upload.onprogress?.({
@@ -68,6 +69,7 @@ describe('useUploadPdfFiles progress', () => {
   const originalXMLHttpRequest = global.XMLHttpRequest;
 
   beforeEach(() => {
+    localStorage.clear();
     MockXMLHttpRequest.responseStatus = 200;
     MockXMLHttpRequest.responseBody = {
       files: [{
@@ -83,10 +85,12 @@ describe('useUploadPdfFiles progress', () => {
   });
 
   afterEach(() => {
+    localStorage.clear();
     global.XMLHttpRequest = originalXMLHttpRequest;
   });
 
   it('reports upload percentage and server-processing phases', async () => {
+    localStorage.setItem('selectedProject', 'Apex');
     const onProgress = jest.fn();
     const { result } = renderHook(() => useUploadPdfFiles(), {
       wrapper: createWrapper(),
@@ -108,6 +112,10 @@ describe('useUploadPdfFiles progress', () => {
       '/api/pdf/sessions/session-1/upload',
     );
     expect(MockXMLHttpRequest.latest.withCredentials).toBe(true);
+    expect(MockXMLHttpRequest.latest.setRequestHeader).toHaveBeenCalledWith(
+      'X-Apex-Project',
+      'Apex',
+    );
     expect(onProgress).toHaveBeenNthCalledWith(1, {
       phase: 'uploading',
       percent: 0,

@@ -1157,6 +1157,7 @@ describe('startPrdWatcher', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-1', status: 'generating' });
   });
 
   afterEach(() => {
@@ -1171,9 +1172,6 @@ describe('startPrdWatcher', () => {
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    // Also mock the workspace cleanup query
-    mockDb.query.prds.findFirst.mockResolvedValue(null);
-
     startPrdWatcher('prd-1', 'thread-1');
 
     // Advance past one interval tick
@@ -1187,6 +1185,46 @@ describe('startPrdWatcher', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ content: '# Generated PRD', status: 'draft' }),
     );
+  });
+
+  it('stops when the PRD no longer exists (e.g. deleted on another instance)', async () => {
+    mockReadOutputPrd.mockReturnValue('# Generated PRD');
+    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+    mockDb.query.prds.findFirst.mockResolvedValue(null);
+
+    const setMock = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(mockReadOutputPrd).not.toHaveBeenCalled();
+    expect(setMock).not.toHaveBeenCalled();
+
+    // Further ticks must not resume polling after stop
+    mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-1', status: 'generating' });
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mockReadOutputPrd).not.toHaveBeenCalled();
+  });
+
+  it('stops when the PRD is no longer generating', async () => {
+    mockReadOutputPrd.mockReturnValue('# Generated PRD');
+    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+    mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-1', status: 'draft' });
+
+    const setMock = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(mockReadOutputPrd).not.toHaveBeenCalled();
+    expect(setMock).not.toHaveBeenCalled();
   });
 
   it('resets PRD to draft when watcher times out without finding files', async () => {

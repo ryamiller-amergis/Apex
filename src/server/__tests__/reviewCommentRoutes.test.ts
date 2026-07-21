@@ -113,6 +113,15 @@ describe('GET /:documentType/:documentId', () => {
     expect(res.status).toBe(200);
     expect(mockService.getComments).toHaveBeenCalledWith('doc-1', 'design_doc');
   });
+
+  it('accepts adr as a valid document type', async () => {
+    mockService.getComments.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/adr/adr-1');
+
+    expect(res.status).toBe(200);
+    expect(mockService.getComments).toHaveBeenCalledWith('adr-1', 'adr');
+  });
 });
 
 // ── POST /:documentType/:documentId ────────────────────────────────────────────

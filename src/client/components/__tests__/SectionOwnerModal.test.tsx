@@ -73,6 +73,12 @@ describe('SectionOwnerModal', () => {
     expect(screen.getByText(/Assign Owners/)).toBeInTheDocument();
   });
 
+  it('loads owner candidates for the current interview project', () => {
+    renderModal({ project: 'project-beta' });
+
+    expect(mockUseActiveUsers).toHaveBeenCalledWith('project-beta');
+  });
+
   it('renders required field labels', () => {
     renderModal();
     expect(screen.getByText(/PRD Owner.*\*/)).toBeInTheDocument();

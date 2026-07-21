@@ -65,7 +65,10 @@ jest.mock('../services/prdService', () => ({
   autoStartPrdValidation: jest.fn().mockResolvedValue(undefined),
 }));
 
-import { addTestCaseToPrd } from '../services/testCaseService';
+import {
+  addTestCaseToPrd,
+  recalculateTestCaseCoverage,
+} from '../services/testCaseService';
 
 const {
   db: mockDb,
@@ -145,7 +148,65 @@ describe('addTestCaseToPrd', () => {
         { order: 1, action: 'Open login page' },
         { order: 2, action: 'Submit valid credentials' },
       ],
-      traceability: { acceptanceCriteriaIndex: 0 },
+      traceability: { pbiId: 'PBI-1', acceptanceCriteriaIndex: 0 },
+    });
+  });
+
+  it('marks traced acceptance criteria and business rules covered', async () => {
+    mockDb.select.mockReturnValue(
+      makeSelectForGet([
+        {
+          id: 'tc-1',
+          prdId: 'prd-1',
+          chatThreadId: 'thread-tc',
+          status: 'ready',
+          testCasesJson: {
+            suites: [{ pbiId: 'PBI-1', testCases: [] }],
+            coverageMatrix: {
+              acceptanceCriteria: [
+                { pbiId: 'PBI-1', index: 0, covered: false, testCaseIds: [] },
+              ],
+              businessRules: [
+                { id: 'BR-001', covered: false, testCaseIds: [] },
+              ],
+              gaps: ['AC and BR are not covered'],
+              explicitlyOutOfScope: [],
+            },
+          },
+          testCasesMd: null,
+          coverageSummary: { totalCases: 0, pbisCovered: 0, acCovered: '0/1', brCovered: '0/1', gaps: 1 },
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ]),
+    );
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      backlogJson: { items: [{ id: 'PBI-1', title: 'Feature work' }] },
+    });
+
+    await addTestCaseToPrd({
+      prdId: 'prd-1',
+      pbiId: 'PBI-1',
+      title: 'Cover login requirements',
+      steps: ['Exercise the requirement'],
+      acceptanceCriteriaIndex: 0,
+      businessRules: ['BR-001'],
+    });
+
+    const update = mockUpdateChains[0].set.mock.calls[0][0];
+    expect(update.coverageSummary).toMatchObject({
+      totalCases: 1,
+      pbisCovered: 1,
+      acCovered: '1/1',
+      brCovered: '1/1',
+    });
+    expect(update.testCasesJson.coverageMatrix.acceptanceCriteria[0]).toMatchObject({
+      covered: true,
+      testCaseIds: ['PBI-1-TC-1'],
+    });
+    expect(update.testCasesJson.coverageMatrix.businessRules[0]).toMatchObject({
+      covered: true,
+      testCaseIds: ['PBI-1-TC-1'],
     });
   });
 
@@ -217,5 +278,62 @@ describe('addTestCaseToPrd', () => {
     expect(suite.testCases).toHaveLength(1);
     expect(suite.testCases[0].id).toBe('PBI-9-TC-1');
     expect(result.testCaseId).toBe('PBI-9-TC-1');
+  });
+
+  it('re-evaluates coverage for cases added before traceability recalculation', async () => {
+    mockDb.select.mockReturnValue(
+      makeSelectForGet([
+        {
+          id: 'tc-1',
+          prdId: 'prd-1',
+          chatThreadId: 'thread-tc',
+          status: 'ready',
+          testCasesJson: {
+            suites: [
+              {
+                pbiId: 'PBI-1',
+                testCases: [
+                  {
+                    id: 'PBI-1-TC-1',
+                    title: 'Existing assistant case',
+                    steps: [{ order: 1, action: 'Exercise AC' }],
+                    traceability: { acceptanceCriteriaIndex: 0 },
+                  },
+                ],
+              },
+            ],
+            coverageMatrix: {
+              acceptanceCriteria: [
+                { pbiId: 'PBI-1', index: 0, covered: false, testCaseIds: [] },
+              ],
+              businessRules: [],
+              gaps: [],
+              explicitlyOutOfScope: [],
+            },
+          },
+          testCasesMd: null,
+          coverageSummary: { totalCases: 1, pbisCovered: 0, acCovered: '0/1', brCovered: '0/0', gaps: 0 },
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ]),
+    );
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      backlogJson: { items: [{ id: 'PBI-1', title: 'Feature work' }] },
+    });
+
+    const summary = await recalculateTestCaseCoverage('prd-1');
+
+    expect(summary).toMatchObject({
+      totalCases: 1,
+      pbisCovered: 1,
+      acCovered: '1/1',
+      brCovered: '0/0',
+    });
+    const testCaseUpdate = mockUpdateChains[0].set.mock.calls[0][0];
+    expect(testCaseUpdate.testCasesJson.coverageMatrix.acceptanceCriteria[0]).toMatchObject({
+      covered: true,
+      testCaseIds: ['PBI-1-TC-1'],
+    });
   });
 });

@@ -103,10 +103,54 @@ export function useChatAttachments() {
     setAttachmentError(null);
   }, []);
 
+  const addTextAttachments = useCallback((files: Array<{ name: string; content: string; type?: string }>) => {
+    if (files.length === 0) return;
+
+    const remainingSlots = MAX_CHAT_ATTACHMENTS - attachments.length;
+    if (remainingSlots <= 0) {
+      setAttachmentError(`You can attach up to ${MAX_CHAT_ATTACHMENTS} files.`);
+      return;
+    }
+
+    const selected = files.slice(0, remainingSlots);
+    const nextAttachments: ChatAttachment[] = [];
+    let nextTotalBytes = totalAttachmentBytes;
+    let error: string | null = files.length > remainingSlots
+      ? `Only ${remainingSlots} more file${remainingSlots === 1 ? '' : 's'} can be attached.`
+      : null;
+
+    for (const file of selected) {
+      const content = file.content;
+      const size = new TextEncoder().encode(content).length;
+      if (size > MAX_CHAT_ATTACHMENT_BYTES) {
+        error = `${file.name} is larger than ${formatAttachmentSize(MAX_CHAT_ATTACHMENT_BYTES)}.`;
+        continue;
+      }
+      if (nextTotalBytes + size > MAX_CHAT_ATTACHMENT_TOTAL_BYTES) {
+        error = `Attachments can total up to ${formatAttachmentSize(MAX_CHAT_ATTACHMENT_TOTAL_BYTES)}.`;
+        continue;
+      }
+      nextAttachments.push({
+        id: makeAttachmentId(),
+        name: file.name,
+        type: file.type ?? 'text/markdown',
+        size,
+        content,
+      });
+      nextTotalBytes += size;
+    }
+
+    if (nextAttachments.length > 0) {
+      setAttachments((prev) => [...prev, ...nextAttachments]);
+    }
+    setAttachmentError(error);
+  }, [attachments.length, totalAttachmentBytes]);
+
   return {
     attachments,
     attachmentError,
     addFiles,
+    addTextAttachments,
     removeAttachment,
     clearAttachments,
   };

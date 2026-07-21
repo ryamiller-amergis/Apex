@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { usePdfDocument } from '../hooks/usePdfDocument';
+import { pdfFileUrl } from '../utils/pdfUrls';
 import styles from './PdfInlinePreview.module.css';
 
 export interface PdfInlinePreviewProps {
@@ -35,7 +36,7 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
 
-  const fileUrl = fileId ? `/api/pdf/sessions/${sessionId}/files/${fileId}` : null;
+  const fileUrl = fileId ? pdfFileUrl(sessionId, fileId) : null;
   const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
 
   const updateSize = useCallback(() => {

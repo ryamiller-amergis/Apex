@@ -1,5 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
-import { requirePermission, requireAnyPermission, attachPermissions, requireGroupMembership } from '../middleware/rbac';
+import {
+  requirePermission,
+  requireAnyPermission,
+  attachPermissions,
+  requireGroupMembership,
+  resolveRequestProject,
+} from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as groupService from '../services/groupService';
 import * as superAdminUtils from '../utils/superAdmin';
@@ -18,9 +24,28 @@ const mockIsSuperAdminRequest = superAdminUtils.isSuperAdminRequest as jest.Mock
   typeof superAdminUtils.isSuperAdminRequest
 >;
 
-function makeReq(user: unknown, cachedPerms?: Set<string>): Request {
-  const req: any = { user };
-  if (cachedPerms !== undefined) req._permissions = cachedPerms;
+interface MakeReqOpts {
+  query?: Record<string, string>;
+  params?: Record<string, string>;
+  body?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  cachedPerms?: Set<string>;
+}
+
+function makeReq(user: unknown, optsOrCachedPerms?: Set<string> | MakeReqOpts): Request {
+  const opts: MakeReqOpts =
+    optsOrCachedPerms instanceof Set ? { cachedPerms: optsOrCachedPerms } : (optsOrCachedPerms ?? {});
+  const req: any = {
+    user,
+    query: opts.query ?? {},
+    params: opts.params ?? {},
+    body: opts.body ?? {},
+    headers: opts.headers ?? {},
+    get: function (name: string) {
+      return this.headers[name.toLowerCase()];
+    },
+  };
+  if (opts.cachedPerms !== undefined) req._permissions = opts.cachedPerms;
   return req as Request;
 }
 
@@ -123,7 +148,7 @@ describe('requirePermission', () => {
     expect((req as any)._permissions).toBe(perms);
   });
 
-  it('calls getUserPermissions with the profile oid', async () => {
+  it('calls getUserPermissions with the profile oid and undefined project when no project context', async () => {
     const req = makeReq({ profile: { oid: 'oid-abc' } });
     const res = makeRes();
     const next = jest.fn() as NextFunction;
@@ -131,7 +156,55 @@ describe('requirePermission', () => {
 
     await requirePermission('admin:roles')(req, res, next);
 
-    expect(mockGetUserPermissions).toHaveBeenCalledWith('oid-abc');
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('oid-abc', undefined);
+  });
+
+  it('passes project from query string to getUserPermissions', async () => {
+    const req = makeReq({ profile: { oid: 'user-1' } }, { query: { project: 'ProjectAlpha' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await requirePermission('chat:create')(req, res, next);
+
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'ProjectAlpha');
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes project from X-Apex-Project header to getUserPermissions', async () => {
+    const req = makeReq({ profile: { oid: 'user-1' } }, { headers: { 'x-apex-project': 'HeaderProj' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await requirePermission('chat:create')(req, res, next);
+
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'HeaderProj');
+  });
+
+  it('passes project from req.body to getUserPermissions', async () => {
+    const req = makeReq({ profile: { oid: 'user-1' } }, { body: { project: 'BodyProj' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await requirePermission('chat:create')(req, res, next);
+
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'BodyProj');
+  });
+
+  it('prefers query.project over header', async () => {
+    const req = makeReq(
+      { profile: { oid: 'user-1' } },
+      { query: { project: 'QueryProj' }, headers: { 'x-apex-project': 'HeaderProj' } },
+    );
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await requirePermission('chat:create')(req, res, next);
+
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'QueryProj');
   });
 });
 
@@ -377,5 +450,67 @@ describe('requireGroupMembership', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+});
+
+// ── resolveRequestProject ─────────────────────────────────────────────────────
+
+describe('resolveRequestProject', () => {
+  it('returns query.project when present', () => {
+    const req = makeReq(null, { query: { project: 'FromQuery' } });
+    expect(resolveRequestProject(req)).toBe('FromQuery');
+  });
+
+  it('returns params.project when query is absent', () => {
+    const req = makeReq(null, { params: { project: 'FromParams' } });
+    expect(resolveRequestProject(req)).toBe('FromParams');
+  });
+
+  it('returns body.project when query and params are absent', () => {
+    const req = makeReq(null, { body: { project: 'FromBody' } });
+    expect(resolveRequestProject(req)).toBe('FromBody');
+  });
+
+  it('returns X-Apex-Project header when query/params/body are absent', () => {
+    const req = makeReq(null, { headers: { 'x-apex-project': 'FromHeader' } });
+    expect(resolveRequestProject(req)).toBe('FromHeader');
+  });
+
+  it('returns undefined when no project source is present', () => {
+    const req = makeReq(null);
+    expect(resolveRequestProject(req)).toBeUndefined();
+  });
+
+  it('prefers query over params over body over header', () => {
+    const req = makeReq(null, {
+      query: { project: 'Q' },
+      params: { project: 'P' },
+      body: { project: 'B' },
+      headers: { 'x-apex-project': 'H' },
+    });
+    expect(resolveRequestProject(req)).toBe('Q');
+  });
+
+  it('skips empty-string query and falls through to params', () => {
+    const req = makeReq(null, { query: { project: '' }, params: { project: 'FallbackParam' } });
+    expect(resolveRequestProject(req)).toBe('FallbackParam');
+  });
+});
+
+// ── attachPermissions with project ────────────────────────────────────────────
+
+describe('attachPermissions (project-aware)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('passes resolved project to getUserPermissions', async () => {
+    const req = makeReq({ profile: { oid: 'user-1' } }, { query: { project: 'ProjX' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await attachPermissions(req, res, next);
+
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'ProjX');
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });

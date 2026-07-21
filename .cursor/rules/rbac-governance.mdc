@@ -31,6 +31,11 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 |-----|----------|-------|
 | `admin:roles` | admin | admin |
 | `admin:users` | admin | admin |
+| `adr:view` | adr | admin, member, viewer |
+| `adr:create` | adr | admin, member |
+| `adr:edit` | adr | admin, member |
+| `adr:delete` | adr | admin, member |
+| `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
 | `calendar:view` | calendar | admin, member |
@@ -41,12 +46,16 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `deployments:create` | deployments | admin, member |
 | `deployments:manage` | deployments | admin |
 | `design-docs:review` | design-docs | admin, member |
+| `design-module:manage` | design-module | admin |
+| `design-module:regenerate` | design-module | admin |
+| `design-module:view` | design-module | admin, member, viewer |
 | `planning:view` | planning | admin, member, viewer |
 | `planning:devstats` | planning | admin, member |
 | `planning:qa` | planning | admin, member |
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
+| `pdf-assembly:use` | pdf-tools | *(no default roles — assign explicitly)* |
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |

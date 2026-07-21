@@ -40,6 +40,19 @@ describe('UndoSnackbar', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('does not submit an ancestor form when dismissed', () => {
+    const onSubmit = jest.fn((event: React.FormEvent) => event.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <UndoSnackbar {...defaultProps} />
+      </form>,
+    );
+
+    fireEvent.click(screen.getByLabelText('Dismiss'));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('has role="alert" and aria-live="assertive"', () => {
     renderSnackbar();
 

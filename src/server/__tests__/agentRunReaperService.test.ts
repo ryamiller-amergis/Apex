@@ -1,11 +1,15 @@
 const mockFindMany = jest.fn();
+const mockFindFirst = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
-      agentRuns: { findMany: (...args: unknown[]) => mockFindMany(...args) },
+      agentRuns: {
+        findMany: (...args: unknown[]) => mockFindMany(...args),
+        findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
     },
     update: jest.fn(() => ({ set: mockUpdateSet })),
   },
@@ -18,6 +22,10 @@ jest.mock('../services/pgNotifyService', () => ({
 
 import {
   assessAgentRunHealth,
+  isThreadRunAlive,
+  isTerminalAgentRunStatus,
+  getLatestThreadRun,
+  canThisInstanceFailGeneration,
   reapOrphanedRuns,
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
@@ -243,5 +251,131 @@ describe('reapOrphanedRuns', () => {
       }),
       { persist: true }
     );
+  });
+});
+
+describe('isThreadRunAlive', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns true while a healthy running agent_runs row exists', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns true for progress_stale and long_running (worker still alive)', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(45 * 60_000),
+        startedAt: timestamp(45 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(3 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when the only run is worker_lost', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(6 * 60_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(false);
+  });
+
+  it('returns false when no queued/running rows exist', async () => {
+    mockFindMany.mockResolvedValue([]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(false);
+  });
+});
+
+describe('isTerminalAgentRunStatus', () => {
+  it.each(['completed', 'failed', 'cancelled'])('returns true for %s', (status) => {
+    expect(isTerminalAgentRunStatus(status)).toBe(true);
+  });
+
+  it.each(['queued', 'running', 'unknown'])('returns false for %s', (status) => {
+    expect(isTerminalAgentRunStatus(status)).toBe(false);
+  });
+});
+
+describe('getLatestThreadRun', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns the latest run status and ownerInstance', async () => {
+    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-a' });
+    const result = await getLatestThreadRun('thread-1');
+    expect(result).toEqual({ status: 'completed', ownerInstance: 'worker-a' });
+  });
+
+  it('returns null when no runs exist', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+    const result = await getLatestThreadRun('thread-1');
+    expect(result).toBeNull();
+  });
+});
+
+describe('canThisInstanceFailGeneration', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns false when no agent_runs row exists (kickoff in progress)', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
+  });
+
+  it('returns false when the latest run is not terminal (still alive)', async () => {
+    mockFindFirst.mockResolvedValue({ status: 'running', ownerInstance: 'worker-a' });
+    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
+  });
+
+  it('returns false when the latest run is terminal but owned by another instance', async () => {
+    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-b' });
+    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
+  });
+
+  it('returns true when this instance owned the terminal run', async () => {
+    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-a' });
+    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
+  });
+
+  it('returns true when ownerInstance is null (legacy/reaped)', async () => {
+    mockFindFirst.mockResolvedValue({ status: 'failed', ownerInstance: null });
+    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
   });
 });

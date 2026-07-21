@@ -66,7 +66,7 @@ describe('AppSidebar — desktop navigation', () => {
         onNavigateFeatureRequests={jest.fn()}
       />,
     );
-    expect(screen.queryByRole('button', { name: 'Feature Requests' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apex Backlog' })).not.toBeInTheDocument();
   });
 
   it('shows Admin when user has admin:roles permission', () => {

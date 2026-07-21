@@ -89,6 +89,10 @@ jest.mock('../middleware/rbac', () => ({
     (_req: any, _res: any, next: any) => next(),
   requireAnyPermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
+  requireGroupMembership: (..._groups: string[]) =>
+    (_req: any, _res: any, next: any) => next(),
+  requireProjectAccess: (_resolver: any) =>
+    (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
 }));
 
@@ -211,6 +215,28 @@ describe('GET /api/skill-config', () => {
       interviewModel: 'claude-opus-4-6',
       prdModel: null,
       designDocModel: null,
+    });
+  });
+
+  it('returns technical and issue analysis skill settings', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'Apex',
+      skillRepo: 'org/Apex',
+      skillBranch: 'main',
+      technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+      technicalModel: 'composer-2',
+      issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      issueModel: 'claude-opus-4-6',
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=Apex');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+      technicalModel: 'composer-2',
+      issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      issueModel: 'claude-opus-4-6',
     });
   });
 

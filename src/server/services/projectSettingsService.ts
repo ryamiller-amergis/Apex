@@ -2,7 +2,7 @@ import { db } from '../db/drizzle';
 import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 
@@ -70,6 +70,9 @@ export interface UpsertSkillConfigOptions {
   updatedBy?: string;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
+  adrInterviewSkillPath?: string | null;
+  adrFinalizeSkillPath?: string | null;
+  adrAssistantSkillPath?: string | null;
   designDocSkillPath?: string | null;
   designDocAssistantSkillPath?: string | null;
   designPrototypeSkillPath?: string | null;
@@ -78,6 +81,7 @@ export interface UpsertSkillConfigOptions {
   prdValidationSkillPath?: string | null;
   interviewModel?: string | null;
   prdModel?: string | null;
+  adrModel?: string | null;
   designDocModel?: string | null;
   designDocAssistantModel?: string | null;
   designPrototypeModel?: string | null;
@@ -100,6 +104,10 @@ export interface UpsertSkillConfigOptions {
   developmentModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
+  technicalSkillPath?: string | null;
+  technicalModel?: string | null;
+  issueSkillPath?: string | null;
+  issueModel?: string | null;
   prdValidationScoreThreshold?: number | null;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
@@ -108,10 +116,18 @@ export interface UpsertSkillConfigOptions {
   uiLabRegenBedrockMaxTokens?: number | null;
   uiLabBedrockTemperature?: number | null;
   uiLabSkillPath?: string | null;
+  calendarAssistantSkillPath?: string | null;
+  calendarAssistantModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
   prototypeStageEnabled?: boolean;
+  interviewWebResearchEnabled?: boolean;
+  interviewWebMcp?: QuickMcpPill | null;
+  prototypeEngine?: PrototypeEngine;
+  prototypeDesignSystemPath?: string | null;
+  screenInventoryPath?: string | null;
+  prototypeWebReferencesEnabled?: boolean;
   approvalMode?: ApprovalMode;
 }
 
@@ -129,6 +145,9 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     updatedBy: opts.updatedBy,
     interviewSkillPath: opts.interviewSkillPath ?? null,
     prdSkillPath: opts.prdSkillPath ?? null,
+    adrInterviewSkillPath: opts.adrInterviewSkillPath ?? null,
+    adrFinalizeSkillPath: opts.adrFinalizeSkillPath ?? null,
+    adrAssistantSkillPath: opts.adrAssistantSkillPath ?? null,
     designDocSkillPath: opts.designDocSkillPath ?? null,
     designDocAssistantSkillPath: opts.designDocAssistantSkillPath ?? null,
     designPrototypeSkillPath: opts.designPrototypeSkillPath ?? null,
@@ -137,6 +156,7 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     prdAssistantSkillPath: opts.prdAssistantSkillPath ?? null,
     interviewModel: opts.interviewModel ?? null,
     prdModel: opts.prdModel ?? null,
+    adrModel: opts.adrModel ?? null,
     designDocModel: opts.designDocModel ?? null,
     designDocAssistantModel: opts.designDocAssistantModel ?? null,
     designPrototypeModel: opts.designPrototypeModel ?? null,
@@ -158,6 +178,10 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     developmentModel: opts.developmentModel ?? null,
     featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
     featureRequestModel: opts.featureRequestModel ?? null,
+    technicalSkillPath: opts.technicalSkillPath ?? null,
+    technicalModel: opts.technicalModel ?? null,
+    issueSkillPath: opts.issueSkillPath ?? null,
+    issueModel: opts.issueModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
     uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
     uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,
@@ -166,10 +190,18 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     uiLabRegenBedrockMaxTokens: opts.uiLabRegenBedrockMaxTokens ?? null,
     uiLabBedrockTemperature: opts.uiLabBedrockTemperature ?? null,
     uiLabSkillPath: opts.uiLabSkillPath ?? null,
+    calendarAssistantSkillPath: opts.calendarAssistantSkillPath ?? null,
+    calendarAssistantModel: opts.calendarAssistantModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,
     prototypeStageEnabled: opts.prototypeStageEnabled ?? true,
+    interviewWebResearchEnabled: opts.interviewWebResearchEnabled ?? false,
+    interviewWebMcp: opts.interviewWebMcp ?? null,
+    prototypeEngine: opts.prototypeEngine ?? 'bedrock',
+    prototypeDesignSystemPath: opts.prototypeDesignSystemPath ?? null,
+    screenInventoryPath: opts.screenInventoryPath ?? null,
+    prototypeWebReferencesEnabled: opts.prototypeWebReferencesEnabled ?? false,
     defaultModel: opts.defaultModel ?? null,
     approvalMode: approvalModeValue,
     updatedAt: now,

@@ -40,6 +40,13 @@ jest.mock('../utils/rbacHelpers', () => ({
 jest.mock('../services/designPlanService', () => ({
   generateDesignPlan: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../services/designPrototypeService', () => {
+  const actual = jest.requireActual('../services/designPrototypeService') as typeof import('../services/designPrototypeService');
+  return {
+    ...actual,
+    triggerDesignDocForPrototype: jest.fn().mockResolvedValue(undefined),
+  };
+});
 jest.mock('../services/projectSettingsService', () => {
   const getSkillConfig = jest.fn().mockResolvedValue(null);
   return {
@@ -69,6 +76,7 @@ jest.mock('../db/drizzle', () => ({
       prds: { findFirst: jest.fn() },
       designPlans: { findFirst: jest.fn() },
       designDocs: { findFirst: jest.fn() },
+      designPrototypes: { findFirst: jest.fn() },
     },
     update: jest.fn().mockReturnValue({
       set: jest.fn().mockReturnValue({
@@ -202,6 +210,7 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
       prds: { findFirst: jest.Mock };
       designPlans: { findFirst: jest.Mock };
       designDocs: { findFirst: jest.Mock };
+      designPrototypes: { findFirst: jest.Mock };
     };
     update: jest.Mock;
     select: jest.Mock;
@@ -1264,6 +1273,93 @@ describe('POST /api/interviews/design-docs/:id/owner-approve', () => {
   });
 });
 
+// ── POST /api/interviews/prds/:prdId/design-prototypes/owner-approve ─────────
+
+describe('POST /api/interviews/prds/:prdId/design-prototypes/owner-approve', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsAdminUser.mockResolvedValue(false);
+    mockIsDocumentOwner.mockResolvedValue(true);
+    mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+  });
+
+  it('returns 400 when prototypeId is missing', async () => {
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/prototypeId is required/);
+  });
+
+  it('returns 404 when prototype does not belong to the PRD', async () => {
+    mockDb.query.designPrototypes = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/);
+  });
+
+  it('returns 409 when prototype is not in reviewer_approved status', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'pending_review' }),
+    };
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/reviewer_approved/);
+  });
+
+  it('returns 403 when non-owner tries to approve', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'reviewer_approved' }),
+    };
+    mockIsDocumentOwner.mockResolvedValue(false);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Only the document owner/);
+  });
+
+  it('returns 200 and records approval against the specific prototypeId', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'reviewer_approved' }),
+    };
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    // Approval is recorded keyed to the prototypeId, not the prdId.
+    expect(mockRecordOwnerApproval).toHaveBeenCalledWith('proto-1', 'design_prototype', 'user-test', 'approved', undefined);
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('transitions prototype to revision_requested on revision', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'reviewer_approved' }),
+    };
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'revision_requested', prototypeId: 'proto-1', comment: 'Needs work' });
+
+    expect(res.status).toBe(200);
+    expect(mockRecordOwnerApproval).toHaveBeenCalledWith('proto-1', 'design_prototype', 'user-test', 'revision_requested', 'Needs work');
+  });
+});
+
 // ── DELETE /api/interviews/design-docs/:id ────────────────────────────────────
 
 describe('DELETE /api/interviews/design-docs/:id', () => {
@@ -1677,7 +1773,19 @@ describe('GET /api/interviews/active-users', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0]).toMatchObject({ oid: 'alice', displayName: 'Alice Smith' });
-    expect(mockGetActiveUsers).toHaveBeenCalledTimes(1);
+    expect(mockGetActiveUsers).toHaveBeenCalledWith(undefined);
+  });
+
+  it('scopes active users to the requested project', async () => {
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'alice', displayName: 'Alice Smith', email: 'alice@example.com' },
+    ]);
+
+    const res = await request(buildApp()).get('/api/interviews/active-users?project=Project%20Alpha');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockGetActiveUsers).toHaveBeenCalledWith('Project Alpha');
   });
 
   it('returns an empty array when there are no active users', async () => {

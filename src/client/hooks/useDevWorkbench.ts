@@ -8,6 +8,7 @@ import type {
   ConflictedFile,
   PushSessionResponse,
   CreatePrResponse,
+  StartDevSessionRequest,
 } from '../../shared/types/devWorkbench';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -30,7 +31,7 @@ export function useAssignedWorkItems(project: string | null) {
 
 export function useStartDevSession() {
   const queryClient = useQueryClient();
-  return useMutation<StartDevSessionResponse, Error, { workItemId?: number; project: string; model?: string; prdId?: string; featureId?: string }>({
+  return useMutation<StartDevSessionResponse, Error, StartDevSessionRequest>({
     mutationFn: (body) =>
       apiFetch('/api/dev-workbench/start', {
         method: 'POST',
