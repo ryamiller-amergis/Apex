@@ -1,4 +1,5 @@
 import express from 'express';
+import os from 'os';
 import request from 'supertest';
 
 const mockQueuePdfExport = jest.fn();
@@ -34,7 +35,7 @@ jest.mock('../services/pdfArtifactStore', () => ({
 }));
 
 jest.mock('../services/pdfAssemblyService', () => ({
-  getPdfTempDir: () => require('os').tmpdir(),
+  getPdfTempDir: () => os.tmpdir(),
   createSession: jest.fn(),
   getSession: jest.fn(),
   getActiveSessions: jest.fn(),

@@ -11,8 +11,7 @@ jest.mock('../middleware/rbac', () => ({
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
   requireGroupMembership: (...groups: string[]) => (req: any, res: any, next: any) => {
     // Mirror the real middleware: super admins always bypass the group check.
-    const { isSuperAdminRequest: isSuperAdmin } = require('../utils/superAdmin');
-    if (isSuperAdmin(req) || mockGroupMembershipGranted) {
+    if (isSuperAdminRequest(req) || mockGroupMembershipGranted) {
       next();
     } else {
       res.status(403).json({ error: 'Forbidden', requiredGroups: groups });

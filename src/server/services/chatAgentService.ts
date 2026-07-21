@@ -225,8 +225,7 @@ function sanitizeAttachmentName(name: string, index: number): string {
 }
 
 async function extractDocxText(buffer: Buffer): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
+  const mammoth = await import('mammoth');
   const result = await mammoth.extractRawText({ buffer });
   return result.value;
 }

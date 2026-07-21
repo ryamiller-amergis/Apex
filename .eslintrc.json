@@ -1,17 +1,45 @@
 {
   "root": true,
   "env": {
-    "browser": true,
     "es2020": true,
     "node": true
   },
   "extends": [
     "eslint:recommended",
-    "plugin:@typescript-eslint/recommended",
-    "plugin:react-hooks/recommended",
-    "plugin:jsx-a11y/recommended"
+    "plugin:@typescript-eslint/recommended"
   ],
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2020,
+    "sourceType": "module"
+  },
+  "plugins": ["@typescript-eslint"],
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-console": "off"
+  },
+  "ignorePatterns": ["dist/", "node_modules/", "*.js"],
   "overrides": [
+    {
+      "files": ["src/client/**/*.{ts,tsx}"],
+      "env": {
+        "browser": true
+      },
+      "extends": [
+        "plugin:react-hooks/recommended",
+        "plugin:jsx-a11y/recommended"
+      ],
+      "plugins": ["react-hooks", "jsx-a11y"],
+      "rules": {
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn",
+        "react-hooks/set-state-in-effect": "warn",
+        "react-hooks/immutability": "warn",
+        "react-hooks/refs": "warn",
+        "react-hooks/preserve-manual-memoization": "warn"
+      }
+    },
     {
       "files": ["src/client/**/*.tsx"],
       "rules": {
@@ -23,27 +51,5 @@
         "jsx-a11y/no-autofocus": "warn"
       }
     }
-  ],
-  "parser": "@typescript-eslint/parser",
-  "parserOptions": {
-    "ecmaVersion": 2020,
-    "sourceType": "module"
-  },
-  "plugins": [
-    "@typescript-eslint",
-    "react-hooks",
-    "jsx-a11y"
-  ],
-  "rules": {
-    "react-hooks/rules-of-hooks": "error",
-    "react-hooks/exhaustive-deps": "warn",
-    "react-hooks/set-state-in-effect": "warn",
-    "react-hooks/immutability": "warn",
-    "react-hooks/refs": "warn",
-    "react-hooks/preserve-manual-memoization": "warn",
-    "@typescript-eslint/no-explicit-any": "warn",
-    "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
-    "no-console": "off"
-  },
-  "ignorePatterns": ["dist/", "node_modules/", "*.js"]
+  ]
 }

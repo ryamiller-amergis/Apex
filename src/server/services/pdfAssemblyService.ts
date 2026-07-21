@@ -1049,7 +1049,7 @@ async function runPdfExport(input: ExportWorkerInput): Promise<ExportWorkerOutpu
 }
 
 function sanitizeFilename(name: string): string {
-  return path.basename(name).replace(/[^a-zA-Z0-9._\-]/g, '_');
+  return path.basename(name).replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 async function safeDeleteFile(filePath: string): Promise<void> {

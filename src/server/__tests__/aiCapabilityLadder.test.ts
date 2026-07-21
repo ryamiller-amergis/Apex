@@ -1,3 +1,4 @@
+import fs from 'fs';
 import type { CursorTeamSummary } from '../types/cursorAnalytics';
 import type { AiCapabilityBaseline } from '../types/aiCapabilityLadder';
 import { buildLadderResult } from '../services/aiCapabilityLadderService';
@@ -26,7 +27,6 @@ describe('aiCapabilityBaselineService', () => {
   });
 
   it('saveBaseline calls writeFileSync', () => {
-    const fs = require('fs') as jest.Mocked<typeof import('fs')>;
     const baseline: AiCapabilityBaseline = {
       capturedAt: '2024-01-01',
       prCycleTimeDays: 3.5,

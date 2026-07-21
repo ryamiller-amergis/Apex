@@ -42,9 +42,9 @@ jest.mock('worker_threads', () => {
   return {
     ...actualWt,
     Worker: jest.fn().mockImplementation((_path: string, opts: any) => {
-      const handlers: Record<string, Function> = {};
+      const handlers: Record<string, (...args: unknown[]) => void> = {};
       const instance = {
-        on: jest.fn((event: string, handler: Function) => {
+        on: jest.fn((event: string, handler: (...args: unknown[]) => void) => {
           handlers[event] = handler;
         }),
         postMessage: mockPostMessage,
@@ -141,14 +141,14 @@ describe('assembleAndExport', () => {
   // DoD-2: export spawns worker thread
   it('DoD-2: spawns Worker with filtered manifest (deleted excluded)', async () => {
     mockFindFirst.mockResolvedValue(makeSession());
-    const { Worker } = require('worker_threads');
+    const { Worker } = await import('worker_threads');
 
     await assembleAndExport(SESSION_ID, USER_ID);
 
     expect(Worker).toHaveBeenCalledTimes(1);
-    const callArgs = Worker.mock.calls[0];
+    const callArgs = jest.mocked(Worker).mock.calls[0];
     expect(callArgs[0]).toContain('pdfExportWorker');
-    const workerData = callArgs[1].workerData;
+    const workerData = (callArgs[1] as { workerData: { manifest: unknown[] } }).workerData;
     // Deleted page (p3) should be filtered out
     expect(workerData.manifest).toHaveLength(3);
     expect(workerData.manifest.every((p: any) => !p.deleted)).toBe(true);
