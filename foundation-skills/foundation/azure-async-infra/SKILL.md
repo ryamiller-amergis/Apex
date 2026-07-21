@@ -36,7 +36,7 @@ Record rejected options with the driver that killed them.
 ## Extending the platform
 
 The project adapter describes project-specific infrastructure files to inspect. See the adapter for:
-- The shared infrastructure Terraform file (e.g. `infra/shared-async.tf`)
+- The shared infrastructure Terraform file in the project's `infra/` directory
 - Container/queue naming conventions
 - App settings contracts
 

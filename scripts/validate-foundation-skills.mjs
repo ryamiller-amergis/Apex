@@ -44,7 +44,9 @@ function warn(msg) { warnings++; console.warn(`  WARN: ${msg}`); }
 function ok(msg)   {             console.log(`  OK:   ${msg}`);  }
 
 function parseFrontmatter(content) {
-  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  // Normalize CRLF → LF so the regex works on Windows
+  const text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const m = text.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return null;
   const fm = {};
   for (const line of m[1].split('\n')) {
@@ -72,7 +74,12 @@ if (catalog.skills.length < 30) {
 
 // 2. Validate each skill
 for (const entry of catalog.skills) {
-  const { id } = entry;
+  // Catalog uses 'name' as the canonical identifier (not 'id')
+  const id = entry.name;
+  if (!id) {
+    err(`Catalog entry missing "name" field: ${JSON.stringify(entry).slice(0, 80)}`);
+    continue;
+  }
   const skillDir = join(FOUNDATION_DIR, id);
   const skillMd  = join(skillDir, 'SKILL.md');
 
@@ -126,7 +133,7 @@ try {
   const foundationDirs = readdirSync(FOUNDATION_DIR, { withFileTypes: true })
     .filter(e => e.isDirectory())
     .map(e => e.name);
-  const catalogIds = new Set(catalog.skills.map(s => s.id));
+  const catalogIds = new Set(catalog.skills.map(s => s.name));
   for (const dir of foundationDirs) {
     if (!catalogIds.has(dir)) {
       warn(`foundation/${dir}/ exists but is not in catalog.json`);

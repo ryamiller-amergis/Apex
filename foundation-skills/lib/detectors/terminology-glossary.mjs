@@ -15,7 +15,7 @@
  *   { type: 'enum',  name: 'WorkItemState', member: 'Active', file: 'src/shared/types/workItem.ts', line: 5 }
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DOCS = ['context.md', 'CONTEXT.md', 'AGENTS.md', 'agents.md', 'GLOSSARY.md', 'glossary.md', 'README.md', 'docs/GLOSSARY.md'];
@@ -53,17 +53,13 @@ export function detectTerminology(repoRoot) {
     if (evidence.length >= MAX_TERMS) break;
   }
 
-  // TypeScript enums in shared/types
+  // TypeScript enums in shared/types (synchronous)
   const enumDirs = ['src/shared/types', 'src/shared', 'shared/types', 'types'];
   for (const dir of enumDirs) {
     const abs = join(repoRoot, dir);
     if (!existsSync(abs)) continue;
-    const { readdirSync } = await import('node:fs').catch(() => ({}));
-    // Use sync readdir
     let files;
-    try {
-      files = (await import('node:fs')).readdirSync(abs);
-    } catch { continue; }
+    try { files = readdirSync(abs); } catch { continue; }
     for (const f of files) {
       if (!f.endsWith('.ts') && !f.endsWith('.tsx')) continue;
       const fp = join(abs, f);
