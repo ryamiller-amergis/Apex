@@ -205,20 +205,29 @@ Open the existing PR in the browser and report its URL.
 
 ### If there is no open PR
 
+Do **not** rely on `--fill` alone. Follow
+[create-pull-request](../create-pull-request/SKILL.md): read
+`.github/PULL_REQUEST_TEMPLATE.md`, fill Summary / Test plan / Checklist from
+the branch diff and verification evidence, then:
+
 ```bash
-gh pr create --fill --base main
+gh pr create --base main --title "<title>" --body "$(cat <<'EOF'
+<filled template body>
+EOF
+)"
 ```
 
-`--fill` auto-populates the title and body from the commit messages. Use `--base main` (or the repo's default branch if not `main`).
+Use `--base main` (or the repo's default branch if not `main`).
 
 Return the PR URL to the user when creation succeeds.
 
 ### Linking to a GitHub Project
 
-To add the new PR to a GitHub Project board, run:
+To add the new PR to a GitHub Project board, pass `--project` on create or edit
+afterward:
 
 ```bash
-gh pr create --fill --project "<Project name or URL>"
+gh pr create --base main --title "<title>" --body "..." --project "<Project name or URL>"
 ```
 
 To discover available projects for the repo's org:
@@ -233,24 +242,13 @@ If the user has not specified a project, ask:
 
 Do not add to a project automatically without confirmation.
 
-### PR body template
-
-When not using `--fill`, draft the body with:
-
-```
-## Summary
-<bullet list of what changed and why>
-
-## Test plan
-<list of tests run and their results>
-```
-
 ### Guardrails for PR creation
 
 - Never open a PR from `main` or `master` into itself — Step 0a should have created a feature branch first.
 - If still on `main` / `master` at Step 7, stop and create a feature branch (Step 0a) before pushing or opening a PR.
 - If the remote branch is behind `main`, warn the user before opening the PR.
 - Always confirm the base branch is correct (`gh pr create --base <base-branch>`) — default is the repo's default branch.
+- PR body must follow `.github/PULL_REQUEST_TEMPLATE.md` (via create-pull-request).
 
 ## Guardrails
 

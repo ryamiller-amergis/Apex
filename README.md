@@ -146,6 +146,8 @@ npm run build && npm start   # production-style build/run
 
 A Husky **pre-commit** hook runs ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
 
+Pull requests opened in GitHub use the description template in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md). In Cursor, developers can kick off a filled PR with the [`create-pull-request`](./.cursor/skills/create-pull-request/SKILL.md) skill (`/create-pull-request`).
+
 Where to look while developing:
 
 - [`context.md`](./context.md) — product overview and workflows
