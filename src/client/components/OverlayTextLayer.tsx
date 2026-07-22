@@ -6,6 +6,9 @@ import {
 } from '../hooks/overlayGeometry';
 import type { OverlaySaveStatus } from '../hooks/useOverlayAutosave';
 import { useOverlayKeyboard } from '../hooks/useOverlayKeyboard';
+import type { NativePdfTextItem } from '../utils/pdfNativeTextItems';
+import { fitReplacementGeometry } from '../utils/fitReplacementGeometry';
+import { NativeTextItemLayer } from './NativeTextItemLayer';
 import { OverlayTextBox } from './OverlayTextBox';
 import styles from './OverlayTextLayer.module.css';
 
@@ -14,24 +17,26 @@ interface OverlayTextLayerProps {
   overlays: OverlayTextBoxModel[];
   selectedOverlayId: string | null;
   textToolActive: boolean;
+  replacementMode?: boolean;
+  nativeTextItems?: NativePdfTextItem[];
   createLimitMessage: string | null;
   announcement: string;
   canUndo: boolean;
   canRedo?: boolean;
   saveStatus?: OverlaySaveStatus;
   saveErrorMessage?: string | null;
-  onCreateAt: (
-    xPct: number,
-    yPct: number
-  ) => OverlayTextBoxModel | null;
+  onCreateAt: (xPct: number, yPct: number) => OverlayTextBoxModel | null;
+  onCreateReplacement?: (item: NativePdfTextItem) => OverlayTextBoxModel | null;
+  onExitReplacementMode?: () => void;
   onSelect: (overlayId: string | null) => void;
   onDeleteSelected: () => void;
+  onRemoveSelectedNativeText?: () => void;
   onUndo: () => void;
   onRedo?: () => void;
   onFlush?: () => Promise<void>;
   onRetrySave?: () => Promise<void>;
   onBeginTextEdit?: (overlayId: string) => boolean;
-  onUpdateText?: (text: string) => void;
+  onUpdateText?: (text: string, geometry?: OverlayBoxGeometry) => void;
   onCommitTextEdit?: () => boolean;
   onBeginGeometryEdit?: (overlayId: string) => boolean;
   onUpdateGeometry?: (geometry: OverlayBoxGeometry) => void;
@@ -47,6 +52,8 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
   overlays,
   selectedOverlayId,
   textToolActive,
+  replacementMode = false,
+  nativeTextItems = [],
   createLimitMessage,
   announcement,
   canUndo,
@@ -54,8 +61,11 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
   saveStatus = 'idle',
   saveErrorMessage = null,
   onCreateAt,
+  onCreateReplacement,
+  onExitReplacementMode,
   onSelect,
   onDeleteSelected,
+  onRemoveSelectedNativeText = () => {},
   onUndo,
   onRedo = () => {},
   onFlush = async () => {},
@@ -72,6 +82,15 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
   readOnly = false,
 }) => {
   const layerRef = useRef<HTMLDivElement>(null);
+  const flushAfterStateUpdate = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      void onFlush().catch(() => {});
+    });
+  }, [onFlush]);
+  const deleteSelectedAndSave = useCallback(() => {
+    onDeleteSelected();
+    flushAfterStateUpdate();
+  }, [flushAfterStateUpdate, onDeleteSelected]);
   const {
     orderedOverlays,
     editingOverlayId,
@@ -86,9 +105,13 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
     onSelect,
     onBeginTextEdit,
     onCommitTextEdit,
-    onDeleteSelected,
+    onDeleteSelected: deleteSelectedAndSave,
     onNudgeSelected,
   });
+  const finishEditingAndSave = useCallback(() => {
+    finishEditing();
+    flushAfterStateUpdate();
+  }, [finishEditing, flushAfterStateUpdate]);
 
   const handleLayerClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -141,6 +164,48 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
     [onRedo, onUndo]
   );
 
+  const handleNativeTextSelect = useCallback(
+    (item: NativePdfTextItem) => {
+      const created = onCreateReplacement?.(item);
+      if (!created) return;
+      onExitReplacementMode?.();
+      window.requestAnimationFrame(() => {
+        beginEditing(created.id);
+      });
+    },
+    [beginEditing, onCreateReplacement, onExitReplacementMode]
+  );
+
+  const handleOverlayTextChange = useCallback(
+    (overlay: OverlayTextBoxModel, text: string) => {
+      if (overlay.kind !== 'replace') {
+        onUpdateText(text);
+        return;
+      }
+
+      const pageEl = layerRef.current;
+      if (!pageEl || pageEl.clientWidth <= 0 || pageEl.clientHeight <= 0) {
+        onUpdateText(text);
+        return;
+      }
+
+      const fitted = fitReplacementGeometry(
+        { ...overlay, text },
+        text,
+        pageEl.clientWidth,
+        pageEl.clientHeight
+      );
+      const grew =
+        fitted.width > overlay.width + 0.01 ||
+        fitted.height > overlay.height + 0.01;
+      onUpdateText(text, grew ? fitted : undefined);
+    },
+    [onUpdateText]
+  );
+
+  const selectedOverlay =
+    orderedOverlays.find((overlay) => overlay.id === selectedOverlayId) ?? null;
+
   if (!pageId) return null;
 
   return (
@@ -169,10 +234,10 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
           onEdit={beginEditing}
           onFocus={handleBoxFocus}
           onKeyDown={handleBoxKeyDown}
-          onTextChange={onUpdateText}
-          onExitEdit={finishEditing}
+          onTextChange={(text) => handleOverlayTextChange(overlay, text)}
+          onExitEdit={finishEditingAndSave}
           onDelete={
-            overlay.id === selectedOverlayId ? onDeleteSelected : undefined
+            overlay.id === selectedOverlayId ? deleteSelectedAndSave : undefined
           }
           onBeginGeometryEdit={onBeginGeometryEdit}
           onUpdateGeometry={onUpdateGeometry}
@@ -180,6 +245,13 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
           displayOnly={readOnly}
         />
       ))}
+
+      {!readOnly && replacementMode && (
+        <NativeTextItemLayer
+          items={nativeTextItems}
+          onSelect={handleNativeTextSelect}
+        />
+      )}
 
       {createLimitMessage && (
         <div
@@ -205,6 +277,35 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
                 }}
               >
                 Edit text
+              </button>
+              {selectedOverlay?.kind === 'replace' && (
+                <button
+                  type="button"
+                  className={styles.chromeButton}
+                  data-testid="pdf-tools-overlay-remove-native-text"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    finishEditing();
+                    onRemoveSelectedNativeText();
+                    flushAfterStateUpdate();
+                  }}
+                >
+                  Remove original text
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.chromeButton}
+                data-testid="pdf-tools-overlay-delete"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  finishEditing();
+                  deleteSelectedAndSave();
+                }}
+              >
+                {selectedOverlay?.kind === 'replace'
+                  ? 'Revert replacement'
+                  : 'Delete'}
               </button>
               <button
                 type="button"

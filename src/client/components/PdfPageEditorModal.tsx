@@ -20,6 +20,7 @@ interface PdfPageEditorModalProps {
   overlay: PdfInlinePreviewOverlayProps;
   selectedOverlay: OverlayTextBox | null;
   onToggleTextTool: () => void;
+  onToggleReplacementTool: () => void;
   onFormattingChange: (patch: OverlayFormattingPatch) => void;
   onValidationChange: (hasError: boolean) => void;
   onClose: () => void;
@@ -36,6 +37,7 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
   overlay,
   selectedOverlay,
   onToggleTextTool,
+  onToggleReplacementTool,
   onFormattingChange,
   onValidationChange,
   onClose,
@@ -184,6 +186,30 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
                     ? 'Click page to add text'
                     : 'Add text'}
                 </button>
+                <button
+                  type="button"
+                  className={`${styles.addTextButton} ${overlay.editorMode === 'replace' ? styles.addTextActive : ''}`}
+                  aria-pressed={overlay.editorMode === 'replace'}
+                  disabled={overlay.readOnly}
+                  onClick={onToggleReplacementTool}
+                  data-testid="page-editor-replace-text"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 7V4h16v3M9 20h6M12 4v16" />
+                    <path d="M17 17h5M19.5 14.5v5" />
+                  </svg>
+                  {overlay.editorMode === 'replace'
+                    ? 'Select existing text'
+                    : 'Replace text'}
+                </button>
 
                 {selectedOverlay && !overlay.readOnly ? (
                   <div className={styles.formatPanel}>
@@ -199,9 +225,11 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
                   <div className={styles.guidance} role="status">
                     {overlay.readOnly
                       ? 'This session has expired. Text boxes are read-only.'
-                      : overlay.textToolActive
-                        ? 'Click anywhere on the page to place a text box.'
-                        : 'Select a text box to format it, or choose Add text to create one.'}
+                      : overlay.editorMode === 'replace'
+                        ? 'Hover over an individual text item, then click it to edit or remove it.'
+                        : overlay.textToolActive
+                          ? 'Click anywhere on the page to place a text box.'
+                          : 'Select a text box to format it, or choose Add text / Replace text.'}
                   </div>
                 )}
               </>

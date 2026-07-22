@@ -11,6 +11,7 @@ export type OverlayFontFamily = 'Helvetica' | 'Times-Roman' | 'Courier';
 export type OverlayHorizontalAlign = 'left' | 'center' | 'right';
 export type OverlayVerticalAlign = 'top' | 'middle' | 'bottom';
 export type OverlayListStyle = 'none' | 'bullet' | 'numbered';
+export type OverlayKind = 'add' | 'replace';
 
 export interface OverlayTextBox {
   id: string;
@@ -34,6 +35,9 @@ export interface OverlayTextBox {
   linkUrl?: string | null;
   linkDisplayText?: string | null;
   zIndex: number;
+  kind?: OverlayKind;
+  /** Opaque visual cover used by native-text replacement overlays. */
+  backgroundColor?: string | null;
 }
 
 /**
@@ -71,7 +75,11 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     ['none', 'bullet', 'numbered'].includes(overlay.listStyle as string) &&
     isOptionalString('linkUrl') &&
     isOptionalString('linkDisplayText') &&
-    isNumber('zIndex')
+    isNumber('zIndex') &&
+    (overlay.kind === undefined ||
+      overlay.kind === 'add' ||
+      overlay.kind === 'replace') &&
+    isOptionalString('backgroundColor')
   );
 }
 

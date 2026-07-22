@@ -11,6 +11,8 @@ const MAX_UNDO_STEPS = 50;
 const CREATE_LIMIT_MESSAGE =
   'This session already has 50 text boxes. Delete one before adding another.';
 
+export type OverlayEditorMode = 'add' | 'replace';
+
 export type OverlayFormattingPatch = Partial<
   Pick<
     OverlayTextBox,
@@ -26,6 +28,7 @@ export type OverlayFormattingPatch = Partial<
     | 'listStyle'
     | 'linkUrl'
     | 'linkDisplayText'
+    | 'backgroundColor'
   >
 >;
 
@@ -104,6 +107,7 @@ export function useOverlayEditor({
     null
   );
   const [textToolActive, setTextToolActiveState] = useState(false);
+  const [editorMode, setEditorModeState] = useState<OverlayEditorMode>('add');
   const [isDirty, setIsDirty] = useState(false);
   const [createLimitMessage, setCreateLimitMessage] = useState<string | null>(
     null
@@ -115,6 +119,7 @@ export function useOverlayEditor({
   const overlaysRef = useRef(overlays);
   const selectedRef = useRef(selectedOverlayId);
   const textToolActiveRef = useRef(textToolActive);
+  const editorModeRef = useRef(editorMode);
   const undoStackRef = useRef<UndoSnapshot[]>([]);
   const redoStackRef = useRef<UndoSnapshot[]>([]);
   const geometryEditSnapshotRef = useRef<UndoSnapshot | null>(null);
@@ -197,9 +202,22 @@ export function useOverlayEditor({
         typeof value === 'function' ? value(textToolActiveRef.current) : value;
       textToolActiveRef.current = next;
       setTextToolActiveState(next);
+      if (next && editorModeRef.current === 'replace') {
+        editorModeRef.current = 'add';
+        setEditorModeState('add');
+      }
     },
     []
   );
+
+  const setEditorMode = useCallback((mode: OverlayEditorMode) => {
+    editorModeRef.current = mode;
+    setEditorModeState(mode);
+    if (mode === 'replace' && textToolActiveRef.current) {
+      textToolActiveRef.current = false;
+      setTextToolActiveState(false);
+    }
+  }, []);
 
   const createAt = useCallback(
     (xPct: number, yPct: number): OverlayTextBox | null => {
@@ -230,6 +248,56 @@ export function useOverlayEditor({
     [pageId, pushUndo]
   );
 
+  const createReplacement = useCallback(
+    (item: {
+      geometry: OverlayBoxGeometry;
+      text: string;
+      fontSize: number;
+      rotation: number;
+      backgroundColor?: string | null;
+    }): OverlayTextBox | null => {
+      if (editorModeRef.current !== 'replace' || !pageId) return null;
+      if (overlaysRef.current.length >= MAX_SESSION_OVERLAYS) {
+        setCreateLimitMessage(CREATE_LIMIT_MESSAGE);
+        setAnnouncement(CREATE_LIMIT_MESSAGE);
+        return null;
+      }
+
+      setCreateLimitMessage(null);
+      pushUndo();
+      const next: OverlayTextBox = {
+        id: makeOverlayId(),
+        pageId,
+        ...item.geometry,
+        text: item.text,
+        fontFamily: 'Helvetica',
+        fontSize: item.fontSize,
+        bold: false,
+        italic: false,
+        color: '#000000',
+        horizontalAlign: 'left',
+        // Top aligns with PDF.js TextLayer (text originates at em-box top).
+        verticalAlign: 'top',
+        opacity: 100,
+        rotation: item.rotation,
+        listStyle: 'none',
+        linkUrl: null,
+        linkDisplayText: null,
+        zIndex: maxZIndexForPage(overlaysRef.current, pageId) + 1,
+        kind: 'replace',
+        backgroundColor: item.backgroundColor ?? '#FFFFFF',
+      };
+      overlaysRef.current = [...overlaysRef.current, next];
+      selectedRef.current = next.id;
+      setOverlays(overlaysRef.current);
+      setSelectedOverlayId(next.id);
+      setIsDirty(true);
+      setAnnouncement(`Selected PDF text: ${item.text.slice(0, 60)}`);
+      return next;
+    },
+    [pageId, pushUndo]
+  );
+
   const deleteSelected = useCallback((): boolean => {
     const selectedId = selectedRef.current;
     if (!selectedId) return false;
@@ -250,6 +318,26 @@ export function useOverlayEditor({
     setIsDirty(true);
     setCreateLimitMessage(null);
     setAnnouncement('Text box deleted');
+    return true;
+  }, [pushUndo]);
+
+  const removeSelectedNativeText = useCallback((): boolean => {
+    const selectedId = selectedRef.current;
+    const selected = overlaysRef.current.find(
+      (overlay) => overlay.id === selectedId
+    );
+    if (!selected || selected.kind !== 'replace' || selected.text === '') {
+      return false;
+    }
+
+    pushUndo();
+    textEditSnapshotRef.current = null;
+    overlaysRef.current = overlaysRef.current.map((overlay) =>
+      overlay.id === selectedId ? { ...overlay, text: '' } : overlay
+    );
+    setOverlays(overlaysRef.current);
+    setIsDirty(true);
+    setAnnouncement('Original PDF text removed');
     return true;
   }, [pushUndo]);
 
@@ -274,22 +362,37 @@ export function useOverlayEditor({
     return true;
   }, []);
 
-  const updateSelectedText = useCallback((text: string): boolean => {
-    const selectedId = selectedRef.current;
-    const selected = overlaysRef.current.find(
-      (overlay) => overlay.id === selectedId
-    );
-    if (!selected || !textEditSnapshotRef.current || selected.text === text) {
-      return false;
-    }
+  const updateSelectedText = useCallback(
+    (text: string, geometry?: OverlayBoxGeometry): boolean => {
+      const selectedId = selectedRef.current;
+      const selected = overlaysRef.current.find(
+        (overlay) => overlay.id === selectedId
+      );
+      if (!selected || !textEditSnapshotRef.current) {
+        return false;
+      }
 
-    overlaysRef.current = overlaysRef.current.map((overlay) =>
-      overlay.id === selectedId ? { ...overlay, text } : overlay
-    );
-    setOverlays(overlaysRef.current);
-    setIsDirty(true);
-    return true;
-  }, []);
+      const geometryChanged =
+        Boolean(geometry) &&
+        (geometry!.x !== selected.x ||
+          geometry!.y !== selected.y ||
+          geometry!.width !== selected.width ||
+          geometry!.height !== selected.height);
+      if (selected.text === text && !geometryChanged) {
+        return false;
+      }
+
+      overlaysRef.current = overlaysRef.current.map((overlay) =>
+        overlay.id === selectedId
+          ? { ...overlay, text, ...(geometry ?? {}) }
+          : overlay
+      );
+      setOverlays(overlaysRef.current);
+      setIsDirty(true);
+      return true;
+    },
+    []
+  );
 
   const commitTextEdit = useCallback((): boolean => {
     const snapshot = textEditSnapshotRef.current;
@@ -303,7 +406,13 @@ export function useOverlayEditor({
     const after = overlaysRef.current.find(
       (overlay) => overlay.id === selectedId
     );
-    if (!before || !after || before.text === after.text) {
+    if (
+      !before ||
+      !after ||
+      (before.text === after.text &&
+        before.width === after.width &&
+        before.height === after.height)
+    ) {
       setAnnouncement('Editing finished');
       return false;
     }
@@ -523,24 +632,27 @@ export function useOverlayEditor({
     setIsDirty(false);
   }, []);
 
-  const replaceFromServer = useCallback((next: OverlayTextBox[]) => {
-    undoStackRef.current = [];
-    redoStackRef.current = [];
-    geometryEditSnapshotRef.current = null;
-    textEditSnapshotRef.current = null;
-    selectedRef.current = null;
-    // Prevent the dirty -> clean transition from re-applying stale props
-    // before the session query publishes the authoritative response.
-    lastHydratedKeyRef.current = JSON.stringify(initialOverlays);
-    overlaysRef.current = cloneOverlays(next);
-    setOverlays(overlaysRef.current);
-    setSelectedOverlayId(null);
-    setIsDirty(false);
-    setCanUndo(false);
-    setCanRedo(false);
-    setCreateLimitMessage(null);
-    setAnnouncement('Text overlays updated from another tab');
-  }, [initialOverlays]);
+  const replaceFromServer = useCallback(
+    (next: OverlayTextBox[]) => {
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      geometryEditSnapshotRef.current = null;
+      textEditSnapshotRef.current = null;
+      selectedRef.current = null;
+      // Prevent the dirty -> clean transition from re-applying stale props
+      // before the session query publishes the authoritative response.
+      lastHydratedKeyRef.current = JSON.stringify(initialOverlays);
+      overlaysRef.current = cloneOverlays(next);
+      setOverlays(overlaysRef.current);
+      setSelectedOverlayId(null);
+      setIsDirty(false);
+      setCanUndo(false);
+      setCanRedo(false);
+      setCreateLimitMessage(null);
+      setAnnouncement('Text overlays updated from another tab');
+    },
+    [initialOverlays]
+  );
 
   return {
     overlays,
@@ -549,6 +661,8 @@ export function useOverlayEditor({
     selectedOverlayId,
     textToolActive,
     setTextToolActive,
+    editorMode,
+    setEditorMode,
     isDirty,
     createLimitMessage,
     announcement,
@@ -556,7 +670,9 @@ export function useOverlayEditor({
     canUndo,
     canRedo,
     createAt,
+    createReplacement,
     deleteSelected,
+    removeSelectedNativeText,
     selectOverlay,
     beginTextEdit,
     updateSelectedText,

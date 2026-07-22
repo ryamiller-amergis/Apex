@@ -463,13 +463,17 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     selectedOverlayId,
     textToolActive,
     setTextToolActive,
+    editorMode,
+    setEditorMode,
     isDirty: overlaysDirty,
     createLimitMessage,
     announcement: overlayAnnouncement,
     canUndo: canUndoOverlay,
     canRedo: canRedoOverlay,
     createAt,
+    createReplacement,
     deleteSelected: deleteSelectedOverlay,
+    removeSelectedNativeText,
     selectOverlay,
     beginTextEdit,
     updateSelectedText,
@@ -504,12 +508,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
   }, [refetchSession]);
 
   const applyAuthoritativeOverlays = useCallback(
-    ({
-      overlays,
-    }: {
-      overlays: OverlayTextBox[];
-      updatedAt: string;
-    }) => {
+    ({ overlays }: { overlays: OverlayTextBox[]; updatedAt: string }) => {
       replaceOverlaysFromServer(overlays);
       setOverlayFormatInvalid(false);
     },
@@ -560,6 +559,16 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     }
   }, [ensureOverlaysSaved, overlaysReadOnly, setTextToolActive]);
 
+  const handleToggleReplacementTool = useCallback(async () => {
+    if (overlaysReadOnly) return;
+    try {
+      await ensureOverlaysSaved();
+      setEditorMode(editorMode === 'replace' ? 'add' : 'replace');
+    } catch {
+      // Keep the current mode so the user can fix or retry the save.
+    }
+  }, [editorMode, ensureOverlaysSaved, overlaysReadOnly, setEditorMode]);
+
   const handleOpenPageEditor = useCallback(() => {
     if (selectedPageIds.size !== 1) return;
     const pageId = [...selectedPageIds][0];
@@ -571,13 +580,14 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     try {
       await ensureOverlaysSaved();
       setTextToolActive(false);
+      setEditorMode('add');
       selectOverlay(null);
       setOverlayFormatInvalid(false);
       setIsPageEditorOpen(false);
     } catch {
       // Leave the editor open with the announced save error and retry action.
     }
-  }, [ensureOverlaysSaved, selectOverlay, setTextToolActive]);
+  }, [ensureOverlaysSaved, selectOverlay, setEditorMode, setTextToolActive]);
 
   const undoTimerRef = useRef<number | null>(null);
 
@@ -1097,6 +1107,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 overlays: pageOverlays,
                 selectedOverlayId,
                 textToolActive,
+                editorMode,
                 createLimitMessage,
                 announcement: overlayAnnouncement,
                 canUndo: canUndoOverlay,
@@ -1105,8 +1116,11 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 saveErrorMessage: overlaySaveError,
                 readOnly: overlaysReadOnly,
                 onCreateAt: createAt,
+                onCreateReplacement: createReplacement,
+                onExitReplacementMode: () => setEditorMode('add'),
                 onSelectOverlay: selectOverlay,
                 onDeleteSelectedOverlay: deleteSelectedOverlay,
+                onRemoveSelectedNativeText: removeSelectedNativeText,
                 onUndoOverlay: undoOverlay,
                 onRedoOverlay: redoOverlay,
                 onFlushOverlays: ensureOverlaysSaved,
@@ -1123,6 +1137,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
               }}
               selectedOverlay={selectedOverlay}
               onToggleTextTool={handleToggleTextTool}
+              onToggleReplacementTool={handleToggleReplacementTool}
               onFormattingChange={updateSelectedFormatting}
               onValidationChange={setOverlayFormatInvalid}
               onClose={handleClosePageEditor}

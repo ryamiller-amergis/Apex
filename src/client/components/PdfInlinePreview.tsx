@@ -1,9 +1,12 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { usePdfDocument } from '../hooks/usePdfDocument';
+import { usePageTextItems } from '../hooks/usePageTextItems';
 import { pdfFileUrl } from '../utils/pdfUrls';
 import type { OverlayTextBox as OverlayTextBoxModel } from '../../shared/types/pdf';
 import type { OverlayBoxGeometry } from '../hooks/overlayGeometry';
 import type { OverlaySaveStatus } from '../hooks/useOverlayAutosave';
+import type { NativePdfTextItem } from '../utils/pdfNativeTextItems';
+import { samplePageBackgroundColor } from '../utils/samplePageBackgroundColor';
 import { OverlayTextLayer } from './OverlayTextLayer';
 import styles from './PdfInlinePreview.module.css';
 
@@ -12,6 +15,7 @@ export interface PdfInlinePreviewOverlayProps {
   overlays: OverlayTextBoxModel[];
   selectedOverlayId: string | null;
   textToolActive: boolean;
+  editorMode?: 'add' | 'replace';
   createLimitMessage: string | null;
   announcement: string;
   canUndo: boolean;
@@ -19,18 +23,21 @@ export interface PdfInlinePreviewOverlayProps {
   saveStatus: OverlaySaveStatus;
   saveErrorMessage?: string | null;
   readOnly?: boolean;
-  onCreateAt: (
-    xPct: number,
-    yPct: number
-  ) => OverlayTextBoxModel | null;
+  onCreateAt: (xPct: number, yPct: number) => OverlayTextBoxModel | null;
+  onCreateReplacement?: (item: NativePdfTextItem) => OverlayTextBoxModel | null;
+  onExitReplacementMode?: () => void;
   onSelectOverlay: (overlayId: string | null) => void;
   onDeleteSelectedOverlay: () => void;
+  onRemoveSelectedNativeText?: () => void;
   onUndoOverlay: () => void;
   onRedoOverlay: () => void;
   onFlushOverlays?: () => Promise<void>;
   onRetryOverlaySave?: () => Promise<void>;
   onBeginOverlayTextEdit?: (overlayId: string) => boolean;
-  onUpdateOverlayText?: (text: string) => void;
+  onUpdateOverlayText?: (
+    text: string,
+    geometry?: OverlayBoxGeometry
+  ) => void;
   onCommitOverlayTextEdit?: () => boolean;
   onBeginGeometryEdit: (overlayId: string) => boolean;
   onUpdateOverlayGeometry: (geometry: OverlayBoxGeometry) => void;
@@ -81,6 +88,14 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
 
   const fileUrl = fileId ? pdfFileUrl(sessionId, fileId) : null;
   const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
+  const replacementMode = overlay?.editorMode === 'replace';
+  const textItemsState = usePageTextItems(
+    document,
+    fileUrl,
+    sourcePageIndex,
+    rotation,
+    replacementMode
+  );
 
   const updateSize = useCallback(() => {
     if (viewportRef.current) {
@@ -177,6 +192,18 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
       renderTask?.cancel?.();
     };
   }, [document, fileId, sourcePageIndex, rotation, containerSize, zoom]);
+
+  const handleCreateReplacement = useCallback(
+    (item: NativePdfTextItem) => {
+      if (!overlay?.onCreateReplacement) return null;
+      const backgroundColor = samplePageBackgroundColor(
+        canvasRef.current,
+        item.geometry
+      );
+      return overlay.onCreateReplacement({ ...item, backgroundColor });
+    },
+    [overlay]
+  );
 
   if (!fileId) {
     return (
@@ -283,6 +310,8 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               overlays={overlay.overlays}
               selectedOverlayId={overlay.selectedOverlayId}
               textToolActive={overlay.textToolActive}
+              replacementMode={replacementMode}
+              nativeTextItems={textItemsState.items}
               createLimitMessage={overlay.createLimitMessage}
               announcement={overlay.announcement}
               canUndo={overlay.canUndo}
@@ -291,8 +320,11 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               saveErrorMessage={overlay.saveErrorMessage}
               readOnly={overlay.readOnly}
               onCreateAt={overlay.onCreateAt}
+              onCreateReplacement={handleCreateReplacement}
+              onExitReplacementMode={overlay.onExitReplacementMode}
               onSelect={overlay.onSelectOverlay}
               onDeleteSelected={overlay.onDeleteSelectedOverlay}
+              onRemoveSelectedNativeText={overlay.onRemoveSelectedNativeText}
               onUndo={overlay.onUndoOverlay}
               onRedo={overlay.onRedoOverlay}
               onFlush={overlay.onFlushOverlays}
@@ -308,6 +340,20 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               onSendBackward={overlay.onSendOverlayBackward}
             />
           )}
+          {showOverlayLayer &&
+            replacementMode &&
+            textItemsState.status === 'unavailable' && (
+              <div className={styles.textUnavailable} role="status">
+                No selectable text was detected. OCR is not available yet.
+              </div>
+            )}
+          {showOverlayLayer &&
+            replacementMode &&
+            textItemsState.status === 'error' && (
+              <div className={styles.textUnavailable} role="alert">
+                Existing text could not be loaded.
+              </div>
+            )}
         </div>
       </div>
       {!showSpinner && (

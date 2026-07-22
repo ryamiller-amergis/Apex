@@ -25,6 +25,58 @@ const baseOverlay: OverlayTextBox = {
 };
 
 describe('Overlay create/delete chrome', () => {
+  it('creates a replacement from exactly one selected PDF.js text item', () => {
+    const replacement = {
+      ...baseOverlay,
+      text: 'Existing word',
+      kind: 'replace' as const,
+      backgroundColor: '#FFFFFF',
+    };
+    const onCreateReplacement = jest.fn().mockReturnValue(replacement);
+    const onExitReplacementMode = jest.fn();
+
+    render(
+      <div style={{ position: 'relative', width: 200, height: 200 }}>
+        <OverlayTextLayer
+          pageId="page-1"
+          overlays={[]}
+          selectedOverlayId={null}
+          textToolActive={false}
+          replacementMode
+          nativeTextItems={[
+            {
+              id: 'text-item-0',
+              text: 'Existing word',
+              geometry: { x: 10, y: 20, width: 12, height: 2 },
+              fontSize: 12,
+              rotation: 0,
+            },
+          ]}
+          createLimitMessage={null}
+          announcement=""
+          canUndo={false}
+          onCreateAt={jest.fn()}
+          onCreateReplacement={onCreateReplacement}
+          onExitReplacementMode={onExitReplacementMode}
+          onSelect={jest.fn()}
+          onDeleteSelected={jest.fn()}
+          onUndo={jest.fn()}
+          onBeginTextEdit={() => true}
+        />
+      </div>
+    );
+
+    fireEvent.click(screen.getByTestId('native-text-item'));
+
+    expect(onCreateReplacement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'text-item-0',
+        text: 'Existing word',
+      })
+    );
+    expect(onExitReplacementMode).toHaveBeenCalledTimes(1);
+  });
+
   // VT-09
   it('opens page editing and places a box when Add text is active', () => {
     const onEditPage = jest.fn();

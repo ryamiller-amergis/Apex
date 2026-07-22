@@ -497,4 +497,98 @@ describe('useOverlayEditor', () => {
     expect(result.current.canRedo).toBe(false);
     expect(result.current.undo()).toBe(false);
   });
+
+  it('creates one replacement overlay from one selected PDF text item', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.createReplacement({
+        text: 'Individual item',
+        geometry: { x: 10, y: 20, width: 12, height: 2 },
+        fontSize: 12,
+        rotation: 0,
+      });
+    });
+
+    expect(result.current.overlays).toHaveLength(1);
+    expect(result.current.selectedOverlay).toMatchObject({
+      text: 'Individual item',
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      verticalAlign: 'top',
+      x: 10,
+      y: 20,
+      width: 12,
+      height: 2,
+    });
+    expect(result.current.isDirty).toBe(true);
+    expect(result.current.canUndo).toBe(true);
+  });
+
+  it('uses a sampled background color when provided for replacements', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.createReplacement({
+        text: 'Tinted',
+        geometry: { x: 10, y: 20, width: 12, height: 2 },
+        fontSize: 12,
+        rotation: 0,
+        backgroundColor: '#F2EDE6',
+      });
+    });
+
+    expect(result.current.selectedOverlay).toMatchObject({
+      kind: 'replace',
+      backgroundColor: '#F2EDE6',
+      verticalAlign: 'top',
+    });
+  });
+
+  it('keeps add and replacement tools mutually exclusive', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+
+    act(() => result.current.setTextToolActive(true));
+    act(() => result.current.setEditorMode('replace'));
+    expect(result.current.textToolActive).toBe(false);
+    expect(result.current.editorMode).toBe('replace');
+
+    act(() => result.current.setTextToolActive(true));
+    expect(result.current.textToolActive).toBe(true);
+    expect(result.current.editorMode).toBe('add');
+  });
+
+  it('removes original PDF text by retaining an empty replacement cover', () => {
+    const replacement = makeOverlay(1, {
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      text: 'Original PDF text',
+    });
+    const { result } = renderHook(() =>
+      useOverlayEditor({
+        pageId: 'page-1',
+        initialOverlays: [replacement],
+      })
+    );
+
+    act(() => result.current.selectOverlay(replacement.id));
+    act(() => expect(result.current.removeSelectedNativeText()).toBe(true));
+
+    expect(result.current.selectedOverlay).toMatchObject({
+      id: replacement.id,
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      text: '',
+    });
+    expect(result.current.isDirty).toBe(true);
+    expect(result.current.canUndo).toBe(true);
+  });
 });

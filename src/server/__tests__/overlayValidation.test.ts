@@ -183,6 +183,48 @@ describe('validateOverlays', () => {
     });
   });
 
+  it('accepts smaller per-item geometry for replacement overlays', () => {
+    const result = validateOverlays(
+      [
+        makeOverlay({
+          kind: 'replace',
+          backgroundColor: '#FFFFFF',
+          width: 0.1,
+          height: 0.1,
+        }),
+      ],
+      PAGE_IDS
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      overlays: [
+        expect.objectContaining({
+          kind: 'replace',
+          width: 0.25,
+          height: 0.25,
+        }),
+      ],
+    });
+  });
+
+  it('requires a valid cover color for replacement overlays', () => {
+    const result = validateOverlays(
+      [makeOverlay({ kind: 'replace', backgroundColor: null })],
+      PAGE_IDS
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      errors: [
+        expect.objectContaining({
+          field: 'backgroundColor',
+          code: 'OVERLAY_BACKGROUND_COLOR_REQUIRED',
+        }),
+      ],
+    });
+  });
+
   it('VT-08: collects errors from multiple overlays in one result', () => {
     const result = validateOverlays(
       [

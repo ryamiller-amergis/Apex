@@ -207,6 +207,8 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
 }) => {
   const [colorDraft, setColorDraft] = useState<string | null>(null);
   const [colorError, setColorError] = useState('');
+  const [coverColorDraft, setCoverColorDraft] = useState<string | null>(null);
+  const [coverColorError, setCoverColorError] = useState('');
 
   const applyColor = () => {
     const normalized = normalizeOverlayColor(colorDraft ?? overlay.color);
@@ -218,6 +220,20 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
     setColorDraft(null);
     setColorError('');
     onChange({ color: normalized });
+  };
+
+  const applyCoverColor = () => {
+    const normalized = normalizeOverlayColor(
+      coverColorDraft ?? overlay.backgroundColor ?? '#FFFFFF'
+    );
+    if (!normalized) {
+      setCoverColorDraft(null);
+      setCoverColorError('Use a six-digit hex color such as #FFFFFF.');
+      return;
+    }
+    setCoverColorDraft(null);
+    setCoverColorError('');
+    onChange({ backgroundColor: normalized });
   };
 
   const applyFontSize = (value: string) => {
@@ -425,6 +441,31 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
         </div>
       </div>
 
+      {overlay.kind === 'replace' && (
+        <div className={styles.formatRow}>
+          <div className={styles.controlGroup}>
+            <label className={styles.field}>
+              <span>Cover color</span>
+              <input
+                type="text"
+                value={coverColorDraft ?? overlay.backgroundColor ?? '#FFFFFF'}
+                maxLength={7}
+                data-testid="overlay-format-background-color"
+                aria-invalid={Boolean(coverColorError)}
+                onChange={(event) => setCoverColorDraft(event.target.value)}
+                onBlur={applyCoverColor}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    applyCoverColor();
+                  }
+                }}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+
       <div className={styles.linkRow}>
         <OverlayLinkEditor
           overlay={overlay}
@@ -436,6 +477,11 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
       {colorError && (
         <span className={styles.error} aria-live="polite">
           {colorError}
+        </span>
+      )}
+      {coverColorError && (
+        <span className={styles.error} aria-live="polite">
+          {coverColorError}
         </span>
       )}
     </div>

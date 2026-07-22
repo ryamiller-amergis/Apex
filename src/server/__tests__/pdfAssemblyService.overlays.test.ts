@@ -108,6 +108,26 @@ describe('updateOverlays', () => {
     });
   });
 
+  it('persists replacement metadata and an empty removal value', async () => {
+    const replacement = {
+      ...makeOverlay(),
+      text: '',
+      width: 8,
+      height: 2,
+      kind: 'replace' as const,
+      backgroundColor: '#FFFFFF',
+    };
+    mockReturning.mockResolvedValue([{ textOverlays: [replacement] }]);
+
+    await expect(
+      updateOverlays(SESSION_ID, USER_ID, [replacement])
+    ).resolves.toMatchObject({ overlays: [replacement] });
+    expect(mockSet).toHaveBeenCalledWith({
+      textOverlays: [replacement],
+      updatedAt: expect.any(String),
+    });
+  });
+
   it('VT-04: rejects cross-user writes before persistence', async () => {
     mockFindFirst.mockResolvedValue(makeSession({ userId: 'other-user' }));
 

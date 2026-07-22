@@ -5,9 +5,7 @@ import {
   createStandardFontCache,
 } from '../services/pdfOverlayBurnIn';
 
-function makeOverlay(
-  overrides: Partial<OverlayTextBox> = {}
-): OverlayTextBox {
+function makeOverlay(overrides: Partial<OverlayTextBox> = {}): OverlayTextBox {
   return {
     id: '11111111-1111-4111-8111-111111111111',
     pageId: 'page-1',
@@ -97,9 +95,7 @@ describe('pdfOverlayBurnIn', () => {
       '1. First',
       '2. Second',
     ]);
-    expect(drawText.mock.calls[0][1]?.font?.name).toBe(
-      'Times-BoldItalic'
-    );
+    expect(drawText.mock.calls[0][1]?.font?.name).toBe('Times-BoldItalic');
   });
 
   it('VT-01: underlines linked text and adds a URI annotation', async () => {
@@ -117,15 +113,12 @@ describe('pdfOverlayBurnIn', () => {
     burnOverlaysOntoPage(page, overlays, fonts);
     await document.save();
 
-    expect(drawText).toHaveBeenCalledWith(
-      'Apex link',
-      expect.any(Object)
-    );
+    expect(drawText).toHaveBeenCalledWith('Apex link', expect.any(Object));
     expect(drawLine).toHaveBeenCalledTimes(1);
     expect(page.node.Annots()?.size()).toBe(1);
   });
 
-  it('VT-05: draws no box border or background', async () => {
+  it('VT-05: draws no box border or background for additive text', async () => {
     const overlays = [makeOverlay()];
     const { page, fonts } = await createPage(overlays);
     const drawRectangle = jest.spyOn(
@@ -136,6 +129,46 @@ describe('pdfOverlayBurnIn', () => {
     burnOverlaysOntoPage(page, overlays, fonts);
 
     expect(drawRectangle).not.toHaveBeenCalled();
+  });
+
+  it('draws an opaque cover before replacement text', async () => {
+    const overlays = [
+      makeOverlay({
+        kind: 'replace',
+        backgroundColor: '#FFFFFF',
+        text: 'Replacement',
+      }),
+    ];
+    const { page, fonts } = await createPage(overlays);
+    const drawRectangle = jest.spyOn(page, 'drawRectangle');
+    const drawText = jest.spyOn(page, 'drawText');
+
+    burnOverlaysOntoPage(page, overlays, fonts);
+
+    expect(drawRectangle).toHaveBeenCalledWith(
+      expect.objectContaining({ opacity: 1 })
+    );
+    expect(drawRectangle.mock.invocationCallOrder[0]).toBeLessThan(
+      drawText.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('keeps a replacement cover when its text is cleared', async () => {
+    const overlays = [
+      makeOverlay({
+        kind: 'replace',
+        backgroundColor: '#FFFFFF',
+        text: '',
+      }),
+    ];
+    const { page, fonts } = await createPage(overlays);
+    const drawRectangle = jest.spyOn(page, 'drawRectangle');
+    const drawText = jest.spyOn(page, 'drawText');
+
+    burnOverlaysOntoPage(page, overlays, fonts);
+
+    expect(drawRectangle).toHaveBeenCalledTimes(1);
+    expect(drawText).not.toHaveBeenCalled();
   });
 
   it('VT-01: wraps text to the overlay width', async () => {

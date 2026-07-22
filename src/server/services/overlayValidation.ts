@@ -8,6 +8,8 @@ const MAX_OVERLAYS = 50;
 const MAX_TEXT_LENGTH = 2_000;
 const MIN_WIDTH = 5;
 const MIN_HEIGHT = 3;
+const REPLACE_MIN_WIDTH = 0.25;
+const REPLACE_MIN_HEIGHT = 0.25;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -15,6 +17,7 @@ const FONT_FAMILIES = new Set(['Helvetica', 'Times-Roman', 'Courier']);
 const HORIZONTAL_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const VERTICAL_ALIGNMENTS = new Set(['top', 'middle', 'bottom']);
 const LIST_STYLES = new Set(['none', 'bullet', 'numbered']);
+const OVERLAY_KINDS = new Set(['add', 'replace']);
 
 export type OverlayValidationResult =
   | { ok: true; overlays: OverlayTextBox[] }
@@ -307,6 +310,46 @@ export function validateOverlays(
         'zIndex must be a finite number.'
       );
     }
+    if (
+      overlay.kind !== undefined &&
+      (typeof overlay.kind !== 'string' || !OVERLAY_KINDS.has(overlay.kind))
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'kind',
+        'OVERLAY_KIND_INVALID',
+        'kind must be add or replace.'
+      );
+    }
+    const isReplacement = overlay.kind === 'replace';
+    if (
+      isReplacement &&
+      (typeof overlay.backgroundColor !== 'string' ||
+        !COLOR_PATTERN.test(overlay.backgroundColor))
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'backgroundColor',
+        'OVERLAY_BACKGROUND_COLOR_REQUIRED',
+        'Replacement overlays require a #RRGGBB backgroundColor.'
+      );
+    } else if (
+      !isReplacement &&
+      overlay.backgroundColor !== undefined &&
+      overlay.backgroundColor !== null &&
+      (typeof overlay.backgroundColor !== 'string' ||
+        !COLOR_PATTERN.test(overlay.backgroundColor))
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'backgroundColor',
+        'OVERLAY_BACKGROUND_COLOR_INVALID',
+        'backgroundColor must use #RRGGBB format.'
+      );
+    }
 
     const geometryFields = ['x', 'y', 'width', 'height'] as const;
     for (const field of geometryFields) {
@@ -323,8 +366,16 @@ export function validateOverlays(
 
     if (errors.length !== errorCountBefore) return;
 
-    const width = clamp(overlay.width as number, MIN_WIDTH, 100);
-    const height = clamp(overlay.height as number, MIN_HEIGHT, 100);
+    const width = clamp(
+      overlay.width as number,
+      isReplacement ? REPLACE_MIN_WIDTH : MIN_WIDTH,
+      100
+    );
+    const height = clamp(
+      overlay.height as number,
+      isReplacement ? REPLACE_MIN_HEIGHT : MIN_HEIGHT,
+      100
+    );
     validated.push({
       ...(overlay as unknown as OverlayTextBox),
       x: clamp(overlay.x as number, 0, 100 - width),
