@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.35.0",
+    "date": "2026-07-22",
+    "title": "Smarter PDF Text Editing",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "PDF text replacement now matches supported source font styles and sampled page colors, accepts multiline text, and resizes in both directions"
+      },
+      {
+        "type": "improvement",
+        "description": "Full and selected-page PDF exports now default to names based on the source documents that actually contribute exported pages"
+      },
+      {
+        "type": "improvement",
+        "description": "Image-only PDF pages now explain that OCR is unavailable and provide clear Add text and searchable-PDF alternatives"
+      }
+    ]
+  },
+  {
     "version": "1.34.0",
     "date": "2026-07-15",
     "title": "Calendar Work-Item Assistant",

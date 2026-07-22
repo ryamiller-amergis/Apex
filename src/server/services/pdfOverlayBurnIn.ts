@@ -231,6 +231,8 @@ export function burnOverlaysOntoPage(
   const [pageA, pageB, pageC, pageD, pageE, pageF] = pageGeometry.displayToRaw;
 
   for (const overlay of [...overlays].sort((a, b) => a.zIndex - b.zIndex)) {
+    if (overlay.kind === 'replace' && overlay.coverActive === false) continue;
+
     const hasText = overlay.text.trim().length > 0;
     const hasCover =
       overlay.kind === 'replace' && Boolean(overlay.backgroundColor);

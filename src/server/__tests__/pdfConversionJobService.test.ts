@@ -30,9 +30,14 @@ jest.mock('../services/pdfArtifactStore', () => ({
 jest.mock('../db/drizzle', () => ({
   db: {
     execute: (...args: unknown[]) => mockExecute(...args),
-    transaction: jest.fn((callback: (tx: { execute: (...args: unknown[]) => unknown }) => unknown) => callback({
-      execute: (...args: unknown[]) => mockTxExecute(...args),
-    })),
+    transaction: jest.fn(
+      (
+        callback: (tx: { execute: (...args: unknown[]) => unknown }) => unknown
+      ) =>
+        callback({
+          execute: (...args: unknown[]) => mockTxExecute(...args),
+        })
+    ),
     insert: jest.fn(() => ({ values: mockInsertValues })),
     update: jest.fn(() => ({ set: mockSet })),
     query: {
@@ -49,6 +54,7 @@ import {
   assertPdfQueueCapacity,
   claimNextPdfJob,
   enqueuePdfConversion,
+  enqueuePdfExport,
   getPdfQueueRuntimeConfig,
   recoverExpiredPdfJobs,
   renewPdfJobLock,
@@ -61,7 +67,8 @@ const jobRow = {
   jobType: 'docx_convert' as const,
   userId: 'user-1',
   originalName: 'large-report.docx',
-  originalMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  originalMimeType:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   inputKey: 'user-1/20000000-0000-4000-8000-000000000002/job.docx',
   status: 'processing' as const,
   attempts: 1,
@@ -110,7 +117,9 @@ describe('pdfConversionJobService', () => {
     jest.clearAllMocks();
     mockStat.mockResolvedValue({ size: 1024 });
     mockRm.mockResolvedValue(undefined);
-    mockExecute.mockResolvedValue({ rows: [{ queue_depth: 0, user_depth: 0 }] });
+    mockExecute.mockResolvedValue({
+      rows: [{ queue_depth: 0, user_depth: 0 }],
+    });
     mockInsertValues.mockResolvedValue(undefined);
     mockArtifactPut.mockResolvedValue(undefined);
     mockArtifactDelete.mockResolvedValue(undefined);
@@ -124,20 +133,25 @@ describe('pdfConversionJobService', () => {
       '/uploads/report.docx',
       'report.docx',
       jobRow.originalMimeType,
-      100 * 1024 * 1024,
+      100 * 1024 * 1024
     );
 
     expect(result.status).toBe('queued');
     expect(mockArtifactPut).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: jobRow.userId, sessionId: jobRow.sessionId }),
-      '/uploads/report.docx',
+      expect.objectContaining({
+        userId: jobRow.userId,
+        sessionId: jobRow.sessionId,
+      }),
+      '/uploads/report.docx'
     );
-    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
-      jobType: 'docx_convert',
-      userId: jobRow.userId,
-      inputKey: expect.stringMatching(/^user-1\/.*\/.*\.docx$/),
-      status: 'queued',
-    }));
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobType: 'docx_convert',
+        userId: jobRow.userId,
+        inputKey: expect.stringMatching(/^user-1\/.*\/.*\.docx$/),
+        status: 'queued',
+      })
+    );
   });
 
   test('rejects an oversized Word file before creating a job', async () => {
@@ -149,7 +163,7 @@ describe('pdfConversionJobService', () => {
       '/uploads/huge.docx',
       'huge.docx',
       jobRow.originalMimeType,
-      100 * 1024 * 1024,
+      100 * 1024 * 1024
     );
 
     expect(result.error?.code).toBe(PDF_ERROR_CODES.FILE_TOO_LARGE);
@@ -158,10 +172,53 @@ describe('pdfConversionJobService', () => {
   });
 
   test('applies enqueue back-pressure at the per-user backlog limit', async () => {
-    mockExecute.mockResolvedValue({ rows: [{ queue_depth: 12, user_depth: 12 }] });
+    mockExecute.mockResolvedValue({
+      rows: [{ queue_depth: 12, user_depth: 12 }],
+    });
 
-    await expect(assertPdfQueueCapacity(jobRow.userId))
-      .rejects.toBeInstanceOf(PdfQueueSaturatedError);
+    await expect(assertPdfQueueCapacity(jobRow.userId)).rejects.toBeInstanceOf(
+      PdfQueueSaturatedError
+    );
+  });
+
+  test('preserves absent export override through the queue payload', async () => {
+    const result = await enqueuePdfExport(
+      jobRow.sessionId,
+      jobRow.userId,
+      undefined,
+      [0, 2]
+    );
+
+    expect(result.status).toBe('queued');
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobType: 'export',
+        originalName: '',
+        payload: expect.objectContaining({
+          pages: [0, 2],
+          resultFileName: expect.stringMatching(/\.pdf$/),
+        }),
+      })
+    );
+    expect(mockInsertValues.mock.calls[0][0].payload).not.toHaveProperty(
+      'filename'
+    );
+  });
+
+  test('preserves an explicit export override through the queue payload', async () => {
+    await enqueuePdfExport(jobRow.sessionId, jobRow.userId, 'custom.pdf', [1]);
+
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobType: 'export',
+        originalName: 'custom.pdf',
+        payload: expect.objectContaining({
+          filename: 'custom.pdf',
+          pages: [1],
+          resultFileName: expect.stringMatching(/\.pdf$/),
+        }),
+      })
+    );
   });
 
   test('claims atomically through a transaction and records a lease', async () => {
@@ -173,15 +230,19 @@ describe('pdfConversionJobService', () => {
 
     expect(claimed).toEqual(jobRow);
     expect(mockTxExecute).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(mockTxExecute.mock.calls[1][0])).toContain('FOR UPDATE SKIP LOCKED');
+    expect(JSON.stringify(mockTxExecute.mock.calls[1][0])).toContain(
+      'FOR UPDATE SKIP LOCKED'
+    );
   });
 
   test('renews a processing job lock owned by this instance', async () => {
     await expect(renewPdfJobLock(jobRow.id)).resolves.toBe(true);
-    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({
-      heartbeatAt: expect.any(String),
-      lockExpiresAt: expect.any(String),
-    }));
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        heartbeatAt: expect.any(String),
+        lockExpiresAt: expect.any(String),
+      })
+    );
   });
 
   test('reaper separates retryable expired jobs from poison jobs', async () => {
@@ -193,16 +254,22 @@ describe('pdfConversionJobService', () => {
       requeued: 2,
       poisoned: 1,
     });
-    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain("status = 'queued'");
-    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain('attempts >= max_attempts');
+    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain(
+      "status = 'queued'"
+    );
+    expect(JSON.stringify(mockExecute.mock.calls[0][0])).toContain(
+      'attempts >= max_attempts'
+    );
   });
 
   test('exposes the configured three-tier governor', () => {
-    expect(getPdfQueueRuntimeConfig()).toEqual(expect.objectContaining({
-      globalLimit: 40,
-      instanceLimit: 7,
-      userLimit: 3,
-      leaseMs: 20 * 60_000,
-    }));
+    expect(getPdfQueueRuntimeConfig()).toEqual(
+      expect.objectContaining({
+        globalLimit: 40,
+        instanceLimit: 7,
+        userLimit: 3,
+        leaseMs: 20 * 60_000,
+      })
+    );
   });
 });

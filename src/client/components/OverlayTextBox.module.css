@@ -67,20 +67,23 @@
 }
 
 .replace {
-  line-height: 1;
+  line-height: 1.2;
   overflow: hidden;
 }
 
 .replace .text,
 .replace .textEditor {
   display: block;
-  padding: 0 2px;
+  padding: 0 6px;
   box-sizing: border-box;
-  white-space: nowrap;
-  overflow-x: hidden;
-  overflow-y: hidden;
+  /* `pre` (not `pre-wrap`) keeps explicit newlines but never soft-wraps a
+     line: replacement height is driven by explicit line count via
+     fitReplacementGeometry, so soft-wrapping a same-length edit onto a second
+     line would be clipped by the single-line box height. */
+  white-space: pre;
+  overflow: hidden;
   word-break: normal;
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .replace .textEditor {

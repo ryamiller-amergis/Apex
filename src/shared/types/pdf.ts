@@ -38,6 +38,8 @@ export interface OverlayTextBox {
   kind?: OverlayKind;
   /** Opaque visual cover used by native-text replacement overlays. */
   backgroundColor?: string | null;
+  /** Cover activates after text edit or removal. Defaults true for backward compat. */
+  coverActive?: boolean;
 }
 
 /**

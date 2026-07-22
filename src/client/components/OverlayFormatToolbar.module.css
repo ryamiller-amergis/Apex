@@ -366,6 +366,25 @@
   width: 100%;
 }
 
+.replacementTextarea {
+  width: 100%;
+  min-height: 3.2em;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm, 0.875rem);
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #000);
+  line-height: 1.4;
+}
+
+.replacementTextarea:focus {
+  outline: 2px solid var(--accent-color, #2563eb);
+  outline-offset: -1px;
+}
+
 @media (max-width: 900px) {
   .toolbarHeader {
     align-items: flex-start;

@@ -25,12 +25,6 @@ jest.mock('../../hooks/useExportSession', () => ({
     mutate: mockMutate,
     ...mockMutationState,
   }),
-  generateDefaultFilename: () => 'merged-document-20260709-1500.pdf',
-  ensurePdfExtension: (name: string) => {
-    if (!name.trim()) return 'merged-document-20260709-1500.pdf';
-    if (!name.toLowerCase().endsWith('.pdf')) return `${name.trim()}.pdf`;
-    return name.trim();
-  },
 }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -45,8 +39,15 @@ function renderPanel(nonDeletedPageCount = 10) {
   const queryClient = createQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <ExportPanel sessionId="session-123" nonDeletedPageCount={nonDeletedPageCount} />
-    </QueryClientProvider>,
+      <ExportPanel
+        sessionId="session-123"
+        nonDeletedPageCount={nonDeletedPageCount}
+        filenameOverride=""
+        automaticFilename="source.pdf"
+        isFilenameAutomatic={true}
+        onFilenameOverrideChange={jest.fn()}
+      />
+    </QueryClientProvider>
   );
 }
 
@@ -66,7 +67,7 @@ beforeEach(() => {
 
 describe('ExportPanel', () => {
   // AC-0: export triggers download via mutation
-  it('AC-0: calls mutate with sessionId and filename when Export is clicked', async () => {
+  it('AC-0: calls mutate with only sessionId when Export is clicked with no override', async () => {
     renderPanel();
 
     const exportButton = screen.getByTestId('pdf-export-button');
@@ -77,7 +78,6 @@ describe('ExportPanel', () => {
     });
     expect(mockMutate).toHaveBeenCalledWith({
       sessionId: 'session-123',
-      filename: 'merged-document-20260709-1500.pdf',
     });
   });
 
@@ -101,10 +101,27 @@ describe('ExportPanel', () => {
 
   // AC-2: custom filename passed to mutate
   it('AC-2: passes custom filename to mutate when user changes input', async () => {
-    renderPanel();
+    const onFilenameOverrideChange = jest.fn();
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={10}
+          filenameOverride="my-custom-report.pdf"
+          automaticFilename="source.pdf"
+          isFilenameAutomatic={false}
+          onFilenameOverrideChange={onFilenameOverrideChange}
+        />
+      </QueryClientProvider>
+    );
 
     const input = screen.getByTestId('pdf-export-filename-input');
-    fireEvent.change(input, { target: { value: 'my-custom-report.pdf' } });
+    fireEvent.change(input, { target: { value: 'my-custom-report-2.pdf' } });
+    expect(onFilenameOverrideChange).toHaveBeenCalledWith(
+      'my-custom-report-2.pdf'
+    );
 
     const exportButton = screen.getByTestId('pdf-export-button');
     fireEvent.click(exportButton);
@@ -122,22 +139,23 @@ describe('ExportPanel', () => {
     mockMutationState.isError = true;
     mockMutationState.error = Object.assign(
       new Error('PDF assembly failed. Please retry.'),
-      { code: 'EXPORT_FAILED' },
+      { code: 'EXPORT_FAILED' }
     );
     renderPanel();
 
     expect(screen.getByTestId('pdf-export-error-toast')).toBeInTheDocument();
-    expect(screen.getByText('PDF assembly failed. Please retry.')).toBeInTheDocument();
+    expect(
+      screen.getByText('PDF assembly failed. Please retry.')
+    ).toBeInTheDocument();
     expect(screen.getByTestId('pdf-export-retry-button')).toBeInTheDocument();
   });
 
   // AC-3: retry button calls mutate again
   it('AC-3: retry button triggers export again', async () => {
     mockMutationState.isError = true;
-    mockMutationState.error = Object.assign(
-      new Error('Export failed'),
-      { code: 'EXPORT_FAILED' },
-    );
+    mockMutationState.error = Object.assign(new Error('Export failed'), {
+      code: 'EXPORT_FAILED',
+    });
     renderPanel();
 
     const retryButton = screen.getByTestId('pdf-export-retry-button');
@@ -148,12 +166,68 @@ describe('ExportPanel', () => {
     });
   });
 
-  // BR-008: default filename format pre-populated
-  it('BR-008: filename input is pre-populated with default filename', () => {
+  it('shows automatic filename as the input value in automatic mode', () => {
     renderPanel();
 
-    const input = screen.getByTestId('pdf-export-filename-input') as HTMLInputElement;
-    expect(input.value).toBe('merged-document-20260709-1500.pdf');
+    const input = screen.getByTestId(
+      'pdf-export-filename-input'
+    ) as HTMLInputElement;
+    expect(input.value).toBe('source.pdf');
+    expect(input).toHaveAttribute('data-filename-mode', 'automatic');
+  });
+
+  it('keeps long automatic filenames bound to the value contract', () => {
+    const queryClient = createQueryClient();
+    const longAutomaticName =
+      'very-long-source-name-that-should-wrap-safely-inside-the-export-panel-without-overflowing-combined.pdf';
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          filenameOverride=""
+          automaticFilename={longAutomaticName}
+          isFilenameAutomatic={true}
+          onFilenameOverrideChange={jest.fn()}
+        />
+      </QueryClientProvider>
+    );
+
+    const input = screen.getByTestId(
+      'pdf-export-filename-input'
+    ) as HTMLInputElement;
+    expect(input.value).toBe(longAutomaticName);
+    expect(input).toHaveAttribute('data-filename-mode', 'automatic');
+  });
+
+  it('shows override value and mode when isFilenameAutomatic is false', () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ExportPanel
+          sessionId="session-123"
+          nonDeletedPageCount={5}
+          filenameOverride="user-typed.pdf"
+          automaticFilename="source.pdf"
+          isFilenameAutomatic={false}
+          onFilenameOverrideChange={jest.fn()}
+        />
+      </QueryClientProvider>
+    );
+
+    const input = screen.getByTestId(
+      'pdf-export-filename-input'
+    ) as HTMLInputElement;
+    expect(input.value).toBe('user-typed.pdf');
+    expect(input).toHaveAttribute('data-filename-mode', 'override');
+  });
+
+  it('does not send filename to server in automatic mode', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('pdf-export-button'));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate).toHaveBeenCalledWith({ sessionId: 'session-123' });
   });
 
   // NFR-a11y: ARIA attributes on export button
@@ -175,10 +249,15 @@ describe('ExportPanel', () => {
 
   it('NFR-a11y: error toast has role=alert', () => {
     mockMutationState.isError = true;
-    mockMutationState.error = Object.assign(new Error('fail'), { code: 'EXPORT_FAILED' });
+    mockMutationState.error = Object.assign(new Error('fail'), {
+      code: 'EXPORT_FAILED',
+    });
     renderPanel();
 
-    expect(screen.getByTestId('pdf-export-error-toast')).toHaveAttribute('role', 'alert');
+    expect(screen.getByTestId('pdf-export-error-toast')).toHaveAttribute(
+      'role',
+      'alert'
+    );
   });
 
   // Empty session: button disabled
@@ -222,7 +301,7 @@ describe('ExportPanel', () => {
       () =>
         new Promise<void>((resolve) => {
           resolveBefore = resolve;
-        }),
+        })
     );
     const queryClient = createQueryClient();
 
@@ -231,9 +310,12 @@ describe('ExportPanel', () => {
         <ExportPanel
           sessionId="session-123"
           nonDeletedPageCount={5}
+          filenameOverride=""
+          automaticFilename="source.pdf"
+          onFilenameOverrideChange={jest.fn()}
           onBeforeExport={onBeforeExport}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
 
     fireEvent.click(screen.getByTestId('pdf-export-button'));
@@ -251,7 +333,9 @@ describe('ExportPanel', () => {
   });
 
   it('shows an error and skips mutate when onBeforeExport fails', async () => {
-    const onBeforeExport = jest.fn().mockRejectedValue(new Error('Save failed'));
+    const onBeforeExport = jest
+      .fn()
+      .mockRejectedValue(new Error('Save failed'));
     const queryClient = createQueryClient();
 
     render(
@@ -259,14 +343,19 @@ describe('ExportPanel', () => {
         <ExportPanel
           sessionId="session-123"
           nonDeletedPageCount={5}
+          filenameOverride=""
+          automaticFilename="source.pdf"
+          onFilenameOverrideChange={jest.fn()}
           onBeforeExport={onBeforeExport}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
 
     fireEvent.click(screen.getByTestId('pdf-export-button'));
 
-    expect(await screen.findByTestId('pdf-export-error-toast')).toHaveTextContent('Save failed');
+    expect(
+      await screen.findByTestId('pdf-export-error-toast')
+    ).toHaveTextContent('Save failed');
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
@@ -280,9 +369,12 @@ describe('ExportPanel', () => {
         <ExportPanel
           sessionId="session-123"
           nonDeletedPageCount={5}
+          filenameOverride=""
+          automaticFilename="source.pdf"
+          onFilenameOverrideChange={jest.fn()}
           onExportComplete={onExportComplete}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
 
     expect(onExportComplete).toHaveBeenCalledTimes(1);
@@ -292,15 +384,18 @@ describe('ExportPanel', () => {
         <ExportPanel
           sessionId="session-123"
           nonDeletedPageCount={5}
+          filenameOverride=""
+          automaticFilename="source.pdf"
+          onFilenameOverrideChange={jest.fn()}
           onExportComplete={() => onExportComplete()}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
 
     expect(onExportComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('uses controlled filename when provided', async () => {
+  it('uses the controlled override when provided', async () => {
     const queryClient = createQueryClient();
 
     render(
@@ -308,13 +403,17 @@ describe('ExportPanel', () => {
         <ExportPanel
           sessionId="session-123"
           nonDeletedPageCount={5}
-          filename="controlled-name.pdf"
-          onFilenameChange={jest.fn()}
+          filenameOverride="controlled-name.pdf"
+          automaticFilename="source.pdf"
+          isFilenameAutomatic={false}
+          onFilenameOverrideChange={jest.fn()}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
 
-    const input = screen.getByTestId('pdf-export-filename-input') as HTMLInputElement;
+    const input = screen.getByTestId(
+      'pdf-export-filename-input'
+    ) as HTMLInputElement;
     expect(input.value).toBe('controlled-name.pdf');
 
     fireEvent.click(screen.getByTestId('pdf-export-button'));

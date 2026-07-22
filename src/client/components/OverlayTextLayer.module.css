@@ -103,6 +103,14 @@
   outline-offset: 1px;
 }
 
+.draftOutline {
+  position: absolute;
+  border: 2px dashed var(--accent-color, #2563eb);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .liveRegion {
   position: absolute;
   width: 1px;

@@ -78,9 +78,7 @@ describe('useOverlayAutosave', () => {
       overlays,
     });
     expect(onSaved).toHaveBeenCalledWith(overlays);
-    expect(onSaveSuccess).toHaveBeenCalledWith(
-      '2026-07-21T12:00:00.000Z'
-    );
+    expect(onSaveSuccess).toHaveBeenCalledWith('2026-07-21T12:00:00.000Z');
     expect(result.current.status).toBe('saved');
   });
 
@@ -181,5 +179,38 @@ describe('useOverlayAutosave', () => {
     expect(onSaveSuccess).toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
     expect(result.current.status).toBe('dirty');
+  });
+
+  it('inactive replacement draft never appears in the mutation payload', async () => {
+    const persisted = makeOverlay('Persisted box');
+    const onSaved = jest.fn();
+    mockMutateAsync.mockResolvedValue({
+      overlays: [persisted],
+      updatedAt: '2026-07-21T13:00:00.000Z',
+    });
+
+    renderHook(() =>
+      useOverlayAutosave({
+        sessionId: 'session-1',
+        overlays: [persisted],
+        isDirty: true,
+        onSaved,
+      })
+    );
+
+    await act(async () => {
+      jest.advanceTimersByTime(OVERLAY_AUTOSAVE_DELAY_MS);
+      await Promise.resolve();
+    });
+
+    expect(mockMutateAsync).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      overlays: [persisted],
+    });
+    expect(
+      mockMutateAsync.mock.calls[0][0].overlays.every(
+        (o: { coverActive?: boolean }) => o.coverActive !== false
+      )
+    ).toBe(true);
   });
 });

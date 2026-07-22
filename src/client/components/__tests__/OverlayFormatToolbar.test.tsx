@@ -175,7 +175,102 @@ describe('OverlayFormatToolbar', () => {
     expect(screen.getByText('Example')).toBeInTheDocument();
     expect(box).toHaveStyle({
       textDecoration: 'underline',
-      fontSize: '14pt',
+      fontSize: '14px',
+    });
+  });
+
+  it('keeps toolbar controls active for multiline replacements', () => {
+    const onChange = jest.fn();
+    render(
+      <OverlayFormatToolbar
+        overlay={{
+          ...overlay,
+          kind: 'replace',
+          backgroundColor: '#FFFFFF',
+          text: 'Line one\nLine two',
+        }}
+        onChange={onChange}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('overlay-format-font-family'), {
+      target: { value: 'Times-Roman' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-color'), {
+      target: { value: '#112233' },
+    });
+    fireEvent.blur(screen.getByTestId('overlay-format-color'));
+    fireEvent.click(screen.getByRole('button', { name: 'Align center' }));
+
+    expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Times-Roman' });
+    expect(onChange).toHaveBeenCalledWith({ color: '#112233' });
+    expect(onChange).toHaveBeenCalledWith({ horizontalAlign: 'center' });
+  });
+
+  describe('replacement text textarea', () => {
+    it('renders a labeled textarea prefilled with replacement overlay text', () => {
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Sales Assistant',
+          }}
+          onChange={jest.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText('Replacement text');
+      expect(textarea).toBeInTheDocument();
+      expect(textarea).toHaveValue('Sales Assistant');
+      expect(textarea.tagName).toBe('TEXTAREA');
+    });
+
+    it('does not render the replacement textarea for additive overlays', () => {
+      render(<OverlayFormatToolbar overlay={overlay} onChange={jest.fn()} />);
+
+      expect(
+        screen.queryByLabelText('Replacement text')
+      ).not.toBeInTheDocument();
+    });
+
+    it('fires onReplacementTextChange when textarea is edited', () => {
+      const onReplacementTextChange = jest.fn();
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Sales Assistant',
+          }}
+          onChange={jest.fn()}
+          onReplacementTextChange={onReplacementTextChange}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText('Replacement text'), {
+        target: { value: 'Marketing Manager' },
+      });
+      expect(onReplacementTextChange).toHaveBeenCalledWith('Marketing Manager');
+    });
+
+    it('supports multiline content in the replacement textarea', () => {
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Line one\nLine two\nLine three',
+          }}
+          onChange={jest.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText('Replacement text');
+      expect(textarea).toHaveValue('Line one\nLine two\nLine three');
     });
   });
 });

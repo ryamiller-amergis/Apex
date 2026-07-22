@@ -51,13 +51,28 @@ export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
     try {
       await onBeforeExport?.();
       const sortedPages = [...selectedPageIndices].sort((a, b) => a - b);
-      exportMutation.mutate({ sessionId, pages: sortedPages, filename });
+      exportMutation.mutate({
+        sessionId,
+        ...(filename?.trim() ? { filename } : {}),
+        ...(sortedPages.length ? { pages: sortedPages } : {}),
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save assembly before export.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to save assembly before export.'
+      );
     } finally {
       setIsPreparing(false);
     }
-  }, [selectedCount, onBeforeExport, exportMutation, sessionId, selectedPageIndices, filename]);
+  }, [
+    selectedCount,
+    onBeforeExport,
+    exportMutation,
+    sessionId,
+    selectedPageIndices,
+    filename,
+  ]);
 
   const handleClick = useCallback(() => {
     if (isDisabled) return;
@@ -114,7 +129,11 @@ export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
       </button>
 
       {error && (
-        <div className={styles.errorToast} role="alert" data-testid="pdf-export-selected-error">
+        <div
+          className={styles.errorToast}
+          role="alert"
+          data-testid="pdf-export-selected-error"
+        >
           <span>{error}</span>
           <button
             className={styles.retryBtn}

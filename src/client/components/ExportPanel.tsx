@@ -1,13 +1,15 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { useExportSession, generateDefaultFilename } from '../hooks/useExportSession';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useExportSession } from '../hooks/useExportSession';
 import styles from './ExportPanel.module.css';
 
 interface ExportPanelProps {
   sessionId: string;
   nonDeletedPageCount: number;
-  /** Controlled filename; falls back to internal default when omitted. */
-  filename?: string;
-  onFilenameChange?: (filename: string) => void;
+  filenameOverride: string;
+  automaticFilename: string;
+  /** True when the field is still in automatic/recomputed mode. */
+  isFilenameAutomatic?: boolean;
+  onFilenameOverrideChange: (filename: string) => void;
   /** Called before export so callers can persist unsaved assembly changes. */
   onBeforeExport?: () => Promise<void>;
   /** Called after the export download has started successfully. */
@@ -17,18 +19,16 @@ interface ExportPanelProps {
 export const ExportPanel: React.FC<ExportPanelProps> = ({
   sessionId,
   nonDeletedPageCount,
-  filename: controlledFilename,
-  onFilenameChange,
+  filenameOverride,
+  automaticFilename,
+  isFilenameAutomatic = true,
+  onFilenameOverrideChange,
   onBeforeExport,
   onExportComplete,
 }) => {
-  const [internalFilename, setInternalFilename] = useState(() => generateDefaultFilename());
   const [error, setError] = useState<string | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
   const hasReportedSuccessRef = useRef(false);
-
-  const filename = controlledFilename ?? internalFilename;
-  const setFilename = onFilenameChange ?? setInternalFilename;
 
   const exportMutation = useExportSession();
   const isExporting = exportMutation.isPending || isPreparing;
@@ -57,13 +57,28 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
     setIsPreparing(true);
     try {
       await onBeforeExport?.();
-      exportMutation.mutate({ sessionId, filename });
+      exportMutation.mutate({
+        sessionId,
+        ...(!isFilenameAutomatic && filenameOverride.trim()
+          ? { filename: filenameOverride }
+          : {}),
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save assembly before export.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to save assembly before export.'
+      );
     } finally {
       setIsPreparing(false);
     }
-  }, [onBeforeExport, exportMutation, sessionId, filename]);
+  }, [
+    onBeforeExport,
+    exportMutation,
+    filenameOverride,
+    isFilenameAutomatic,
+    sessionId,
+  ]);
 
   const handleExport = useCallback(() => {
     void runExport();
@@ -87,10 +102,16 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           id="pdf-export-filename"
           type="text"
           className={styles.filenameInput}
-          value={filename}
-          onChange={(e) => setFilename(e.target.value)}
+          value={isFilenameAutomatic ? automaticFilename : filenameOverride}
+          placeholder={
+            isFilenameAutomatic && !automaticFilename
+              ? 'Server will choose a source-based PDF name'
+              : undefined
+          }
+          onChange={(e) => onFilenameOverrideChange(e.target.value)}
           disabled={isExporting}
           data-testid="pdf-export-filename-input"
+          data-filename-mode={isFilenameAutomatic ? 'automatic' : 'override'}
           aria-describedby={error ? 'pdf-export-error' : undefined}
         />
         <button
@@ -104,14 +125,26 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         >
           {isExporting ? (
             <>
-              <span className={styles.spinner} data-testid="pdf-export-loading" />
+              <span
+                className={styles.spinner}
+                data-testid="pdf-export-loading"
+              />
               {isPreparing
                 ? 'Preparing…'
                 : `Exporting ${nonDeletedPageCount} ${nonDeletedPageCount === 1 ? 'page' : 'pages'}…`}
             </>
           ) : (
             <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />

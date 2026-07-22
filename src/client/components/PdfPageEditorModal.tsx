@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type { OverlayTextBox } from '../../shared/types/pdf';
-import type { OverlayFormattingPatch } from '../hooks/useOverlayEditor';
+import type {
+  OverlayFormattingPatch,
+  ReplacementDraft,
+} from '../hooks/useOverlayEditor';
 import {
   PdfInlinePreview,
   type PdfInlinePreviewOverlayProps,
@@ -19,10 +22,15 @@ interface PdfPageEditorModalProps {
   originalPageNumber: number;
   overlay: PdfInlinePreviewOverlayProps;
   selectedOverlay: OverlayTextBox | null;
+  replacementDraft?: ReplacementDraft | null;
   onToggleTextTool: () => void;
   onToggleReplacementTool: () => void;
   onFormattingChange: (patch: OverlayFormattingPatch) => void;
+  onReplacementTextFocus?: () => void;
+  onReplacementTextChange?: (text: string) => void;
+  onReplacementTextBlur?: () => void;
   onValidationChange: (hasError: boolean) => void;
+  onDiscardDraft?: () => void;
   onClose: () => void;
 }
 
@@ -39,8 +47,13 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
   onToggleTextTool,
   onToggleReplacementTool,
   onFormattingChange,
+  onReplacementTextFocus,
+  onReplacementTextChange,
+  onReplacementTextBlur,
   onValidationChange,
+  onDiscardDraft,
   onClose,
+  replacementDraft = null,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -48,10 +61,18 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (!replacementDraft) {
+      closeButtonRef.current?.focus();
+    }
+    // Initial focus only on open — textarea autoFocus handles draft case
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
 
     const previousOverflow = window.document.body.style.overflow;
     window.document.body.style.overflow = 'hidden';
-    closeButtonRef.current?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -62,6 +83,7 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
           return;
         }
         event.preventDefault();
+        onDiscardDraft?.();
         onClose();
         return;
       }
@@ -70,7 +92,7 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
       const dialog = dialogRef.current;
       if (!dialog) return;
       const focusable = dialog.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'
       );
       if (focusable.length === 0) return;
       const first = focusable[0];
@@ -89,7 +111,7 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
       window.document.body.style.overflow = previousOverflow;
       window.document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, onDiscardDraft]);
 
   if (!isOpen) return null;
 
@@ -135,7 +157,10 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
               ref={closeButtonRef}
               type="button"
               className={styles.doneButton}
-              onClick={onClose}
+              onClick={() => {
+                onDiscardDraft?.();
+                onClose();
+              }}
               data-testid="page-editor-done"
             >
               Done
@@ -213,11 +238,16 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
 
                 {selectedOverlay && !overlay.readOnly ? (
                   <div className={styles.formatPanel}>
+                    {/* No key={overlay.id}: preserves textarea focus across
+                        draft→active transitions. Toolbar syncs via prop. */}
                     <OverlayFormatToolbar
-                      key={selectedOverlay.id}
                       overlay={selectedOverlay}
                       orientation="vertical"
                       onChange={onFormattingChange}
+                      onReplacementTextFocus={onReplacementTextFocus}
+                      onReplacementTextChange={onReplacementTextChange}
+                      onReplacementTextBlur={onReplacementTextBlur}
+                      autoFocusReplacementText={Boolean(replacementDraft)}
                       onValidationChange={onValidationChange}
                     />
                   </div>

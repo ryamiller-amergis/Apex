@@ -17,6 +17,8 @@ interface OverlayTextBoxProps {
   overlay: OverlayTextBoxModel;
   selected: boolean;
   editing?: boolean;
+  /** PDF.js render scale (fitScale × zoom). Font renders at fontSize * displayScale px. */
+  displayScale?: number;
   onSelect: (overlayId: string) => void;
   onEdit?: (overlayId: string) => void;
   onFocus?: (overlayId: string) => void;
@@ -29,7 +31,10 @@ interface OverlayTextBoxProps {
   onDelete?: () => void;
   onBeginGeometryEdit?: (overlayId: string) => boolean;
   onUpdateGeometry?: (geometry: OverlayBoxGeometry) => void;
-  onCommitGeometryEdit?: (kind: 'move' | 'resize') => void;
+  onCommitGeometryEdit?: (
+    kind: 'move' | 'resize',
+    finalGeometry: OverlayBoxGeometry
+  ) => void;
   displayOnly?: boolean;
 }
 
@@ -44,8 +49,20 @@ const RESIZE_HANDLES: OverlayResizeHandle[] = [
   'nw',
 ];
 
-/** Replacements stay single-line; only horizontal resize is offered. */
-const REPLACE_RESIZE_HANDLES: OverlayResizeHandle[] = ['e', 'w'];
+function replacementHandleAriaLabel(
+  handle: OverlayResizeHandle,
+  overlay: Pick<OverlayTextBoxModel, 'width' | 'height'>
+): string {
+  const width = `${overlay.width.toFixed(1)}% wide`;
+  const height = `${overlay.height.toFixed(1)}% high`;
+  if (handle === 'e' || handle === 'w') {
+    return `Resize replacement width ${handle}; ${width}`;
+  }
+  if (handle === 'n' || handle === 's') {
+    return `Resize replacement height ${handle}; ${height}`;
+  }
+  return `Resize replacement ${handle}; ${width} by ${height}`;
+}
 
 interface PointerGesture {
   kind: 'move' | 'resize';
@@ -56,12 +73,14 @@ interface PointerGesture {
   pageWidth: number;
   pageHeight: number;
   startGeometry: OverlayBoxGeometry;
+  finalGeometry: OverlayBoxGeometry;
 }
 
 export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
   overlay,
   selected,
   editing = false,
+  displayScale = 1,
   onSelect,
   onEdit,
   onFocus,
@@ -94,27 +113,6 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
       );
     }
   }, [editing]);
-
-  // Keep replacement glyph size locked to the cover box so zoom/fit scale
-  // cannot leave original PDF text peeking under a mis-sized overlay.
-  useEffect(() => {
-    if (overlay.kind !== 'replace') return;
-    const el = boxRef.current;
-    if (!el) return;
-
-    const syncFontToCover = () => {
-      const heightPx = el.clientHeight;
-      if (heightPx <= 0) return;
-      // Cover includes small neighbor-clamped padding; em-box is most of height.
-      el.style.fontSize = `${Math.max(6, heightPx * 0.85)}px`;
-    };
-
-    syncFontToCover();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(syncFontToCover);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [overlay.kind, overlay.height, overlay.fontSize]);
 
   const startGesture = (
     event: React.PointerEvent<HTMLElement>,
@@ -155,10 +153,16 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
         width: overlay.width,
         height: overlay.height,
       },
+      finalGeometry: {
+        x: overlay.x,
+        y: overlay.y,
+        width: overlay.width,
+        height: overlay.height,
+      },
     };
   };
 
-  const continueGesture = (event: React.PointerEvent<HTMLElement>) => {
+  const updateGesture = (event: React.PointerEvent<HTMLElement>) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     if (
@@ -172,7 +176,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
       event.clientY - gesture.startClientY,
       { width: gesture.pageWidth, height: gesture.pageHeight }
     );
-    const geometry =
+    gesture.finalGeometry =
       gesture.kind === 'move'
         ? moveOverlayBox(gesture.startGeometry, delta.xPct, delta.yPct)
         : resizeOverlayFromHandle(
@@ -181,24 +185,16 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
             delta.xPct,
             delta.yPct
           );
-    // Replacement covers are single-line: never allow vertical resize drift.
-    if (overlay.kind === 'replace') {
-      onUpdateGeometry?.({
-        ...geometry,
-        height: gesture.startGeometry.height,
-      });
-      return;
-    }
-    onUpdateGeometry?.(geometry);
+    onUpdateGeometry?.(gesture.finalGeometry);
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLElement>) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
-    continueGesture(event);
+    updateGesture(event);
     gestureRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    onCommitGeometryEdit?.(gesture.kind);
+    onCommitGeometryEdit?.(gesture.kind, gesture.finalGeometry);
   };
 
   return (
@@ -224,10 +220,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
           : undefined,
         color: overlay.color,
         fontFamily: OVERLAY_FONT_STACKS[overlay.fontFamily],
-        // Replacements sync px size to the cover via ResizeObserver. Additive
-        // overlays keep pt for the existing authoring model / burn-in.
-        fontSize:
-          overlay.kind === 'replace' ? undefined : `${overlay.fontSize}pt`,
+        fontSize: `${overlay.fontSize * displayScale}px`,
         fontWeight: overlay.bold ? 700 : 400,
         fontStyle: overlay.italic ? 'italic' : 'normal',
         textAlign: overlay.horizontalAlign,
@@ -256,7 +249,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
         if (!editing) onFocus?.(overlay.id);
       }}
       onPointerDown={(event) => startGesture(event, 'move')}
-      onPointerMove={continueGesture}
+      onPointerMove={updateGesture}
       onPointerUp={finishGesture}
       onPointerCancel={finishGesture}
       onClick={(event) => {
@@ -288,38 +281,33 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
         onKeyDown?.(overlay.id, event);
       }}
     >
-      {overlay.kind === 'replace' && overlay.backgroundColor && (
-        <span
-          className={styles.replacementCover}
-          style={{ backgroundColor: overlay.backgroundColor }}
-          aria-hidden="true"
-        />
-      )}
+      {overlay.kind === 'replace' &&
+        overlay.backgroundColor &&
+        overlay.coverActive !== false && (
+          <span
+            className={styles.replacementCover}
+            style={{ backgroundColor: overlay.backgroundColor }}
+            aria-hidden="true"
+          />
+        )}
       {editing ? (
         <textarea
           ref={editorRef}
           className={styles.textEditor}
           value={overlay.text}
           maxLength={2000}
-          rows={1}
-          wrap={overlay.kind === 'replace' ? 'off' : undefined}
+          rows={Math.max(
+            1,
+            overlay.text.replace(/\r\n?/g, '\n').split('\n').length
+          )}
           aria-label="Edit text box content"
           data-testid="pdf-tools-overlay-editing"
           style={{ opacity: overlay.opacity / 100 }}
           onChange={(event) => {
-            const next =
-              overlay.kind === 'replace'
-                ? event.target.value.replace(/\r?\n/g, ' ')
-                : event.target.value;
-            onTextChange?.(next);
+            onTextChange?.(event.target.value.replace(/\r\n?/g, '\n'));
           }}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
-            if (overlay.kind === 'replace' && event.key === 'Enter') {
-              event.preventDefault();
-              event.stopPropagation();
-              return;
-            }
             if (event.key !== 'Escape') return;
             event.preventDefault();
             event.stopPropagation();
@@ -339,10 +327,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
       )}
       {selected &&
         !editing &&
-        (overlay.kind === 'replace'
-          ? REPLACE_RESIZE_HANDLES
-          : RESIZE_HANDLES
-        ).map((handle) => (
+        RESIZE_HANDLES.map((handle) => (
           <button
             key={handle}
             type="button"
@@ -351,11 +336,11 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
             data-handle={handle}
             aria-label={
               overlay.kind === 'replace'
-                ? `Resize replacement width ${handle}; ${overlay.width.toFixed(1)}% wide`
+                ? replacementHandleAriaLabel(handle, overlay)
                 : `Resize text box ${handle}; ${overlay.width.toFixed(1)}% wide by ${overlay.height.toFixed(1)}% high`
             }
             onPointerDown={(event) => startGesture(event, 'resize', handle)}
-            onPointerMove={continueGesture}
+            onPointerMove={updateGesture}
             onPointerUp={finishGesture}
             onPointerCancel={finishGesture}
             onClick={(event) => event.stopPropagation()}

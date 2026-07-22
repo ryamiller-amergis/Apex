@@ -165,12 +165,6 @@ jest.mock('../../hooks/useExportSession', () => ({
     mutate: mockExportMutate,
     ...mockExportMutationState,
   }),
-  generateDefaultFilename: () => 'merged-document-20260710-1200.pdf',
-  ensurePdfExtension: (name: string) => {
-    if (!name.trim()) return 'merged-document-20260710-1200.pdf';
-    if (!name.toLowerCase().endsWith('.pdf')) return `${name.trim()}.pdf`;
-    return name.trim();
-  },
 }));
 
 function makePage(pageId: string, sourcePageIndex: number): PageManifestEntry {
@@ -671,14 +665,23 @@ describe('PdfAssemblyView', () => {
   it('starts a fresh session without deleting the current documents', async () => {
     sessionStorage.setItem('pdf-active-session', 'sess-wired');
     mockSessionData = makeSession([makePage('page-a', 0)]);
-    mockCreateSession.mockResolvedValueOnce({
-      sessionId: 'sess-fresh',
-      status: 'active',
-      createdAt: '',
-      expiresAt: '',
+    mockCreateSession.mockImplementationOnce(async () => {
+      mockSessionData = {
+        ...makeSession([makePage('page-fresh', 0)]),
+        id: 'sess-fresh',
+      };
+      return {
+        sessionId: 'sess-fresh',
+        status: 'active',
+        createdAt: '',
+        expiresAt: '',
+      };
     });
 
     renderWithQuery(<PdfAssemblyView />);
+    fireEvent.change(screen.getByTestId('pdf-export-filename-input'), {
+      target: { value: 'custom-before-reset.pdf' },
+    });
     fireEvent.click(screen.getByTestId('pdf-new-session'));
 
     await waitFor(() => {
@@ -688,8 +691,13 @@ describe('PdfAssemblyView', () => {
       expect(sessionStorage.getItem('pdf-active-session')).toBe('sess-fresh');
     });
 
-    expect(screen.getByTestId('pdf-dropzone')).toBeInTheDocument();
-    expect(screen.queryByTestId('mock-source-browser')).not.toBeInTheDocument();
+    expect(screen.getByTestId('pdf-export-filename-input')).toHaveAttribute(
+      'data-filename-mode',
+      'automatic'
+    );
+    expect(screen.getByTestId('pdf-export-filename-input')).toHaveValue(
+      'source.pdf'
+    );
   });
 
   it('saves page changes before starting a fresh session', async () => {
@@ -730,32 +738,31 @@ describe('PdfAssemblyView', () => {
       expect(
         screen.getByTestId('pdf-export-filename-input')
       ).toBeInTheDocument();
+      expect(screen.getByTestId('pdf-export-filename-input')).toHaveValue(
+        'source.pdf'
+      );
+      expect(screen.getByTestId('pdf-export-filename-input')).toHaveAttribute(
+        'data-filename-mode',
+        'automatic'
+      );
       expect(screen.getByTestId('pdf-range-input')).toBeInTheDocument();
       expect(screen.getByTestId('pdf-export-button')).toBeInTheDocument();
       expect(screen.getByTestId('pdf-export-selected-btn')).toBeInTheDocument();
     });
 
-    it('exports all pages with the shared filename', async () => {
+    it('exports all pages without a filename when no override is set', async () => {
       renderWithQuery(<PdfAssemblyView />);
-
-      const filenameInput = screen.getByTestId('pdf-export-filename-input');
-      fireEvent.change(filenameInput, { target: { value: 'full-packet.pdf' } });
       fireEvent.click(screen.getByTestId('pdf-export-button'));
 
       await waitFor(() => {
         expect(mockExportMutate).toHaveBeenCalledWith({
           sessionId: 'sess-wired',
-          filename: 'full-packet.pdf',
         });
       });
     });
 
-    it('exports selected pages using the shared filename and range selection', async () => {
+    it('exports selected pages without a filename when no override is set', async () => {
       renderWithQuery(<PdfAssemblyView />);
-
-      fireEvent.change(screen.getByTestId('pdf-export-filename-input'), {
-        target: { value: 'selected-pages.pdf' },
-      });
 
       // RangeInput debounces 300ms before applying selection
       fireEvent.change(screen.getByTestId('pdf-range-input'), {
@@ -773,20 +780,18 @@ describe('PdfAssemblyView', () => {
       await waitFor(() => {
         expect(mockExportMutate).toHaveBeenCalledWith({
           sessionId: 'sess-wired',
-          filename: 'selected-pages.pdf',
           pages: [0, 1],
         });
       });
     });
 
-    it('persists unsaved reorder before export selected', async () => {
+    it('persists an explicit override across reorder and selection changes', async () => {
       renderWithQuery(<PdfAssemblyView />);
 
-      fireEvent.click(screen.getByTestId('mock-reorder-btn'));
-
       fireEvent.change(screen.getByTestId('pdf-export-filename-input'), {
-        target: { value: 'after-reorder.pdf' },
+        target: { value: 'custom-packet.pdf' },
       });
+      fireEvent.click(screen.getByTestId('mock-reorder-btn'));
       fireEvent.change(screen.getByTestId('pdf-range-input'), {
         target: { value: '1,3' },
       });
@@ -810,11 +815,24 @@ describe('PdfAssemblyView', () => {
         });
       });
 
+      expect(screen.getByTestId('pdf-export-filename-input')).toHaveValue(
+        'custom-packet.pdf'
+      );
+
       await waitFor(() => {
         expect(mockExportMutate).toHaveBeenCalledWith({
           sessionId: 'sess-wired',
-          filename: 'after-reorder.pdf',
+          filename: 'custom-packet.pdf',
           pages: [0, 2],
+        });
+      });
+
+      fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+      await waitFor(() => {
+        expect(mockExportMutate).toHaveBeenCalledWith({
+          sessionId: 'sess-wired',
+          filename: 'custom-packet.pdf',
         });
       });
 
@@ -822,6 +840,80 @@ describe('PdfAssemblyView', () => {
       expect(mockMutateAsyncManifest.mock.invocationCallOrder[0]).toBeLessThan(
         mockExportMutate.mock.invocationCallOrder[0]
       );
+    });
+
+    it('clears the override when the input is cleared and keeps the export request blank', async () => {
+      renderWithQuery(<PdfAssemblyView />);
+
+      const filenameInput = screen.getByTestId('pdf-export-filename-input');
+      fireEvent.change(filenameInput, {
+        target: { value: 'custom-packet.pdf' },
+      });
+      fireEvent.change(filenameInput, { target: { value: '' } });
+      expect(filenameInput).toHaveAttribute('data-filename-mode', 'automatic');
+      expect(filenameInput).toHaveValue('source.pdf');
+
+      fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+      await waitFor(() => {
+        expect(mockExportMutate).toHaveBeenCalledWith({
+          sessionId: 'sess-wired',
+        });
+      });
+    });
+
+    it('resets the override after a completed full export starts a new session', async () => {
+      mockCreateSession.mockImplementationOnce(async () => {
+        mockSessionData = {
+          ...makeSession([
+            makePage('page-reset-a', 0),
+            makePage('page-reset-b', 1),
+          ]),
+          id: 'sess-reset',
+        };
+        return {
+          sessionId: 'sess-reset',
+          status: 'active',
+          createdAt: '',
+          expiresAt: '',
+        };
+      });
+
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const rendered = render(
+        <QueryClientProvider client={client}>
+          <PdfAssemblyView />
+        </QueryClientProvider>
+      );
+      fireEvent.change(screen.getByTestId('pdf-export-filename-input'), {
+        target: { value: 'custom-before-export.pdf' },
+      });
+      fireEvent.click(screen.getByTestId('pdf-export-button'));
+
+      mockExportMutationState = {
+        ...mockExportMutationState,
+        isSuccess: true,
+      };
+      rendered.rerender(
+        <QueryClientProvider client={client}>
+          <PdfAssemblyView />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalledWith({
+          replaceSessionId: 'sess-wired',
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pdf-export-filename-input')).toHaveAttribute(
+          'data-filename-mode',
+          'automatic'
+        );
+      });
     });
 
     it('flushes pending overlay edits before export starts', async () => {

@@ -25,15 +25,56 @@ const baseOverlay: OverlayTextBox = {
 };
 
 describe('Overlay create/delete chrome', () => {
-  it('creates a replacement from exactly one selected PDF.js text item', () => {
-    const replacement = {
+  const renderSelectedReplacement = (
+    overrides: Partial<OverlayTextBox> = {}
+  ) => {
+    const onUpdateText = jest.fn();
+    const onUpdateGeometry = jest.fn();
+    const onCommitGeometryEdit = jest.fn();
+    const replacementOverlay: OverlayTextBox = {
       ...baseOverlay,
-      text: 'Existing word',
-      kind: 'replace' as const,
+      kind: 'replace',
       backgroundColor: '#FFFFFF',
+      text: 'First line',
+      ...overrides,
     };
-    const onCreateReplacement = jest.fn().mockReturnValue(replacement);
-    const onExitReplacementMode = jest.fn();
+    render(
+      <div style={{ position: 'relative', width: 200, height: 200 }}>
+        <OverlayTextLayer
+          pageId="page-1"
+          overlays={[replacementOverlay]}
+          selectedOverlayId={replacementOverlay.id}
+          textToolActive={false}
+          createLimitMessage={null}
+          announcement=""
+          canUndo={false}
+          onCreateAt={jest.fn()}
+          onSelect={jest.fn()}
+          onDeleteSelected={jest.fn()}
+          onUndo={jest.fn()}
+          onBeginTextEdit={() => true}
+          onBeginGeometryEdit={() => true}
+          onUpdateText={onUpdateText}
+          onUpdateGeometry={onUpdateGeometry}
+          onCommitGeometryEdit={onCommitGeometryEdit}
+        />
+      </div>
+    );
+    return {
+      replacementOverlay,
+      onUpdateText,
+      onUpdateGeometry,
+      onCommitGeometryEdit,
+    };
+  };
+
+  const getHandle = (handle: string) =>
+    screen
+      .getAllByTestId('pdf-tools-overlay-resize-handle')
+      .find((node) => node.getAttribute('data-handle') === handle)!;
+
+  it('creates a local replacement draft from one selected PDF.js text item', () => {
+    const onSetReplacementDraft = jest.fn();
 
     render(
       <div style={{ position: 'relative', width: 200, height: 200 }}>
@@ -48,16 +89,19 @@ describe('Overlay create/delete chrome', () => {
               id: 'text-item-0',
               text: 'Existing word',
               geometry: { x: 10, y: 20, width: 12, height: 2 },
+              fontFamily: 'Times-Roman',
               fontSize: 12,
+              bold: true,
+              italic: true,
               rotation: 0,
+              backgroundColor: '#F2EDE6',
             },
           ]}
           createLimitMessage={null}
           announcement=""
           canUndo={false}
           onCreateAt={jest.fn()}
-          onCreateReplacement={onCreateReplacement}
-          onExitReplacementMode={onExitReplacementMode}
+          onSetReplacementDraft={onSetReplacementDraft}
           onSelect={jest.fn()}
           onDeleteSelected={jest.fn()}
           onUndo={jest.fn()}
@@ -68,13 +112,77 @@ describe('Overlay create/delete chrome', () => {
 
     fireEvent.click(screen.getByTestId('native-text-item'));
 
-    expect(onCreateReplacement).toHaveBeenCalledWith(
+    expect(onSetReplacementDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'text-item-0',
         text: 'Existing word',
+        fontFamily: 'Times-Roman',
+        bold: true,
+        italic: true,
+        backgroundColor: '#F2EDE6',
       })
     );
-    expect(onExitReplacementMode).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-editing')
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders an inactive replacement draft as an outline only', () => {
+    render(
+      <div style={{ position: 'relative', width: 200, height: 200 }}>
+        <OverlayTextLayer
+          pageId="page-1"
+          overlays={[]}
+          selectedOverlayId={null}
+          textToolActive={false}
+          replacementDraftGeometry={{
+            x: 10,
+            y: 20,
+            width: 12,
+            height: 3,
+            rotation: 90,
+          }}
+          createLimitMessage={null}
+          announcement=""
+          canUndo={false}
+          onCreateAt={jest.fn()}
+          onSelect={jest.fn()}
+          onDeleteSelected={jest.fn()}
+          onUndo={jest.fn()}
+        />
+      </div>
+    );
+
+    expect(
+      screen.getByTestId('pdf-tools-replacement-draft-outline')
+    ).toHaveStyle({
+      left: '10%',
+      top: '20%',
+      width: '12%',
+      height: '3%',
+      transform: 'rotate(90deg)',
+    });
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-box')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-editing')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-resize-handle')
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps active replacements out of inline editing', () => {
+    renderSelectedReplacement();
+
+    fireEvent.click(screen.getByTestId('pdf-tools-overlay-drag-surface'));
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-editing')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('pdf-tools-overlay-edit-text')
+    ).not.toBeInTheDocument();
   });
 
   // VT-09
@@ -294,7 +402,13 @@ describe('Overlay create/delete chrome', () => {
       })
     );
     expect(onUpdateGeometry).toHaveBeenCalled();
-    expect(onCommitGeometryEdit).toHaveBeenCalledWith('resize');
+    expect(onCommitGeometryEdit).toHaveBeenCalledWith(
+      'resize',
+      expect.objectContaining({
+        width: expect.any(Number),
+        height: expect.any(Number),
+      })
+    );
 
     fireEvent.click(screen.getByTestId('pdf-tools-overlay-bring-forward'));
     fireEvent.click(screen.getByTestId('pdf-tools-overlay-send-backward'));
@@ -477,6 +591,114 @@ describe('Overlay create/delete chrome', () => {
     expect(screen.getByTestId('pdf-tools-overlay-editing')).toHaveFocus();
   });
 
+  it('keeps additive inline editing and normalizes CRLF input', () => {
+    const onUpdateText = jest.fn();
+    render(
+      <div style={{ position: 'relative', width: 200, height: 200 }}>
+        <OverlayTextLayer
+          pageId="page-1"
+          overlays={[baseOverlay]}
+          selectedOverlayId={baseOverlay.id}
+          textToolActive={false}
+          createLimitMessage={null}
+          announcement=""
+          canUndo={false}
+          onCreateAt={jest.fn()}
+          onSelect={jest.fn()}
+          onDeleteSelected={jest.fn()}
+          onUndo={jest.fn()}
+          onBeginTextEdit={() => true}
+          onUpdateText={onUpdateText}
+        />
+      </div>
+    );
+    fireEvent.keyDown(screen.getByTestId('pdf-tools-overlay-box'), {
+      key: 'Enter',
+    });
+    const editor = screen.getByTestId('pdf-tools-overlay-editing');
+    fireEvent.change(editor, { target: { value: 'First\r\nSecond' } });
+    expect(onUpdateText).toHaveBeenLastCalledWith('First\nSecond');
+  });
+
+  it('shows all eight resize handles for a replacement', () => {
+    renderSelectedReplacement({ kind: 'replace', backgroundColor: '#FFFFFF' });
+    expect(
+      screen
+        .getAllByTestId('pdf-tools-overlay-resize-handle')
+        .map((node) => node.getAttribute('data-handle'))
+    ).toEqual(['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']);
+    expect(getHandle('n')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/height/i)
+    );
+    expect(getHandle('n')).toHaveAttribute(
+      'aria-label',
+      expect.not.stringMatching(/width/i)
+    );
+    expect(getHandle('s')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/height/i)
+    );
+    expect(getHandle('se')).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/wide by .*high/i)
+    );
+  });
+
+  it('commits vertical replacement geometry from the south handle', () => {
+    const { onUpdateGeometry, onCommitGeometryEdit } =
+      renderSelectedReplacement();
+    jest
+      .spyOn(
+        screen.getByTestId('pdf-tools-overlay-layer'),
+        'getBoundingClientRect'
+      )
+      .mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 200,
+        bottom: 200,
+        width: 200,
+        height: 200,
+        toJSON: () => ({}),
+      });
+    const south = getHandle('s');
+    fireEvent(
+      south,
+      new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        clientX: 60,
+        clientY: 60,
+      })
+    );
+    fireEvent(
+      south,
+      new MouseEvent('pointermove', {
+        bubbles: true,
+        clientX: 60,
+        clientY: 100,
+      })
+    );
+    fireEvent(
+      south,
+      new MouseEvent('pointerup', {
+        bubbles: true,
+        clientX: 60,
+        clientY: 100,
+      })
+    );
+    expect(onUpdateGeometry).toHaveBeenCalledWith(
+      expect.objectContaining({ height: expect.any(Number) })
+    );
+    expect(onCommitGeometryEdit).toHaveBeenCalledWith(
+      'resize',
+      expect.objectContaining({ height: expect.any(Number) })
+    );
+  });
+
   it('does not delete when no box is focused or selected', () => {
     const onDeleteSelected = jest.fn();
     render(
@@ -502,5 +724,114 @@ describe('Overlay create/delete chrome', () => {
     expect(
       screen.getByTestId('pdf-tools-overlay-live-region')
     ).toBeEmptyDOMElement();
+  });
+});
+
+describe('OverlayTextBox displayScale', () => {
+  it.each([1, 1.75, 2.0])(
+    'renders font-size as fontSize * displayScale px at scale=%s',
+    (scale) => {
+      const overlay: OverlayTextBox = {
+        ...baseOverlay,
+        fontSize: 10,
+      };
+      render(
+        <OverlayTextLayer
+          pageId="page-1"
+          overlays={[overlay]}
+          selectedOverlayId={null}
+          textToolActive={false}
+          displayScale={scale}
+          createLimitMessage={null}
+          announcement=""
+          canUndo={false}
+          onCreateAt={jest.fn()}
+          onSelect={jest.fn()}
+          onDeleteSelected={jest.fn()}
+          onUndo={jest.fn()}
+        />
+      );
+      const box = screen.getByTestId('pdf-tools-overlay-box');
+      expect(box.style.fontSize).toBe(`${10 * scale}px`);
+    }
+  );
+});
+
+describe('OverlayTextBox coverActive rendering', () => {
+  it('does not render cover when coverActive is false', () => {
+    const overlay: OverlayTextBox = {
+      ...baseOverlay,
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      coverActive: false,
+    };
+    render(
+      <OverlayTextLayer
+        pageId="page-1"
+        overlays={[overlay]}
+        selectedOverlayId={overlay.id}
+        textToolActive={false}
+        createLimitMessage={null}
+        announcement=""
+        canUndo={false}
+        onCreateAt={jest.fn()}
+        onSelect={jest.fn()}
+        onDeleteSelected={jest.fn()}
+        onUndo={jest.fn()}
+      />
+    );
+    const box = screen.getByTestId('pdf-tools-overlay-box');
+    expect(box.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('renders cover when coverActive is true', () => {
+    const overlay: OverlayTextBox = {
+      ...baseOverlay,
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      coverActive: true,
+    };
+    render(
+      <OverlayTextLayer
+        pageId="page-1"
+        overlays={[overlay]}
+        selectedOverlayId={overlay.id}
+        textToolActive={false}
+        createLimitMessage={null}
+        announcement=""
+        canUndo={false}
+        onCreateAt={jest.fn()}
+        onSelect={jest.fn()}
+        onDeleteSelected={jest.fn()}
+        onUndo={jest.fn()}
+      />
+    );
+    const box = screen.getByTestId('pdf-tools-overlay-box');
+    expect(box.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('renders cover when coverActive is undefined (backward compat)', () => {
+    const overlay: OverlayTextBox = {
+      ...baseOverlay,
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+    };
+    render(
+      <OverlayTextLayer
+        pageId="page-1"
+        overlays={[overlay]}
+        selectedOverlayId={overlay.id}
+        textToolActive={false}
+        createLimitMessage={null}
+        announcement=""
+        canUndo={false}
+        onCreateAt={jest.fn()}
+        onSelect={jest.fn()}
+        onDeleteSelected={jest.fn()}
+        onUndo={jest.fn()}
+      />
+    );
+    const box = screen.getByTestId('pdf-tools-overlay-box');
+    expect(box.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });

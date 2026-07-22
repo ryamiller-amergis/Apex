@@ -70,7 +70,10 @@ jest.mock('fs', () => {
   return {
     ...actual,
     existsSync: jest.fn((p: string) => {
-      if (typeof p === 'string' && (p.includes('.pdf') || p.includes('pdfExportWorker.js'))) {
+      if (
+        typeof p === 'string' &&
+        (p.includes('.pdf') || p.includes('pdfExportWorker.js'))
+      ) {
         return true;
       }
       return actual.existsSync(p);
@@ -97,7 +100,11 @@ import {
   expireOldSessions,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
-import type { OverlayTextBox } from '../../shared/types/pdf';
+import type {
+  OverlayTextBox,
+  PageManifestEntry,
+  PdfFileMetadata,
+} from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -117,7 +124,9 @@ function makeSession(pageCount: number, userId = 'user-1') {
     status: 'active',
     pageManifest: pages,
     textOverlays: [] as OverlayTextBox[],
-    fileMetadata: [{ fileId: FILE_ID, storedName: `${FILE_ID}.pdf`, sizeBytes: 1000 }],
+    fileMetadata: [
+      { fileId: FILE_ID, storedName: `${FILE_ID}.pdf`, sizeBytes: 1000 },
+    ],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
@@ -162,10 +171,121 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     const session = makeSession(20);
     mockFindFirst.mockResolvedValue(session);
 
-    const result = await assembleAndExport('session-1', 'user-1', undefined, [0, 4, 9]);
+    const result = await assembleAndExport(
+      'session-1',
+      'user-1',
+      undefined,
+      [0, 4, 9]
+    );
 
     expect(result.pdfBytes).toBeDefined();
     expect(result.filename).toMatch(/^merged-document-.*\.pdf$/);
+  });
+
+  it('derives selected export filename from only the selected source pages', async () => {
+    const multiSourceSession = {
+      id: 'session-1',
+      userId: 'user-1',
+      status: 'active',
+      pageManifest: [
+        {
+          pageId: 'page-a0',
+          fileId: 'file-a',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'page-b0',
+          fileId: 'file-b',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'page-b1',
+          fileId: 'file-b',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
+      ] as PageManifestEntry[],
+      textOverlays: [] as OverlayTextBox[],
+      fileMetadata: [
+        {
+          fileId: 'file-a',
+          originalName: 'Alpha.pdf',
+          storedName: 'file-a.pdf',
+          sizeBytes: 1000,
+        },
+        {
+          fileId: 'file-b',
+          originalName: 'Beta.final.pdf',
+          storedName: 'file-b.pdf',
+          sizeBytes: 1000,
+        },
+      ] as PdfFileMetadata[],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    };
+    mockFindFirst.mockResolvedValue(multiSourceSession);
+
+    const result = await assembleAndExport(
+      'session-1',
+      'user-1',
+      undefined,
+      [1, 2]
+    );
+
+    expect(result.filename).toBe('Beta.final-selected.pdf');
+  });
+
+  it('derives full export filename after deleted pages are excluded', async () => {
+    const multiSourceSession = {
+      id: 'session-1',
+      userId: 'user-1',
+      status: 'active',
+      pageManifest: [
+        {
+          pageId: 'page-a0',
+          fileId: 'file-a',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: true,
+        },
+        {
+          pageId: 'page-b0',
+          fileId: 'file-b',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ] as PageManifestEntry[],
+      textOverlays: [] as OverlayTextBox[],
+      fileMetadata: [
+        {
+          fileId: 'file-a',
+          originalName: 'Alpha.pdf',
+          storedName: 'file-a.pdf',
+          sizeBytes: 1000,
+        },
+        {
+          fileId: 'file-b',
+          originalName: 'Beta.final.pdf',
+          storedName: 'file-b.pdf',
+          sizeBytes: 1000,
+        },
+      ] as PdfFileMetadata[],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    };
+    mockFindFirst.mockResolvedValue(multiSourceSession);
+
+    const result = await assembleAndExport('session-1', 'user-1');
+
+    expect(result.filename).toBe('Beta.final.pdf');
   });
 
   it('VT-04: passes only selected-page overlays to extraction', async () => {
@@ -192,10 +312,10 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     await assembleAndExport('session-1', 'user-1', undefined, [0, 2]);
 
     expect(mockSet).toHaveBeenCalledWith(
-      expect.not.objectContaining({ status: 'exported' }),
+      expect.not.objectContaining({ status: 'exported' })
     );
     expect(mockSet).not.toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'exported' }),
+      expect.objectContaining({ status: 'exported' })
     );
   });
 
@@ -205,7 +325,7 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     mockFindFirst.mockResolvedValue(session);
 
     await expect(
-      assembleAndExport('session-1', 'user-1', undefined, [15]),
+      assembleAndExport('session-1', 'user-1', undefined, [15])
     ).rejects.toMatchObject({
       code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
     });
@@ -216,7 +336,7 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     mockFindFirst.mockResolvedValue(session);
 
     await expect(
-      assembleAndExport('session-1', 'user-1', undefined, [-1]),
+      assembleAndExport('session-1', 'user-1', undefined, [-1])
     ).rejects.toMatchObject({
       code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
     });
@@ -227,7 +347,7 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     mockFindFirst.mockResolvedValue(session);
 
     await expect(
-      assembleAndExport('session-1', 'user-1', undefined, [1.5]),
+      assembleAndExport('session-1', 'user-1', undefined, [1.5])
     ).rejects.toMatchObject({
       code: PDF_ERROR_CODES.INVALID_PAGE_INDICES,
     });
@@ -238,7 +358,12 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     const session = makeSession(5);
     mockFindFirst.mockResolvedValue(session);
 
-    const result = await assembleAndExport('session-1', 'user-1', undefined, [0, 1, 2, 3, 4]);
+    const result = await assembleAndExport(
+      'session-1',
+      'user-1',
+      undefined,
+      [0, 1, 2, 3, 4]
+    );
 
     expect(result.pdfBytes).toBeDefined();
     expect(result.filename).toMatch(/\.pdf$/);
@@ -249,7 +374,12 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     const session = makeSession(5);
     mockFindFirst.mockResolvedValue(session);
 
-    const result = await assembleAndExport('session-1', 'user-1', undefined, undefined);
+    const result = await assembleAndExport(
+      'session-1',
+      'user-1',
+      undefined,
+      undefined
+    );
 
     expect(result.pdfBytes).toBeDefined();
   });
@@ -258,7 +388,12 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     const session = makeSession(5);
     mockFindFirst.mockResolvedValue(session);
 
-    const result = await assembleAndExport('session-1', 'user-1', undefined, []);
+    const result = await assembleAndExport(
+      'session-1',
+      'user-1',
+      undefined,
+      []
+    );
 
     expect(result.pdfBytes).toBeDefined();
   });
@@ -269,7 +404,7 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     mockFindFirst.mockResolvedValue(session);
 
     await expect(
-      assembleAndExport('session-1', 'user-1', undefined, [0, 1]),
+      assembleAndExport('session-1', 'user-1', undefined, [0, 1])
     ).rejects.toMatchObject({
       code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
     });
@@ -278,10 +413,10 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
   it('removes all temporary files for a completed session', async () => {
     await cleanupSessionFiles('session-1');
 
-    expect(mockRm).toHaveBeenCalledWith(
-      expect.stringContaining('session-1'),
-      { recursive: true, force: true },
-    );
+    expect(mockRm).toHaveBeenCalledWith(expect.stringContaining('session-1'), {
+      recursive: true,
+      force: true,
+    });
   });
 
   it('cleans expired active and exported sessions as a fallback', async () => {
@@ -296,7 +431,7 @@ describe('assembleAndExport — page extraction (pages filter)', () => {
     expect(mockRm).toHaveBeenCalledTimes(2);
     expect(mockSet).toHaveBeenCalledTimes(2);
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'expired' }),
+      expect.objectContaining({ status: 'expired' })
     );
   });
 });

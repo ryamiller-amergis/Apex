@@ -139,6 +139,10 @@ export const OverlayLinkEditor: React.FC<OverlayLinkEditorProps> = ({
 interface OverlayFormatToolbarProps {
   overlay: OverlayTextBox;
   onChange: (patch: OverlayFormattingPatch) => void;
+  onReplacementTextFocus?: () => void;
+  onReplacementTextChange?: (text: string) => void;
+  onReplacementTextBlur?: () => void;
+  autoFocusReplacementText?: boolean;
   onValidationChange?: (hasError: boolean) => void;
   orientation?: 'horizontal' | 'vertical';
 }
@@ -202,6 +206,10 @@ const NumberStepper: React.FC<NumberStepperProps> = ({
 export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
   overlay,
   onChange,
+  onReplacementTextFocus,
+  onReplacementTextChange,
+  onReplacementTextBlur,
+  autoFocusReplacementText = false,
   onValidationChange = () => {},
   orientation = 'horizontal',
 }) => {
@@ -444,6 +452,27 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
       {overlay.kind === 'replace' && (
         <div className={styles.formatRow}>
           <div className={styles.controlGroup}>
+            <label className={styles.field}>
+              <span>Replacement text</span>
+              <textarea
+                className={styles.replacementTextarea}
+                value={overlay.text}
+                rows={Math.max(
+                  2,
+                  overlay.text.replace(/\r\n?/g, '\n').split('\n').length
+                )}
+                aria-label="Replacement text"
+                data-testid="overlay-format-replacement-text"
+                autoFocus={autoFocusReplacementText}
+                onFocus={onReplacementTextFocus}
+                onChange={(event) =>
+                  onReplacementTextChange?.(
+                    event.target.value.replace(/\r\n?/g, '\n')
+                  )
+                }
+                onBlur={onReplacementTextBlur}
+              />
+            </label>
             <label className={styles.field}>
               <span>Cover color</span>
               <input

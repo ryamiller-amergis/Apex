@@ -34,13 +34,13 @@ import { ExportSelectedButton } from './ExportSelectedButton';
 import { RangeInput } from './RangeInput';
 import { DeduplicationToast } from './DeduplicationToast';
 import { OverlayConflictBanner } from './OverlayConflictBanner';
-import { generateDefaultFilename } from '../hooks/useExportSession';
 import { pdfFileUrl } from '../utils/pdfUrls';
 import type {
   FileUploadResult,
   OverlayTextBox,
   PageManifestEntry,
   PdfConversionJob,
+  PdfFileMetadata,
   UploadFilesResponse,
 } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
@@ -50,6 +50,7 @@ const MAX_ASSEMBLY_PANE_PERCENT = 75;
 const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
 const PDF_SESSION_STORAGE_KEY = 'pdf-active-session';
 const EMPTY_OVERLAYS: OverlayTextBox[] = [];
+const FILENAME_DISALLOWED = /[/\\:*?"<>|]/g;
 
 interface PdfAssemblyViewProps {
   userId?: string;
@@ -65,6 +66,52 @@ function isUnavailableSessionError(error: unknown): error is PdfApiError {
   const status = (error as PdfApiError | null)?.status;
   // 403 = session belongs to another user (common after switching mock/dev accounts)
   return status === 403 || status === 404 || status === 410;
+}
+
+function sanitizeAutomaticFilename(raw?: string): string | null {
+  if (!raw?.trim()) return null;
+
+  let name = raw.trim().replace(FILENAME_DISALLOWED, '');
+  if (!name) return null;
+  if (!name.toLowerCase().endsWith('.pdf')) {
+    name += '.pdf';
+  }
+  return name;
+}
+
+function deriveAutomaticExportFilename(
+  pagesToExport: PageManifestEntry[],
+  fileMetadata: PdfFileMetadata[]
+): string | null {
+  const metadataById = new Map(
+    fileMetadata.map((metadata) => [metadata.fileId, metadata] as const)
+  );
+  const contributors: PdfFileMetadata[] = [];
+  const seen = new Set<string>();
+
+  for (const page of pagesToExport) {
+    const metadata = metadataById.get(page.fileId);
+    if (!metadata) return null;
+    if (!seen.has(page.fileId)) {
+      seen.add(page.fileId);
+      contributors.push(metadata);
+    }
+  }
+
+  if (contributors.length === 1) {
+    return sanitizeAutomaticFilename(contributors[0].originalName);
+  }
+
+  if (contributors.length > 1) {
+    const stem = contributors[0].originalName
+      .replace(/\.[^.]*$/, '')
+      .replace(FILENAME_DISALLOWED, '')
+      .trim();
+    if (!stem) return null;
+    return `${stem}-combined.pdf`;
+  }
+
+  return null;
 }
 
 export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
@@ -320,8 +367,22 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
 
   const [showDedupToast, setShowDedupToast] = useState(false);
   const [rangeExternalUpdate, setRangeExternalUpdate] = useState(0);
-  const [exportFilename, setExportFilename] = useState(() =>
-    generateDefaultFilename()
+  const [exportFilenameOverride, setExportFilenameOverride] = useState('');
+  const [isFilenameAutomatic, setIsFilenameAutomatic] = useState(true);
+  const handleFilenameChange = useCallback((value: string) => {
+    if (value === '') {
+      setIsFilenameAutomatic(true);
+      setExportFilenameOverride('');
+    } else {
+      setIsFilenameAutomatic(false);
+      setExportFilenameOverride(value);
+    }
+  }, []);
+  const automaticExportFilename = useMemo(
+    () =>
+      deriveAutomaticExportFilename(manipulationVisiblePages, fileMetadata) ??
+      '',
+    [fileMetadata, manipulationVisiblePages]
   );
 
   const ensureManifestSaved = useCallback(async () => {
@@ -351,7 +412,8 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
       setShowDedupToast(false);
       setIsPageEditorOpen(false);
       setRangeExternalUpdate((count) => count + 1);
-      setExportFilename(generateDefaultFilename());
+      setExportFilenameOverride('');
+      setIsFilenameAutomatic(true);
       setIsSourceBrowserCollapsed(false);
       clearSelection();
     } catch {
@@ -459,7 +521,6 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
   const {
     overlays: overlayList,
     pageOverlays,
-    selectedOverlay,
     selectedOverlayId,
     textToolActive,
     setTextToolActive,
@@ -471,7 +532,13 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     canUndo: canUndoOverlay,
     canRedo: canRedoOverlay,
     createAt,
-    createReplacement,
+    replacementDraft,
+    setReplacementDraft,
+    discardReplacementDraft,
+    beginReplacementTextEdit,
+    updateReplacementText,
+    commitReplacementTextEdit,
+    selectedDisplayOverlay,
     deleteSelected: deleteSelectedOverlay,
     removeSelectedNativeText,
     selectOverlay,
@@ -494,6 +561,39 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     initialOverlays,
     historyKey: sessionId,
   });
+
+  const pageMetricsRef = useRef<{
+    pageWidthPx: number;
+    pageHeightPx: number;
+    displayScale: number;
+  } | null>(null);
+
+  const handlePageMetricsChange = useCallback(
+    (metrics: {
+      pageWidthPx: number;
+      pageHeightPx: number;
+      displayScale: number;
+    }) => {
+      pageMetricsRef.current = metrics;
+    },
+    []
+  );
+
+  const handleReplacementTextChange = useCallback(
+    (text: string) => {
+      const metrics = pageMetricsRef.current;
+      if (metrics) {
+        return updateReplacementText(
+          text,
+          metrics.pageWidthPx,
+          metrics.pageHeightPx,
+          metrics.displayScale
+        );
+      }
+      return updateReplacementText(text);
+    },
+    [updateReplacementText]
+  );
 
   const loadAuthoritativeOverlays = useCallback(async () => {
     const result = await refetchSession();
@@ -1071,8 +1171,10 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
             <ExportPanel
               sessionId={sessionId!}
               nonDeletedPageCount={manipulationVisiblePages.length}
-              filename={exportFilename}
-              onFilenameChange={setExportFilename}
+              filenameOverride={exportFilenameOverride}
+              automaticFilename={automaticExportFilename}
+              isFilenameAutomatic={isFilenameAutomatic}
+              onFilenameOverrideChange={handleFilenameChange}
               onBeforeExport={ensureSessionSaved}
               onExportComplete={handleExportComplete}
             />
@@ -1087,7 +1189,7 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 sessionId={sessionId!}
                 selectedCount={selectedCount}
                 selectedPageIndices={selectedIndicesForRange}
-                filename={exportFilename}
+                filename={exportFilenameOverride}
                 onBeforeExport={ensureSessionSaved}
                 onExportComplete={clearSelection}
               />
@@ -1116,7 +1218,13 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 saveErrorMessage: overlaySaveError,
                 readOnly: overlaysReadOnly,
                 onCreateAt: createAt,
-                onCreateReplacement: createReplacement,
+                onSetReplacementDraft: setReplacementDraft,
+                replacementDraftGeometry: replacementDraft
+                  ? {
+                      ...replacementDraft.item.geometry,
+                      rotation: replacementDraft.rotation,
+                    }
+                  : null,
                 onExitReplacementMode: () => setEditorMode('add'),
                 onSelectOverlay: selectOverlay,
                 onDeleteSelectedOverlay: deleteSelectedOverlay,
@@ -1132,14 +1240,20 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 onUpdateOverlayGeometry: updateSelectedGeometry,
                 onCommitGeometryEdit: commitGeometryEdit,
                 onNudgeSelectedOverlay: nudgeSelected,
+                onPageMetricsChange: handlePageMetricsChange,
                 onBringOverlayForward: bringSelectedForward,
                 onSendOverlayBackward: sendSelectedBackward,
               }}
-              selectedOverlay={selectedOverlay}
+              selectedOverlay={selectedDisplayOverlay}
+              replacementDraft={replacementDraft}
               onToggleTextTool={handleToggleTextTool}
               onToggleReplacementTool={handleToggleReplacementTool}
               onFormattingChange={updateSelectedFormatting}
+              onReplacementTextFocus={beginReplacementTextEdit}
+              onReplacementTextChange={handleReplacementTextChange}
+              onReplacementTextBlur={commitReplacementTextEdit}
               onValidationChange={setOverlayFormatInvalid}
+              onDiscardDraft={discardReplacementDraft}
               onClose={handleClosePageEditor}
             />
           )}

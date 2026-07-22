@@ -15,8 +15,8 @@ export type PageTextItemsState =
 
 const cache = new Map<string, NativePdfTextItem[]>();
 
-/** Bump when native-text geometry conversion changes so stale covers are not reused. */
-const TEXT_ITEMS_GEOMETRY_VERSION = 4;
+/** Bump whenever native-text geometry or inferred style fields change. */
+const TEXT_ITEMS_CACHE_VERSION = 6;
 
 export function usePageTextItems(
   document: PDFDocumentProxy | null,
@@ -41,7 +41,7 @@ export function usePageTextItems(
       return;
     }
 
-    const cacheKey = `${fileUrl}:${pageIndex}:${rotation}:g${TEXT_ITEMS_GEOMETRY_VERSION}`;
+    const cacheKey = `${fileUrl}:${pageIndex}:${rotation}:g${TEXT_ITEMS_CACHE_VERSION}`;
     const cached = cache.get(cacheKey);
     if (cached) {
       setState({

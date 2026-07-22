@@ -741,6 +741,65 @@ export function sanitizeExportFilename(raw?: string): string {
   return name;
 }
 
+export function deriveExportFilename(
+  pagesToExport: PageManifestEntry[],
+  fileMetadata: PdfFileMetadata[],
+  rawOverride?: string,
+  isSelectedExport?: boolean
+): string {
+  if (rawOverride?.trim()) {
+    return sanitizeExportFilename(rawOverride);
+  }
+
+  const metadataById = new Map(
+    fileMetadata.map((metadata) => [metadata.fileId, metadata] as const)
+  );
+  const contributors: PdfFileMetadata[] = [];
+  const seen = new Set<string>();
+
+  for (const page of pagesToExport) {
+    const metadata = metadataById.get(page.fileId);
+    if (!metadata) {
+      return sanitizeExportFilename();
+    }
+    if (!seen.has(page.fileId)) {
+      seen.add(page.fileId);
+      contributors.push(metadata);
+    }
+  }
+
+  if (contributors.length === 1) {
+    if (isSelectedExport) {
+      const firstName = contributors[0].originalName;
+      if (!firstName) return sanitizeExportFilename();
+      const stem = firstName
+        .replace(/\.[^.]*$/, '')
+        .replace(FILENAME_DISALLOWED, '')
+        .trim();
+      if (!stem) {
+        return sanitizeExportFilename();
+      }
+      return sanitizeExportFilename(`${stem}-selected.pdf`);
+    }
+    return sanitizeExportFilename(contributors[0].originalName);
+  }
+
+  if (contributors.length > 1) {
+    const firstName = contributors[0].originalName;
+    if (!firstName) return sanitizeExportFilename();
+    const stem = firstName
+      .replace(/\.[^.]*$/, '')
+      .replace(FILENAME_DISALLOWED, '')
+      .trim();
+    if (!stem) {
+      return sanitizeExportFilename();
+    }
+    return sanitizeExportFilename(`${stem}-combined.pdf`);
+  }
+
+  return sanitizeExportFilename();
+}
+
 export interface AssembleAndExportResult {
   pdfBytes: Uint8Array;
   filename: string;
@@ -824,10 +883,13 @@ export async function assembleAndExport(
   const overlays = overlayValidation.overlays.filter((overlay) =>
     exportedPageIds.has(overlay.pageId)
   );
-
-  const filename = sanitizeExportFilename(rawFilename);
-
   const fileMetadata = (session.fileMetadata ?? []) as PdfFileMetadata[];
+  const filename = deriveExportFilename(
+    pagesToExport,
+    fileMetadata,
+    rawFilename,
+    pages != null && pages.length > 0
+  );
   const fileBytes: Record<string, Uint8Array> = {};
   const artifactFiles: Record<string, PdfArtifactRef> = {};
   if (workerOutputRef) {
@@ -1189,7 +1251,7 @@ export async function queuePdfExport(
   return enqueuePdfExport(
     sessionId,
     userId,
-    sanitizeExportFilename(rawFilename),
+    rawFilename?.trim() ? rawFilename : undefined,
     pages
   );
 }
@@ -1231,7 +1293,7 @@ export async function processPdfJob(job: PdfJobRow) {
   const result = await assembleAndExport(
     job.sessionId,
     job.userId,
-    payload.filename ?? job.originalName,
+    payload.filename,
     payload.pages,
     ref
   );

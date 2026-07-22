@@ -75,14 +75,19 @@ jest.mock('fs', () => {
     existsSync: jest.fn((p: string) => {
       if (typeof p === 'string' && p.includes('.pdf')) return true;
       // Simulate production: compiled worker .js is present so export uses Worker
-      if (typeof p === 'string' && p.includes('pdfExportWorker.js')) return true;
+      if (typeof p === 'string' && p.includes('pdfExportWorker.js'))
+        return true;
       return actual.existsSync(p);
     }),
     mkdirSync: jest.fn(),
   };
 });
 
-import { assembleAndExport, sanitizeExportFilename } from '../services/pdfAssemblyService';
+import {
+  assembleAndExport,
+  deriveExportFilename,
+  sanitizeExportFilename,
+} from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 import type {
   OverlayTextBox,
@@ -103,14 +108,50 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     userId: USER_ID,
     status: 'active',
     fileMetadata: [
-      { fileId: FILE_ID_A, originalName: 'a.pdf', storedName: `${FILE_ID_A}.pdf`, sizeBytes: 1000, pageCount: 3 } as PdfFileMetadata,
-      { fileId: FILE_ID_B, originalName: 'b.pdf', storedName: `${FILE_ID_B}.pdf`, sizeBytes: 2000, pageCount: 2 } as PdfFileMetadata,
+      {
+        fileId: FILE_ID_A,
+        originalName: 'a.pdf',
+        storedName: `${FILE_ID_A}.pdf`,
+        sizeBytes: 1000,
+        pageCount: 3,
+      } as PdfFileMetadata,
+      {
+        fileId: FILE_ID_B,
+        originalName: 'b.pdf',
+        storedName: `${FILE_ID_B}.pdf`,
+        sizeBytes: 2000,
+        pageCount: 2,
+      } as PdfFileMetadata,
     ],
     pageManifest: [
-      { pageId: 'p1', fileId: FILE_ID_A, sourcePageIndex: 0, rotation: 0, deleted: false },
-      { pageId: 'p2', fileId: FILE_ID_A, sourcePageIndex: 1, rotation: 90, deleted: false },
-      { pageId: 'p3', fileId: FILE_ID_B, sourcePageIndex: 0, rotation: 0, deleted: true },
-      { pageId: 'p4', fileId: FILE_ID_B, sourcePageIndex: 1, rotation: 180, deleted: false },
+      {
+        pageId: 'p1',
+        fileId: FILE_ID_A,
+        sourcePageIndex: 0,
+        rotation: 0,
+        deleted: false,
+      },
+      {
+        pageId: 'p2',
+        fileId: FILE_ID_A,
+        sourcePageIndex: 1,
+        rotation: 90,
+        deleted: false,
+      },
+      {
+        pageId: 'p3',
+        fileId: FILE_ID_B,
+        sourcePageIndex: 0,
+        rotation: 0,
+        deleted: true,
+      },
+      {
+        pageId: 'p4',
+        fileId: FILE_ID_B,
+        sourcePageIndex: 1,
+        rotation: 180,
+        deleted: false,
+      },
     ] as PageManifestEntry[],
     exportFilename: null,
     createdAt: '2026-01-01T00:00:00Z',
@@ -165,7 +206,7 @@ describe('assembleAndExport', () => {
 
     expect(result.pdfBytes).toBeInstanceOf(Uint8Array);
     expect(result.pdfBytes.length).toBeGreaterThan(0);
-    expect(result.filename).toMatch(/^merged-document-\d{8}-\d{4}\.pdf$/);
+    expect(result.filename).toBe('a-combined.pdf');
   });
 
   // DoD-2: export spawns worker thread
@@ -178,7 +219,8 @@ describe('assembleAndExport', () => {
     expect(Worker).toHaveBeenCalledTimes(1);
     const callArgs = jest.mocked(Worker).mock.calls[0];
     expect(callArgs[0]).toContain('pdfExportWorker');
-    const workerData = (callArgs[1] as { workerData: { manifest: unknown[] } }).workerData;
+    const workerData = (callArgs[1] as { workerData: { manifest: unknown[] } })
+      .workerData;
     // Deleted page (p3) should be filtered out
     expect(workerData.manifest).toHaveLength(3);
     expect(workerData.manifest.every((p: any) => !p.deleted)).toBe(true);
@@ -203,16 +245,12 @@ describe('assembleAndExport', () => {
   it('VT-07: rejects invalid persisted overlays before starting the worker', async () => {
     mockFindFirst.mockResolvedValue(
       makeSession({
-        textOverlays: [
-          makeOverlay({ linkUrl: 'javascript:alert(1)' }),
-        ],
+        textOverlays: [makeOverlay({ linkUrl: 'javascript:alert(1)' })],
       })
     );
     const { Worker } = await import('worker_threads');
 
-    await expect(
-      assembleAndExport(SESSION_ID, USER_ID)
-    ).rejects.toMatchObject({
+    await expect(assembleAndExport(SESSION_ID, USER_ID)).rejects.toMatchObject({
       code: PDF_ERROR_CODES.OVERLAY_VALIDATION_FAILED,
       errors: [
         expect.objectContaining({
@@ -228,37 +266,47 @@ describe('assembleAndExport', () => {
   it('DoD-3: throws SESSION_NOT_FOUND when session does not exist', async () => {
     mockFindFirst.mockResolvedValue(undefined);
 
-    await expect(assembleAndExport(SESSION_ID, USER_ID))
-      .rejects.toMatchObject({ code: PDF_ERROR_CODES.SESSION_NOT_FOUND });
+    await expect(assembleAndExport(SESSION_ID, USER_ID)).rejects.toMatchObject({
+      code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+    });
   });
 
   // DoD-3: error — expired session
   it('DoD-3: throws SESSION_EXPIRED for expired session', async () => {
     mockFindFirst.mockResolvedValue(makeSession({ status: 'expired' }));
 
-    await expect(assembleAndExport(SESSION_ID, USER_ID))
-      .rejects.toMatchObject({ code: PDF_ERROR_CODES.SESSION_EXPIRED });
+    await expect(assembleAndExport(SESSION_ID, USER_ID)).rejects.toMatchObject({
+      code: PDF_ERROR_CODES.SESSION_EXPIRED,
+    });
   });
 
   // NFR-security: cross-user access forbidden
   it('NFR-security: throws SESSION_FORBIDDEN for cross-user access', async () => {
     mockFindFirst.mockResolvedValue(makeSession({ userId: 'other-user' }));
 
-    await expect(assembleAndExport(SESSION_ID, USER_ID))
-      .rejects.toMatchObject({ code: PDF_ERROR_CODES.SESSION_FORBIDDEN });
+    await expect(assembleAndExport(SESSION_ID, USER_ID)).rejects.toMatchObject({
+      code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
+    });
   });
 
   // DoD-3: error — no pages
   it('DoD-3: throws NO_PAGES when all pages are deleted', async () => {
     const allDeleted = makeSession({
       pageManifest: [
-        { pageId: 'p1', fileId: FILE_ID_A, sourcePageIndex: 0, rotation: 0, deleted: true },
+        {
+          pageId: 'p1',
+          fileId: FILE_ID_A,
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: true,
+        },
       ],
     });
     mockFindFirst.mockResolvedValue(allDeleted);
 
-    await expect(assembleAndExport(SESSION_ID, USER_ID))
-      .rejects.toMatchObject({ code: PDF_ERROR_CODES.NO_PAGES });
+    await expect(assembleAndExport(SESSION_ID, USER_ID)).rejects.toMatchObject({
+      code: PDF_ERROR_CODES.NO_PAGES,
+    });
   });
 
   // DoD-0: session status updated after successful export
@@ -269,7 +317,7 @@ describe('assembleAndExport', () => {
 
     expect(mockUpdate).toHaveBeenCalled();
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'exported' }),
+      expect.objectContaining({ status: 'exported' })
     );
   });
 
@@ -286,9 +334,183 @@ describe('assembleAndExport', () => {
   it('AC-2: preserves .pdf extension when already present', async () => {
     mockFindFirst.mockResolvedValue(makeSession());
 
-    const result = await assembleAndExport(SESSION_ID, USER_ID, 'my-report.pdf');
+    const result = await assembleAndExport(
+      SESSION_ID,
+      USER_ID,
+      'my-report.pdf'
+    );
 
     expect(result.filename).toBe('my-report.pdf');
+  });
+});
+
+describe('deriveExportFilename', () => {
+  const pageA1: PageManifestEntry = {
+    pageId: 'a1',
+    fileId: FILE_ID_A,
+    sourcePageIndex: 0,
+    rotation: 0,
+    deleted: false,
+  };
+  const pageA2: PageManifestEntry = {
+    pageId: 'a2',
+    fileId: FILE_ID_A,
+    sourcePageIndex: 1,
+    rotation: 0,
+    deleted: false,
+  };
+  const pageB1: PageManifestEntry = {
+    pageId: 'b1',
+    fileId: FILE_ID_B,
+    sourcePageIndex: 0,
+    rotation: 0,
+    deleted: false,
+  };
+  const pageB2: PageManifestEntry = {
+    pageId: 'b2',
+    fileId: FILE_ID_B,
+    sourcePageIndex: 1,
+    rotation: 0,
+    deleted: false,
+  };
+
+  it('preserves the exact sanitized original for one contributing source', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1],
+        [
+          {
+            fileId: FILE_ID_A,
+            originalName: 'Quarterly Packet.PDF',
+          } as PdfFileMetadata,
+        ]
+      )
+    ).toBe('Quarterly Packet.PDF');
+  });
+
+  it('uses the earliest exported source stem for multiple sources', () => {
+    expect(
+      deriveExportFilename(
+        [pageB1, pageA1, pageB2],
+        [
+          { fileId: FILE_ID_A, originalName: 'Alpha.pdf' } as PdfFileMetadata,
+          {
+            fileId: FILE_ID_B,
+            originalName: 'Beta.final.pdf',
+          } as PdfFileMetadata,
+        ]
+      )
+    ).toBe('Beta.final-combined.pdf');
+  });
+
+  it('deduplicates repeated contributing pages from the same source', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1, pageA2],
+        [
+          {
+            fileId: FILE_ID_A,
+            originalName: 'Source Packet.pdf',
+          } as PdfFileMetadata,
+        ]
+      )
+    ).toBe('Source Packet.pdf');
+  });
+
+  it('honors an explicit override before automatic naming', () => {
+    expect(deriveExportFilename([pageA1, pageB1], [], 'user/report')).toBe(
+      'userreport.pdf'
+    );
+  });
+
+  it('falls back when any contributing metadata is missing', () => {
+    expect(deriveExportFilename([pageA1, pageB1], [])).toMatch(
+      /^merged-document-\d{8}-\d{4}\.pdf$/
+    );
+  });
+
+  it('falls back when the first combined source stem sanitizes away', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1, pageB1],
+        [
+          { fileId: FILE_ID_A, originalName: '////.pdf' } as PdfFileMetadata,
+          { fileId: FILE_ID_B, originalName: 'second.pdf' } as PdfFileMetadata,
+        ]
+      )
+    ).toMatch(/^merged-document-\d{8}-\d{4}\.pdf$/);
+  });
+
+  it('sanitizes unsafe characters from source-aware automatic names', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1, pageB1],
+        [
+          {
+            fileId: FILE_ID_A,
+            originalName: 'Team:/Report?.pdf',
+          } as PdfFileMetadata,
+          { fileId: FILE_ID_B, originalName: 'second.pdf' } as PdfFileMetadata,
+        ]
+      )
+    ).toBe('TeamReport-combined.pdf');
+  });
+
+  it('selected single-source export gets -selected suffix', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1],
+        [
+          {
+            fileId: FILE_ID_A,
+            originalName: 'Sample Resume.pdf',
+          } as PdfFileMetadata,
+        ],
+        undefined,
+        true
+      )
+    ).toBe('Sample Resume-selected.pdf');
+  });
+
+  it('full single-source export does not get -selected suffix', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1, pageA2],
+        [
+          {
+            fileId: FILE_ID_A,
+            originalName: 'Sample Resume.pdf',
+          } as PdfFileMetadata,
+        ],
+        undefined,
+        false
+      )
+    ).toBe('Sample Resume.pdf');
+  });
+
+  it('multi-source selected export remains -combined', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1, pageB1],
+        [
+          { fileId: FILE_ID_A, originalName: 'Alpha.pdf' } as PdfFileMetadata,
+          { fileId: FILE_ID_B, originalName: 'Beta.pdf' } as PdfFileMetadata,
+        ],
+        undefined,
+        true
+      )
+    ).toBe('Alpha-combined.pdf');
+  });
+
+  it('explicit override works for selected export', () => {
+    expect(
+      deriveExportFilename(
+        [pageA1],
+        [{ fileId: FILE_ID_A, originalName: 'Source.pdf' } as PdfFileMetadata],
+        'custom.pdf',
+        true
+      )
+    ).toBe('custom.pdf');
   });
 });
 
@@ -308,11 +530,15 @@ describe('sanitizeExportFilename', () => {
   });
 
   it('falls back to default for empty string', () => {
-    expect(sanitizeExportFilename('')).toMatch(/^merged-document-\d{8}-\d{4}\.pdf$/);
+    expect(sanitizeExportFilename('')).toMatch(
+      /^merged-document-\d{8}-\d{4}\.pdf$/
+    );
   });
 
   it('falls back to default for whitespace-only string', () => {
-    expect(sanitizeExportFilename('   ')).toMatch(/^merged-document-\d{8}-\d{4}\.pdf$/);
+    expect(sanitizeExportFilename('   ')).toMatch(
+      /^merged-document-\d{8}-\d{4}\.pdf$/
+    );
   });
 
   it('truncates filenames exceeding 255 characters', () => {

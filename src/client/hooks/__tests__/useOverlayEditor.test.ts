@@ -30,6 +30,21 @@ function makeOverlay(
   };
 }
 
+function makeNativeItem(text: string) {
+  return {
+    id: 'text-item-0',
+    text,
+    geometry: { x: 10, y: 20, width: 12, height: 3 },
+    fontFamily: 'Helvetica' as const,
+    fontSize: 10,
+    bold: false,
+    italic: false,
+    rotation: 0,
+    color: '#000000',
+    backgroundColor: '#FFFFFF',
+  };
+}
+
 describe('useOverlayEditor', () => {
   // VT-01
   it('creates a default box at click percent when Text tool is active', () => {
@@ -244,6 +259,79 @@ describe('useOverlayEditor', () => {
 
     act(() => result.current.undo());
     expect(result.current.overlays[0]).toMatchObject({ x: 20, y: 20 });
+  });
+
+  it('commits replacement geometry and re-sampled cover as one undoable edit', () => {
+    const replacement = makeOverlay(1, {
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      width: 12,
+      height: 3,
+      color: '#17365D',
+    });
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [replacement] })
+    );
+
+    act(() => result.current.selectOverlay(replacement.id));
+    act(() => {
+      expect(result.current.beginGeometryEdit(replacement.id)).toBe(true);
+      result.current.updateSelectedGeometry({
+        x: 10,
+        y: 10,
+        width: 30,
+        height: 15,
+      });
+      expect(result.current.commitGeometryEdit('resize', '#E8F0F8')).toBe(true);
+    });
+
+    expect(result.current.selectedOverlay).toMatchObject({
+      width: 30,
+      height: 15,
+      backgroundColor: '#E8F0F8',
+      color: '#17365D',
+    });
+    expect(result.current.isDirty).toBe(true);
+
+    act(() => result.current.undo());
+    expect(result.current.selectedOverlay).toMatchObject({
+      width: 12,
+      height: 3,
+      backgroundColor: '#FFFFFF',
+      color: '#17365D',
+    });
+  });
+
+  it('keeps the previous cover when resize sampling fails', () => {
+    const replacement = makeOverlay(1, {
+      kind: 'replace',
+      backgroundColor: '#FFFFFF',
+      width: 12,
+      height: 3,
+      color: '#17365D',
+    });
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [replacement] })
+    );
+
+    act(() => result.current.selectOverlay(replacement.id));
+    act(() => {
+      expect(result.current.beginGeometryEdit(replacement.id)).toBe(true);
+      result.current.updateSelectedGeometry({
+        x: 10,
+        y: 10,
+        width: 30,
+        height: 15,
+      });
+      expect(result.current.commitGeometryEdit('resize')).toBe(true);
+    });
+
+    expect(result.current.selectedOverlay).toMatchObject({
+      width: 30,
+      height: 15,
+      backgroundColor: '#FFFFFF',
+      color: '#17365D',
+    });
   });
 
   it('nudges by the requested step and clamps on-page', () => {
@@ -498,56 +586,67 @@ describe('useOverlayEditor', () => {
     expect(result.current.undo()).toBe(false);
   });
 
-  it('creates one replacement overlay from one selected PDF text item', () => {
+  it('copies inferred and sampled style into a local replacement draft', () => {
     const { result } = renderHook(() =>
       useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
     );
 
     act(() => result.current.setEditorMode('replace'));
     act(() => {
-      result.current.createReplacement({
-        text: 'Individual item',
-        geometry: { x: 10, y: 20, width: 12, height: 2 },
-        fontSize: 12,
-        rotation: 0,
-      });
-    });
-
-    expect(result.current.overlays).toHaveLength(1);
-    expect(result.current.selectedOverlay).toMatchObject({
-      text: 'Individual item',
-      kind: 'replace',
-      backgroundColor: '#FFFFFF',
-      verticalAlign: 'top',
-      x: 10,
-      y: 20,
-      width: 12,
-      height: 2,
-    });
-    expect(result.current.isDirty).toBe(true);
-    expect(result.current.canUndo).toBe(true);
-  });
-
-  it('uses a sampled background color when provided for replacements', () => {
-    const { result } = renderHook(() =>
-      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
-    );
-
-    act(() => result.current.setEditorMode('replace'));
-    act(() => {
-      result.current.createReplacement({
-        text: 'Tinted',
-        geometry: { x: 10, y: 20, width: 12, height: 2 },
-        fontSize: 12,
-        rotation: 0,
+      result.current.setReplacementDraft({
+        id: 'text-item-0',
+        text: 'Styled source',
+        geometry: { x: 10, y: 20, width: 12, height: 3 },
+        fontFamily: 'Times-Roman',
+        fontSize: 17,
+        bold: true,
+        italic: true,
+        rotation: -15,
+        color: '#17365D',
         backgroundColor: '#F2EDE6',
       });
     });
 
-    expect(result.current.selectedOverlay).toMatchObject({
-      kind: 'replace',
+    expect(result.current.replacementDraft).toMatchObject({
+      text: 'Styled source',
+      fontFamily: 'Times-Roman',
+      fontSize: 17,
+      bold: true,
+      italic: true,
+      rotation: -15,
+      color: '#17365D',
       backgroundColor: '#F2EDE6',
-      verticalAlign: 'top',
+    });
+    expect(result.current.overlays).toEqual([]);
+    expect(result.current.isDirty).toBe(false);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it('keeps metadata fallback independent from color fallback values', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.setReplacementDraft({
+        id: 'text-item-1',
+        text: 'Monospace metadata',
+        geometry: { x: 10, y: 20, width: 12, height: 2 },
+        fontFamily: 'Courier',
+        fontSize: 12,
+        bold: false,
+        italic: false,
+        rotation: 0,
+        color: '#000000',
+        backgroundColor: '#FFFFFF',
+      });
+    });
+
+    expect(result.current.replacementDraft).toMatchObject({
+      fontFamily: 'Courier',
+      color: '#000000',
+      backgroundColor: '#FFFFFF',
     });
   });
 
@@ -590,5 +689,401 @@ describe('useOverlayEditor', () => {
     });
     expect(result.current.isDirty).toBe(true);
     expect(result.current.canUndo).toBe(true);
+  });
+
+  it('removeSelectedNativeText activates a local draft as cover-only', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+    });
+    act(() => {
+      result.current.removeSelectedNativeText();
+    });
+    expect(result.current.selectedOverlay?.coverActive).toBe(true);
+  });
+
+  it('updateSelectedFormatting activates a local draft with the mutation', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+    });
+    expect(result.current.overlays).toEqual([]);
+    act(() => {
+      result.current.updateSelectedFormatting({ bold: true });
+    });
+    expect(result.current.selectedOverlay).toMatchObject({
+      text: 'Sales Assistant',
+      bold: true,
+      coverActive: true,
+    });
+  });
+
+  it('undo after formatting activation removes the replacement', () => {
+    const { result } = renderHook(() =>
+      useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+    );
+    act(() => result.current.setEditorMode('replace'));
+    act(() => {
+      result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+    });
+    act(() => {
+      result.current.updateSelectedFormatting({ italic: true });
+    });
+    expect(result.current.selectedOverlay?.coverActive).toBe(true);
+    act(() => {
+      result.current.undo();
+    });
+    expect(result.current.overlays).toEqual([]);
+  });
+
+  describe('replacement draft workflow', () => {
+    it('native selection creates a draft separate from overlays and isDirty', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('May 2017'));
+      });
+
+      expect(result.current.replacementDraft).not.toBeNull();
+      expect(result.current.replacementDraft!.text).toBe('May 2017');
+      expect(result.current.overlays).toHaveLength(0);
+      expect(result.current.isDirty).toBe(false);
+      expect(result.current.canUndo).toBe(false);
+    });
+
+    it('selecting another native text replaces the previous draft', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('May 2017'));
+      });
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+
+      expect(result.current.replacementDraft!.text).toBe('Sales Assistant');
+      expect(result.current.overlays).toHaveLength(0);
+      expect(result.current.isDirty).toBe(false);
+    });
+
+    it('discardReplacementDraft clears draft without affecting overlays', () => {
+      const existing = makeOverlay(1);
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [existing] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('May 2017'));
+      });
+      act(() => {
+        result.current.discardReplacementDraft();
+      });
+
+      expect(result.current.replacementDraft).toBeNull();
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.isDirty).toBe(false);
+    });
+
+    it('first text change activates exactly once into overlays', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.activateReplacementDraft('New replacement');
+      });
+
+      expect(result.current.replacementDraft).toBeNull();
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.overlays[0]).toMatchObject({
+        kind: 'replace',
+        text: 'New replacement',
+        coverActive: true,
+      });
+      expect(result.current.isDirty).toBe(true);
+      expect(result.current.canUndo).toBe(true);
+      expect(result.current.selectedOverlayId).toBe(
+        result.current.overlays[0].id
+      );
+    });
+
+    it('first panel typing session produces one undo that removes the overlay', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        expect(result.current.beginReplacementTextEdit()).toBe(true);
+        expect(result.current.updateReplacementText('S')).toBe(true);
+      });
+      act(() => {
+        expect(result.current.updateReplacementText('Sales Manager')).toBe(
+          true
+        );
+        expect(result.current.commitReplacementTextEdit()).toBe(true);
+      });
+
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.overlays[0].text).toBe('Sales Manager');
+      act(() => expect(result.current.undo()).toBe(true));
+      expect(result.current.overlays).toEqual([]);
+    });
+
+    it('later panel edit undo restores the prior active overlay text', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.updateReplacementText('Sales Manager');
+        result.current.commitReplacementTextEdit();
+      });
+      act(() => {
+        expect(result.current.beginReplacementTextEdit()).toBe(true);
+        expect(result.current.updateReplacementText('Sales Director')).toBe(
+          true
+        );
+        expect(result.current.commitReplacementTextEdit()).toBe(true);
+      });
+
+      expect(result.current.overlays[0].text).toBe('Sales Director');
+      act(() => expect(result.current.undo()).toBe(true));
+      expect(result.current.overlays[0].text).toBe('Sales Manager');
+    });
+
+    it('first activation auto-fits geometry when page metrics provided', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('A'));
+      });
+      act(() => {
+        result.current.updateReplacementText(
+          'A much longer replacement text that should grow the box',
+          200,
+          200,
+          1
+        );
+      });
+
+      const overlay = result.current.overlays[0];
+      expect(overlay.width).toBeGreaterThan(12);
+      expect(overlay.text).toBe(
+        'A much longer replacement text that should grow the box'
+      );
+    });
+
+    it('subsequent panel edits auto-fit without adding overlays', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('A'));
+      });
+      act(() => {
+        result.current.updateReplacementText('Longer text', 200, 200, 1);
+      });
+      const widthAfterFirst = result.current.overlays[0].width;
+      act(() => {
+        result.current.updateReplacementText(
+          'Even much longer multi-word replacement',
+          200,
+          200,
+          1
+        );
+      });
+
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.overlays[0].width).toBeGreaterThanOrEqual(
+        widthAfterFirst
+      );
+    });
+
+    it('multiline text grows height via auto-fit', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('A'));
+      });
+      act(() => {
+        result.current.updateReplacementText(
+          'Line1\nLine2\nLine3',
+          200,
+          200,
+          1
+        );
+      });
+
+      const overlay = result.current.overlays[0];
+      expect(overlay.height).toBeGreaterThan(3);
+    });
+
+    it('auto-fit never shrinks below original geometry', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.updateReplacementText('A', 200, 200, 1);
+      });
+
+      const overlay = result.current.overlays[0];
+      expect(overlay.width).toBeGreaterThanOrEqual(12);
+      expect(overlay.height).toBeGreaterThanOrEqual(3);
+    });
+
+    it('undo restores prior text and geometry together', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('A'));
+      });
+      act(() => {
+        result.current.updateReplacementText('Short', 200, 200, 1);
+        result.current.commitReplacementTextEdit();
+      });
+      const { width: w1, text: t1 } = result.current.overlays[0];
+      act(() => {
+        result.current.beginReplacementTextEdit();
+        result.current.updateReplacementText(
+          'Much much longer text here',
+          200,
+          200,
+          1
+        );
+        result.current.commitReplacementTextEdit();
+      });
+      expect(result.current.overlays[0].width).toBeGreaterThan(w1);
+      act(() => result.current.undo());
+      expect(result.current.overlays[0].text).toBe(t1);
+      expect(result.current.overlays[0].width).toBe(w1);
+    });
+
+    it('formatting mutation activates the draft with current style', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.activateReplacementDraft('Sales Assistant');
+      });
+
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.overlays[0].coverActive).toBe(true);
+      expect(result.current.isDirty).toBe(true);
+    });
+
+    it('remove text activates as cover-only immediately', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.activateReplacementDraft('');
+      });
+
+      expect(result.current.replacementDraft).toBeNull();
+      expect(result.current.overlays).toHaveLength(1);
+      expect(result.current.overlays[0]).toMatchObject({
+        kind: 'replace',
+        text: '',
+        coverActive: true,
+      });
+      expect(result.current.isDirty).toBe(true);
+    });
+
+    it('first undo after activation removes the replacement entirely', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.activateReplacementDraft('Edited text');
+      });
+      expect(result.current.overlays).toHaveLength(1);
+
+      act(() => {
+        result.current.undo();
+      });
+      expect(result.current.overlays).toHaveLength(0);
+      expect(result.current.isDirty).toBe(true);
+    });
+
+    it('active replacement edits remain autosavable via overlays', () => {
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('Sales Assistant'));
+      });
+      act(() => {
+        result.current.activateReplacementDraft('First edit');
+      });
+      const id = result.current.overlays[0].id;
+      act(() => {
+        result.current.beginTextEdit(id);
+        result.current.updateSelectedText('Second edit');
+        result.current.commitTextEdit();
+      });
+
+      expect(result.current.overlays[0].text).toBe('Second edit');
+      expect(result.current.isDirty).toBe(true);
+    });
+
+    it('unchanged close/discard leaves overlays untouched', () => {
+      const existing = makeOverlay(1);
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [existing] })
+      );
+      act(() => result.current.setEditorMode('replace'));
+      act(() => {
+        result.current.setReplacementDraft(makeNativeItem('May 2017'));
+      });
+      act(() => {
+        result.current.discardReplacementDraft();
+      });
+
+      expect(result.current.overlays).toEqual([existing]);
+      expect(result.current.isDirty).toBe(false);
+    });
   });
 });

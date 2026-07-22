@@ -6,7 +6,10 @@ import type { OverlayTextBox as OverlayTextBoxModel } from '../../shared/types/p
 import type { OverlayBoxGeometry } from '../hooks/overlayGeometry';
 import type { OverlaySaveStatus } from '../hooks/useOverlayAutosave';
 import type { NativePdfTextItem } from '../utils/pdfNativeTextItems';
-import { samplePageBackgroundColor } from '../utils/samplePageBackgroundColor';
+import {
+  samplePagePerimeterColor,
+  samplePageTextColors,
+} from '../utils/samplePageBackgroundColor';
 import { OverlayTextLayer } from './OverlayTextLayer';
 import styles from './PdfInlinePreview.module.css';
 
@@ -23,8 +26,15 @@ export interface PdfInlinePreviewOverlayProps {
   saveStatus: OverlaySaveStatus;
   saveErrorMessage?: string | null;
   readOnly?: boolean;
+  replacementDraftGeometry?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+  } | null;
   onCreateAt: (xPct: number, yPct: number) => OverlayTextBoxModel | null;
-  onCreateReplacement?: (item: NativePdfTextItem) => OverlayTextBoxModel | null;
+  onSetReplacementDraft?: (item: NativePdfTextItem) => void;
   onExitReplacementMode?: () => void;
   onSelectOverlay: (overlayId: string | null) => void;
   onDeleteSelectedOverlay: () => void;
@@ -34,14 +44,19 @@ export interface PdfInlinePreviewOverlayProps {
   onFlushOverlays?: () => Promise<void>;
   onRetryOverlaySave?: () => Promise<void>;
   onBeginOverlayTextEdit?: (overlayId: string) => boolean;
-  onUpdateOverlayText?: (
-    text: string,
-    geometry?: OverlayBoxGeometry
-  ) => void;
+  onUpdateOverlayText?: (text: string, geometry?: OverlayBoxGeometry) => void;
   onCommitOverlayTextEdit?: () => boolean;
   onBeginGeometryEdit: (overlayId: string) => boolean;
   onUpdateOverlayGeometry: (geometry: OverlayBoxGeometry) => void;
-  onCommitGeometryEdit: (kind: 'move' | 'resize') => void;
+  onCommitGeometryEdit: (
+    kind: 'move' | 'resize',
+    backgroundColor?: string
+  ) => void;
+  onPageMetricsChange?: (metrics: {
+    pageWidthPx: number;
+    pageHeightPx: number;
+    displayScale: number;
+  }) => void;
   onNudgeSelectedOverlay: (deltaXPct: number, deltaYPct: number) => void;
   onBringOverlayForward: () => void;
   onSendOverlayBackward: () => void;
@@ -85,6 +100,7 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
     width: 0,
     height: 0,
   });
+  const [displayScale, setDisplayScale] = useState(1);
 
   const fileUrl = fileId ? pdfFileUrl(sessionId, fileId) : null;
   const { document, isLoading: isDocLoading } = usePdfDocument(fileUrl);
@@ -175,6 +191,7 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
         hasRenderedRef.current = true;
         setHasRendered(true);
         setIsRendering(false);
+        setDisplayScale(scale);
         setCanvasDisplaySize({
           width: scaledViewport.width,
           height: scaledViewport.height,
@@ -193,14 +210,48 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
     };
   }, [document, fileId, sourcePageIndex, rotation, containerSize, zoom]);
 
-  const handleCreateReplacement = useCallback(
+  useEffect(() => {
+    if (canvasDisplaySize.width > 0 && overlay?.onPageMetricsChange) {
+      overlay.onPageMetricsChange({
+        pageWidthPx: canvasDisplaySize.width,
+        pageHeightPx: canvasDisplaySize.height,
+        displayScale,
+      });
+    }
+  }, [canvasDisplaySize, displayScale, overlay]);
+
+  const handleSetReplacementDraft = useCallback(
     (item: NativePdfTextItem) => {
-      if (!overlay?.onCreateReplacement) return null;
-      const backgroundColor = samplePageBackgroundColor(
+      if (!overlay?.onSetReplacementDraft) return;
+      const sampled = samplePageTextColors(
         canvasRef.current,
-        item.geometry
+        item.geometry,
+        item.rotation
       );
-      return overlay.onCreateReplacement({ ...item, backgroundColor });
+      overlay.onSetReplacementDraft({
+        ...item,
+        color: sampled.color,
+        backgroundColor: sampled.backgroundColor,
+      });
+    },
+    [overlay]
+  );
+
+  const handleCommitGeometryEdit = useCallback(
+    (kind: 'move' | 'resize', finalGeometry: OverlayBoxGeometry) => {
+      if (!overlay) return;
+      const selected = overlay.overlays.find(
+        (candidate) => candidate.id === overlay.selectedOverlayId
+      );
+      const backgroundColor =
+        kind === 'resize' && selected?.kind === 'replace'
+          ? (samplePagePerimeterColor(
+              canvasRef.current,
+              finalGeometry,
+              selected.rotation
+            ) ?? undefined)
+          : undefined;
+      overlay.onCommitGeometryEdit(kind, backgroundColor);
     },
     [overlay]
   );
@@ -312,6 +363,7 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               textToolActive={overlay.textToolActive}
               replacementMode={replacementMode}
               nativeTextItems={textItemsState.items}
+              displayScale={displayScale}
               createLimitMessage={overlay.createLimitMessage}
               announcement={overlay.announcement}
               canUndo={overlay.canUndo}
@@ -319,8 +371,9 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               saveStatus={overlay.saveStatus}
               saveErrorMessage={overlay.saveErrorMessage}
               readOnly={overlay.readOnly}
+              replacementDraftGeometry={overlay.replacementDraftGeometry}
               onCreateAt={overlay.onCreateAt}
-              onCreateReplacement={handleCreateReplacement}
+              onSetReplacementDraft={handleSetReplacementDraft}
               onExitReplacementMode={overlay.onExitReplacementMode}
               onSelect={overlay.onSelectOverlay}
               onDeleteSelected={overlay.onDeleteSelectedOverlay}
@@ -334,7 +387,7 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
               onCommitTextEdit={overlay.onCommitOverlayTextEdit}
               onBeginGeometryEdit={overlay.onBeginGeometryEdit}
               onUpdateGeometry={overlay.onUpdateOverlayGeometry}
-              onCommitGeometryEdit={overlay.onCommitGeometryEdit}
+              onCommitGeometryEdit={handleCommitGeometryEdit}
               onNudgeSelected={overlay.onNudgeSelectedOverlay}
               onBringForward={overlay.onBringOverlayForward}
               onSendBackward={overlay.onSendOverlayBackward}
@@ -344,14 +397,16 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
             replacementMode &&
             textItemsState.status === 'unavailable' && (
               <div className={styles.textUnavailable} role="status">
-                No selectable text was detected. OCR is not available yet.
+                This page appears to be image-only and has no searchable text.
+                OCR is not available. You can still use Add text. To replace
+                existing text, upload a searchable or OCR-processed PDF.
               </div>
             )}
           {showOverlayLayer &&
             replacementMode &&
             textItemsState.status === 'error' && (
               <div className={styles.textUnavailable} role="alert">
-                Existing text could not be loaded.
+                Existing text could not be loaded. Try again or use Add text.
               </div>
             )}
         </div>
