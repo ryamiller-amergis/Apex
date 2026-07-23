@@ -12,6 +12,7 @@ import {
   OVERLAY_FONT_STACKS,
 } from '../hooks/overlayFormatting';
 import styles from './OverlayTextBox.module.css';
+import './pdfOverlayFonts.css';
 
 interface OverlayTextBoxProps {
   overlay: OverlayTextBoxModel;
