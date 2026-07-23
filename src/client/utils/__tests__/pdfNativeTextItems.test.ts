@@ -1,4 +1,4 @@
-import { convertPdfTextItems } from '../pdfNativeTextItems';
+import { convertPdfTextItems, mapPdfFontToOverlayFamily } from '../pdfNativeTextItems';
 import type { NativePdfTextItem } from '../pdfNativeTextItems';
 
 const viewport = {
@@ -42,7 +42,7 @@ describe('convertPdfTextItems', () => {
 
   it.each([
     ['ABCDEF+CourierNewPS-BoldOblique', undefined, 'Courier', true, true],
-    ['f-serif', 'Cambria Italic', 'Times-Roman', false, true],
+    ['f-serif', 'Cambria Italic', 'Merriweather', false, true],
     ['Arial-Semibold', 'Arial', 'Helvetica', true, false],
     ['generated-f1', undefined, 'Helvetica', false, false],
   ])(
@@ -454,5 +454,24 @@ describe('phrase-level merging', () => {
     expect(result).toHaveLength(2);
     expect(result[0].text).toBe('Serif');
     expect(result[1].text).toBe('Sans');
+  });
+});
+
+describe('mapPdfFontToOverlayFamily', () => {
+  it.each([
+    ['ABCDEF+Calibri', 'Roboto'],
+    ['Aptos-Bold', 'Roboto'],
+    ['Segoe UI Semibold', 'Roboto'],
+    ['ArialMT', 'Helvetica'],
+    ['Helvetica-Oblique', 'Helvetica'],
+    ['TimesNewRomanPSMT', 'Times-Roman'],
+    ['Georgia-Italic', 'Merriweather'],
+    ['Garamond', 'Merriweather'],
+    ['CourierNewPS-BoldMT', 'Courier'],
+    ['Consolas', 'Courier'],
+    ['Verdana', 'Roboto'],
+    ['', 'Helvetica'],
+  ])('maps %s -> %s', (hint, expected) => {
+    expect(mapPdfFontToOverlayFamily(hint)).toBe(expected);
   });
 });

@@ -56,24 +56,36 @@ interface RawEmBox {
 }
 
 const MONOSPACE_HINTS = ['courier', 'mono', 'consolas', 'menlo', 'typewriter'];
-const SERIF_HINTS = [
-  'times',
-  'serif',
-  'roman',
-  'georgia',
-  'garamond',
-  'cambria',
-];
-const SANS_HINTS = [
-  'helvetica',
-  'arial',
-  'sans',
-  'calibri',
-  'verdana',
-  'tahoma',
-];
+const ROBOTO_SANS_HINTS = ['calibri', 'aptos', 'segoe'];
+const HELVETICA_SANS_HINTS = ['helvetica', 'arial'];
+const TIMES_SERIF_HINTS = ['times', 'timesnewroman'];
+const SERIF_HINTS = ['serif', 'roman', 'georgia', 'garamond', 'cambria'];
+const SANS_HINTS = ['sans', 'verdana', 'tahoma', 'roboto', 'lato', 'montserrat'];
 const BOLD_HINTS = ['bold', 'black', 'heavy', 'demi', 'semibold'];
 const ITALIC_HINTS = ['italic', 'oblique', 'slanted'];
+
+function normalizeFontHint(hint: string): string {
+  return hint.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Maps recognized PDF font metadata to the closest supported overlay family.
+ * Best-effort: subsetted/renamed embedded fonts fall back to Helvetica.
+ */
+export function mapPdfFontToOverlayFamily(hint: string): OverlayFontFamily {
+  const normalized = normalizeFontHint(hint);
+  const compact = normalized.replace(/\s+/g, '');
+  const contains = (values: readonly string[]) =>
+    values.some((value) => normalized.includes(value) || compact.includes(value));
+
+  if (contains(MONOSPACE_HINTS)) return 'Courier';
+  if (contains(TIMES_SERIF_HINTS)) return 'Times-Roman';
+  if (contains(HELVETICA_SANS_HINTS)) return 'Helvetica';
+  if (contains(ROBOTO_SANS_HINTS)) return 'Roboto';
+  if (contains(SERIF_HINTS)) return 'Merriweather';
+  if (contains(SANS_HINTS)) return 'Roboto';
+  return 'Helvetica';
+}
 
 interface InferredFontStyle {
   fontFamily: OverlayFontFamily;
@@ -85,23 +97,13 @@ function inferFontStyle(
   fontName: string,
   style: PdfTextStyleLike | undefined
 ): InferredFontStyle {
-  const hint = `${style?.fontFamily ?? ''} ${fontName}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+  const hint = `${style?.fontFamily ?? ''} ${fontName}`;
+  const normalized = normalizeFontHint(hint);
   const contains = (values: readonly string[]) =>
-    values.some((value) => hint.includes(value));
-
-  const fontFamily: OverlayFontFamily = contains(MONOSPACE_HINTS)
-    ? 'Courier'
-    : contains(SERIF_HINTS)
-      ? 'Times-Roman'
-      : contains(SANS_HINTS)
-        ? 'Helvetica'
-        : 'Helvetica';
+    values.some((value) => normalized.includes(value));
 
   return {
-    fontFamily,
+    fontFamily: mapPdfFontToOverlayFamily(hint),
     bold: contains(BOLD_HINTS),
     italic: contains(ITALIC_HINTS),
   };
