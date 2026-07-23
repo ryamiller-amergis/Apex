@@ -66,7 +66,7 @@ describe('OverlayFormatToolbar', () => {
     expect(onChange).toHaveBeenCalledWith({ listStyle: 'numbered' });
   });
 
-  it('refuses invalid size, color, and rotation values', () => {
+  it('refuses invalid size and rotation values', () => {
     const onChange = jest.fn();
     render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
 
@@ -77,27 +77,19 @@ describe('OverlayFormatToolbar', () => {
       target: { value: '181' },
     });
 
-    // open the color picker to access the hex input
-    fireEvent.click(screen.getByTestId('overlay-format-color-swatch'));
-    const color = screen.getByTestId('overlay-format-color');
-    fireEvent.change(color, { target: { value: 'red' } });
-    fireEvent.blur(color);
-
     expect(onChange).not.toHaveBeenCalled();
-    expect(color).toHaveValue('#000000');
-    expect(screen.getByText(/six-digit hex color/i)).toBeInTheDocument();
   });
 
-  it('toggles underline and applies a color swatch', () => {
+  it('toggles underline and applies a color via native picker', () => {
     const onChange = jest.fn();
     render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
 
     fireEvent.click(screen.getByTestId('overlay-format-underline'));
     expect(onChange).toHaveBeenCalledWith({ underline: true });
 
-    // open picker and pick a swatch
-    fireEvent.click(screen.getByTestId('overlay-format-color-swatch'));
-    fireEvent.click(screen.getByRole('button', { name: '#FF0000' }));
+    fireEvent.change(screen.getByTestId('overlay-format-color'), {
+      target: { value: '#ff0000' },
+    });
     expect(onChange).toHaveBeenCalledWith({ color: '#FF0000' });
   });
 
@@ -212,11 +204,9 @@ describe('OverlayFormatToolbar', () => {
     fireEvent.change(screen.getByTestId('overlay-format-font-family'), {
       target: { value: 'Times-Roman' },
     });
-    fireEvent.click(screen.getByTestId('overlay-format-color-swatch'));
     fireEvent.change(screen.getByTestId('overlay-format-color'), {
       target: { value: '#112233' },
     });
-    fireEvent.blur(screen.getByTestId('overlay-format-color'));
     fireEvent.click(screen.getByRole('button', { name: 'Align center' }));
 
     expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Times-Roman' });
