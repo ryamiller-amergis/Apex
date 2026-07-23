@@ -1,4 +1,4 @@
-import type { OverlayTextBox, PageManifestEntry } from '../../shared/types/pdf';
+import type { OverlayFontFamily, OverlayTextBox, PageManifestEntry } from '../../shared/types/pdf';
 import {
   stripOrphanOverlays,
   validateOverlays,
@@ -247,6 +247,34 @@ describe('validateOverlays', () => {
         expect.objectContaining({
           field: 'overlays',
           code: 'OVERLAYS_INVALID',
+        }),
+      ],
+    });
+  });
+
+  it.each(['Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Merriweather', 'Noto Sans'])(
+    'accepts Google font %s',
+    (fontFamily) => {
+      const result = validateOverlays(
+        [makeOverlay({ fontFamily: fontFamily as OverlayFontFamily })],
+        PAGE_IDS
+      );
+      expect(result.ok).toBe(true);
+    }
+  );
+
+  it('error message for invalid fontFamily lists all supported families', () => {
+    const result = validateOverlays(
+      [makeOverlay({ fontFamily: 'Arial' as OverlayFontFamily })],
+      PAGE_IDS
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      errors: [
+        expect.objectContaining({
+          field: 'fontFamily',
+          code: 'OVERLAY_FONT_INVALID',
+          message: expect.stringContaining('Roboto'),
         }),
       ],
     });

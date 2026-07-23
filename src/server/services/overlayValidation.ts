@@ -3,6 +3,7 @@ import type {
   OverlayTextBox,
   PageManifestEntry,
 } from '../../shared/types/pdf';
+import { PDF_OVERLAY_FONT_FAMILIES } from '../../shared/types/pdf';
 
 const MAX_OVERLAYS = 50;
 const MAX_TEXT_LENGTH = 2_000;
@@ -13,7 +14,7 @@ const REPLACE_MIN_HEIGHT = 0.25;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
-const FONT_FAMILIES = new Set(['Helvetica', 'Times-Roman', 'Courier']);
+const FONT_FAMILIES = new Set<string>(PDF_OVERLAY_FONT_FAMILIES);
 const HORIZONTAL_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const VERTICAL_ALIGNMENTS = new Set(['top', 'middle', 'bottom']);
 const LIST_STYLES = new Set(['none', 'bullet', 'numbered']);
@@ -167,7 +168,7 @@ export function validateOverlays(
         overlayId,
         'fontFamily',
         'OVERLAY_FONT_INVALID',
-        'fontFamily must be Helvetica, Times-Roman, or Courier.'
+        `fontFamily must be one of: ${PDF_OVERLAY_FONT_FAMILIES.join(', ')}.`
       );
     }
     if (
