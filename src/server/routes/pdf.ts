@@ -35,6 +35,7 @@ import {
   type ReplaceFormValuesRequest,
   type ReplaceSignatureOverlaysRequest,
   type PdfTextFormValue,
+  type PdfExportFormat,
 } from '../../shared/types/pdf';
 
 const router = express.Router();
@@ -394,10 +395,20 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
   try {
     const userId = getUserId(req);
     const { sessionId } = req.params;
-    const { filename, pages } = req.body as {
+    const { filename, pages, format } = req.body as {
       filename?: string;
       pages?: number[];
+      format?: string;
     };
+
+    // Validate format
+    if (format !== undefined && format !== 'pdf' && format !== 'docx') {
+      res.status(400).json({
+        error: 'INVALID_FORMAT',
+        message: 'format must be "pdf" or "docx"',
+      });
+      return;
+    }
 
     // Validate pages array if provided
     if (pages !== undefined) {
@@ -410,7 +421,13 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       }
     }
 
-    const result = await queuePdfExport(sessionId, userId, filename, pages);
+    const result = await queuePdfExport(
+      sessionId,
+      userId,
+      filename,
+      pages,
+      (format as PdfExportFormat | undefined) ?? 'pdf',
+    );
     res.status(202).json(result);
   } catch (err: unknown) {
     if (err instanceof PdfQueueSaturatedError) {
@@ -501,13 +518,20 @@ router.get('/jobs/:jobId/result', async (req, res): Promise<void> => {
       return;
     }
 
-    const ref = { userId, sessionId: job.sessionId, fileName: `${job.id}.pdf` };
+    // Resolve format and artifact filename from the mapped job fields.
+    const isDocx = job.resultFormat === 'docx';
+    const resultFileName = job.resultFileName ?? `${job.id}.${isDocx ? 'docx' : 'pdf'}`;
+    const ref = { userId, sessionId: job.sessionId, fileName: resultFileName };
+
     if (!(await getPdfArtifactStore().exists(ref))) {
-      res.status(404).json({ error: 'PDF export artifact not found' });
+      res.status(404).json({ error: 'Export artifact not found' });
       return;
     }
     const stream = await getPdfArtifactStore().getStream(ref);
-    res.setHeader('Content-Type', 'application/pdf');
+    const mimeType = isDocx
+      ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      : 'application/pdf';
+    res.setHeader('Content-Type', mimeType);
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${job.resultFilename ?? job.originalName}"`

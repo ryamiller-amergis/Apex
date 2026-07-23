@@ -1,14 +1,17 @@
 import { parentPort } from 'worker_threads';
 import path from 'path';
 
-interface ConversionMessage {
+export type ConversionOutputFormat = 'pdf' | 'docx';
+
+export interface ConversionMessage {
   buffer: Buffer;
   filename: string;
+  outputFormat?: ConversionOutputFormat;
 }
 
-interface ConversionResult {
+export interface ConversionResult {
   success: boolean;
-  pdfBuffer?: Buffer;
+  outputBuffer?: Buffer;
   error?: string;
 }
 
@@ -34,13 +37,14 @@ parentPort?.on('message', async (msg: ConversionMessage) => {
   const result: ConversionResult = { success: false };
   try {
     await ensureConverter();
+    const outputFormat: ConversionOutputFormat = msg.outputFormat ?? 'pdf';
     const output = await convertDocument!(
       Buffer.from(msg.buffer),
-      { outputFormat: 'pdf' },
+      { outputFormat },
       { wasmPath: converterWasmPath },
     );
     result.success = true;
-    result.pdfBuffer = Buffer.from(output.data);
+    result.outputBuffer = Buffer.from(output.data);
   } catch (err) {
     result.error = err instanceof Error ? err.message : 'Unknown conversion error';
   }

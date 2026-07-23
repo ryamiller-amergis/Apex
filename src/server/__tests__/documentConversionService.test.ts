@@ -89,7 +89,7 @@ describe('documentConversionService', () => {
   test('DoD-0: creates worker on first convert call', async () => {
     mockPostMessage.mockImplementation(() => {
       process.nextTick(() =>
-        triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader }),
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader }),
       );
     });
 
@@ -100,7 +100,7 @@ describe('documentConversionService', () => {
   test('DoD-0: reuses existing worker on subsequent calls', async () => {
     mockPostMessage.mockImplementation(() => {
       process.nextTick(() =>
-        triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader }),
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader }),
       );
     });
 
@@ -115,7 +115,7 @@ describe('documentConversionService', () => {
     const pdfOutput = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x35]);
     mockPostMessage.mockImplementation(() => {
       process.nextTick(() =>
-        triggerWorkerMessage({ success: true, pdfBuffer: pdfOutput }),
+        triggerWorkerMessage({ success: true, outputBuffer: pdfOutput }),
       );
     });
 
@@ -124,18 +124,67 @@ describe('documentConversionService', () => {
     expect(result.slice(0, 4).toString()).toBe('%PDF');
   });
 
-  test('DoD-1: passes buffer and filename to worker', async () => {
+  test('DoD-1: passes buffer, filename and outputFormat=pdf to worker by default', async () => {
     const inputBuffer = Buffer.from('test-docx-content');
     mockPostMessage.mockImplementation((msg: any) => {
       expect(msg.filename).toBe('report.docx');
+      expect(msg.outputFormat).toBe('pdf');
       expect(Buffer.isBuffer(msg.buffer) || msg.buffer instanceof Uint8Array).toBe(true);
       process.nextTick(() =>
-        triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader }),
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader }),
       );
     });
 
     await service.convert(inputBuffer, 'report.docx');
     expect(mockPostMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // ── DOCX output direction ────────────────────────────────────────────────────
+
+  test('DOCX-1: passes outputFormat=docx to worker when requested', async () => {
+    // A minimal DOCX is a ZIP; PK magic bytes are 0x50 0x4B 0x03 0x04
+    const docxOutput = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+    mockPostMessage.mockImplementation((msg: any) => {
+      expect(msg.outputFormat).toBe('docx');
+      process.nextTick(() =>
+        triggerWorkerMessage({ success: true, outputBuffer: docxOutput }),
+      );
+    });
+
+    const result = await service.convert(Buffer.from('%PDF-1.4'), 'source.pdf', 'docx');
+    expect(Buffer.isBuffer(result)).toBe(true);
+    // DOCX files are ZIP archives — first two bytes are "PK"
+    expect(result[0]).toBe(0x50); // P
+    expect(result[1]).toBe(0x4b); // K
+  });
+
+  test('DOCX-2: throws CONVERSION_FAILED when docx conversion fails', async () => {
+    mockPostMessage.mockImplementation(() => {
+      process.nextTick(() =>
+        triggerWorkerMessage({ success: false, error: 'Cannot convert scanned PDF' }),
+      );
+    });
+
+    await expect(
+      service.convert(Buffer.from('%PDF'), 'scanned.pdf', 'docx'),
+    ).rejects.toMatchObject({ code: PDF_ERROR_CODES.CONVERSION_FAILED });
+  });
+
+  test('DOCX-3: DOCX conversion uses the same queue as PDF conversion', async () => {
+    const resolveOrder: string[] = [];
+    mockPostMessage.mockImplementation((msg: any) => {
+      process.nextTick(() => {
+        resolveOrder.push(msg.filename);
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader });
+      });
+    });
+
+    await Promise.all([
+      service.convert(Buffer.from('docx'), 'first.docx', 'pdf'),
+      service.convert(Buffer.from('pdf'), 'second.pdf', 'docx'),
+    ]);
+
+    expect(resolveOrder).toEqual(['first.docx', 'second.pdf']);
   });
 
   // ── DoD-4: error handling — format error ────────────────────────────────────
@@ -156,6 +205,26 @@ describe('documentConversionService', () => {
       expect((err as ConversionError).code).toBe(PDF_ERROR_CODES.CONVERSION_FAILED);
       expect((err as ConversionError).message).toContain('could not be converted');
     }
+  });
+
+  test('DoD-4: throws ConversionError with CONVERSION_TIMEOUT for hung conversions', async () => {
+    jest.useFakeTimers();
+
+    mockPostMessage.mockImplementation(() => {
+      // Worker never responds — simulating hung conversion
+    });
+
+    const promise = service.convert(Buffer.from('slow'), 'large.pdf', 'docx');
+    jest.advanceTimersByTime(15 * 60_000 + 1_000);
+
+    await expect(promise).rejects.toThrow(ConversionError);
+    try {
+      await promise;
+    } catch (err) {
+      expect((err as ConversionError).code).toBe(PDF_ERROR_CODES.CONVERSION_TIMEOUT);
+    }
+
+    jest.useRealTimers();
   });
 
   // ── DoD-4: error handling — timeout ─────────────────────────────────────────
@@ -212,7 +281,7 @@ describe('documentConversionService', () => {
       } else {
         // Retry and subsequent calls: success
         process.nextTick(() =>
-          triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader }),
+          triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader }),
         );
       }
     });
@@ -232,7 +301,7 @@ describe('documentConversionService', () => {
     mockPostMessage.mockImplementation((msg: any) => {
       process.nextTick(() => {
         resolveOrder.push(msg.filename);
-        triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader });
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader });
       });
     });
 
@@ -252,7 +321,7 @@ describe('documentConversionService', () => {
   test('shutdown terminates worker and rejects queued requests', async () => {
     mockPostMessage.mockImplementation(() => {
       process.nextTick(() =>
-        triggerWorkerMessage({ success: true, pdfBuffer: validPdfHeader }),
+        triggerWorkerMessage({ success: true, outputBuffer: validPdfHeader }),
       );
     });
 

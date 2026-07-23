@@ -82,6 +82,55 @@
   outline-offset: 2px;
 }
 
+.wordButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.wordButton:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.wordButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wordButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.wordFidelityNote {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin: 3px 0 0 0;
+  padding: 0;
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
+.wordInfoIcon {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  margin-left: 2px;
+  cursor: help;
+  line-height: 1;
+}
+
 .spinner {
   display: inline-block;
   width: 14px;

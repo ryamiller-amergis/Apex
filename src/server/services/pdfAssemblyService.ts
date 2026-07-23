@@ -37,6 +37,7 @@ import {
   buildSignatureArtifactRefs,
 } from './pdfSignatureService';
 import { documentConversionService } from './documentConversionService';
+import { convertPdfToDocx } from './pdfToDocxService';
 import { stripOrphanOverlays, validateOverlays } from './overlayValidation';
 import {
   enqueuePdfConversion,
@@ -1494,7 +1495,8 @@ export async function queuePdfExport(
   sessionId: string,
   userId: string,
   rawFilename?: string,
-  pages?: number[]
+  pages?: number[],
+  format: 'pdf' | 'docx' = 'pdf',
 ) {
   const session = await db.query.pdfSessions.findFirst({
     where: eq(pdfSessions.id, sessionId),
@@ -1542,7 +1544,8 @@ export async function queuePdfExport(
     sessionId,
     userId,
     rawFilename?.trim() ? rawFilename : undefined,
-    pages
+    pages,
+    format,
   );
 }
 
@@ -1573,7 +1576,79 @@ export async function processPdfJob(job: PdfJobRow) {
     filename?: string;
     pages?: number[];
     resultFileName?: string;
+    format?: 'pdf' | 'docx';
   };
+  const format = payload.format ?? 'pdf';
+
+  if (format === 'docx') {
+    // ── DOCX export: assemble → convert → store ────────────────────────────
+    // 1. Use a temporary PDF ref for the intermediate assembled PDF.
+    const tempResultFileName = `${job.id}-tmp.pdf`;
+    const tempRef: PdfArtifactRef = {
+      userId: job.userId,
+      sessionId: job.sessionId,
+      fileName: tempResultFileName,
+    };
+
+    // 2. Run PDF assembly into the temp artifact slot.
+    const assembleResult = await assembleAndExport(
+      job.sessionId,
+      job.userId,
+      payload.filename,
+      payload.pages,
+      tempRef,
+    );
+
+    // 3. Convert the assembled PDF bytes to DOCX.
+    let pdfBytes: Uint8Array;
+    try {
+      pdfBytes = await readPdfArtifact(tempRef);
+    } catch {
+      throw Object.assign(new Error('Failed to read intermediate PDF artifact for DOCX conversion.'), {
+        code: PDF_ERROR_CODES.EXPORT_FAILED,
+      });
+    }
+
+    let docxBuffer: Buffer;
+    try {
+      // Use the pdfjs-based text-extraction path instead of LibreOffice WASM,
+      // which does not support PDF→DOCX in the Node.js worker-thread context.
+      docxBuffer = await convertPdfToDocx(Buffer.from(pdfBytes));
+    } finally {
+      // Always clean up the intermediate PDF regardless of whether conversion succeeded.
+      try {
+        await getPdfArtifactStore().deleteFile(tempRef);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+
+    // 4. Derive the user-facing DOCX filename.
+    const docxResultFileName = payload.resultFileName ?? `${job.id}.docx`;
+    const baseFilename = payload.filename?.trim()
+      ? payload.filename.replace(/\.pdf$/i, '').replace(/\.docx$/i, '') + '.docx'
+      : assembleResult.filename.replace(/\.pdf$/i, '') + '.docx';
+
+    // 5. Store the DOCX artifact.
+    const docxRef: PdfArtifactRef = {
+      userId: job.userId,
+      sessionId: job.sessionId,
+      fileName: docxResultFileName,
+    };
+    await getPdfArtifactStore().putFile(docxRef, docxBuffer);
+
+    return {
+      result: {
+        filename: baseFilename,
+        pageCount: assembleResult.pageCount,
+        resultFileName: docxResultFileName,
+        resultKey: buildPdfArtifactKey(docxRef),
+        format: 'docx',
+      },
+    };
+  }
+
+  // ── PDF export (default path, unchanged) ────────────────────────────────────
   const resultFileName = payload.resultFileName ?? `${job.id}.pdf`;
   const ref: PdfArtifactRef = {
     userId: job.userId,
@@ -1593,6 +1668,7 @@ export async function processPdfJob(job: PdfJobRow) {
       pageCount: result.pageCount,
       resultFileName,
       resultKey: buildPdfArtifactKey(ref),
+      format: 'pdf',
     },
   };
 }

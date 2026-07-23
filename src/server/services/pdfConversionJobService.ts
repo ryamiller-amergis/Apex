@@ -8,6 +8,7 @@ import type {
   EnqueueExportResponse,
   FileUploadResult,
   PdfConversionJob,
+  PdfExportFormat,
   PdfJobType,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
@@ -232,20 +233,27 @@ export async function enqueuePdfExport(
   sessionId: string,
   userId: string,
   filename?: string,
-  pages?: number[]
+  pages?: number[],
+  format: PdfExportFormat = 'pdf',
 ): Promise<EnqueueExportResponse> {
   await assertPdfQueueCapacity(userId);
   const jobId = crypto.randomUUID();
-  const resultFileName = `${jobId}.pdf`;
+  const ext = format === 'docx' ? '.docx' : '.pdf';
+  const resultFileName = `${jobId}${ext}`;
   const inputKey = buildPdfArtifactKey({
     userId,
     sessionId,
     fileName: resultFileName,
   });
+  const mimeType =
+    format === 'docx'
+      ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      : 'application/pdf';
   const payload = {
     ...(filename?.trim() ? { filename } : {}),
     pages: pages ?? [],
     resultFileName,
+    format,
   };
 
   await db.insert(pdfConversionJobs).values({
@@ -254,7 +262,7 @@ export async function enqueuePdfExport(
     jobType: 'export',
     userId,
     originalName: filename ?? '',
-    originalMimeType: 'application/pdf',
+    originalMimeType: mimeType,
     inputKey,
     status: 'queued',
     payload,
@@ -296,7 +304,11 @@ export async function getPdfJob(
 }
 
 async function mapJob(row: PdfJobRow): Promise<PdfConversionJob> {
-  const result = (row.result ?? {}) as { filename?: string };
+  const result = (row.result ?? {}) as {
+    filename?: string;
+    resultFileName?: string;
+    format?: string;
+  };
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -311,6 +323,8 @@ async function mapJob(row: PdfJobRow): Promise<PdfConversionJob> {
         ? `/api/pdf/jobs/${row.id}/result`
         : null,
     resultFilename: result.filename ?? null,
+    resultFileName: result.resultFileName ?? null,
+    resultFormat: (result.format === 'docx' ? 'docx' : 'pdf') ?? null,
     attempts: row.attempts,
     maxAttempts: row.maxAttempts,
     error: row.errorCode

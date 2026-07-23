@@ -3,12 +3,14 @@ import { apexProjectHeaders } from '../utils/apiFetch';
 import type {
   EnqueueExportResponse,
   PdfConversionJob,
+  PdfExportFormat,
 } from '../../shared/types/pdf';
 
 interface ExportSessionParams {
   sessionId: string;
   filename?: string;
   pages?: number[];
+  format?: PdfExportFormat;
 }
 
 function ensurePdfExtension(name: string): string {
@@ -18,13 +20,26 @@ function ensurePdfExtension(name: string): string {
   return trimmed;
 }
 
+function ensureDocxExtension(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+  if (!trimmed.toLowerCase().endsWith('.docx')) {
+    return `${trimmed.replace(/\.pdf$/i, '')}.docx`;
+  }
+  return trimmed;
+}
+
+function applyFormatExtension(name: string, format: PdfExportFormat): string {
+  return format === 'docx' ? ensureDocxExtension(name) : ensurePdfExtension(name);
+}
+
 export function useExportSession() {
   return useMutation<void, Error & { code?: string }, ExportSessionParams>({
-    mutationFn: async ({ sessionId, filename, pages }) => {
+    mutationFn: async ({ sessionId, filename, pages, format = 'pdf' }) => {
       const filenameOverride = filename?.trim()
-        ? ensurePdfExtension(filename)
+        ? applyFormatExtension(filename, format)
         : undefined;
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = { format };
       if (filenameOverride) {
         body.filename = filenameOverride;
       }
@@ -43,14 +58,14 @@ export function useExportSession() {
       );
 
       if (!enqueueResponse.ok) {
-        const body = await enqueueResponse.json().catch(() => ({}));
+        const errBody = await enqueueResponse.json().catch(() => ({}));
         const err = new Error(
-          body.message ??
-            body.error?.message ??
-            body.error ??
+          errBody.message ??
+            errBody.error?.message ??
+            errBody.error ??
             `Export failed (HTTP ${enqueueResponse.status})`
         ) as Error & { code?: string };
-        err.code = body.error?.code ?? body.error;
+        err.code = errBody.error?.code ?? errBody.error;
         throw err;
       }
 
@@ -72,11 +87,13 @@ export function useExportSession() {
       const disposition =
         resultResponse.headers.get('Content-Disposition') ?? '';
       const match = disposition.match(/filename="([^"]+)"/);
+      const fallbackName =
+        format === 'docx' ? 'merged-document.docx' : 'merged-document.pdf';
       const downloadName =
         match?.[1] ??
         completed.resultFilename ??
         filenameOverride ??
-        'merged-document.pdf';
+        fallbackName;
 
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -107,7 +124,7 @@ async function pollExportJob(statusUrl: string): Promise<PdfConversionJob> {
     if (job.status === 'completed') return job;
     if (job.status === 'failed') {
       const error = new Error(
-        job.error?.message ?? 'PDF export failed.'
+        job.error?.message ?? 'Export failed.'
       ) as Error & {
         code?: string;
       };
@@ -116,7 +133,7 @@ async function pollExportJob(statusUrl: string): Promise<PdfConversionJob> {
     }
     await new Promise((resolve) => window.setTimeout(resolve, 1_500));
   }
-  throw new Error('PDF export timed out. Please retry.');
+  throw new Error('Export timed out. Please retry.');
 }
 
-export { ensurePdfExtension };
+export { ensurePdfExtension, ensureDocxExtension };

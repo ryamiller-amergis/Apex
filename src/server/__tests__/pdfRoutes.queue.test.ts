@@ -111,7 +111,8 @@ describe('PDF export queue routes', () => {
       'session-1',
       'user-1',
       undefined,
-      [0]
+      [0],
+      'pdf'
     );
   });
 
