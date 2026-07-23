@@ -1,4 +1,8 @@
-import { convertPdfTextItems, mapPdfFontToOverlayFamily } from '../pdfNativeTextItems';
+import {
+  calculateReplacementBounds,
+  convertPdfTextItems,
+  mapPdfFontToOverlayFamily,
+} from '../pdfNativeTextItems';
 import type { NativePdfTextItem } from '../pdfNativeTextItems';
 
 const viewport = {
@@ -7,6 +11,23 @@ const viewport = {
   scale: 1,
   transform: [1, 0, 0, -1, 0, 800],
 };
+
+function nativeItem(
+  id: string,
+  geometry: NativePdfTextItem['geometry'],
+  rotation = 0
+): NativePdfTextItem {
+  return {
+    id,
+    text: id,
+    geometry,
+    fontSize: 12,
+    rotation,
+    fontFamily: 'Helvetica',
+    bold: false,
+    italic: false,
+  };
+}
 
 function item(str: string, x: number, y: number, width: number, fontSize = 12) {
   return {
@@ -170,6 +191,57 @@ describe('convertPdfTextItems', () => {
     expect(result.rotation).toBe(-90);
     expect(result.geometry.width).toBeGreaterThan(0);
     expect(result.geometry.height).toBeGreaterThan(0);
+  });
+});
+
+describe('calculateReplacementBounds', () => {
+  it('stops horizontal growth before same-line neighbors and vertical growth before content below', () => {
+    const selected = nativeItem('amount', {
+      x: 85,
+      y: 10,
+      width: 10,
+      height: 3,
+    });
+    const label = nativeItem('balance-label', {
+      x: 65,
+      y: 10,
+      width: 18,
+      height: 3,
+    });
+    const below = nativeItem('invoice-date', {
+      x: 84,
+      y: 18,
+      width: 11,
+      height: 3,
+    });
+
+    expect(
+      calculateReplacementBounds(selected, [selected, label, below])
+    ).toEqual({
+      xMin: 83.25,
+      xMax: 100,
+      yMax: 17.75,
+    });
+  });
+
+  it('ignores text with a different rotation', () => {
+    const selected = nativeItem('selected', {
+      x: 40,
+      y: 20,
+      width: 10,
+      height: 3,
+    });
+    const rotated = nativeItem(
+      'rotated',
+      { x: 20, y: 20, width: 18, height: 3 },
+      90
+    );
+
+    expect(calculateReplacementBounds(selected, [selected, rotated])).toEqual({
+      xMin: 0,
+      xMax: 100,
+      yMax: 100,
+    });
   });
 });
 

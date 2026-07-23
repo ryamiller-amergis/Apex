@@ -32,6 +32,46 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isPageGeometry(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const geometry = value as Record<string, unknown>;
+  if (
+    !isFiniteNumber(geometry.x) ||
+    !isFiniteNumber(geometry.y) ||
+    !isFiniteNumber(geometry.width) ||
+    !isFiniteNumber(geometry.height)
+  ) {
+    return false;
+  }
+  return (
+    geometry.x >= 0 &&
+    geometry.y >= 0 &&
+    geometry.width > 0 &&
+    geometry.height > 0 &&
+    geometry.x + geometry.width <= 100 &&
+    geometry.y + geometry.height <= 100
+  );
+}
+
+function isReplacementBounds(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const bounds = value as Record<string, unknown>;
+  if (
+    !isFiniteNumber(bounds.xMin) ||
+    !isFiniteNumber(bounds.xMax) ||
+    !isFiniteNumber(bounds.yMax)
+  ) {
+    return false;
+  }
+  return (
+    bounds.xMin >= 0 &&
+    bounds.xMax <= 100 &&
+    bounds.xMin < bounds.xMax &&
+    bounds.yMax > 0 &&
+    bounds.yMax <= 100
+  );
+}
+
 function addError(
   errors: OverlayFieldError[],
   overlayId: string | null,
@@ -349,6 +389,42 @@ export function validateOverlays(
         'backgroundColor',
         'OVERLAY_BACKGROUND_COLOR_INVALID',
         'backgroundColor must use #RRGGBB format.'
+      );
+    }
+    if (
+      overlay.replacementCover !== undefined &&
+      !isPageGeometry(overlay.replacementCover)
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'replacementCover',
+        'OVERLAY_REPLACEMENT_COVER_INVALID',
+        'replacementCover must be finite percentage geometry within the page.'
+      );
+    }
+    if (
+      overlay.replacementBounds !== undefined &&
+      !isReplacementBounds(overlay.replacementBounds)
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'replacementBounds',
+        'OVERLAY_REPLACEMENT_BOUNDS_INVALID',
+        'replacementBounds must define ordered percentage limits within the page.'
+      );
+    }
+    if (
+      overlay.replacementOverflow !== undefined &&
+      typeof overlay.replacementOverflow !== 'boolean'
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'replacementOverflow',
+        'OVERLAY_REPLACEMENT_OVERFLOW_INVALID',
+        'replacementOverflow must be a boolean.'
       );
     }
 

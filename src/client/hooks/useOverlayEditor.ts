@@ -231,6 +231,9 @@ export function useOverlayEditor({
         kind: 'replace',
         backgroundColor: replacementDraft.backgroundColor,
         coverActive: false,
+        replacementCover: replacementDraft.item.geometry,
+        replacementBounds: replacementDraft.item.replacementBounds,
+        replacementOverflow: false,
       };
     }
     return selectedOverlay;
@@ -733,6 +736,8 @@ export function useOverlayEditor({
         fontSize: draft.fontSize,
         bold: draft.bold,
         italic: draft.italic,
+        replacementBounds: draft.item.replacementBounds,
+        replacementOverflow: false,
       };
       const geometry =
         pageWidthPx && pageHeightPx
@@ -743,7 +748,7 @@ export function useOverlayEditor({
               pageHeightPx,
               displayScale
             )
-          : draft.item.geometry;
+          : { ...draft.item.geometry, replacementOverflow: false };
 
       const next: OverlayTextBox = {
         id: makeOverlayId(),
@@ -765,6 +770,8 @@ export function useOverlayEditor({
         zIndex: maxZIndexForPage(overlaysRef.current, pageId) + 1,
         kind: 'replace',
         backgroundColor: draft.backgroundColor,
+        replacementCover: draft.item.geometry,
+        replacementBounds: draft.item.replacementBounds,
         ...patch,
         coverActive: true,
       };

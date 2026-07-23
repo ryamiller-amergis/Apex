@@ -743,6 +743,17 @@ describe('useOverlayEditor', () => {
   });
 
   describe('replacement draft workflow', () => {
+    beforeEach(() => {
+      jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+        font: '',
+        measureText: (value: string) => ({ width: value.length * 8 }),
+      } as unknown as CanvasRenderingContext2D);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
     it('native selection creates a draft separate from overlays and isDirty', () => {
       const { result } = renderHook(() =>
         useOverlayEditor({ pageId: 'page-1', initialOverlays: [] })
@@ -876,7 +887,10 @@ describe('useOverlayEditor', () => {
       );
       act(() => result.current.setEditorMode('replace'));
       act(() => {
-        result.current.setReplacementDraft(makeNativeItem('A'));
+        result.current.setReplacementDraft({
+          ...makeNativeItem('A'),
+          replacementBounds: { xMin: 8, xMax: 40, yMax: 40 },
+        });
       });
       act(() => {
         result.current.updateReplacementText(
@@ -892,6 +906,18 @@ describe('useOverlayEditor', () => {
       expect(overlay.text).toBe(
         'A much longer replacement text that should grow the box'
       );
+      expect(overlay.replacementCover).toEqual({
+        x: 10,
+        y: 20,
+        width: 12,
+        height: 3,
+      });
+      expect(overlay.replacementBounds).toEqual({
+        xMin: 8,
+        xMax: 40,
+        yMax: 40,
+      });
+      expect(overlay.x + overlay.width).toBeLessThanOrEqual(40);
     });
 
     it('subsequent panel edits auto-fit without adding overlays', () => {
@@ -919,6 +945,35 @@ describe('useOverlayEditor', () => {
       expect(result.current.overlays[0].width).toBeGreaterThanOrEqual(
         widthAfterFirst
       );
+    });
+
+    it('repairs an oversized persisted replacement during a panel edit', () => {
+      const oversized = makeOverlay(1, {
+        kind: 'replace',
+        text: 'Old replacement',
+        width: 45,
+        height: 30,
+        backgroundColor: '#FFFFFF',
+        coverActive: true,
+      });
+      const { result } = renderHook(() =>
+        useOverlayEditor({ pageId: 'page-1', initialOverlays: [oversized] })
+      );
+
+      act(() => result.current.selectOverlay(oversized.id));
+      act(() => expect(result.current.beginReplacementTextEdit()).toBe(true));
+      act(() => {
+        expect(
+          result.current.updateReplacementText(
+            'Regression tests: 16 client and 19 server passed.',
+            600,
+            800,
+            1
+          )
+        ).toBe(true);
+      });
+
+      expect(result.current.overlays[0].height).toBeLessThan(30);
     });
 
     it('multiline text grows height via auto-fit', () => {

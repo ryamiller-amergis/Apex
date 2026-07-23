@@ -118,7 +118,11 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
     const embeddedSignatures = await embedSignatureAssets(outputDoc, signatureByteMap);
 
     // ── Step 3: add pages, burn text overlays, burn signature overlays ──────
-    const fontCache = await createOverlayFontCache(outputDoc, overlays);
+    const pagesByPageId = new Map<string, PDFPage>();
+    for (let i = 0; i < copiedPagesByOutputIndex.length; i++) {
+      pagesByPageId.set(activeEntries[i].pageId, copiedPagesByOutputIndex[i]);
+    }
+    const fontCache = await createOverlayFontCache(outputDoc, overlays, pagesByPageId);
     for (let index = 0; index < copiedPagesByOutputIndex.length; index++) {
       const copiedPage = copiedPagesByOutputIndex[index];
       outputDoc.addPage(copiedPage);

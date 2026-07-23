@@ -88,13 +88,33 @@ describe('Overlay create/delete chrome', () => {
             {
               id: 'text-item-0',
               text: 'Existing word',
-              geometry: { x: 10, y: 20, width: 12, height: 2 },
+              geometry: { x: 85, y: 20, width: 10, height: 2 },
               fontFamily: 'Times-Roman',
               fontSize: 12,
               bold: true,
               italic: true,
               rotation: 0,
               backgroundColor: '#F2EDE6',
+            },
+            {
+              id: 'text-item-label',
+              text: 'Balance Due',
+              geometry: { x: 65, y: 20, width: 18, height: 2 },
+              fontFamily: 'Times-Roman',
+              fontSize: 12,
+              bold: true,
+              italic: false,
+              rotation: 0,
+            },
+            {
+              id: 'text-item-below',
+              text: 'Invoice Date',
+              geometry: { x: 84, y: 28, width: 11, height: 2 },
+              fontFamily: 'Times-Roman',
+              fontSize: 12,
+              bold: false,
+              italic: false,
+              rotation: 0,
             },
           ]}
           createLimitMessage={null}
@@ -110,7 +130,7 @@ describe('Overlay create/delete chrome', () => {
       </div>
     );
 
-    fireEvent.click(screen.getByTestId('native-text-item'));
+    fireEvent.click(screen.getAllByTestId('native-text-item')[0]);
 
     expect(onSetReplacementDraft).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -120,6 +140,11 @@ describe('Overlay create/delete chrome', () => {
         bold: true,
         italic: true,
         backgroundColor: '#F2EDE6',
+        replacementBounds: {
+          xMin: 83.25,
+          xMax: 100,
+          yMax: 27.75,
+        },
       })
     );
     expect(
@@ -643,6 +668,23 @@ describe('Overlay create/delete chrome', () => {
       'aria-label',
       expect.stringMatching(/wide by .*high/i)
     );
+  });
+
+  it('renders the replacement cover at its immutable source geometry', () => {
+    renderSelectedReplacement({
+      x: 60,
+      y: 10,
+      width: 35,
+      height: 12,
+      replacementCover: { x: 85, y: 10, width: 10, height: 3 },
+    });
+
+    expect(screen.getByTestId('pdf-tools-replacement-cover')).toHaveStyle({
+      left: '85%',
+      top: '10%',
+      width: '10%',
+      height: '3%',
+    });
   });
 
   it('commits vertical replacement geometry from the south handle', () => {

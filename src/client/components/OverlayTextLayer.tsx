@@ -6,7 +6,10 @@ import {
 } from '../hooks/overlayGeometry';
 import type { OverlaySaveStatus } from '../hooks/useOverlayAutosave';
 import { useOverlayKeyboard } from '../hooks/useOverlayKeyboard';
-import type { NativePdfTextItem } from '../utils/pdfNativeTextItems';
+import {
+  calculateReplacementBounds,
+  type NativePdfTextItem,
+} from '../utils/pdfNativeTextItems';
 import { fitReplacementGeometry } from '../utils/fitReplacementGeometry';
 import { NativeTextItemLayer } from './NativeTextItemLayer';
 import { OverlayTextBox } from './OverlayTextBox';
@@ -181,9 +184,12 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
 
   const handleNativeTextSelect = useCallback(
     (item: NativePdfTextItem) => {
-      onSetReplacementDraft?.(item);
+      onSetReplacementDraft?.({
+        ...item,
+        replacementBounds: calculateReplacementBounds(item, nativeTextItems),
+      });
     },
-    [onSetReplacementDraft]
+    [nativeTextItems, onSetReplacementDraft]
   );
 
   const handleOverlayTextChange = useCallback(
@@ -249,30 +255,55 @@ export const OverlayTextLayer: React.FC<OverlayTextLayerProps> = ({
       }}
     >
       {orderedOverlays.map((overlay) => (
-        <OverlayTextBox
-          key={overlay.id}
-          overlay={overlay}
-          selected={overlay.id === selectedOverlayId}
-          editing={
-            overlay.kind !== 'replace' && overlay.id === editingOverlayId
-          }
-          displayScale={displayScale}
-          onSelect={onSelect}
-          onEdit={overlay.kind === 'replace' ? undefined : beginEditing}
-          onFocus={handleBoxFocus}
-          onKeyDown={(_overlayId, event) =>
-            handleOverlayBoxKeyDown(overlay, event)
-          }
-          onTextChange={(text) => handleOverlayTextChange(overlay, text)}
-          onExitEdit={finishEditingAndSave}
-          onDelete={
-            overlay.id === selectedOverlayId ? deleteSelectedAndSave : undefined
-          }
-          onBeginGeometryEdit={onBeginGeometryEdit}
-          onUpdateGeometry={onUpdateGeometry}
-          onCommitGeometryEdit={onCommitGeometryEdit}
-          displayOnly={readOnly}
-        />
+        <React.Fragment key={overlay.id}>
+          {overlay.kind === 'replace' &&
+            overlay.replacementCover &&
+            overlay.backgroundColor &&
+            overlay.coverActive !== false && (
+              <div
+                className={styles.replacementCover}
+                data-testid="pdf-tools-replacement-cover"
+                aria-hidden="true"
+                style={{
+                  left: `${overlay.replacementCover.x}%`,
+                  top: `${overlay.replacementCover.y}%`,
+                  width: `${overlay.replacementCover.width}%`,
+                  height: `${overlay.replacementCover.height}%`,
+                  zIndex: overlay.zIndex,
+                  backgroundColor: overlay.backgroundColor,
+                  transform: overlay.rotation
+                    ? `rotate(${overlay.rotation}deg)`
+                    : undefined,
+                }}
+              />
+            )}
+          <OverlayTextBox
+            overlay={overlay}
+            selected={overlay.id === selectedOverlayId}
+            editing={
+              overlay.kind !== 'replace' && overlay.id === editingOverlayId
+            }
+            displayScale={displayScale}
+            onSelect={onSelect}
+            onEdit={overlay.kind === 'replace' ? undefined : beginEditing}
+            onFocus={handleBoxFocus}
+            onKeyDown={(_overlayId, event) =>
+              handleOverlayBoxKeyDown(overlay, event)
+            }
+            onTextChange={(text) => handleOverlayTextChange(overlay, text)}
+            onExitEdit={finishEditingAndSave}
+            onDelete={
+              overlay.id === selectedOverlayId
+                ? deleteSelectedAndSave
+                : undefined
+            }
+            onBeginGeometryEdit={onBeginGeometryEdit}
+            onUpdateGeometry={onUpdateGeometry}
+            onCommitGeometryEdit={onCommitGeometryEdit}
+            displayOnly={readOnly}
+            renderInlineCover={!overlay.replacementCover}
+          />
+        </React.Fragment>
       ))}
 
       {replacementDraftGeometry && (

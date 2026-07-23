@@ -37,6 +37,7 @@ interface OverlayTextBoxProps {
     finalGeometry: OverlayBoxGeometry
   ) => void;
   displayOnly?: boolean;
+  renderInlineCover?: boolean;
 }
 
 const RESIZE_HANDLES: OverlayResizeHandle[] = [
@@ -93,6 +94,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
   onUpdateGeometry,
   onCommitGeometryEdit,
   displayOnly = false,
+  renderInlineCover = true,
 }) => {
   const displayText = formatOverlayDisplayText(
     overlay.text,
@@ -231,8 +233,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
             : overlay.verticalAlign === 'bottom'
               ? 'flex-end'
               : 'flex-start',
-        textDecoration:
-          hasLink || overlay.underline ? 'underline' : undefined,
+        textDecoration: hasLink || overlay.underline ? 'underline' : undefined,
       }}
       data-testid="pdf-tools-overlay-box"
       data-overlay-id={overlay.id}
@@ -284,6 +285,7 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
       }}
     >
       {overlay.kind === 'replace' &&
+        renderInlineCover &&
         overlay.backgroundColor &&
         overlay.coverActive !== false && (
           <span

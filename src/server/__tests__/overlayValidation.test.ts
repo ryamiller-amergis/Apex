@@ -1,4 +1,8 @@
-import type { OverlayFontFamily, OverlayTextBox, PageManifestEntry } from '../../shared/types/pdf';
+import type {
+  OverlayFontFamily,
+  OverlayTextBox,
+  PageManifestEntry,
+} from '../../shared/types/pdf';
 import {
   stripOrphanOverlays,
   validateOverlays,
@@ -83,6 +87,47 @@ describe('stripOrphanOverlays', () => {
 });
 
 describe('validateOverlays', () => {
+  it('accepts collision-safe replacement metadata', () => {
+    const overlay = {
+      ...makeOverlay({
+        kind: 'replace',
+        backgroundColor: '#FFFFFF',
+      }),
+      replacementCover: { x: 80, y: 10, width: 10, height: 3 },
+      replacementBounds: { xMin: 60, xMax: 100, yMax: 25 },
+      replacementOverflow: false,
+    };
+
+    const result = validateOverlays([overlay], PAGE_IDS);
+
+    expect(result).toEqual({ ok: true, overlays: [overlay] });
+  });
+
+  it('rejects malformed collision-safe replacement metadata', () => {
+    const result = validateOverlays(
+      [
+        {
+          ...makeOverlay({
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+          }),
+          replacementCover: { x: 80, y: 10, width: -1, height: 3 },
+          replacementBounds: { xMin: 70, xMax: 60, yMax: 101 },
+          replacementOverflow: 'yes',
+        },
+      ],
+      PAGE_IDS
+    );
+
+    expect(errorFields(result)).toEqual(
+      expect.arrayContaining([
+        'replacementCover',
+        'replacementBounds',
+        'replacementOverflow',
+      ])
+    );
+  });
+
   it('VT-09: accepts all inclusive numeric and content boundaries', () => {
     const result = validateOverlays(
       [
@@ -252,16 +297,20 @@ describe('validateOverlays', () => {
     });
   });
 
-  it.each(['Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Merriweather', 'Noto Sans'])(
-    'accepts Google font %s',
-    (fontFamily) => {
-      const result = validateOverlays(
-        [makeOverlay({ fontFamily: fontFamily as OverlayFontFamily })],
-        PAGE_IDS
-      );
-      expect(result.ok).toBe(true);
-    }
-  );
+  it.each([
+    'Roboto',
+    'Open Sans',
+    'Lato',
+    'Montserrat',
+    'Merriweather',
+    'Noto Sans',
+  ])('accepts Google font %s', (fontFamily) => {
+    const result = validateOverlays(
+      [makeOverlay({ fontFamily: fontFamily as OverlayFontFamily })],
+      PAGE_IDS
+    );
+    expect(result.ok).toBe(true);
+  });
 
   it('error message for invalid fontFamily lists all supported families', () => {
     const result = validateOverlays(

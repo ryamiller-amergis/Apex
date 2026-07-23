@@ -1,11 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { inflateSync } from 'node:zlib';
 import fontkit from '@pdf-lib/fontkit';
 import {
+  PDFDict,
   PDFDocument,
   PDFFont,
   PDFName,
   PDFPage,
+  PDFRawStream,
+  PDFRef,
   PDFString,
   StandardFonts,
   clip,
@@ -128,16 +132,166 @@ function standardFontName(overlay: OverlayTextBox): StandardFonts {
   return STANDARD_FONT_NAMES[overlay.fontFamily as StandardFontFamily][variant];
 }
 
+// ── Embedded font extraction ───────────────────────────────────────────────────
+
+/**
+ * Family-name hints used server-side to match an embedded PDF font's BaseFont
+ * name to one of our supported OverlayFontFamily values. Mirrors the heuristics
+ * in the client-side pdfNativeTextItems.ts mapPdfFontToOverlayFamily.
+ */
+const FAMILY_HINTS: Record<OverlayFontFamily, string[]> = {
+  Helvetica: ['helvetica', 'arial'],
+  'Times-Roman': ['times', 'timesnewroman'],
+  Courier: ['courier', 'couriernew', 'mono', 'consolas', 'menlo'],
+  Roboto: ['roboto', 'calibri', 'aptos', 'segoe', 'opensans', 'opensan'],
+  'Open Sans': ['opensans', 'opensan'],
+  Lato: ['lato'],
+  Montserrat: ['montserrat'],
+  Merriweather: ['merriweather', 'georgia', 'garamond', 'cambria'],
+  'Noto Sans': ['notosans', 'noto'],
+};
+
+function fontNameMatchesFamily(
+  rawName: string,
+  family: OverlayFontFamily
+): boolean {
+  // Strip subset prefix e.g. "ABCDEF+Calibri" → "Calibri"
+  const clean = rawName.replace(/^[A-Z]{6}\+/, '');
+  const lower = clean.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (FAMILY_HINTS[family] ?? []).some((hint) => lower.includes(hint));
+}
+
+function lookupDict(doc: PDFDocument, value: unknown): PDFDict | null {
+  if (!value) return null;
+  if (value instanceof PDFRef) {
+    const obj = doc.context.lookup(value);
+    return obj instanceof PDFDict ? obj : null;
+  }
+  return value instanceof PDFDict ? value : null;
+}
+
+function lookupStream(doc: PDFDocument, value: unknown): PDFRawStream | null {
+  if (!value) return null;
+  if (value instanceof PDFRef) {
+    const obj = doc.context.lookup(value);
+    return obj instanceof PDFRawStream ? obj : null;
+  }
+  return value instanceof PDFRawStream ? value : null;
+}
+
+function decodeStream(stream: PDFRawStream): Uint8Array {
+  const filter = stream.dict.get(PDFName.of('Filter'));
+  const raw = stream.contents;
+  const filterName = filter instanceof PDFName ? filter.asString() : '';
+  if (filterName === 'FlateDecode') {
+    try {
+      return inflateSync(Buffer.from(raw));
+    } catch {
+      return raw;
+    }
+  }
+  return raw;
+}
+
+/**
+ * Attempts to extract unsubsetted TTF/OTF font bytes from a copied PDF page
+ * whose resources are already available inside `doc`. Subsetted fonts (whose
+ * BaseFont name begins with a 6-uppercase-letter prefix) are skipped because
+ * only a partial glyph set is present and using it for arbitrary replacement
+ * text would produce missing glyphs.
+ *
+ * Returns null when no suitable match is found; never throws.
+ */
+async function tryExtractFontBytesFromPage(
+  doc: PDFDocument,
+  page: PDFPage,
+  targetFamily: OverlayFontFamily
+): Promise<Uint8Array | null> {
+  try {
+    const resourcesValue = page.node.get(PDFName.of('Resources'));
+    const resources = lookupDict(doc, resourcesValue);
+    if (!resources) return null;
+
+    const fontDictValue = resources.get(PDFName.of('Font'));
+    const fontDict = lookupDict(doc, fontDictValue);
+    if (!fontDict) return null;
+
+    for (const fontKey of fontDict.keys()) {
+      try {
+        const fontObj = lookupDict(doc, fontDict.get(fontKey));
+        if (!fontObj) continue;
+
+        const baseFontValue = fontObj.get(PDFName.of('BaseFont'));
+        const baseFontName =
+          baseFontValue instanceof PDFName ? baseFontValue.asString() : '';
+
+        // Skip subsetted fonts — partial glyph set would corrupt replacement
+        if (/^[A-Z]{6}\+/.test(baseFontName)) continue;
+
+        if (!fontNameMatchesFamily(baseFontName, targetFamily)) continue;
+
+        const descriptorValue = fontObj.get(PDFName.of('FontDescriptor'));
+        const descriptor = lookupDict(doc, descriptorValue);
+        if (!descriptor) continue;
+
+        for (const fileKey of ['FontFile2', 'FontFile3', 'FontFile'] as const) {
+          const fileValue = descriptor.get(PDFName.of(fileKey));
+          const fileStream = lookupStream(doc, fileValue);
+          if (!fileStream) continue;
+          const bytes = decodeStream(fileStream);
+          if (bytes.length > 256) return bytes;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // Any parsing error → fall through to bundled font
+  }
+  return null;
+}
+
 /** Embeds each used font variant at most once for the complete export. */
 export async function createOverlayFontCache(
   document: PDFDocument,
-  overlays: OverlayTextBox[]
+  overlays: OverlayTextBox[],
+  pagesByPageId?: Map<string, PDFPage>
 ): Promise<StandardFontCache> {
   const cache: StandardFontCache = new Map();
   let fontkitRegistered = false;
   for (const overlay of overlays) {
     const key = fontKey(overlay);
     if (cache.has(key)) continue;
+
+    // For replace overlays, try to reuse the original embedded font from the
+    // source page. This only succeeds for fully-embedded (non-subsetted) fonts,
+    // which represent a minority of real-world PDFs — subsetted fonts are
+    // skipped and fall through to the bundled substitutes below.
+    if (overlay.kind === 'replace' && pagesByPageId) {
+      const page = pagesByPageId.get(overlay.pageId);
+      if (page) {
+        const extracted = await tryExtractFontBytesFromPage(
+          document,
+          page,
+          overlay.fontFamily
+        );
+        if (extracted) {
+          if (!fontkitRegistered) {
+            document.registerFontkit(fontkit);
+            fontkitRegistered = true;
+          }
+          try {
+            cache.set(
+              key,
+              await document.embedFont(extracted, { subset: false })
+            );
+            continue;
+          } catch {
+            // Fall through to bundled font
+          }
+        }
+      }
+    }
 
     if (STANDARD_FAMILIES.has(overlay.fontFamily)) {
       cache.set(key, await document.embedFont(standardFontName(overlay)));
@@ -190,6 +344,7 @@ function wrapParagraph(
     }
 
     while (current && font.widthOfTextAtSize(current, fontSize) > maxWidth) {
+      if (current.length <= 1) break;
       let splitAt = current.length - 1;
       while (
         splitAt > 1 &&
@@ -348,6 +503,39 @@ export function burnOverlaysOntoPage(
           ? -boxHeight / 2 + blockHeight
           : boxHeight / 2;
 
+    if (hasCover && overlay.backgroundColor) {
+      const cover = overlay.replacementCover ?? overlay;
+      const coverWidth = (cover.width / 100) * pageGeometry.width;
+      const coverHeight = (cover.height / 100) * pageGeometry.height;
+      const coverLeft = (cover.x / 100) * pageGeometry.width;
+      const coverTop =
+        pageGeometry.height - (cover.y / 100) * pageGeometry.height;
+      const coverCenterX = coverLeft + coverWidth / 2;
+      const coverCenterY = coverTop - coverHeight / 2;
+
+      page.pushOperators(
+        pushGraphicsState(),
+        concatTransformationMatrix(pageA, pageB, pageC, pageD, pageE, pageF),
+        concatTransformationMatrix(
+          cos,
+          sin,
+          -sin,
+          cos,
+          coverCenterX,
+          coverCenterY
+        )
+      );
+      page.drawRectangle({
+        x: -coverWidth / 2,
+        y: -coverHeight / 2,
+        width: coverWidth,
+        height: coverHeight,
+        color: parseColor(overlay.backgroundColor),
+        opacity: 1,
+      });
+      page.pushOperators(popGraphicsState());
+    }
+
     page.pushOperators(
       pushGraphicsState(),
       concatTransformationMatrix(pageA, pageB, pageC, pageD, pageE, pageF),
@@ -356,17 +544,6 @@ export function burnOverlaysOntoPage(
       clip(),
       endPath()
     );
-
-    if (hasCover && overlay.backgroundColor) {
-      page.drawRectangle({
-        x: -boxWidth / 2,
-        y: -boxHeight / 2,
-        width: boxWidth,
-        height: boxHeight,
-        color: parseColor(overlay.backgroundColor),
-        opacity: 1,
-      });
-    }
 
     lines.forEach((line, index) => {
       const lineWidth = font.widthOfTextAtSize(line, overlay.fontSize);
@@ -389,7 +566,11 @@ export function burnOverlaysOntoPage(
 
       const visibleBottom = Math.max(y, -boxHeight / 2);
       const visibleTop = Math.min(y + lineHeight, boxHeight / 2);
-      if ((overlay.linkUrl || overlay.underline) && line.length > 0 && visibleTop > visibleBottom) {
+      if (
+        (overlay.linkUrl || overlay.underline) &&
+        line.length > 0 &&
+        visibleTop > visibleBottom
+      ) {
         const underlineY = y - Math.max(1, overlay.fontSize * 0.08);
         page.drawLine({
           start: { x, y: underlineY },
@@ -403,7 +584,11 @@ export function burnOverlaysOntoPage(
           const toRawPoint = (localX: number, localY: number) => {
             const displayX = centerX + cos * localX - sin * localY;
             const displayY = centerY + sin * localX + cos * localY;
-            return transformPoint(pageGeometry.displayToRaw, displayX, displayY);
+            return transformPoint(
+              pageGeometry.displayToRaw,
+              displayX,
+              displayY
+            );
           };
           addLinkAnnotation(page, overlay.linkUrl, [
             toRawPoint(x, visibleBottom),

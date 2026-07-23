@@ -1,5 +1,8 @@
 import type { OverlayBoxGeometry } from '../hooks/overlayGeometry';
-import type { OverlayFontFamily } from '../../shared/types/pdf';
+import type {
+  OverlayFontFamily,
+  OverlayReplacementBounds,
+} from '../../shared/types/pdf';
 
 export interface NativePdfTextItem {
   id: string;
@@ -14,6 +17,8 @@ export interface NativePdfTextItem {
   color?: string | null;
   /** Sampled page cover color injected when creating a replacement overlay. */
   backgroundColor?: string | null;
+  /** Free page region around this item after accounting for native neighbors. */
+  replacementBounds?: OverlayReplacementBounds;
 }
 
 export interface PdfTextItemLike {
@@ -22,6 +27,72 @@ export interface PdfTextItemLike {
   width: number;
   height: number;
   fontName: string;
+}
+
+const REPLACEMENT_COLLISION_GAP_PCT = 0.25;
+const REPLACEMENT_ROTATION_TOLERANCE_DEG = 2;
+
+/**
+ * Finds a collision-safe rectangle around selected native PDF text. Same-line
+ * neighbors cap horizontal growth; the nearest item below caps downward reflow.
+ */
+export function calculateReplacementBounds(
+  selected: NativePdfTextItem,
+  items: NativePdfTextItem[]
+): OverlayReplacementBounds {
+  const selectedGeometry = selected.geometry;
+  const selectedRight = selectedGeometry.x + selectedGeometry.width;
+  const selectedBottom = selectedGeometry.y + selectedGeometry.height;
+  let xMin = 0;
+  let xMax = 100;
+
+  for (const other of items) {
+    if (
+      other.id === selected.id ||
+      Math.abs(other.rotation - selected.rotation) >
+        REPLACEMENT_ROTATION_TOLERANCE_DEG
+    ) {
+      continue;
+    }
+    const geometry = other.geometry;
+    const otherRight = geometry.x + geometry.width;
+    const otherBottom = geometry.y + geometry.height;
+    const sharesLine =
+      selectedGeometry.y < otherBottom && geometry.y < selectedBottom;
+    if (!sharesLine) continue;
+
+    if (otherRight <= selectedGeometry.x) {
+      xMin = Math.max(xMin, otherRight + REPLACEMENT_COLLISION_GAP_PCT);
+    } else if (geometry.x >= selectedRight) {
+      xMax = Math.min(xMax, geometry.x - REPLACEMENT_COLLISION_GAP_PCT);
+    }
+  }
+
+  xMin = Math.min(xMin, selectedGeometry.x);
+  xMax = Math.max(xMax, selectedRight);
+
+  let yMax = 100;
+  for (const other of items) {
+    if (
+      other.id === selected.id ||
+      Math.abs(other.rotation - selected.rotation) >
+        REPLACEMENT_ROTATION_TOLERANCE_DEG
+    ) {
+      continue;
+    }
+    const geometry = other.geometry;
+    const otherRight = geometry.x + geometry.width;
+    const overlapsAvailableWidth = xMin < otherRight && geometry.x < xMax;
+    if (overlapsAvailableWidth && geometry.y >= selectedBottom) {
+      yMax = Math.min(yMax, geometry.y - REPLACEMENT_COLLISION_GAP_PCT);
+    }
+  }
+
+  return {
+    xMin: Math.max(0, xMin),
+    xMax: Math.min(100, xMax),
+    yMax: Math.max(selectedBottom, Math.min(100, yMax)),
+  };
 }
 
 interface PdfTextStyleLike {
@@ -60,12 +131,22 @@ const ROBOTO_SANS_HINTS = ['calibri', 'aptos', 'segoe'];
 const HELVETICA_SANS_HINTS = ['helvetica', 'arial'];
 const TIMES_SERIF_HINTS = ['times', 'timesnewroman'];
 const SERIF_HINTS = ['serif', 'roman', 'georgia', 'garamond', 'cambria'];
-const SANS_HINTS = ['sans', 'verdana', 'tahoma', 'roboto', 'lato', 'montserrat'];
+const SANS_HINTS = [
+  'sans',
+  'verdana',
+  'tahoma',
+  'roboto',
+  'lato',
+  'montserrat',
+];
 const BOLD_HINTS = ['bold', 'black', 'heavy', 'demi', 'semibold'];
 const ITALIC_HINTS = ['italic', 'oblique', 'slanted'];
 
 function normalizeFontHint(hint: string): string {
-  return hint.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return hint
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 /**
@@ -76,7 +157,9 @@ export function mapPdfFontToOverlayFamily(hint: string): OverlayFontFamily {
   const normalized = normalizeFontHint(hint);
   const compact = normalized.replace(/\s+/g, '');
   const contains = (values: readonly string[]) =>
-    values.some((value) => normalized.includes(value) || compact.includes(value));
+    values.some(
+      (value) => normalized.includes(value) || compact.includes(value)
+    );
 
   if (contains(MONOSPACE_HINTS)) return 'Courier';
   if (contains(TIMES_SERIF_HINTS)) return 'Times-Roman';

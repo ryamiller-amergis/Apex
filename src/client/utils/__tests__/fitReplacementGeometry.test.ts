@@ -24,20 +24,21 @@ describe('fitReplacementGeometry', () => {
   };
 
   it('uses the longest explicit line for width and line count for height without overshoot', () => {
+    // Use a wide box (80%) so none of the three explicit lines wrap. Each char = 10px,
+    // longest line = 24 chars = 240px; (80/100)*600 = 480px > 240px → no wrap.
     mockMeasureText((value) => value.length * 10);
+    const wideBase = { ...base, width: 80 };
     const fitted = fitReplacementGeometry(
-      base,
+      wideBase,
       'short\r\nthis is the longest line\nmid',
       600,
       800
     );
     const emPx = 12 * (96 / 72);
-    expect(fitted.width).toBeCloseTo(
-      ((24 * 10 + 12 + emPx * 0.2) / 600) * 100
-    );
+    expect(fitted.width).toBe(wideBase.width);
     const perLineHeightPct = ((emPx * 1.2) / 800) * 100;
     expect(fitted.height).toBeCloseTo(
-      Math.max(base.height, 3 * perLineHeightPct)
+      Math.max(wideBase.height, 3 * perLineHeightPct)
     );
   });
 
@@ -71,23 +72,94 @@ describe('fitReplacementGeometry', () => {
     expect(contentWidthPx).toBeCloseTo(measured + emPx * 0.2);
   });
 
-  it('does not auto-shrink manually enlarged dimensions', () => {
+  it('grows leftward near the right edge before wrapping', () => {
+    mockMeasureText(() => 300);
+    const fitted = fitReplacementGeometry(
+      { ...base, x: 80, width: 12 },
+      'A longer replacement near the right edge',
+      600,
+      800
+    );
+
+    expect(fitted.x).toBeLessThan(80);
+    expect(fitted.width).toBeGreaterThan(20);
+    expect(fitted.x + fitted.width).toBeLessThanOrEqual(100);
+    expect(fitted.height).toBeCloseTo(((12 * (96 / 72) * 1.2) / 800) * 100);
+  });
+
+  it('stops growth at collision bounds and wraps inside the remaining space', () => {
+    mockMeasureText((value) => value.length * 10);
+    const fitted = fitReplacementGeometry(
+      {
+        ...base,
+        x: 85,
+        y: 10,
+        width: 10,
+        height: 3,
+        replacementBounds: { xMin: 83.25, xMax: 100, yMax: 17.75 },
+      },
+      'longer replacement',
+      600,
+      800
+    );
+
+    expect(fitted.x).toBeCloseTo(83.25);
+    expect(fitted.width).toBeCloseTo(16.75);
+    expect(fitted.x + fitted.width).toBeCloseTo(100);
+    expect(fitted.replacementOverflow).toBe(false);
+  });
+
+  it('marks overflow instead of expanding across neighboring content', () => {
+    mockMeasureText((value) => value.length * 10);
+    const fitted = fitReplacementGeometry(
+      {
+        ...base,
+        x: 85,
+        y: 10,
+        width: 10,
+        height: 3,
+        replacementBounds: { xMin: 83.25, xMax: 100, yMax: 12 },
+      },
+      'longer replacement',
+      600,
+      800
+    );
+
+    expect(fitted.x).toBeGreaterThanOrEqual(83.25);
+    expect(fitted.x + fitted.width).toBeLessThanOrEqual(100);
+    expect(fitted.height).toBeCloseTo(2);
+    expect(fitted.replacementOverflow).toBe(true);
+  });
+
+  it('repairs an oversized persisted height while preserving its width', () => {
     mockMeasureText(() => 4);
-    expect(
-      fitReplacementGeometry({ ...base, width: 45, height: 30 }, 'x', 600, 800)
-    ).toMatchObject({ width: 45, height: 30 });
+    const fitted = fitReplacementGeometry(
+      { ...base, width: 45, height: 30 },
+      'x',
+      600,
+      800
+    );
+
+    expect(fitted.width).toBe(45);
+    expect(fitted.height).toBeCloseTo(((12 * (96 / 72) * 1.2) / 800) * 100);
   });
 
   it('clamps growth at the right and bottom page boundaries', () => {
     mockMeasureText(() => 2000);
     expect(
       fitReplacementGeometry({ ...base, x: 90, y: 92 }, 'a\nb\nc\nd', 600, 800)
-    ).toMatchObject({ x: 90, y: 92, width: 10, height: 8 });
+    ).toMatchObject({ x: 0, y: 92, width: 100, height: 8 });
   });
 
   it('uses deterministic fallback measurement without a canvas context', () => {
     jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
-    const fitted = fitReplacementGeometry(base, 'fallback\nline', 600, 800);
+    // Use a wide box so the two explicit lines don't wrap in fallback mode
+    const fitted = fitReplacementGeometry(
+      { ...base, width: 80 },
+      'fallback\nline',
+      600,
+      800
+    );
     expect(fitted.width).toBeGreaterThanOrEqual(base.width);
     expect(fitted.height).toBeGreaterThan(base.height);
   });
@@ -152,30 +224,38 @@ describe('fitReplacementGeometry', () => {
       fontSize: 10,
     };
 
-    it('single-line edit keeps height == source height (no vertical growth)', () => {
+    it('single-line text that fits in the box keeps height == source height', () => {
+      // Box is wide enough that 'Sales Assist' (12 chars × 8px = 96px) fits
+      // inside (20% × 792px = 158px). Word-wrap never fires → height is max of
+      // source height and 1-line em height.
       mockMeasureText((v) => v.length * 8);
+      const wideOverlay = { ...realisticOverlay, width: 20 };
+      const emPx = 10 * 1.0;
+      const oneLinePct = ((emPx * 1.2) / 612) * 100;
       const fitted = fitReplacementGeometry(
-        realisticOverlay,
+        wideOverlay,
         'Sales Assist',
         792,
         612,
         1.0
       );
 
-      expect(fitted.height).toBe(sourceHeight);
+      expect(fitted.height).toBeCloseTo(Math.max(sourceHeight, oneLinePct));
     });
 
-    it('longer single-line text grows width only, height unchanged', () => {
+    it('single-line text wider than box wraps and grows height', () => {
+      // Text is longer than the remaining page width → auto-grown width is
+      // clamped, text wraps, both width and height grow.
       mockMeasureText((v) => v.length * 8);
       const fitted = fitReplacementGeometry(
         realisticOverlay,
-        'A much longer replacement string here',
+        'a'.repeat(100),
         792,
         612,
         1.0
       );
 
-      expect(fitted.height).toBe(sourceHeight);
+      expect(fitted.height).toBeGreaterThan(sourceHeight);
       expect(fitted.width).toBeGreaterThan(realisticOverlay.width);
     });
 
@@ -226,12 +306,35 @@ describe('fitReplacementGeometry', () => {
       expect(occupiedPx).toBeCloseTo(expectedPx, 0);
     });
 
-    it('manual-enlarged height is not auto-shrunk', () => {
+    it('repairs a previously auto-enlarged height on the next text edit', () => {
       mockMeasureText(() => 10);
       const enlarged = { ...realisticOverlay, height: 10 };
       const fitted = fitReplacementGeometry(enlarged, 'short', 792, 612, 1.0);
 
-      expect(fitted.height).toBe(10);
+      expect(fitted.height).toBeCloseTo(((10 * 1.2) / 612) * 100);
+    });
+
+    it('long single-line text that wraps grows the box height', () => {
+      // Text is so long (100 chars × 8px = 800px) that even a 90%-wide box
+      // (maximum with x=10: 90% × 792 = 712px) cannot fit it on one line.
+      // Width is clamped at 90%, wrap prediction fires, height grows.
+      mockMeasureText((v) => v.length * 8);
+      const emPx = 10 * 1.0;
+      const longText = 'a'.repeat(100); // 100 × 8px = 800px > 90% × 792 = 712px
+      const fitted = fitReplacementGeometry(
+        realisticOverlay,
+        longText,
+        792,
+        612,
+        1.0
+      );
+
+      // Width expands left and right to the full page before wrapping.
+      expect(fitted.x).toBe(0);
+      expect(fitted.width).toBeCloseTo(100, 0);
+      // Height must grow beyond 1 line since text still wraps at full width.
+      const oneLinePct = ((1 * emPx * 1.2) / 612) * 100;
+      expect(fitted.height).toBeGreaterThan(oneLinePct);
     });
 
     it('page-bottom clamp respected for multiline', () => {

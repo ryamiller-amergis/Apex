@@ -25,6 +25,19 @@ export type OverlayVerticalAlign = 'top' | 'middle' | 'bottom';
 export type OverlayListStyle = 'none' | 'bullet' | 'numbered';
 export type OverlayKind = 'add' | 'replace';
 
+export interface PdfOverlayGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface OverlayReplacementBounds {
+  xMin: number;
+  xMax: number;
+  yMax: number;
+}
+
 export interface OverlayTextBox {
   id: string;
   pageId: string;
@@ -53,6 +66,12 @@ export interface OverlayTextBox {
   backgroundColor?: string | null;
   /** Cover activates after text edit or removal. Defaults true for backward compat. */
   coverActive?: boolean;
+  /** Immutable source-text region erased by a replacement. */
+  replacementCover?: PdfOverlayGeometry;
+  /** Collision-safe page limits calculated from neighboring native PDF text. */
+  replacementBounds?: OverlayReplacementBounds;
+  /** True when replacement text cannot fit inside its collision-safe bounds. */
+  replacementOverflow?: boolean;
 }
 
 /**
@@ -67,6 +86,26 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     overlay[field] === undefined ||
     overlay[field] === null ||
     typeof overlay[field] === 'string';
+  const isOptionalGeometry = (field: string) => {
+    const value = overlay[field];
+    if (value === undefined) return true;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false;
+    const geometry = value as Record<string, unknown>;
+    return ['x', 'y', 'width', 'height'].every(
+      (key) => typeof geometry[key] === 'number'
+    );
+  };
+  const isOptionalReplacementBounds = (field: string) => {
+    const value = overlay[field];
+    if (value === undefined) return true;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false;
+    const bounds = value as Record<string, unknown>;
+    return ['xMin', 'xMax', 'yMax'].every(
+      (key) => typeof bounds[key] === 'number'
+    );
+  };
 
   return (
     typeof overlay.id === 'string' &&
@@ -82,7 +121,8 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     isNumber('fontSize') &&
     typeof overlay.bold === 'boolean' &&
     typeof overlay.italic === 'boolean' &&
-    (overlay.underline === undefined || typeof overlay.underline === 'boolean') &&
+    (overlay.underline === undefined ||
+      typeof overlay.underline === 'boolean') &&
     typeof overlay.color === 'string' &&
     ['left', 'center', 'right'].includes(overlay.horizontalAlign as string) &&
     ['top', 'middle', 'bottom'].includes(overlay.verticalAlign as string) &&
@@ -95,7 +135,11 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     (overlay.kind === undefined ||
       overlay.kind === 'add' ||
       overlay.kind === 'replace') &&
-    isOptionalString('backgroundColor')
+    isOptionalString('backgroundColor') &&
+    isOptionalGeometry('replacementCover') &&
+    isOptionalReplacementBounds('replacementBounds') &&
+    (overlay.replacementOverflow === undefined ||
+      typeof overlay.replacementOverflow === 'boolean')
   );
 }
 

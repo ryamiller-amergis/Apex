@@ -27,6 +27,24 @@ const overlay: OverlayTextBox = {
 };
 
 describe('OverlayFormatToolbar', () => {
+  it('warns when collision-safe bounds cannot contain replacement text', () => {
+    render(
+      <OverlayFormatToolbar
+        overlay={{
+          ...overlay,
+          kind: 'replace',
+          backgroundColor: '#FFFFFF',
+          replacementOverflow: true,
+        }}
+        onChange={jest.fn()}
+      />
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Replacement text does not fit without overlapping nearby PDF content.'
+    );
+  });
+
   it('applies core and rich formatting patches', () => {
     const onChange = jest.fn();
     render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);

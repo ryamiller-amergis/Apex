@@ -161,7 +161,12 @@ interface ColorPickerProps {
   onChange: (color: string) => void;
 }
 
-const ColorPicker: React.FC<ColorPickerProps> = ({ value, testId, label, onChange }) => {
+const ColorPicker: React.FC<ColorPickerProps> = ({
+  value,
+  testId,
+  label,
+  onChange,
+}) => {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div className={styles.colorControl}>
@@ -475,6 +480,12 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
                 }
                 onBlur={onReplacementTextBlur}
               />
+              {overlay.replacementOverflow && (
+                <span className={styles.error} role="alert">
+                  Replacement text does not fit without overlapping nearby PDF
+                  content. Resize the box or reduce the font size.
+                </span>
+              )}
             </label>
             <div className={styles.field}>
               <span>Cover color</span>

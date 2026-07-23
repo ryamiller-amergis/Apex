@@ -13,6 +13,12 @@
   pointer-events: none;
 }
 
+.replacementCover {
+  position: absolute;
+  transform-origin: center center;
+  pointer-events: none;
+}
+
 .limitMessage {
   position: absolute;
   left: 50%;

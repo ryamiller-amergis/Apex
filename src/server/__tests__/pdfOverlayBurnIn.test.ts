@@ -154,6 +154,35 @@ describe('pdfOverlayBurnIn', () => {
     );
   });
 
+  it('limits the cover to immutable source geometry when replacement text expands', async () => {
+    const overlays = [
+      makeOverlay({
+        kind: 'replace',
+        backgroundColor: '#FFFFFF',
+        x: 60,
+        y: 10,
+        width: 35,
+        height: 12,
+        replacementCover: { x: 85, y: 10, width: 10, height: 3 },
+        text: 'Expanded replacement',
+      }),
+    ];
+    const { page, fonts } = await createPage(overlays);
+    const drawRectangle = jest.spyOn(page, 'drawRectangle');
+
+    burnOverlaysOntoPage(page, overlays, fonts);
+
+    expect(drawRectangle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        x: -30,
+        y: -12,
+        width: 60,
+        height: 24,
+        opacity: 1,
+      })
+    );
+  });
+
   it('keeps a replacement cover when its text is cleared', async () => {
     const overlays = [
       makeOverlay({
@@ -221,9 +250,9 @@ describe('pdfOverlayBurnIn', () => {
       .filter(
         (operator) => (operator as unknown as { name?: string }).name === 'cm'
       );
-    expect(transformOperators).toHaveLength(2);
+    expect(transformOperators).toHaveLength(4);
     const [a, b, c, d, e, f] = (
-      transformOperators[1] as unknown as {
+      transformOperators[3] as unknown as {
         args: Array<{ numberValue: number }>;
       }
     ).args.map((value) => value.numberValue);
