@@ -154,3 +154,48 @@ describe('PDF session overlay data model', () => {
     expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 });
+
+import { PDF_OVERLAY_FONT_FAMILIES } from '../../shared/types/pdf';
+
+describe('PDF_OVERLAY_FONT_FAMILIES catalog', () => {
+  it('includes the legacy families and the six Google fonts', () => {
+    expect(PDF_OVERLAY_FONT_FAMILIES).toEqual([
+      'Helvetica',
+      'Times-Roman',
+      'Courier',
+      'Roboto',
+      'Open Sans',
+      'Lato',
+      'Montserrat',
+      'Merriweather',
+      'Noto Sans',
+    ]);
+  });
+
+  it('accepts an overlay using a new Google font via isOverlayTextBox', () => {
+    const overlay = {
+      id: '11111111-1111-1111-8111-111111111111',
+      pageId: 'p1',
+      x: 1, y: 1, width: 10, height: 5,
+      text: 'Hi',
+      fontFamily: 'Roboto',
+      fontSize: 12,
+      bold: false, italic: false,
+      color: '#000000',
+      horizontalAlign: 'left', verticalAlign: 'top',
+      opacity: 100, rotation: 0, listStyle: 'none', zIndex: 1,
+    };
+    expect(isOverlayTextBox(overlay)).toBe(true);
+  });
+
+  it('rejects an unknown font family via isOverlayTextBox', () => {
+    const overlay = {
+      id: '11111111-1111-1111-8111-111111111111',
+      pageId: 'p1', x: 1, y: 1, width: 10, height: 5, text: 'Hi',
+      fontFamily: 'Comic Sans', fontSize: 12, bold: false, italic: false,
+      color: '#000000', horizontalAlign: 'left', verticalAlign: 'top',
+      opacity: 100, rotation: 0, listStyle: 'none', zIndex: 1,
+    };
+    expect(isOverlayTextBox(overlay)).toBe(false);
+  });
+});

@@ -19,8 +19,10 @@ export type StandardFontCache = Map<string, PDFFont>;
 
 const LINE_HEIGHT_MULTIPLIER = 1.2;
 
+type StandardFontFamily = 'Helvetica' | 'Times-Roman' | 'Courier';
+
 const STANDARD_FONT_NAMES: Record<
-  OverlayFontFamily,
+  StandardFontFamily,
   Record<'regular' | 'bold' | 'italic' | 'boldItalic', StandardFonts>
 > = {
   Helvetica: {
@@ -57,7 +59,7 @@ function standardFontName(overlay: OverlayTextBox): StandardFonts {
     : overlay.italic
       ? 'italic'
       : 'regular';
-  return STANDARD_FONT_NAMES[overlay.fontFamily][variant];
+  return STANDARD_FONT_NAMES[overlay.fontFamily as StandardFontFamily][variant];
 }
 
 /** Embeds each standard-font variant at most once for the complete export. */

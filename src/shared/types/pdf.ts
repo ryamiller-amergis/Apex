@@ -7,7 +7,19 @@ export type PdfConversionStatus =
   | 'completed'
   | 'failed';
 export type PdfJobType = 'docx_convert' | 'export';
-export type OverlayFontFamily = 'Helvetica' | 'Times-Roman' | 'Courier';
+export const PDF_OVERLAY_FONT_FAMILIES = [
+  'Helvetica',
+  'Times-Roman',
+  'Courier',
+  'Roboto',
+  'Open Sans',
+  'Lato',
+  'Montserrat',
+  'Merriweather',
+  'Noto Sans',
+] as const;
+
+export type OverlayFontFamily = (typeof PDF_OVERLAY_FONT_FAMILIES)[number];
 export type OverlayHorizontalAlign = 'left' | 'center' | 'right';
 export type OverlayVerticalAlign = 'top' | 'middle' | 'bottom';
 export type OverlayListStyle = 'none' | 'bullet' | 'numbered';
@@ -63,7 +75,7 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     isNumber('width') &&
     isNumber('height') &&
     typeof overlay.text === 'string' &&
-    ['Helvetica', 'Times-Roman', 'Courier'].includes(
+    (PDF_OVERLAY_FONT_FAMILIES as readonly string[]).includes(
       overlay.fontFamily as string
     ) &&
     isNumber('fontSize') &&
@@ -95,6 +107,10 @@ export interface PdfConversionJob {
   queuePosition?: number | null;
   resultUrl?: string | null;
   resultFilename?: string | null;
+  /** Internal artifact filename stored in the artifact store (e.g. `{jobId}.pdf` or `{jobId}.docx`). */
+  resultFileName?: string | null;
+  /** Output format of this job's result artifact. */
+  resultFormat?: PdfExportFormat | null;
   attempts?: number;
   maxAttempts?: number;
   error?: {
@@ -293,8 +309,14 @@ export const PDF_MVP_PERFORMANCE_TARGETS = {
 
 // ── Export Types ───────────────────────────────────────────────────────────────
 
+/** Supported output formats for the PDF assembly export endpoint. */
+export type PdfExportFormat = 'pdf' | 'docx';
+
 export interface ExportRequest {
   filename?: string;
+  /** Output format; defaults to 'pdf' when omitted. */
+  format?: PdfExportFormat;
+  pages?: number[];
 }
 
 export interface EnqueueExportResponse {
