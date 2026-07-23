@@ -1,8 +1,14 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { usePdfDocument } from '../hooks/usePdfDocument';
 import { usePageTextItems } from '../hooks/usePageTextItems';
+import { usePdfFormFields } from '../hooks/usePdfFormFields';
 import { pdfFileUrl } from '../utils/pdfUrls';
-import type { OverlayTextBox as OverlayTextBoxModel } from '../../shared/types/pdf';
+import type {
+  OverlayTextBox as OverlayTextBoxModel,
+  PdfTextFormFieldDefinition,
+  PdfTextFormValue,
+  PdfSignatureOverlay,
+} from '../../shared/types/pdf';
 import type { OverlayBoxGeometry } from '../hooks/overlayGeometry';
 import type { OverlaySaveStatus } from '../hooks/useOverlayAutosave';
 import type { NativePdfTextItem } from '../utils/pdfNativeTextItems';
@@ -11,7 +17,24 @@ import {
   samplePageTextColors,
 } from '../utils/samplePageBackgroundColor';
 import { OverlayTextLayer } from './OverlayTextLayer';
+import { PdfFormFieldLayer } from './PdfFormFieldLayer';
+import { SignatureOverlayLayer } from './SignatureOverlayLayer';
 import styles from './PdfInlinePreview.module.css';
+
+export interface PdfInlinePreviewFormProps {
+  /** Field catalog from the session metadata for this page's source file. */
+  catalog: PdfTextFormFieldDefinition[];
+  /** Currently persisted form values for this session. */
+  values: PdfTextFormValue[];
+  /** Whether the fill-form tool is currently active. */
+  active: boolean;
+  /** Whether the session is expired / read-only. */
+  readOnly?: boolean;
+  /** Render saved values as non-interactive document content. */
+  displayOnly?: boolean;
+  /** Fired on every field change — drives debounced autosave. */
+  onValuesChange: (updated: PdfTextFormValue[]) => void;
+}
 
 export interface PdfInlinePreviewOverlayProps {
   pageId: string | null;
@@ -62,6 +85,16 @@ export interface PdfInlinePreviewOverlayProps {
   onSendOverlayBackward: () => void;
 }
 
+export interface PdfInlinePreviewSignatureProps {
+  pageId: string;
+  overlays: PdfSignatureOverlay[];
+  selectedOverlayId: string | null;
+  readOnly?: boolean;
+  onSelect: (id: string | null) => void;
+  onUpdate: (id: string, patch: Partial<PdfSignatureOverlay>) => void;
+  onDelete: (id: string) => void;
+}
+
 export interface PdfInlinePreviewProps {
   sessionId: string;
   fileId: string | null;
@@ -70,6 +103,8 @@ export interface PdfInlinePreviewProps {
   sourceFileName: string;
   originalPageNumber: number;
   overlay?: PdfInlinePreviewOverlayProps | null;
+  form?: PdfInlinePreviewFormProps | null;
+  signature?: PdfInlinePreviewSignatureProps | null;
 }
 
 const MAX_FIT_SCALE = 3;
@@ -87,6 +122,8 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
   sourceFileName,
   originalPageNumber,
   overlay = null,
+  form = null,
+  signature = null,
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -111,6 +148,15 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
     sourcePageIndex,
     rotation,
     replacementMode
+  );
+
+  const { fields: formFields } = usePdfFormFields(
+    document,
+    fileUrl,
+    sourcePageIndex,
+    rotation,
+    form?.catalog ?? [],
+    form?.active ?? false
   );
 
   const updateSize = useCallback(() => {
@@ -409,6 +455,29 @@ const PdfInlinePreviewInner: React.FC<PdfInlinePreviewProps> = ({
                 Existing text could not be loaded. Try again or use Add text.
               </div>
             )}
+          {form?.active && hasRendered && canvasDisplaySize.width > 0 && fileId && (
+            <PdfFormFieldLayer
+              fileId={fileId}
+              fields={formFields}
+              catalog={form.catalog}
+              values={form.values}
+              readOnly={form.readOnly}
+              displayOnly={form.displayOnly}
+              onValuesChange={form.onValuesChange}
+            />
+          )}
+          {signature && hasRendered && canvasDisplaySize.width > 0 && (
+            <SignatureOverlayLayer
+              pageId={signature.pageId}
+              sessionId={sessionId}
+              overlays={signature.overlays}
+              selectedOverlayId={signature.selectedOverlayId}
+              readOnly={signature.readOnly}
+              onSelect={signature.onSelect}
+              onUpdate={signature.onUpdate}
+              onDelete={signature.onDelete}
+            />
+          )}
         </div>
       </div>
       {!showSpinner && (

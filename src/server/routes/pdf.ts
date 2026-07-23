@@ -17,7 +17,11 @@ import {
   removeFile,
   queuePdfExport,
   closeSession,
+  replaceFormValues,
+  addSignatureAsset,
+  replaceSignatureOverlays,
 } from '../services/pdfAssemblyService';
+import { streamSignatureAsset } from '../services/pdfSignatureService';
 import {
   getPdfJob,
   PdfQueueSaturatedError,
@@ -28,6 +32,9 @@ import {
   PDF_MVP_PERFORMANCE_TARGETS,
   type OverlayFieldError,
   type ReplaceOverlaysRequest,
+  type ReplaceFormValuesRequest,
+  type ReplaceSignatureOverlaysRequest,
+  type PdfTextFormValue,
 } from '../../shared/types/pdf';
 
 const router = express.Router();
@@ -554,6 +561,231 @@ router.get(
       stream.pipe(res);
     } catch (err) {
       console.error('[pdf] GET file error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── PUT /api/pdf/sessions/:sessionId/form-values ──────────────────────────────
+//
+// Replaces the session's form-field values with the supplied array.
+// The route validates ownership, session status, and field-level constraints.
+// Returns the authoritative saved values and updatedAt.
+
+router.put(
+  '/sessions/:sessionId/form-values',
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId } = req.params;
+      const body = req.body as ReplaceFormValuesRequest;
+
+      if (!Array.isArray(body?.values)) {
+        res.status(400).json({
+          error: 'Request body must include a "values" array.',
+          code: PDF_ERROR_CODES.FORM_VALUES_INVALID,
+        });
+        return;
+      }
+
+      // Enforce reasonable per-request item count
+      if (body.values.length > 500) {
+        res.status(400).json({
+          error: 'Too many form values in one request (max 500).',
+          code: PDF_ERROR_CODES.FORM_VALUES_INVALID,
+        });
+        return;
+      }
+
+      const result = await replaceFormValues(sessionId, userId, body.values as PdfTextFormValue[]);
+      res.json(result);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+        res.status(404).json({ error: 'Session not found', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+        res.status(403).json({ error: 'Forbidden', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+        res.status(410).json({ error: 'Session has expired', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.FORM_VALUES_INVALID) {
+        res.status(422).json({
+          error: (err as Error).message,
+          code,
+          errors: (err as { errors?: unknown }).errors,
+        });
+        return;
+      }
+      console.error('[pdf] PUT form-values error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── Signature upload multer (in-memory, 2 MB) ─────────────────────────────────
+
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+});
+
+// ── POST /api/pdf/sessions/:sessionId/signature-assets ────────────────────────
+//
+// Accepts a single PNG file (field name "image") and stores it as a session-
+// scoped artifact. Returns asset metadata (never raw bytes or base64 data).
+
+router.post(
+  '/sessions/:sessionId/signature-assets',
+  signatureUpload.single('image'),
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        res.status(400).json({
+          error: 'Request must include a "image" file field.',
+          code: PDF_ERROR_CODES.SIGNATURE_ASSET_INVALID,
+        });
+        return;
+      }
+
+      const result = await addSignatureAsset(sessionId, userId, file.buffer);
+      res.status(201).json(result);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+        res.status(404).json({ error: 'Session not found', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+        res.status(403).json({ error: 'Forbidden', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+        res.status(410).json({ error: 'Session has expired', code });
+        return;
+      }
+      if (
+        code === PDF_ERROR_CODES.SIGNATURE_ASSET_INVALID ||
+        code === PDF_ERROR_CODES.SIGNATURE_ASSET_TOO_LARGE ||
+        code === PDF_ERROR_CODES.SIGNATURE_ASSET_LIMIT_EXCEEDED
+      ) {
+        res.status(422).json({ error: (err as Error).message, code });
+        return;
+      }
+      console.error('[pdf] POST signature-assets error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── GET /api/pdf/sessions/:sessionId/signature-assets/:assetId ────────────────
+//
+// Streams the stored PNG for inline preview. The caller must own the session.
+
+router.get(
+  '/sessions/:sessionId/signature-assets/:assetId',
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId, assetId } = req.params;
+
+      // Ownership check: load the session
+      const session = await getSession(sessionId);
+      if (!session) {
+        res.status(404).json({ error: 'Session not found', code: PDF_ERROR_CODES.SESSION_NOT_FOUND });
+        return;
+      }
+      if ((session as any).userId !== userId) {
+        res.status(403).json({ error: 'Forbidden', code: PDF_ERROR_CODES.SESSION_FORBIDDEN });
+        return;
+      }
+      const sigState = (session as any).signatureState as { assets: Array<{ assetId: string }> } | undefined;
+      const knownIds = new Set((sigState?.assets ?? []).map((a) => a.assetId));
+      if (!knownIds.has(assetId)) {
+        res.status(404).json({
+          error: 'Signature asset not found',
+          code: PDF_ERROR_CODES.SIGNATURE_ASSET_NOT_FOUND,
+        });
+        return;
+      }
+
+      const stream = await streamSignatureAsset(userId, sessionId, assetId);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      (stream as NodeJS.ReadableStream).pipe(res);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND || code === PDF_ERROR_CODES.SIGNATURE_ASSET_NOT_FOUND) {
+        res.status(404).json({ error: 'Not found', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+        res.status(403).json({ error: 'Forbidden', code });
+        return;
+      }
+      console.error('[pdf] GET signature-asset error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── PUT /api/pdf/sessions/:sessionId/signature-overlays ───────────────────────
+//
+// Replaces the session's signature overlay array. Every overlay must reference
+// a known session asset and a non-deleted page in the manifest.
+
+router.put(
+  '/sessions/:sessionId/signature-overlays',
+  async (req, res): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { sessionId } = req.params;
+      const body = req.body as ReplaceSignatureOverlaysRequest;
+
+      if (!Array.isArray(body?.overlays)) {
+        res.status(400).json({
+          error: 'Request body must include an "overlays" array.',
+          code: PDF_ERROR_CODES.SIGNATURE_OVERLAY_INVALID,
+        });
+        return;
+      }
+
+      const result = await replaceSignatureOverlays(sessionId, userId, body.overlays);
+      res.json(result);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND) {
+        res.status(404).json({ error: 'Session not found', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_FORBIDDEN) {
+        res.status(403).json({ error: 'Forbidden', code });
+        return;
+      }
+      if (code === PDF_ERROR_CODES.SESSION_EXPIRED) {
+        res.status(410).json({ error: 'Session has expired', code });
+        return;
+      }
+      if (
+        code === PDF_ERROR_CODES.SIGNATURE_OVERLAY_INVALID ||
+        code === PDF_ERROR_CODES.SIGNATURE_OVERLAY_LIMIT_EXCEEDED
+      ) {
+        res.status(422).json({
+          error: (err as Error).message,
+          code,
+          errors: (err as { errors?: unknown }).errors,
+        });
+        return;
+      }
+      console.error('[pdf] PUT signature-overlays error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
   }

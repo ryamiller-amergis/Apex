@@ -187,11 +187,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
     <div
       ref={cardRef}
       className={cardClassName}
-      style={
-        colorIndicator
-          ? { borderLeftWidth: '3px', borderLeftColor: colorIndicator }
-          : undefined
-      }
+      style={colorIndicator ? { borderLeftWidth: '5px', borderLeftColor: colorIndicator } : undefined}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
@@ -207,6 +203,13 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
       data-testid={`pdf-thumbnail-${assemblyPosition}`}
       data-page-id={pageId}
     >
+      {colorIndicator && (
+        <div
+          className={styles.fileColorStrip}
+          style={{ background: colorIndicator }}
+          aria-hidden="true"
+        />
+      )}
       <div className={styles.canvasWrapper}>
         {isLoading && (
           <div className={styles.skeleton} data-testid="thumbnail-skeleton" />
@@ -261,6 +264,7 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
         className={styles.sourceLabel}
         data-testid={`pdf-thumbnail-source-${assemblyPosition}`}
         title={`${sourceFileName} p.${originalPageNumber}`}
+        style={colorIndicator ? { color: colorIndicator, fontWeight: 600 } : undefined}
       >
         {sourceFileName} p.{originalPageNumber}
       </div>

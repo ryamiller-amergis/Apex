@@ -7,6 +7,8 @@ import type {
   PdfFileMetadata,
   PdfJobType,
   PdfSessionStatus,
+  PdfSignatureState,
+  PdfTextFormValue,
 } from '../../shared/types/pdf';
 import type {
   WorkItemHierarchyNode,
@@ -1269,6 +1271,8 @@ export const pdfSessions = pgTable('pdf_sessions', {
   textOverlays: jsonb('text_overlays').$type<OverlayTextBox[]>().notNull().default([]),
   fileMetadata: jsonb('file_metadata').$type<PdfFileMetadata[]>().notNull().default([]),
   exportFilename: text('export_filename'),
+  formFieldValues: jsonb('form_field_values').$type<PdfTextFormValue[]>().notNull().default([]),
+  signatureState: jsonb('signature_state').$type<PdfSignatureState>().notNull().default({ assets: [], overlays: [] }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull().default(sql`now() + interval '4 hours'`),

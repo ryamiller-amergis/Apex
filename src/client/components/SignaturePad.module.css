@@ -1,0 +1,70 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.canvas {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  /* CSS-only paper background; exported canvas pixels remain transparent. */
+  background: #fff;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.clearButton,
+.cancelButton {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.clearButton:hover:not(:disabled),
+.cancelButton:hover {
+  background: var(--bg-secondary);
+}
+
+.clearButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.useButton {
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: none;
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.useButton:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.useButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

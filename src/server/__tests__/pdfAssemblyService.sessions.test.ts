@@ -61,6 +61,7 @@ mockInsertValues.mockReturnValue({ returning: mockReturning });
 import {
   closeSession,
   createSession,
+  getSession,
 } from '../services/pdfAssemblyService';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
 
@@ -94,6 +95,44 @@ describe('pdfAssemblyService session lifecycle', () => {
         expiresAt: '2026-07-17T16:00:00.000Z',
       },
     ]);
+  });
+
+  describe('getSession', () => {
+    it('does not return signature overlays for pages no longer in the manifest', async () => {
+      mockFindFirst.mockResolvedValue({
+        ...makeActive('sess-1', '2026-07-17T10:00:00.000Z'),
+        pageManifest: [
+          {
+            pageId: 'current-page',
+            fileId: 'file-1',
+            sourcePageIndex: 0,
+            rotation: 0,
+            deleted: false,
+          },
+        ],
+        signatureState: {
+          assets: [
+            {
+              assetId: 'asset-1',
+              source: 'drawn',
+              widthPx: 100,
+              heightPx: 50,
+              uploadedAt: '2026-07-17T10:00:00.000Z',
+            },
+          ],
+          overlays: [
+            { id: 'valid', pageId: 'current-page', assetId: 'asset-1', x: 0, y: 0, width: 20, height: 10, rotation: 0, opacity: 100, zIndex: 1 },
+            { id: 'stale', pageId: 'removed-page', assetId: 'asset-1', x: 0, y: 0, width: 20, height: 10, rotation: 0, opacity: 100, zIndex: 2 },
+          ],
+        },
+      });
+
+      const result = await getSession('sess-1');
+
+      expect(result?.signatureState.overlays.map((overlay) => overlay.id)).toEqual([
+        'valid',
+      ]);
+    });
   });
 
   describe('closeSession', () => {

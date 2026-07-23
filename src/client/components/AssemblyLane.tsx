@@ -158,7 +158,8 @@ function ThumbnailCell({
   const originalPageNumber = page.sourcePageIndex + 1;
   const fileUrl = pdfFileUrl(sessionId, page.fileId);
   const isThisDropTarget = dropTargetId === page.pageId;
-  const docColor = documentColors.get(page.fileId);
+  // Only show file-group colors when there are 2+ PDFs in the session.
+  const docColor = documentColors.size > 1 ? documentColors.get(page.fileId) : undefined;
 
   const handleCellDragOver = (e: React.DragEvent) => {
     if (e.dataTransfer.types.includes(SOURCE_PAGE_DRAG_TYPE)) {
@@ -208,7 +209,7 @@ function ThumbnailCell({
 
   return (
     <div
-      style={style}
+      style={docColor ? { ...style, background: docColor.bg } : style}
       className={styles.gridCell}
       onDragOver={handleCellDragOver}
       onDrop={handleCellDrop}

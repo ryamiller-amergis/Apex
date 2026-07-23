@@ -7,6 +7,11 @@ import type {
   UpdateManifestResponse,
   OverlayTextBox,
   ReplaceOverlaysResponse,
+  ReplaceFormValuesResponse,
+  ReplaceSignatureOverlaysResponse,
+  UploadSignatureResponse,
+  PdfTextFormValue,
+  PdfSignatureOverlay,
 } from '../../shared/types/pdf';
 import { apexProjectHeaders, getSelectedApexProject } from '../utils/apiFetch';
 
@@ -277,6 +282,89 @@ export function useUpdateOverlays(userId = '') {
             ? {
                 ...session,
                 textOverlays: data.overlays,
+                updatedAt: data.updatedAt,
+              }
+            : session
+      );
+    },
+  });
+}
+
+export function useUpdateFormValues(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReplaceFormValuesResponse,
+    PdfApiError,
+    { sessionId: string; values: PdfTextFormValue[] }
+  >({
+    mutationFn: ({ sessionId, values }) =>
+      pdfApiFetch(`/api/pdf/sessions/${sessionId}/form-values`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      }),
+    onSuccess: (data, { sessionId }) => {
+      queryClient.setQueryData<PdfSession>(
+        ['pdf-session', userId, sessionId],
+        (session) =>
+          session
+            ? {
+                ...session,
+                formFieldValues: data.values,
+                updatedAt: data.updatedAt,
+              }
+            : session
+      );
+    },
+  });
+}
+
+export function useUploadSignatureAsset(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<
+    UploadSignatureResponse,
+    PdfApiError,
+    { sessionId: string; blob: Blob }
+  >({
+    mutationFn: async ({ sessionId, blob }) => {
+      const formData = new FormData();
+      formData.append('image', blob, 'signature.png');
+      return pdfApiFetch<UploadSignatureResponse>(
+        `/api/pdf/sessions/${sessionId}/signature-assets`,
+        { method: 'POST', body: formData }
+      );
+    },
+    onSuccess: (_data, { sessionId }) => {
+      // Invalidate session so signatureState.assets reflects the new upload.
+      void queryClient.invalidateQueries({ queryKey: ['pdf-session', userId, sessionId] });
+    },
+  });
+}
+
+export function useUpdateSignatureOverlays(userId = '') {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReplaceSignatureOverlaysResponse,
+    PdfApiError,
+    { sessionId: string; overlays: PdfSignatureOverlay[] }
+  >({
+    mutationFn: ({ sessionId, overlays }) =>
+      pdfApiFetch(`/api/pdf/sessions/${sessionId}/signature-overlays`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overlays }),
+      }),
+    onSuccess: (data, { sessionId }) => {
+      queryClient.setQueryData<PdfSession>(
+        ['pdf-session', userId, sessionId],
+        (session) =>
+          session
+            ? {
+                ...session,
+                signatureState: {
+                  ...session.signatureState,
+                  overlays: data.overlays,
+                },
                 updatedAt: data.updatedAt,
               }
             : session

@@ -68,6 +68,16 @@
   }
 }
 
+/* ── File Color Strip (shown when 2+ PDFs are in the session) ─────────── */
+
+.fileColorStrip {
+  height: 8px;
+  flex-shrink: 0;
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+  opacity: 0.85;
+}
+
 /* ── Canvas Area ─────────────────────────────────────── */
 
 .canvasWrapper {

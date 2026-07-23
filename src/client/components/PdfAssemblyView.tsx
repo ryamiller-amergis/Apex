@@ -20,6 +20,9 @@ import { useDocumentColors } from '../hooks/useDocumentColors';
 import { useOverlayEditor } from '../hooks/useOverlayEditor';
 import { useOverlayAutosave } from '../hooks/useOverlayAutosave';
 import { useOverlayMultiTabSync } from '../hooks/useOverlayMultiTabSync';
+import { usePdfFormAutosave } from '../hooks/usePdfFormAutosave';
+import { useSignatureEditor } from '../hooks/useSignatureEditor';
+import type { PageEditorActiveTool } from './PdfPageEditorModal';
 import { PdfWorkerProvider } from '../contexts/PdfWorkerContext';
 import { SourceBrowser } from './SourceBrowser';
 import { AssemblyLane } from './AssemblyLane';
@@ -41,6 +44,8 @@ import type {
   PageManifestEntry,
   PdfConversionJob,
   PdfFileMetadata,
+  PdfSignatureState,
+  PdfTextFormValue,
   UploadFilesResponse,
 } from '../../shared/types/pdf';
 import styles from './PdfAssemblyView.module.css';
@@ -50,6 +55,8 @@ const MAX_ASSEMBLY_PANE_PERCENT = 75;
 const DEFAULT_ASSEMBLY_PANE_PERCENT = 50;
 const PDF_SESSION_STORAGE_KEY = 'pdf-active-session';
 const EMPTY_OVERLAYS: OverlayTextBox[] = [];
+const EMPTY_FORM_VALUES: PdfTextFormValue[] = [];
+const EMPTY_SIGNATURE_STATE: PdfSignatureState = { assets: [], overlays: [] };
 const FILENAME_DISALLOWED = /[/\\:*?"<>|]/g;
 
 interface PdfAssemblyViewProps {
@@ -144,6 +151,13 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     useState<PdfUploadProgress | null>(null);
   const [overlayFormatInvalid, setOverlayFormatInvalid] = useState(false);
   const [isPageEditorOpen, setIsPageEditorOpen] = useState(false);
+  const [activeExtraTool, setActiveExtraTool] =
+    useState<PageEditorActiveTool>('none');
+  const [localFormValues, setLocalFormValues] =
+    useState<PdfTextFormValue[]>(EMPTY_FORM_VALUES);
+  const [formDirty, setFormDirty] = useState(false);
+  const [formUndoStack, setFormUndoStack] = useState<PdfTextFormValue[][]>([]);
+  const [formRedoStack, setFormRedoStack] = useState<PdfTextFormValue[][]>([]);
   const justMovedTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const workspacePanelsRef = useRef<HTMLDivElement>(null);
@@ -415,6 +429,11 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
       setExportFilenameOverride('');
       setIsFilenameAutomatic(true);
       setIsSourceBrowserCollapsed(false);
+      setActiveExtraTool('none');
+      setLocalFormValues(EMPTY_FORM_VALUES);
+      setFormDirty(false);
+      setFormUndoStack([]);
+      setFormRedoStack([]);
       clearSelection();
     } catch {
       // Mutation errors are surfaced by the existing session error UI.
@@ -640,14 +659,100 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
   });
   const overlaysReadOnly = session?.status === 'expired';
 
+  const handleFormValuesSaved = useCallback((serverValues: PdfTextFormValue[]) => {
+    setLocalFormValues(serverValues);
+    setFormDirty(false);
+  }, []);
+
+  const { flushNow: ensureFormValuesSaved } = usePdfFormAutosave({
+    sessionId,
+    userId,
+    values: localFormValues,
+    isDirty: formDirty,
+    onSaved: handleFormValuesSaved,
+  });
+
+  const initialSignatureState = session?.signatureState ?? EMPTY_SIGNATURE_STATE;
+  const signatureEditor = useSignatureEditor({
+    sessionId,
+    userId,
+    initialState: initialSignatureState,
+    ensureManifestSaved,
+  });
+
+  const undoFormValues = useCallback(() => {
+    if (formUndoStack.length === 0) return;
+    const previous = formUndoStack[formUndoStack.length - 1];
+    setFormUndoStack((stack) => stack.slice(0, -1));
+    setFormRedoStack((stack) => [localFormValues, ...stack]);
+    setLocalFormValues(previous);
+    setFormDirty(true);
+  }, [formUndoStack, localFormValues]);
+
+  const redoFormValues = useCallback(() => {
+    if (formRedoStack.length === 0) return;
+    const next = formRedoStack[0];
+    setFormRedoStack((stack) => stack.slice(1));
+    setFormUndoStack((stack) => [...stack, localFormValues]);
+    setLocalFormValues(next);
+    setFormDirty(true);
+  }, [formRedoStack, localFormValues]);
+
+  const editorCanUndo =
+    activeExtraTool === 'fill-form'
+      ? formUndoStack.length > 0
+      : activeExtraTool === 'sign'
+        ? signatureEditor.canUndo
+        : canUndoOverlay;
+  const editorCanRedo =
+    activeExtraTool === 'fill-form'
+      ? formRedoStack.length > 0
+      : activeExtraTool === 'sign'
+        ? signatureEditor.canRedo
+        : canRedoOverlay;
+  const handleEditorUndo = useCallback(() => {
+    if (activeExtraTool === 'fill-form') {
+      undoFormValues();
+    } else if (activeExtraTool === 'sign') {
+      signatureEditor.undo();
+    } else {
+      undoOverlay();
+    }
+  }, [activeExtraTool, signatureEditor, undoFormValues, undoOverlay]);
+  const handleEditorRedo = useCallback(() => {
+    if (activeExtraTool === 'fill-form') {
+      redoFormValues();
+    } else if (activeExtraTool === 'sign') {
+      signatureEditor.redo();
+    } else {
+      redoOverlay();
+    }
+  }, [activeExtraTool, redoFormValues, redoOverlay, signatureEditor]);
+
   const ensureSessionSaved = useCallback(async () => {
     await ensureManifestSaved();
     await ensureOverlaysSaved();
-  }, [ensureManifestSaved, ensureOverlaysSaved]);
+    await ensureFormValuesSaved();
+    await signatureEditor.flushNow();
+  }, [ensureManifestSaved, ensureOverlaysSaved, ensureFormValuesSaved, signatureEditor]);
 
   useEffect(() => {
     setOverlayFormatInvalid(false);
   }, [selectedOverlayId]);
+
+  // Keep local form values in sync with server state when not locally dirty.
+  const serverFormValues = session?.formFieldValues ?? EMPTY_FORM_VALUES;
+  useEffect(() => {
+    if (!formDirty) {
+      setLocalFormValues(serverFormValues);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverFormValues]);
+
+  useEffect(() => {
+    setFormUndoStack([]);
+    setFormRedoStack([]);
+  }, [sessionId]);
 
   const handleToggleTextTool = useCallback(async () => {
     if (overlaysReadOnly) return;
@@ -669,6 +774,46 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
     }
   }, [editorMode, ensureOverlaysSaved, overlaysReadOnly, setEditorMode]);
 
+  const handleToggleFillForm = useCallback(() => {
+    setActiveExtraTool((current) => (current === 'fill-form' ? 'none' : 'fill-form'));
+  }, []);
+
+  const handleToggleSign = useCallback(() => {
+    setActiveExtraTool((current) => {
+      if (current === 'sign') {
+        signatureEditor.selectOverlay(null);
+        return 'none';
+      }
+      return 'sign';
+    });
+  }, [signatureEditor]);
+
+  const handleFormValuesChange = useCallback(
+    (updated: PdfTextFormValue[]) => {
+      setFormUndoStack((stack) => [...stack, localFormValues]);
+      setFormRedoStack([]);
+      setLocalFormValues(updated);
+      setFormDirty(true);
+    },
+    [localFormValues]
+  );
+
+  const hasFormFields = useMemo(() => {
+    if (!activePreviewPage) return false;
+    const file = fileMetadata.find(
+      (f) => f.fileId === activePreviewPage.fileId
+    );
+    return (file?.textFormFields?.length ?? 0) > 0;
+  }, [activePreviewPage, fileMetadata]);
+
+  const activeFileCatalog = useMemo(() => {
+    if (!activePreviewPage) return [];
+    const file = fileMetadata.find(
+      (f) => f.fileId === activePreviewPage.fileId
+    );
+    return file?.textFormFields ?? [];
+  }, [activePreviewPage, fileMetadata]);
+
   const handleOpenPageEditor = useCallback(() => {
     if (selectedPageIds.size !== 1) return;
     const pageId = [...selectedPageIds][0];
@@ -678,16 +823,23 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
 
   const handleClosePageEditor = useCallback(async () => {
     try {
+      // Manifest must be saved first so that signature overlay pageIds are
+      // present in the server manifest before validateSignatureOverlays runs.
+      await ensureManifestSaved();
       await ensureOverlaysSaved();
+      await ensureFormValuesSaved();
+      await signatureEditor.flushNow();
       setTextToolActive(false);
       setEditorMode('add');
       selectOverlay(null);
+      signatureEditor.selectOverlay(null);
       setOverlayFormatInvalid(false);
+      setActiveExtraTool('none');
       setIsPageEditorOpen(false);
     } catch {
       // Leave the editor open with the announced save error and retry action.
     }
-  }, [ensureOverlaysSaved, selectOverlay, setEditorMode, setTextToolActive]);
+  }, [ensureManifestSaved, ensureFormValuesSaved, ensureOverlaysSaved, signatureEditor, selectOverlay, setEditorMode, setTextToolActive]);
 
   const undoTimerRef = useRef<number | null>(null);
 
@@ -1163,6 +1315,31 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                     onBringOverlayForward: () => {},
                     onSendOverlayBackward: () => {},
                   }}
+                  form={
+                    activePreviewPage
+                      ? {
+                          catalog: activeFileCatalog,
+                          values: localFormValues,
+                          active: true,
+                          readOnly: true,
+                          displayOnly: true,
+                          onValuesChange: () => {},
+                        }
+                      : null
+                  }
+                  signature={
+                    activePageId
+                      ? {
+                          pageId: activePageId,
+                          overlays: signatureEditor.overlays,
+                          selectedOverlayId: null,
+                          readOnly: true,
+                          onSelect: () => {},
+                          onUpdate: () => {},
+                          onDelete: () => {},
+                        }
+                      : null
+                  }
                 />
               </div>
             </div>
@@ -1212,8 +1389,8 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 editorMode,
                 createLimitMessage,
                 announcement: overlayAnnouncement,
-                canUndo: canUndoOverlay,
-                canRedo: canRedoOverlay,
+                canUndo: editorCanUndo,
+                canRedo: editorCanRedo,
                 saveStatus: overlaySaveStatus,
                 saveErrorMessage: overlaySaveError,
                 readOnly: overlaysReadOnly,
@@ -1229,8 +1406,8 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
                 onSelectOverlay: selectOverlay,
                 onDeleteSelectedOverlay: deleteSelectedOverlay,
                 onRemoveSelectedNativeText: removeSelectedNativeText,
-                onUndoOverlay: undoOverlay,
-                onRedoOverlay: redoOverlay,
+                onUndoOverlay: handleEditorUndo,
+                onRedoOverlay: handleEditorRedo,
                 onFlushOverlays: ensureOverlaysSaved,
                 onRetryOverlaySave: retryOverlaySave,
                 onBeginOverlayTextEdit: beginTextEdit,
@@ -1255,6 +1432,31 @@ export const PdfAssemblyView: React.FC<PdfAssemblyViewProps> = ({
               onValidationChange={setOverlayFormatInvalid}
               onDiscardDraft={discardReplacementDraft}
               onClose={handleClosePageEditor}
+              hasFormFields={hasFormFields}
+              activeExtraTool={activeExtraTool}
+              onToggleFillForm={handleToggleFillForm}
+              onToggleSign={handleToggleSign}
+              form={{
+                catalog: activeFileCatalog,
+                values: localFormValues,
+                active: activeExtraTool === 'fill-form',
+                readOnly: overlaysReadOnly,
+                onValuesChange: handleFormValuesChange,
+              }}
+              signatureOverlayProps={activePageId ? {
+                pageId: activePageId,
+                overlays: signatureEditor.overlays,
+                selectedOverlayId: signatureEditor.selectedOverlayId,
+                readOnly: overlaysReadOnly,
+                onSelect: signatureEditor.selectOverlay,
+                onUpdate: signatureEditor.updateOverlay,
+                onDelete: signatureEditor.deleteOverlay,
+              } : null}
+              onSignatureReady={activePageId
+                ? (blob, source) => void signatureEditor.uploadAndPlace(blob, source, activePageId)
+                : undefined}
+              isSignatureUploading={signatureEditor.isUploading}
+              signatureUploadError={signatureEditor.uploadError}
             />
           )}
         </PdfWorkerProvider>

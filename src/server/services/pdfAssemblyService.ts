@@ -17,9 +17,25 @@ import type {
   ExportWorkerOutput,
   OverlayFieldError,
   ReplaceOverlaysResponse,
+  ReplaceFormValuesResponse,
+  ReplaceSignatureOverlaysResponse,
+  UploadSignatureResponse,
   UpdateManifestResponse,
+  PdfTextFormValue,
+  PdfSignatureOverlay,
+  PdfSignatureAsset,
+  PdfSignatureState,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import { catalogTextFields, validateFormValues } from './pdfFormService';
+import {
+  uploadSignatureAsset as storeSignatureAsset,
+  validateSignatureOverlays,
+  stripOrphanedOverlays,
+  pruneUnreferencedSignatureAssets,
+  buildSignatureArtifactRef,
+  buildSignatureArtifactRefs,
+} from './pdfSignatureService';
 import { documentConversionService } from './documentConversionService';
 import { stripOrphanOverlays, validateOverlays } from './overlayValidation';
 import {
@@ -163,9 +179,19 @@ export async function getSession(sessionId: string) {
   });
   if (!session) return undefined;
 
+  const manifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const activePageIds = new Set(
+    manifest.filter((page) => !page.deleted).map((page) => page.pageId)
+  );
+  const signatureState = stripOrphanedOverlays(
+    (session.signatureState ?? { assets: [], overlays: [] }) as PdfSignatureState,
+    activePageIds
+  );
+
   return {
     ...session,
     textOverlays: session.textOverlays ?? [],
+    signatureState,
     conversionJobs: await getPdfConversionJobs(sessionId),
   };
 }
@@ -194,6 +220,237 @@ export async function replaceTextOverlays(
   }
 
   return rows[0].textOverlays ?? [];
+}
+
+/**
+ * Persists validated form-field values for a session.
+ * The caller (route handler) must verify ownership and session status before
+ * calling this function.  Values for unknown fields are validated by the route
+ * using the file-level textFormFields catalog in fileMetadata.
+ */
+export async function replaceFormValues(
+  sessionId: string,
+  userId: string,
+  incomingValues: PdfTextFormValue[]
+): Promise<ReplaceFormValuesResponse> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+
+  if (!session) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+  if (session.userId !== userId) {
+    const err = new Error('Forbidden') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_FORBIDDEN;
+    throw err;
+  }
+  if (session.status === 'expired') {
+    const err = new Error('Session expired') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_EXPIRED;
+    throw err;
+  }
+
+  // Build a catalog from all files in the session for cross-file validation.
+  const allFields = ((session.fileMetadata ?? []) as PdfFileMetadata[]).flatMap(
+    (f) => f.textFormFields ?? []
+  );
+
+  // Filter values to only those referencing known files in this session.
+  const knownFileIds = new Set(
+    ((session.fileMetadata ?? []) as PdfFileMetadata[]).map((f) => f.fileId)
+  );
+  const validFileValues = incomingValues.filter((v) => knownFileIds.has(v.fileId));
+
+  const validationErrors = validateFormValues(validFileValues, allFields);
+  if (validationErrors.length > 0) {
+    const err = Object.assign(new Error('Form value validation failed'), {
+      code: PDF_ERROR_CODES.FORM_VALUES_INVALID,
+      errors: validationErrors,
+    });
+    throw err;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const rows = await db
+    .update(pdfSessions)
+    .set({ formFieldValues: validFileValues, updatedAt })
+    .where(eq(pdfSessions.id, sessionId))
+    .returning({ formFieldValues: pdfSessions.formFieldValues });
+
+  if (rows.length === 0) {
+    const err = new Error('Session not found') as Error & { code: string };
+    err.code = PDF_ERROR_CODES.SESSION_NOT_FOUND;
+    throw err;
+  }
+
+  return {
+    values: (rows[0].formFieldValues ?? []) as PdfTextFormValue[],
+    updatedAt,
+  };
+}
+
+/**
+ * Validates and stores a signature PNG asset for a session.
+ * Callers must have already verified ownership.
+ */
+export async function addSignatureAsset(
+  sessionId: string,
+  userId: string,
+  buffer: Buffer
+): Promise<UploadSignatureResponse> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session) {
+    throw Object.assign(new Error('Session not found'), {
+      code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+    });
+  }
+  if (session.userId !== userId) {
+    throw Object.assign(new Error('Forbidden'), {
+      code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
+    });
+  }
+  if (session.status === 'expired') {
+    throw Object.assign(new Error('Session expired'), {
+      code: PDF_ERROR_CODES.SESSION_EXPIRED,
+    });
+  }
+
+  const currentState = (session.signatureState ?? {
+    assets: [],
+    overlays: [],
+  }) as PdfSignatureState;
+  const cleanedCurrentState = pruneUnreferencedSignatureAssets(
+    currentState,
+    Date.now() - 60_000
+  );
+  const removedAssetIds = currentState.assets
+    .filter(
+      (asset) =>
+        !cleanedCurrentState.assets.some(
+          (retained) => retained.assetId === asset.assetId
+        )
+    )
+    .map((asset) => asset.assetId);
+
+  const asset: PdfSignatureAsset = await storeSignatureAsset(
+    userId,
+    sessionId,
+    buffer,
+    cleanedCurrentState.assets
+  );
+
+  const updatedAssets = [...cleanedCurrentState.assets, asset];
+  const updatedState: PdfSignatureState = {
+    assets: updatedAssets,
+    overlays: cleanedCurrentState.overlays,
+  };
+
+  await db
+    .update(pdfSessions)
+    .set({ signatureState: updatedState, updatedAt: asset.uploadedAt })
+    .where(eq(pdfSessions.id, sessionId));
+
+  await Promise.allSettled(
+    removedAssetIds.map((assetId) =>
+      getPdfArtifactStore().deleteFile(
+        buildSignatureArtifactRef(userId, sessionId, assetId)
+      )
+    )
+  );
+
+  return {
+    assetId: asset.assetId,
+    widthPx: asset.widthPx,
+    heightPx: asset.heightPx,
+    uploadedAt: asset.uploadedAt,
+  };
+}
+
+/**
+ * Replaces the session's signature overlay array after validating all entries.
+ */
+export async function replaceSignatureOverlays(
+  sessionId: string,
+  userId: string,
+  incomingOverlays: unknown[]
+): Promise<ReplaceSignatureOverlaysResponse> {
+  const session = await db.query.pdfSessions.findFirst({
+    where: eq(pdfSessions.id, sessionId),
+  });
+  if (!session) {
+    throw Object.assign(new Error('Session not found'), {
+      code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+    });
+  }
+  if (session.userId !== userId) {
+    throw Object.assign(new Error('Forbidden'), {
+      code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
+    });
+  }
+  if (session.status === 'expired') {
+    throw Object.assign(new Error('Session expired'), {
+      code: PDF_ERROR_CODES.SESSION_EXPIRED,
+    });
+  }
+
+  const currentState = (session.signatureState ?? {
+    assets: [],
+    overlays: [],
+  }) as PdfSignatureState;
+
+  const knownAssetIds = new Set(currentState.assets.map((a) => a.assetId));
+  const manifest = (session.pageManifest ?? []) as PageManifestEntry[];
+  const knownPageIds = new Set(
+    manifest.filter((p) => !p.deleted).map((p) => p.pageId)
+  );
+
+  const errors = validateSignatureOverlays(
+    incomingOverlays,
+    knownAssetIds,
+    knownPageIds
+  );
+  if (errors.length > 0) {
+    throw Object.assign(new Error(errors.join('; ')), {
+      code: PDF_ERROR_CODES.SIGNATURE_OVERLAY_INVALID,
+      errors,
+    });
+  }
+
+  let updatedState: PdfSignatureState = {
+    assets: currentState.assets,
+    overlays: incomingOverlays as PdfSignatureOverlay[],
+  };
+  updatedState = stripOrphanedOverlays(updatedState);
+  updatedState = pruneUnreferencedSignatureAssets(updatedState);
+  const removedAssetIds = currentState.assets
+    .filter(
+      (asset) =>
+        !updatedState.assets.some(
+          (retained) => retained.assetId === asset.assetId
+        )
+    )
+    .map((asset) => asset.assetId);
+
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(pdfSessions)
+    .set({ signatureState: updatedState, updatedAt })
+    .where(eq(pdfSessions.id, sessionId));
+
+  await Promise.allSettled(
+    removedAssetIds.map((assetId) =>
+      getPdfArtifactStore().deleteFile(
+        buildSignatureArtifactRef(userId, sessionId, assetId)
+      )
+    )
+  );
+
+  return { overlays: updatedState.overlays, updatedAt };
 }
 
 type OverlayValidationError = Error & {
@@ -492,6 +749,7 @@ export async function validateAndIngest(
   await safeDeleteFile(filePath);
 
   // ── Build updated file_metadata and page_manifest ────────────────────────────
+  const textFormFields = await catalogTextFields(buffer);
   const newFileMeta: PdfFileMetadata = {
     fileId,
     originalName: sanitizedOriginalName,
@@ -500,6 +758,7 @@ export async function validateAndIngest(
     sizeBytes: stat.size,
     pageCount,
     uploadedAt: new Date().toISOString(),
+    ...(textFormFields.length > 0 ? { textFormFields } : {}),
   };
 
   const existingManifest = (session.pageManifest ?? []) as PageManifestEntry[];
@@ -577,6 +836,17 @@ export async function removeFile(
     updatedManifest,
     (session.textOverlays ?? []) as OverlayTextBox[]
   );
+  // Discard form-field values for the removed source file.
+  const updatedFormValues = ((session.formFieldValues ?? []) as PdfTextFormValue[]).filter(
+    (v) => v.fileId !== fileId
+  );
+  const activePageIds = new Set(
+    updatedManifest.filter((page) => !page.deleted).map((page) => page.pageId)
+  );
+  const updatedSignatureState = stripOrphanedOverlays(
+    (session.signatureState ?? { assets: [], overlays: [] }) as PdfSignatureState,
+    activePageIds
+  );
 
   await db
     .update(pdfSessions)
@@ -584,6 +854,8 @@ export async function removeFile(
       fileMetadata: updatedMetadata,
       pageManifest: updatedManifest,
       textOverlays: updatedOverlays,
+      formFieldValues: updatedFormValues,
+      signatureState: updatedSignatureState,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(pdfSessions.id, sessionId));
@@ -652,10 +924,17 @@ export async function updateManifest(
     manifest,
     (session.textOverlays ?? []) as OverlayTextBox[]
   );
+  const activePageIds = new Set(
+    manifest.filter((page) => !page.deleted).map((page) => page.pageId)
+  );
+  const signatureState = stripOrphanedOverlays(
+    (session.signatureState ?? { assets: [], overlays: [] }) as PdfSignatureState,
+    activePageIds
+  );
 
   await db
     .update(pdfSessions)
-    .set({ pageManifest: manifest, textOverlays, updatedAt })
+    .set({ pageManifest: manifest, textOverlays, signatureState, updatedAt })
     .where(eq(pdfSessions.id, sessionId));
 
   const pageCount = manifest.filter((p) => !p.deleted).length;
@@ -918,12 +1197,23 @@ export async function assembleAndExport(
     }
   }
 
+  // Prepare form values and signature state for the export worker.
+  const formFieldValues = (session.formFieldValues ?? []) as PdfTextFormValue[];
+  const signatureState = (session.signatureState ?? { assets: [], overlays: [] }) as PdfSignatureState;
+  const signatureOverlays = signatureState.overlays.filter((o) =>
+    exportedPageIds.has(o.pageId)
+  );
+  const signatureArtifacts = buildSignatureArtifactRefs(userId, sessionId, signatureState);
+
   const workerInput: ExportWorkerInput = {
     manifest: pagesToExport,
     overlays,
     ...(workerOutputRef
       ? { artifactFiles, outputRef: workerOutputRef }
       : { fileBytes }),
+    formFieldValues,
+    signatureOverlays,
+    signatureArtifacts,
   };
 
   const result = await runPdfExport(workerInput);

@@ -8,9 +8,16 @@ import type {
 import {
   PdfInlinePreview,
   type PdfInlinePreviewOverlayProps,
+  type PdfInlinePreviewFormProps,
+  type PdfInlinePreviewSignatureProps,
 } from './PdfInlinePreview';
 import { OverlayFormatToolbar } from './OverlayFormatToolbar';
+import { NoFormFieldsGuidance } from './PdfFormFieldLayer';
+import { SignatureToolPanel } from './SignatureToolPanel';
+import type { SignatureSource } from './SignatureToolPanel';
 import styles from './PdfPageEditorModal.module.css';
+
+export type PageEditorActiveTool = 'none' | 'add' | 'replace' | 'fill-form' | 'sign';
 
 interface PdfPageEditorModalProps {
   isOpen: boolean;
@@ -32,6 +39,22 @@ interface PdfPageEditorModalProps {
   onValidationChange: (hasError: boolean) => void;
   onDiscardDraft?: () => void;
   onClose: () => void;
+  /** Whether the source file has AcroForm text fields on this page. */
+  hasFormFields?: boolean;
+  /** Active non-overlay tool in the tool rail. */
+  activeExtraTool?: PageEditorActiveTool;
+  onToggleFillForm?: () => void;
+  onToggleSign?: () => void;
+  /** Form-fill props forwarded to the inline preview. */
+  form?: PdfInlinePreviewFormProps | null;
+  /** Signature props forwarded to the inline preview. */
+  signatureOverlayProps?: PdfInlinePreviewSignatureProps | null;
+  /** Called when the user has created a signature and it should be uploaded+placed. */
+  onSignatureReady?: (blob: Blob, source: SignatureSource) => void;
+  /** Whether the signature is currently uploading. */
+  isSignatureUploading?: boolean;
+  /** Error from signature upload, if any. */
+  signatureUploadError?: string | null;
 }
 
 export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
@@ -54,6 +77,15 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
   onDiscardDraft,
   onClose,
   replacementDraft = null,
+  hasFormFields = false,
+  activeExtraTool = 'none',
+  onToggleFillForm,
+  onToggleSign,
+  form = null,
+  signatureOverlayProps = null,
+  onSignatureReady,
+  isSignatureUploading = false,
+  signatureUploadError = null,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -236,6 +268,55 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
                     : 'Replace text'}
                 </button>
 
+                <button
+                  type="button"
+                  className={`${styles.addTextButton} ${activeExtraTool === 'fill-form' ? styles.addTextActive : ''}`}
+                  aria-pressed={activeExtraTool === 'fill-form'}
+                  disabled={overlay.readOnly}
+                  onClick={onToggleFillForm}
+                  data-testid="page-editor-fill-form"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <path d="M7 10h4M7 14h8" />
+                  </svg>
+                  Fill form
+                </button>
+
+                <button
+                  type="button"
+                  className={`${styles.addTextButton} ${activeExtraTool === 'sign' ? styles.addTextActive : ''}`}
+                  aria-pressed={activeExtraTool === 'sign'}
+                  disabled={overlay.readOnly}
+                  onClick={onToggleSign}
+                  data-testid="page-editor-sign"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 17c2-2 4-3 6-1s4 3 6 0 4-3 6-1" />
+                    <path d="M21 17V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v13" />
+                  </svg>
+                  Sign
+                  <span className={styles.signDisclosure}>
+                    (Electronic signature image only — not a certificate-backed digital signature.)
+                  </span>
+                </button>
+
                 {selectedOverlay && !overlay.readOnly ? (
                   <div className={styles.formatPanel}>
                     {/* No key={overlay.id}: preserves textarea focus across
@@ -250,6 +331,32 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
                       autoFocusReplacementText={Boolean(replacementDraft)}
                       onValidationChange={onValidationChange}
                     />
+                  </div>
+                ) : activeExtraTool === 'fill-form' ? (
+                  <div className={styles.guidance} role="status">
+                    {hasFormFields
+                      ? 'Click a field on the page to fill it in.'
+                      : null}
+                    {!hasFormFields && <NoFormFieldsGuidance />}
+                  </div>
+                ) : activeExtraTool === 'sign' ? (
+                  <div className={styles.signaturePanel}>
+                    {onSignatureReady ? (
+                      <SignatureToolPanel
+                        onSignatureReady={onSignatureReady}
+                        onCancel={() => onToggleSign?.()}
+                        isUploading={isSignatureUploading}
+                      />
+                    ) : (
+                      <div className={styles.guidance} role="status">
+                        Choose a signature type, then drag it onto the page.
+                      </div>
+                    )}
+                    {signatureUploadError && (
+                      <p className={styles.signatureError} role="alert">
+                        {signatureUploadError}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className={styles.guidance} role="status">
@@ -275,6 +382,8 @@ export const PdfPageEditorModal: React.FC<PdfPageEditorModalProps> = ({
               sourceFileName={sourceFileName}
               originalPageNumber={originalPageNumber}
               overlay={overlay}
+              form={form}
+              signature={signatureOverlayProps}
             />
           </main>
         </div>

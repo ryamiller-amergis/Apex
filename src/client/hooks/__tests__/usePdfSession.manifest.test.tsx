@@ -50,6 +50,8 @@ describe('useUpdateManifest', () => {
       textOverlays: [{ ...overlay, pageId: 'removed-page' }],
       fileMetadata: [],
       conversionJobs: [],
+      formFieldValues: [],
+      signatureState: { assets: [], overlays: [] },
       createdAt: '2026-07-21T12:00:00.000Z',
       updatedAt: '2026-07-21T12:00:00.000Z',
       expiresAt: '2026-07-21T16:00:00.000Z',

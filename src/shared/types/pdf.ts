@@ -116,6 +116,85 @@ export interface PdfFileMetadata {
   convertedFrom?: string;
   originalMimeType?: string;
   uploadedAt: string;
+  /** Catalogued AcroForm text fields for this source file; absent when the file has none. */
+  textFormFields?: PdfTextFormFieldDefinition[];
+}
+
+// ── AcroForm Text Field Types ─────────────────────────────────────────────────
+
+/**
+ * Describes one AcroForm text-input widget as catalogued on the server.
+ * Read-only and XFA fields are excluded from the catalog.
+ */
+export interface PdfTextFormFieldDefinition {
+  /** Fully qualified PDF field name (unique within the source file). */
+  fieldName: string;
+  /** True when the widget allows multi-line entry. */
+  multiline: boolean;
+  /** Maximum character count enforced by the field, or null if unconstrained. */
+  maxLength: number | null;
+  /** Zero-based page index in the source PDF where the primary widget appears. */
+  pageIndex: number;
+  /** Additional page indices for repeated widgets sharing this field name. */
+  additionalPageIndices: number[];
+}
+
+/**
+ * A single user-entered value for one AcroForm text field.
+ * Identified by source file and field name so repeated widgets share one value.
+ */
+export interface PdfTextFormValue {
+  fileId: string;
+  fieldName: string;
+  value: string;
+}
+
+// ── Electronic Signature Types ─────────────────────────────────────────────────
+
+/** How the signature image was created. */
+export type PdfSignatureSource = 'typed' | 'drawn' | 'uploaded';
+
+/**
+ * Metadata for a session-scoped PNG signature asset stored via pdfArtifactStore.
+ * The actual image bytes never appear in JSON — only the assetId for retrieval.
+ */
+export interface PdfSignatureAsset {
+  /** UUID assigned at upload time; used as the artifact file name. */
+  assetId: string;
+  source: PdfSignatureSource;
+  /** Pixel dimensions of the normalised PNG. */
+  widthPx: number;
+  heightPx: number;
+  uploadedAt: string;
+}
+
+/**
+ * One instance of a signature image placed on a specific page.
+ * Geometry uses the same top-left percentage origin as OverlayTextBox.
+ */
+export interface PdfSignatureOverlay {
+  id: string;
+  pageId: string;
+  assetId: string;
+  /** Percentage geometry (top-left origin, 0–100). */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Clockwise rotation in degrees (0 | 90 | 180 | 270). */
+  rotation: 0 | 90 | 180 | 270;
+  /** Opacity 0–100. */
+  opacity: number;
+  /** Stacking order; higher values appear on top. */
+  zIndex: number;
+}
+
+/**
+ * Complete signature state persisted in pdf_sessions.signature_state.
+ */
+export interface PdfSignatureState {
+  assets: PdfSignatureAsset[];
+  overlays: PdfSignatureOverlay[];
 }
 
 export interface PageManifestEntry {
@@ -136,6 +215,10 @@ export interface PdfSession {
   fileMetadata: PdfFileMetadata[];
   conversionJobs: PdfConversionJob[];
   exportFilename?: string | null;
+  /** Persisted AcroForm text-field values, keyed by fileId+fieldName. */
+  formFieldValues: PdfTextFormValue[];
+  /** Session-scoped signature assets and their page placements. */
+  signatureState: PdfSignatureState;
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
@@ -240,12 +323,47 @@ export interface ExportWorkerInput {
   fileBytes?: Record<string, Uint8Array>;
   artifactFiles?: Record<string, ExportArtifactRef>;
   outputRef?: ExportArtifactRef;
+  /** Validated AcroForm text-field values to fill before assembly. */
+  formFieldValues?: PdfTextFormValue[];
+  /** Signature overlays and artifact references to burn in after assembly. */
+  signatureOverlays?: PdfSignatureOverlay[];
+  /** Maps assetId → ExportArtifactRef so the worker can retrieve PNG bytes. */
+  signatureArtifacts?: Record<string, ExportArtifactRef>;
 }
 
 export interface ExportWorkerOutput {
   success: boolean;
   pdfBytes?: Uint8Array;
   error?: string;
+}
+
+// ── Form Values API ────────────────────────────────────────────────────────────
+
+export interface ReplaceFormValuesRequest {
+  values: PdfTextFormValue[];
+}
+
+export interface ReplaceFormValuesResponse {
+  values: PdfTextFormValue[];
+  updatedAt: string;
+}
+
+// ── Signature API ──────────────────────────────────────────────────────────────
+
+export interface UploadSignatureResponse {
+  assetId: string;
+  widthPx: number;
+  heightPx: number;
+  uploadedAt: string;
+}
+
+export interface ReplaceSignatureOverlaysRequest {
+  overlays: PdfSignatureOverlay[];
+}
+
+export interface ReplaceSignatureOverlaysResponse {
+  overlays: PdfSignatureOverlay[];
+  updatedAt: string;
 }
 
 // ── Error Codes ────────────────────────────────────────────────────────────────
@@ -272,6 +390,16 @@ export const PDF_ERROR_CODES = {
   NO_PAGES: 'NO_PAGES',
   EXPORT_FAILED: 'EXPORT_FAILED',
   INVALID_PAGE_INDICES: 'INVALID_PAGE_INDICES',
+  FORM_FIELD_UNKNOWN: 'FORM_FIELD_UNKNOWN',
+  FORM_FIELD_READ_ONLY: 'FORM_FIELD_READ_ONLY',
+  FORM_FIELD_VALUE_TOO_LONG: 'FORM_FIELD_VALUE_TOO_LONG',
+  FORM_VALUES_INVALID: 'FORM_VALUES_INVALID',
+  SIGNATURE_ASSET_NOT_FOUND: 'SIGNATURE_ASSET_NOT_FOUND',
+  SIGNATURE_ASSET_INVALID: 'SIGNATURE_ASSET_INVALID',
+  SIGNATURE_ASSET_TOO_LARGE: 'SIGNATURE_ASSET_TOO_LARGE',
+  SIGNATURE_ASSET_LIMIT_EXCEEDED: 'SIGNATURE_ASSET_LIMIT_EXCEEDED',
+  SIGNATURE_OVERLAY_INVALID: 'SIGNATURE_OVERLAY_INVALID',
+  SIGNATURE_OVERLAY_LIMIT_EXCEEDED: 'SIGNATURE_OVERLAY_LIMIT_EXCEEDED',
 } as const;
 
 export type PdfErrorCode =

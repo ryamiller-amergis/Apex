@@ -76,20 +76,49 @@ jest.mock('../PagePreviewModal', () => ({
   PagePreviewModal: () => <div data-testid="mock-preview-modal" />,
 }));
 
+const mockInlinePreview = jest.fn(
+  (_props: Record<string, unknown>) => (
+    <div data-testid="mock-inline-preview" />
+  )
+);
+
 jest.mock('../PdfInlinePreview', () => ({
-  PdfInlinePreview: () => <div data-testid="mock-inline-preview" />,
+  PdfInlinePreview: (props: Record<string, unknown>) =>
+    mockInlinePreview(props),
 }));
 
 jest.mock('../PdfPageEditorModal', () => ({
   PdfPageEditorModal: ({
     overlay,
     onToggleTextTool,
+    activeExtraTool,
+    onToggleFillForm,
+    onToggleSign,
+    form,
+    signatureOverlayProps,
   }: {
     overlay: {
       textToolActive: boolean;
       onCreateAt: (x: number, y: number) => void;
+      canUndo: boolean;
+      canRedo: boolean;
+      onUndoOverlay: () => void;
+      onRedoOverlay: () => void;
     };
     onToggleTextTool: () => void;
+    activeExtraTool: string;
+    onToggleFillForm: () => void;
+    onToggleSign: () => void;
+    form: {
+      values: Array<{ fileId: string; fieldName: string; value: string }>;
+      onValuesChange: (
+        values: Array<{ fileId: string; fieldName: string; value: string }>
+      ) => void;
+    };
+    signatureOverlayProps: {
+      overlays: Array<{ id: string; x: number }>;
+      onUpdate: (id: string, patch: { x: number }) => void;
+    } | null;
   }) => (
     <div data-testid="mock-page-editor-modal">
       <button data-testid="mock-toggle-text" onClick={onToggleTextTool}>
@@ -104,6 +133,52 @@ jest.mock('../PdfPageEditorModal', () => ({
       >
         Create overlay
       </button>
+      <button data-testid="mock-toggle-fill" onClick={onToggleFillForm}>
+        Toggle fill
+      </button>
+      <button data-testid="mock-toggle-sign" onClick={onToggleSign}>
+        Toggle sign
+      </button>
+      <button
+        data-testid="mock-change-form"
+        onClick={() =>
+          form.onValuesChange([
+            { fileId: 'file-1', fieldName: 'Name', value: 'Changed' },
+          ])
+        }
+      >
+        Change form
+      </button>
+      <button
+        data-testid="mock-move-signature"
+        onClick={() => {
+          const signature = signatureOverlayProps?.overlays[0];
+          if (signature) signatureOverlayProps?.onUpdate(signature.id, { x: 25 });
+        }}
+      >
+        Move signature
+      </button>
+      <button
+        data-testid="mock-page-undo"
+        disabled={!overlay.canUndo}
+        onClick={overlay.onUndoOverlay}
+      >
+        Undo
+      </button>
+      <button
+        data-testid="mock-page-redo"
+        disabled={!overlay.canRedo}
+        onClick={overlay.onRedoOverlay}
+      >
+        Redo
+      </button>
+      <span data-testid="mock-active-extra-tool">{activeExtraTool}</span>
+      <span data-testid="mock-page-form-values">
+        {JSON.stringify(form.values)}
+      </span>
+      <span data-testid="mock-page-signature-x">
+        {signatureOverlayProps?.overlays[0]?.x ?? ''}
+      </span>
     </div>
   ),
 }));
@@ -158,6 +233,18 @@ jest.mock('../../hooks/usePdfSession', () => ({
     mutateAsync: jest.fn(),
     isPending: false,
   }),
+  useUpdateFormValues: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ values: [], updatedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
+  useUploadSignatureAsset: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ assetId: 'asset-1', widthPx: 400, heightPx: 160, uploadedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
+  useUpdateSignatureOverlays: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ overlays: [], updatedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
 }));
 
 jest.mock('../../hooks/useExportSession', () => ({
@@ -199,6 +286,8 @@ function makeSession(pages: PageManifestEntry[]): PdfSession {
     pageManifest: pages,
     textOverlays: [],
     conversionJobs: [],
+    formFieldValues: [],
+    signatureState: { assets: [], overlays: [] },
   };
 }
 
@@ -660,6 +749,151 @@ describe('PdfAssemblyView', () => {
     fireEvent.click(screen.getByTestId('mock-edit-page'));
 
     expect(screen.getByTestId('mock-page-editor-modal')).toBeInTheDocument();
+  });
+
+  it('uses the page editor undo and redo controls for form values', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = makeSession([makePage('page-a', 0)]);
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('mock-select-first'));
+    fireEvent.click(screen.getByTestId('mock-edit-page'));
+    fireEvent.click(screen.getByTestId('mock-toggle-fill'));
+    fireEvent.click(screen.getByTestId('mock-change-form'));
+
+    expect(screen.getByTestId('mock-page-undo')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('mock-page-undo'));
+    expect(screen.getByTestId('mock-page-form-values')).toHaveTextContent('[]');
+    expect(screen.getByTestId('mock-page-redo')).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId('mock-page-redo'));
+    expect(screen.getByTestId('mock-page-form-values')).toHaveTextContent(
+      '"value":"Changed"'
+    );
+  });
+
+  it('uses the page editor undo and redo controls for signature placement', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    mockSessionData = {
+      ...makeSession([makePage('page-a', 0)]),
+      signatureState: {
+        assets: [
+          {
+            assetId: 'asset-1',
+            source: 'drawn',
+            widthPx: 100,
+            heightPx: 50,
+            uploadedAt: '2026-07-10T12:00:00.000Z',
+          },
+        ],
+        overlays: [
+          {
+            id: 'signature-1',
+            pageId: 'page-a',
+            assetId: 'asset-1',
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+            rotation: 0,
+            opacity: 100,
+            zIndex: 1,
+          },
+        ],
+      },
+    };
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('mock-select-first'));
+    fireEvent.click(screen.getByTestId('mock-edit-page'));
+    fireEvent.click(screen.getByTestId('mock-toggle-sign'));
+    fireEvent.click(screen.getByTestId('mock-move-signature'));
+
+    expect(screen.getByTestId('mock-page-signature-x')).toHaveTextContent('25');
+    expect(screen.getByTestId('mock-page-undo')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('mock-page-undo'));
+    expect(screen.getByTestId('mock-page-signature-x')).toHaveTextContent('10');
+    expect(screen.getByTestId('mock-page-redo')).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId('mock-page-redo'));
+    expect(screen.getByTestId('mock-page-signature-x')).toHaveTextContent('25');
+  });
+
+  it('shows saved form values and signatures in the normal page preview', () => {
+    sessionStorage.setItem('pdf-active-session', 'sess-wired');
+    const page = makePage('page-a', 0);
+    mockSessionData = {
+      ...makeSession([page]),
+      fileMetadata: [
+        {
+          ...makeSession([page]).fileMetadata[0],
+          textFormFields: [
+            {
+              fieldName: 'Name',
+              multiline: false,
+              maxLength: null,
+              pageIndex: 0,
+              additionalPageIndices: [],
+            },
+          ],
+        },
+      ],
+      formFieldValues: [
+        { fileId: 'file-1', fieldName: 'Name', value: 'Alex' },
+      ],
+      signatureState: {
+        assets: [
+          {
+            assetId: 'asset-1',
+            source: 'drawn',
+            widthPx: 100,
+            heightPx: 50,
+            uploadedAt: '2026-07-10T12:00:00.000Z',
+          },
+        ],
+        overlays: [
+          {
+            id: 'signature-1',
+            pageId: page.pageId,
+            assetId: 'asset-1',
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+            rotation: 0,
+            opacity: 100,
+            zIndex: 1,
+          },
+        ],
+      },
+    };
+
+    renderWithQuery(<PdfAssemblyView />);
+    fireEvent.click(screen.getByTestId('mock-select-first'));
+
+    const previewProps =
+      mockInlinePreview.mock.calls[mockInlinePreview.mock.calls.length - 1][0] as {
+        form?: {
+          values: unknown[];
+          active: boolean;
+          readOnly: boolean;
+          displayOnly: boolean;
+        };
+        signature?: {
+          overlays: unknown[];
+          readOnly: boolean;
+        };
+      };
+    expect(previewProps.form).toMatchObject({
+      values: mockSessionData.formFieldValues,
+      active: true,
+      readOnly: true,
+      displayOnly: true,
+    });
+    expect(previewProps.signature).toMatchObject({
+      overlays: mockSessionData.signatureState.overlays,
+      readOnly: true,
+    });
   });
 
   it('starts a fresh session without deleting the current documents', async () => {

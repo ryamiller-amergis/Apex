@@ -7,6 +7,11 @@ import {
   burnOverlaysOntoPage,
   createStandardFontCache,
 } from '../services/pdfOverlayBurnIn';
+import { fillAndFlattenForm } from '../services/pdfFormService';
+import {
+  embedSignatureAssets,
+  burnSignaturesOntoPage,
+} from '../services/pdfSignatureBurnIn';
 
 /**
  * Core assembly logic extracted for testability.
@@ -22,6 +27,9 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
       artifactFiles = {},
       outputRef,
       overlays = [],
+      formFieldValues = [],
+      signatureOverlays = [],
+      signatureArtifacts = {},
     } = input;
     const outputDoc = await PDFDocument.create();
     const activeEntries = manifest.filter((entry) => !entry.deleted);
@@ -52,8 +60,14 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
         return { success: false, error: `File missing on disk: ${filePath}` };
       }
 
-      const sourceBytes = providedBytes ?? fs.readFileSync(filePath);
-      const sourceDoc = await PDFDocument.load(sourceBytes);
+      const rawSourceBytes = providedBytes ?? fs.readFileSync(filePath);
+
+      // ── Step 1: fill and flatten AcroForm fields before copyPages ──────────
+      // Values scoped to this fileId are passed; others are ignored by the service.
+      const fileFormValues = formFieldValues.filter((v) => v.fileId === fileId);
+      const flattenedBytes = await fillAndFlattenForm(rawSourceBytes, fileFormValues);
+
+      const sourceDoc = await PDFDocument.load(flattenedBytes);
       const pageCount = sourceDoc.getPageCount();
       const invalidEntry = groupedEntries.find(
         ({ entry }) =>
@@ -80,15 +94,46 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
       });
     }
 
+    // ── Step 2: load and embed signature PNG assets ─────────────────────────
+    // Only load assets that are actually referenced by overlays in this export.
+    const exportedPageIds = new Set(activeEntries.map((e) => e.pageId));
+    const activeSignatureOverlays = signatureOverlays.filter((o) =>
+      exportedPageIds.has(o.pageId)
+    );
+    const neededAssetIds = new Set(activeSignatureOverlays.map((o) => o.assetId));
+    const signatureByteMap = new Map<string, Uint8Array | Buffer>();
+
+    for (const assetId of neededAssetIds) {
+      const ref = signatureArtifacts[assetId];
+      if (!ref) {
+        return {
+          success: false,
+          error: `Signature asset reference missing for assetId "${assetId}". Cannot export without all signatures.`,
+        };
+      }
+      const pngBytes = await readPdfArtifact(ref);
+      signatureByteMap.set(assetId, pngBytes);
+    }
+
+    const embeddedSignatures = await embedSignatureAssets(outputDoc, signatureByteMap);
+
+    // ── Step 3: add pages, burn text overlays, burn signature overlays ──────
     const fontCache = await createStandardFontCache(outputDoc, overlays);
     for (let index = 0; index < copiedPagesByOutputIndex.length; index++) {
       const copiedPage = copiedPagesByOutputIndex[index];
       outputDoc.addPage(copiedPage);
       const pageId = activeEntries[index].pageId;
+
       burnOverlaysOntoPage(
         copiedPage,
         overlays.filter((overlay) => overlay.pageId === pageId),
         fontCache
+      );
+
+      burnSignaturesOntoPage(
+        copiedPage,
+        activeSignatureOverlays.filter((o) => o.pageId === pageId),
+        embeddedSignatures
       );
     }
 

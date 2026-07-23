@@ -32,6 +32,7 @@ import type {
   OverlayTextBox,
   PageManifestEntry,
   PdfFileMetadata,
+  PdfSignatureState,
 } from '../../shared/types/pdf';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -186,11 +187,14 @@ describe('updateManifest', () => {
     const result = await updateManifest(SESSION_ID, USER_ID, manifest);
 
     expect(result.textOverlays).toEqual([overlays[0], overlays[2]]);
-    expect(mockSet).toHaveBeenCalledWith({
-      pageManifest: manifest,
-      textOverlays: [overlays[0], overlays[2]],
-      updatedAt: expect.any(String),
-    });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageManifest: manifest,
+        textOverlays: [overlays[0], overlays[2]],
+        signatureState: { assets: [], overlays: [] },
+        updatedAt: expect.any(String),
+      })
+    );
   });
 
   it('VT-07/VT-08: reorder and rotation preserve overlays unchanged', async () => {
@@ -282,16 +286,55 @@ describe('removeFile', () => {
 
     await removeFile(SESSION_ID, USER_ID, FILE_ID_A);
 
-    expect(mockSet).toHaveBeenCalledWith({
-      fileMetadata: [expect.objectContaining({ fileId: FILE_ID_B })],
-      pageManifest: [manifest[1]],
-      textOverlays: [overlays[1]],
-      updatedAt: expect.any(String),
-    });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileMetadata: [expect.objectContaining({ fileId: FILE_ID_B })],
+        pageManifest: [manifest[1]],
+        textOverlays: [overlays[1]],
+        signatureState: { assets: [], overlays: [] },
+        updatedAt: expect.any(String),
+      })
+    );
     expect(mockDeleteFile).toHaveBeenCalledWith({
       userId: USER_ID,
       sessionId: SESSION_ID,
       fileName: `${FILE_ID_A}.pdf`,
     });
+  });
+
+  it('removes signature overlays for pages belonging to the removed file', async () => {
+    const manifest = [
+      makeManifestEntry({ pageId: 'p1', fileId: FILE_ID_A }),
+      makeManifestEntry({ pageId: 'p2', fileId: FILE_ID_B }),
+    ];
+    const signatureState: PdfSignatureState = {
+      assets: [
+        {
+          assetId: 'asset-1',
+          source: 'drawn',
+          widthPx: 100,
+          heightPx: 50,
+          uploadedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      overlays: [
+        { id: 'removed', pageId: 'p1', assetId: 'asset-1', x: 0, y: 0, width: 20, height: 10, rotation: 0, opacity: 100, zIndex: 1 },
+        { id: 'retained', pageId: 'p2', assetId: 'asset-1', x: 0, y: 0, width: 20, height: 10, rotation: 0, opacity: 100, zIndex: 2 },
+      ],
+    };
+    mockFindFirst.mockResolvedValue(
+      makeSession({ pageManifest: manifest, signatureState })
+    );
+
+    await removeFile(SESSION_ID, USER_ID, FILE_ID_A);
+
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureState: {
+          assets: signatureState.assets,
+          overlays: [signatureState.overlays[1]],
+        },
+      })
+    );
   });
 });

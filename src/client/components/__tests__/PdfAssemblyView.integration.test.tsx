@@ -148,6 +148,18 @@ jest.mock('../../hooks/usePdfSession', () => ({
     isPending: false,
   }),
   useRemovePdfFile: () => ({ mutateAsync: jest.fn(), isPending: false }),
+  useUpdateFormValues: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ values: [], updatedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
+  useUploadSignatureAsset: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ assetId: 'asset-1', widthPx: 400, heightPx: 160, uploadedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
+  useUpdateSignatureOverlays: () => ({
+    mutateAsync: jest.fn().mockResolvedValue({ overlays: [], updatedAt: new Date().toISOString() }),
+    isPending: false,
+  }),
 }));
 
 jest.mock('../../hooks/useExportSession', () => ({
@@ -188,6 +200,8 @@ function makeSession(): PdfSession {
     pageManifest: [page],
     textOverlays: [],
     conversionJobs: [],
+    formFieldValues: [],
+    signatureState: { assets: [], overlays: [] },
   };
 }
 
