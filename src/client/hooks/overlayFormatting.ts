@@ -2,17 +2,33 @@ import type {
   OverlayFontFamily,
   OverlayListStyle,
 } from '../../shared/types/pdf';
+import { PDF_OVERLAY_FONT_FAMILIES } from '../../shared/types/pdf';
 
-export const OVERLAY_FONT_FAMILIES: readonly OverlayFontFamily[] = [
-  'Helvetica',
-  'Times-Roman',
-  'Courier',
-];
+export const OVERLAY_FONT_FAMILIES: readonly OverlayFontFamily[] =
+  PDF_OVERLAY_FONT_FAMILIES;
 
 export const OVERLAY_FONT_STACKS: Record<OverlayFontFamily, string> = {
   Helvetica: 'Helvetica, Arial, sans-serif',
   'Times-Roman': '"Times New Roman", Times, serif',
   Courier: '"Courier New", Courier, monospace',
+  Roboto: '"Roboto", sans-serif',
+  'Open Sans': '"Open Sans", sans-serif',
+  Lato: '"Lato", sans-serif',
+  Montserrat: '"Montserrat", sans-serif',
+  Merriweather: '"Merriweather", serif',
+  'Noto Sans': '"Noto Sans", sans-serif',
+};
+
+export const OVERLAY_FONT_LABELS: Record<OverlayFontFamily, string> = {
+  Helvetica: 'Helvetica',
+  'Times-Roman': 'Times Roman',
+  Courier: 'Courier',
+  Roboto: 'Roboto',
+  'Open Sans': 'Open Sans',
+  Lato: 'Lato',
+  Montserrat: 'Montserrat',
+  Merriweather: 'Merriweather',
+  'Noto Sans': 'Noto Sans',
 };
 
 export const MIN_OVERLAY_FONT_SIZE = 8;

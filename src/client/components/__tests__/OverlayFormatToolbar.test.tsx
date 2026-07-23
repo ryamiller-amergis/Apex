@@ -35,7 +35,7 @@ describe('OverlayFormatToolbar', () => {
       screen
         .getAllByTestId('overlay-format-font-family')[0]
         .querySelectorAll('option')
-    ).toHaveLength(3);
+    ).toHaveLength(9);
 
     fireEvent.change(screen.getByTestId('overlay-format-font-family'), {
       target: { value: 'Times-Roman' },

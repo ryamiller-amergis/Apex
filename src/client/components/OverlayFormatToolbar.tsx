@@ -16,6 +16,7 @@ import {
   MIN_OVERLAY_FONT_SIZE,
   MIN_OVERLAY_ROTATION,
   OVERLAY_FONT_FAMILIES,
+  OVERLAY_FONT_LABELS,
   clampOverlayOpacity,
   isOverlayFontSize,
   normalizeOverlayColor,
@@ -286,7 +287,7 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
             >
               {OVERLAY_FONT_FAMILIES.map((font) => (
                 <option key={font} value={font}>
-                  {font}
+                  {OVERLAY_FONT_LABELS[font]}
                 </option>
               ))}
             </select>
