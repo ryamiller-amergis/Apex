@@ -2,7 +2,8 @@ import { PDFDocument, PDFPage, rgb } from 'pdf-lib';
 import type { OverlayTextBox } from '../../shared/types/pdf';
 import {
   burnOverlaysOntoPage,
-  createStandardFontCache,
+  createOverlayFontCache,
+  resolveCustomFontPath,
 } from '../services/pdfOverlayBurnIn';
 
 function makeOverlay(overrides: Partial<OverlayTextBox> = {}): OverlayTextBox {
@@ -34,7 +35,7 @@ function makeOverlay(overrides: Partial<OverlayTextBox> = {}): OverlayTextBox {
 async function createPage(overlays: OverlayTextBox[]) {
   const document = await PDFDocument.create();
   const page = document.addPage([600, 800]);
-  const fonts = await createStandardFontCache(document, overlays);
+  const fonts = await createOverlayFontCache(document, overlays);
   return { document, page, fonts };
 }
 
@@ -288,5 +289,41 @@ describe('pdfOverlayBurnIn', () => {
 
     expect(drawRectangle).toHaveBeenCalled();
     expect(drawText).toHaveBeenCalled();
+  });
+});
+
+describe('createOverlayFontCache — custom fonts', () => {
+  it('resolves a bundled font path by family and variant', () => {
+    expect(resolveCustomFontPath('Roboto', 'boldItalic')).toMatch(
+      /public[\\/]fonts[\\/]pdf[\\/]Roboto-BoldItalic\.ttf$/
+    );
+    expect(resolveCustomFontPath('Noto Sans', 'regular')).toMatch(
+      /NotoSans-Regular\.ttf$/
+    );
+  });
+
+  it('registers fontkit and embeds a custom font from bundled bytes', async () => {
+    const document = await PDFDocument.create();
+    const registerSpy = jest.spyOn(document, 'registerFontkit');
+    const fakeFont = { name: 'Roboto' } as unknown as never;
+    const embedSpy = jest
+      .spyOn(document, 'embedFont')
+      .mockResolvedValue(fakeFont);
+
+    const overlays = [makeOverlay({ fontFamily: 'Roboto', bold: true })];
+    const cache = await createOverlayFontCache(document, overlays);
+
+    expect(registerSpy).toHaveBeenCalled();
+    expect(embedSpy).toHaveBeenCalledWith(expect.anything(), { subset: true });
+    expect(cache.size).toBe(1);
+  });
+
+  it('still embeds standard fonts without fontkit', async () => {
+    const document = await PDFDocument.create();
+    const registerSpy = jest.spyOn(document, 'registerFontkit');
+    const overlays = [makeOverlay({ fontFamily: 'Helvetica' })];
+    const cache = await createOverlayFontCache(document, overlays);
+    expect(cache.size).toBe(1);
+    expect(registerSpy).not.toHaveBeenCalled();
   });
 });

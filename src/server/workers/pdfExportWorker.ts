@@ -5,7 +5,7 @@ import type { ExportWorkerInput, ExportWorkerOutput } from '../../shared/types/p
 import { getPdfArtifactStore, readPdfArtifact } from '../services/pdfArtifactStore';
 import {
   burnOverlaysOntoPage,
-  createStandardFontCache,
+  createOverlayFontCache,
 } from '../services/pdfOverlayBurnIn';
 import { fillAndFlattenForm } from '../services/pdfFormService';
 import {
@@ -118,7 +118,7 @@ export async function assemblePdf(input: ExportWorkerInput): Promise<ExportWorke
     const embeddedSignatures = await embedSignatureAssets(outputDoc, signatureByteMap);
 
     // ── Step 3: add pages, burn text overlays, burn signature overlays ──────
-    const fontCache = await createStandardFontCache(outputDoc, overlays);
+    const fontCache = await createOverlayFontCache(outputDoc, overlays);
     for (let index = 0; index < copiedPagesByOutputIndex.length; index++) {
       const copiedPage = copiedPagesByOutputIndex[index];
       outputDoc.addPage(copiedPage);

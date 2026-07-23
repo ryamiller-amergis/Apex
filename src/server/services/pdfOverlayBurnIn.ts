@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import fontkit from '@pdf-lib/fontkit';
 import {
   PDFDocument,
   PDFFont,
@@ -45,6 +48,69 @@ const STANDARD_FONT_NAMES: Record<
   },
 };
 
+type FontVariant = 'regular' | 'bold' | 'italic' | 'boldItalic';
+
+const STANDARD_FAMILIES = new Set<OverlayFontFamily>([
+  'Helvetica',
+  'Times-Roman',
+  'Courier',
+]);
+
+const CUSTOM_FONT_FILE_PREFIX: Partial<Record<OverlayFontFamily, string>> = {
+  Roboto: 'Roboto',
+  'Open Sans': 'OpenSans',
+  Lato: 'Lato',
+  Montserrat: 'Montserrat',
+  Merriweather: 'Merriweather',
+  'Noto Sans': 'NotoSans',
+};
+
+const VARIANT_FILE_SUFFIX: Record<FontVariant, string> = {
+  regular: 'Regular',
+  bold: 'Bold',
+  italic: 'Italic',
+  boldItalic: 'BoldItalic',
+};
+
+function overlayVariant(overlay: OverlayTextBox): FontVariant {
+  return overlay.bold
+    ? overlay.italic
+      ? 'boldItalic'
+      : 'bold'
+    : overlay.italic
+      ? 'italic'
+      : 'regular';
+}
+
+export function resolveCustomFontPath(
+  family: OverlayFontFamily,
+  variant: FontVariant
+): string {
+  const prefix = CUSTOM_FONT_FILE_PREFIX[family];
+  if (!prefix) {
+    throw new Error(`No bundled font for family ${family}`);
+  }
+  return path.resolve(
+    process.cwd(),
+    'public',
+    'fonts',
+    'pdf',
+    `${prefix}-${VARIANT_FILE_SUFFIX[variant]}.ttf`
+  );
+}
+
+export async function readCustomFontBytes(
+  family: OverlayFontFamily,
+  variant: FontVariant
+): Promise<Buffer> {
+  const filePath = resolveCustomFontPath(family, variant);
+  try {
+    return await fs.readFile(filePath);
+  } catch {
+    throw new Error(`Missing bundled font asset: ${filePath}`);
+  }
+}
+
 function fontKey(overlay: OverlayTextBox): string {
   return `${overlay.fontFamily}:${overlay.bold ? 'bold' : 'regular'}:${
     overlay.italic ? 'italic' : 'normal'
@@ -62,17 +128,31 @@ function standardFontName(overlay: OverlayTextBox): StandardFonts {
   return STANDARD_FONT_NAMES[overlay.fontFamily as StandardFontFamily][variant];
 }
 
-/** Embeds each standard-font variant at most once for the complete export. */
-export async function createStandardFontCache(
+/** Embeds each used font variant at most once for the complete export. */
+export async function createOverlayFontCache(
   document: PDFDocument,
   overlays: OverlayTextBox[]
 ): Promise<StandardFontCache> {
   const cache: StandardFontCache = new Map();
+  let fontkitRegistered = false;
   for (const overlay of overlays) {
     const key = fontKey(overlay);
-    if (!cache.has(key)) {
+    if (cache.has(key)) continue;
+
+    if (STANDARD_FAMILIES.has(overlay.fontFamily)) {
       cache.set(key, await document.embedFont(standardFontName(overlay)));
+      continue;
     }
+
+    if (!fontkitRegistered) {
+      document.registerFontkit(fontkit);
+      fontkitRegistered = true;
+    }
+    const bytes = await readCustomFontBytes(
+      overlay.fontFamily,
+      overlayVariant(overlay)
+    );
+    cache.set(key, await document.embedFont(bytes, { subset: true }));
   }
   return cache;
 }
