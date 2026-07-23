@@ -389,7 +389,7 @@ export function burnOverlaysOntoPage(
 
       const visibleBottom = Math.max(y, -boxHeight / 2);
       const visibleTop = Math.min(y + lineHeight, boxHeight / 2);
-      if (overlay.linkUrl && line.length > 0 && visibleTop > visibleBottom) {
+      if ((overlay.linkUrl || overlay.underline) && line.length > 0 && visibleTop > visibleBottom) {
         const underlineY = y - Math.max(1, overlay.fontSize * 0.08);
         page.drawLine({
           start: { x, y: underlineY },
@@ -399,17 +399,19 @@ export function burnOverlaysOntoPage(
           opacity: overlay.opacity / 100,
         });
 
-        const toRawPoint = (localX: number, localY: number) => {
-          const displayX = centerX + cos * localX - sin * localY;
-          const displayY = centerY + sin * localX + cos * localY;
-          return transformPoint(pageGeometry.displayToRaw, displayX, displayY);
-        };
-        addLinkAnnotation(page, overlay.linkUrl, [
-          toRawPoint(x, visibleBottom),
-          toRawPoint(x + lineWidth, visibleBottom),
-          toRawPoint(x + lineWidth, visibleTop),
-          toRawPoint(x, visibleTop),
-        ]);
+        if (overlay.linkUrl) {
+          const toRawPoint = (localX: number, localY: number) => {
+            const displayX = centerX + cos * localX - sin * localY;
+            const displayY = centerY + sin * localX + cos * localY;
+            return transformPoint(pageGeometry.displayToRaw, displayX, displayY);
+          };
+          addLinkAnnotation(page, overlay.linkUrl, [
+            toRawPoint(x, visibleBottom),
+            toRawPoint(x + lineWidth, visibleBottom),
+            toRawPoint(x + lineWidth, visibleTop),
+            toRawPoint(x, visibleTop),
+          ]);
+        }
       }
     });
 

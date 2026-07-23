@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
@@ -15,6 +15,7 @@ import {
   MAX_OVERLAY_ROTATION,
   MIN_OVERLAY_FONT_SIZE,
   MIN_OVERLAY_ROTATION,
+  OVERLAY_COLOR_PRESETS,
   OVERLAY_FONT_FAMILIES,
   OVERLAY_FONT_LABELS,
   clampOverlayOpacity,
@@ -154,6 +155,100 @@ const HORIZONTAL_ALIGNMENTS: OverlayHorizontalAlign[] = [
   'right',
 ];
 const VERTICAL_ALIGNMENTS: OverlayVerticalAlign[] = ['top', 'middle', 'bottom'];
+
+interface ColorSwatchPickerProps {
+  value: string;
+  draft: string | null;
+  error: string;
+  testId: string;
+  label: string;
+  onDraftChange: (val: string) => void;
+  onApply: () => void;
+  onPickSwatch: (color: string) => void;
+}
+
+const ColorSwatchPicker: React.FC<ColorSwatchPickerProps> = ({
+  value,
+  draft,
+  error,
+  testId,
+  label,
+  onDraftChange,
+  onApply,
+  onPickSwatch,
+}) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className={styles.colorControl}>
+      <button
+        type="button"
+        className={styles.colorSwatch}
+        style={{ background: draft ?? value }}
+        aria-label={`Pick ${label}`}
+        data-testid={`${testId}-swatch`}
+        title={draft ?? value}
+        onClick={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <div className={styles.colorPopover} role="dialog" aria-label={`${label} picker`}>
+          <div className={styles.colorGrid}>
+            {OVERLAY_COLOR_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={`${styles.colorGridSwatch} ${
+                  (draft ?? value).toUpperCase() === preset.toUpperCase()
+                    ? styles.colorGridSwatchActive
+                    : ''
+                }`}
+                style={{ background: preset }}
+                aria-label={preset}
+                title={preset}
+                onClick={() => {
+                  onPickSwatch(preset);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </div>
+          <input
+            type="text"
+            className={styles.colorHexInput}
+            value={draft ?? value}
+            maxLength={7}
+            placeholder="#000000"
+            data-testid={testId}
+            aria-label={`${label} hex value`}
+            aria-invalid={Boolean(error)}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onBlur={onApply}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); onApply(); setOpen(false); }
+              if (e.key === 'Escape') setOpen(false);
+            }}
+          />
+          {error && <span className={styles.colorHexError}>{error}</span>}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface NumberStepperProps {
   value: number;
@@ -325,27 +420,36 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
           >
             <em>I</em>
           </button>
+          <button
+            type="button"
+            className={`${styles.toggle} ${overlay.underline ? styles.active : ''}`}
+            aria-label="Underline"
+            aria-pressed={Boolean(overlay.underline)}
+            data-testid="overlay-format-underline"
+            onClick={() => onChange({ underline: !overlay.underline })}
+          >
+            <u>U</u>
+          </button>
         </div>
 
         <div className={styles.controlGroup}>
-          <label className={styles.field}>
+          <div className={styles.field}>
             <span>Color</span>
-            <input
-              type="text"
-              value={colorDraft ?? overlay.color}
-              maxLength={7}
-              data-testid="overlay-format-color"
-              aria-invalid={Boolean(colorError)}
-              onChange={(event) => setColorDraft(event.target.value)}
-              onBlur={applyColor}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  applyColor();
-                }
+            <ColorSwatchPicker
+              value={overlay.color}
+              draft={colorDraft}
+              error={colorError}
+              testId="overlay-format-color"
+              label="text color"
+              onDraftChange={setColorDraft}
+              onApply={applyColor}
+              onPickSwatch={(color) => {
+                setColorDraft(null);
+                setColorError('');
+                onChange({ color });
               }}
             />
-          </label>
+          </div>
 
           <div className={styles.labeledControl}>
             <span>Align</span>
@@ -474,24 +578,23 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
                 onBlur={onReplacementTextBlur}
               />
             </label>
-            <label className={styles.field}>
+            <div className={styles.field}>
               <span>Cover color</span>
-              <input
-                type="text"
-                value={coverColorDraft ?? overlay.backgroundColor ?? '#FFFFFF'}
-                maxLength={7}
-                data-testid="overlay-format-background-color"
-                aria-invalid={Boolean(coverColorError)}
-                onChange={(event) => setCoverColorDraft(event.target.value)}
-                onBlur={applyCoverColor}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    applyCoverColor();
-                  }
+              <ColorSwatchPicker
+                value={overlay.backgroundColor ?? '#FFFFFF'}
+                draft={coverColorDraft}
+                error={coverColorError}
+                testId="overlay-format-background-color"
+                label="cover color"
+                onDraftChange={setCoverColorDraft}
+                onApply={applyCoverColor}
+                onPickSwatch={(color) => {
+                  setCoverColorDraft(null);
+                  setCoverColorError('');
+                  onChange({ backgroundColor: color });
                 }}
               />
-            </label>
+            </div>
           </div>
         </div>
       )}
@@ -503,17 +606,6 @@ export const OverlayFormatToolbar: React.FC<OverlayFormatToolbarProps> = ({
           onValidationChange={onValidationChange}
         />
       </div>
-
-      {colorError && (
-        <span className={styles.error} aria-live="polite">
-          {colorError}
-        </span>
-      )}
-      {coverColorError && (
-        <span className={styles.error} aria-live="polite">
-          {coverColorError}
-        </span>
-      )}
     </div>
   );
 };

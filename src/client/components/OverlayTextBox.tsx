@@ -231,7 +231,8 @@ export const OverlayTextBox: React.FC<OverlayTextBoxProps> = ({
             : overlay.verticalAlign === 'bottom'
               ? 'flex-end'
               : 'flex-start',
-        textDecoration: hasLink ? 'underline' : undefined,
+        textDecoration:
+          hasLink || overlay.underline ? 'underline' : undefined,
       }}
       data-testid="pdf-tools-overlay-box"
       data-overlay-id={overlay.id}

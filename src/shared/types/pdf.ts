@@ -38,6 +38,7 @@ export interface OverlayTextBox {
   fontSize: number;
   bold: boolean;
   italic: boolean;
+  underline?: boolean;
   color: string;
   horizontalAlign: OverlayHorizontalAlign;
   verticalAlign: OverlayVerticalAlign;
@@ -81,6 +82,7 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
     isNumber('fontSize') &&
     typeof overlay.bold === 'boolean' &&
     typeof overlay.italic === 'boolean' &&
+    (overlay.underline === undefined || typeof overlay.underline === 'boolean') &&
     typeof overlay.color === 'string' &&
     ['left', 'center', 'right'].includes(overlay.horizontalAlign as string) &&
     ['top', 'middle', 'bottom'].includes(overlay.verticalAlign as string) &&

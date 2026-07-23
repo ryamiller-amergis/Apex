@@ -34,6 +34,7 @@ export type OverlayFormattingPatch = Partial<
     | 'fontSize'
     | 'bold'
     | 'italic'
+    | 'underline'
     | 'color'
     | 'horizontalAlign'
     | 'verticalAlign'
