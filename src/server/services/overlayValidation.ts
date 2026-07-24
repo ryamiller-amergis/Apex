@@ -404,6 +404,20 @@ export function validateOverlays(
       );
     }
     if (
+      overlay.replacementOriginalText !== undefined &&
+      (typeof overlay.replacementOriginalText !== 'string' ||
+        overlay.replacementOriginalText.length === 0 ||
+        overlay.replacementOriginalText.length > MAX_TEXT_LENGTH)
+    ) {
+      addError(
+        errors,
+        overlayId,
+        'replacementOriginalText',
+        'OVERLAY_REPLACEMENT_ORIGINAL_TEXT_INVALID',
+        `replacementOriginalText must contain 1 through ${MAX_TEXT_LENGTH} characters.`
+      );
+    }
+    if (
       overlay.replacementBounds !== undefined &&
       !isReplacementBounds(overlay.replacementBounds)
     ) {

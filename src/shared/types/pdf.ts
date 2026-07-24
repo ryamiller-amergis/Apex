@@ -68,6 +68,8 @@ export interface OverlayTextBox {
   coverActive?: boolean;
   /** Immutable source-text region erased by a replacement. */
   replacementCover?: PdfOverlayGeometry;
+  /** Original native PDF text targeted by server-side replacement engines. */
+  replacementOriginalText?: string;
   /** Collision-safe page limits calculated from neighboring native PDF text. */
   replacementBounds?: OverlayReplacementBounds;
   /** True when replacement text cannot fit inside its collision-safe bounds. */
@@ -137,6 +139,8 @@ export function isOverlayTextBox(value: unknown): value is OverlayTextBox {
       overlay.kind === 'replace') &&
     isOptionalString('backgroundColor') &&
     isOptionalGeometry('replacementCover') &&
+    (overlay.replacementOriginalText === undefined ||
+      typeof overlay.replacementOriginalText === 'string') &&
     isOptionalReplacementBounds('replacementBounds') &&
     (overlay.replacementOverflow === undefined ||
       typeof overlay.replacementOverflow === 'boolean')

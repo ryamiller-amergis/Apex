@@ -9,6 +9,10 @@ const envSchema = z.object({
   VITE_ADO_PROJECT: z.string().default('MaxView'),
   /** Work item poll interval in seconds */
   VITE_POLL_INTERVAL: z.coerce.number().int().positive().default(60),
+  /** Apryse WebViewer browser trial key for the isolated PDF editing POC. */
+  VITE_APRYSE_WEBVIEWER_LICENSE_KEY: z.string().default(''),
+  /** Nutrient Web SDK browser trial key; optional for evaluation mode. */
+  VITE_NUTRIENT_LICENSE_KEY: z.string().default(''),
 });
 
 function parseEnv() {
@@ -17,13 +21,16 @@ function parseEnv() {
     VITE_ADO_ORG: import.meta.env.VITE_ADO_ORG,
     VITE_ADO_PROJECT: import.meta.env.VITE_ADO_PROJECT,
     VITE_POLL_INTERVAL: import.meta.env.VITE_POLL_INTERVAL,
+    VITE_APRYSE_WEBVIEWER_LICENSE_KEY: import.meta.env
+      .VITE_APRYSE_WEBVIEWER_LICENSE_KEY,
+    VITE_NUTRIENT_LICENSE_KEY: import.meta.env.VITE_NUTRIENT_LICENSE_KEY,
   };
 
   const result = envSchema.safeParse(raw);
 
   if (!result.success) {
     const issues = result.error.issues
-      .map(i => `  ${i.path.join('.')}: ${i.message}`)
+      .map((i) => `  ${i.path.join('.')}: ${i.message}`)
       .join('\n');
     console.error(`[env] Invalid environment variables:\n${issues}`);
   }

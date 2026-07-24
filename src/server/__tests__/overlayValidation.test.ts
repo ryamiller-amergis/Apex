@@ -96,6 +96,7 @@ describe('validateOverlays', () => {
       replacementCover: { x: 80, y: 10, width: 10, height: 3 },
       replacementBounds: { xMin: 60, xMax: 100, yMax: 25 },
       replacementOverflow: false,
+      replacementOriginalText: 'USD $9,000',
     };
 
     const result = validateOverlays([overlay], PAGE_IDS);
@@ -114,6 +115,7 @@ describe('validateOverlays', () => {
           replacementCover: { x: 80, y: 10, width: -1, height: 3 },
           replacementBounds: { xMin: 70, xMax: 60, yMax: 101 },
           replacementOverflow: 'yes',
+          replacementOriginalText: 123,
         },
       ],
       PAGE_IDS
@@ -124,6 +126,7 @@ describe('validateOverlays', () => {
         'replacementCover',
         'replacementBounds',
         'replacementOverflow',
+        'replacementOriginalText',
       ])
     );
   });

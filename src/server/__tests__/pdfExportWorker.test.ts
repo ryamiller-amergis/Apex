@@ -6,12 +6,21 @@
 
 const mockReadPdfArtifact = jest.fn();
 const mockArtifactPut = jest.fn();
+const mockApryseReplaceText = jest.fn();
+let mockApryseConfigured = false;
 
 jest.mock('../services/pdfArtifactStore', () => ({
   readPdfArtifact: (...args: unknown[]) => mockReadPdfArtifact(...args),
   getPdfArtifactStore: () => ({
     putFile: (...args: unknown[]) => mockArtifactPut(...args),
   }),
+}));
+
+jest.mock('../services/aprysePdfEditingService', () => ({
+  aprysePdfEditingService: {
+    isConfigured: () => mockApryseConfigured,
+    replaceText: (...args: unknown[]) => mockApryseReplaceText(...args),
+  },
 }));
 
 import fs from 'fs';
@@ -47,7 +56,10 @@ afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function createTestPdf(pageCount: number, filePath: string): Promise<void> {
+async function createTestPdf(
+  pageCount: number,
+  filePath: string
+): Promise<void> {
   const doc = await PDFDocument.create();
   for (let i = 0; i < pageCount; i++) {
     doc.addPage([612, 792]); // standard letter size
@@ -58,7 +70,7 @@ async function createTestPdf(pageCount: number, filePath: string): Promise<void>
 
 function makeOverlay(
   pageId: string,
-  overrides: Partial<OverlayTextBox> = {},
+  overrides: Partial<OverlayTextBox> = {}
 ): OverlayTextBox {
   return {
     id: '11111111-1111-4111-8111-111111111111',
@@ -90,6 +102,54 @@ function makeOverlay(
 describe('assemblePdf (worker core logic)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockApryseConfigured = false;
+    mockApryseReplaceText.mockImplementation(
+      async (bytes: Uint8Array) => bytes
+    );
+  });
+
+  it('routes native replacements through Apryse on their assembled pages', async () => {
+    mockApryseConfigured = true;
+    const filePath = path.join(tmpDir, 'apryse-source.pdf');
+    await createTestPdf(2, filePath);
+    const input: ExportWorkerInput = {
+      manifest: [
+        {
+          pageId: 'page-2',
+          fileId: 'file-1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'page-1',
+          fileId: 'file-1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
+      filePaths: { 'file-1': filePath },
+      overlays: [
+        makeOverlay('page-1', {
+          kind: 'replace',
+          replacementOriginalText: 'USD $9,000',
+          text: 'USD $8,500',
+          backgroundColor: '#FFFFFF',
+        }),
+      ],
+    };
+
+    const result = await assemblePdf(input);
+
+    expect(result.success).toBe(true);
+    expect(mockApryseReplaceText).toHaveBeenCalledWith(expect.any(Uint8Array), [
+      {
+        pageNumber: 2,
+        originalText: 'USD $9,000',
+        replacementText: 'USD $8,500',
+      },
+    ]);
   });
 
   // DoD-1: pages assembled in manifest order
@@ -101,9 +161,27 @@ describe('assemblePdf (worker core logic)', () => {
 
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'fileA', sourcePageIndex: 2, rotation: 0, deleted: false },
-        { pageId: 'p2', fileId: 'fileB', sourcePageIndex: 0, rotation: 0, deleted: false },
-        { pageId: 'p3', fileId: 'fileA', sourcePageIndex: 0, rotation: 0, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'fileA',
+          sourcePageIndex: 2,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'p2',
+          fileId: 'fileB',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'p3',
+          fileId: 'fileA',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       filePaths: { fileA: fileA, fileB: fileB },
     };
@@ -124,8 +202,20 @@ describe('assemblePdf (worker core logic)', () => {
 
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 90, deleted: false },
-        { pageId: 'p2', fileId: 'f1', sourcePageIndex: 1, rotation: 270, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 90,
+          deleted: false,
+        },
+        {
+          pageId: 'p2',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 270,
+          deleted: false,
+        },
       ],
       filePaths: { f1: file },
     };
@@ -150,13 +240,15 @@ describe('assemblePdf (worker core logic)', () => {
     };
 
     const result = await assemblePdf({
-      manifest: [{
-        pageId: 'p1',
-        fileId: 'file-1',
-        sourcePageIndex: 0,
-        rotation: 0,
-        deleted: false,
-      }],
+      manifest: [
+        {
+          pageId: 'p1',
+          fileId: 'file-1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
       artifactFiles: {
         'file-1': {
           userId: 'user-1',
@@ -168,10 +260,15 @@ describe('assemblePdf (worker core logic)', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(mockReadPdfArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      fileName: 'file-1.pdf',
-    }));
-    expect(mockArtifactPut).toHaveBeenCalledWith(outputRef, expect.any(Uint8Array));
+    expect(mockReadPdfArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'file-1.pdf',
+      })
+    );
+    expect(mockArtifactPut).toHaveBeenCalledWith(
+      outputRef,
+      expect.any(Uint8Array)
+    );
   });
 
   it('VT-04: burns only the included page overlays into an extraction', async () => {
@@ -209,9 +306,27 @@ describe('assemblePdf (worker core logic)', () => {
 
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false },
-        { pageId: 'p2', fileId: 'f1', sourcePageIndex: 1, rotation: 0, deleted: true },
-        { pageId: 'p3', fileId: 'f1', sourcePageIndex: 2, rotation: 0, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'p2',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: true,
+        },
+        {
+          pageId: 'p3',
+          fileId: 'f1',
+          sourcePageIndex: 2,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       filePaths: { f1: file },
     };
@@ -227,7 +342,13 @@ describe('assemblePdf (worker core logic)', () => {
   it('DoD-3: returns error when source file is missing on disk', async () => {
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'missing', sourcePageIndex: 0, rotation: 0, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'missing',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       filePaths: { missing: path.join(tmpDir, 'does-not-exist.pdf') },
     };
@@ -244,7 +365,13 @@ describe('assemblePdf (worker core logic)', () => {
 
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       filePaths: { f1: file },
     };
@@ -263,7 +390,13 @@ describe('assemblePdf (worker core logic)', () => {
 
     const input: ExportWorkerInput = {
       manifest: [
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: true },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: true,
+        },
       ],
       filePaths: { f1: file },
     };
@@ -286,7 +419,7 @@ describe('assemblePdf (worker core logic)', () => {
           sourcePageIndex: index,
           rotation: 0,
           deleted: false,
-        }),
+        })
       );
 
       const startedAt = performance.now();
@@ -298,15 +431,15 @@ describe('assemblePdf (worker core logic)', () => {
 
       expect(result.success).toBe(true);
       expect(durationMs).toBeLessThan(
-        PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs,
+        PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs
       );
 
       const outputDoc = await PDFDocument.load(result.pdfBytes!);
       expect(outputDoc.getPageCount()).toBe(
-        PDF_MVP_PERFORMANCE_TARGETS.exportPageCount,
+        PDF_MVP_PERFORMANCE_TARGETS.exportPageCount
       );
     },
-    PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs + 5_000,
+    PDF_MVP_PERFORMANCE_TARGETS.assembleAndExportMs + 5_000
   );
 });
 
@@ -336,7 +469,15 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
 
     // assembling the flattened bytes via fileBytes must succeed
     const result = await assemblePdf({
-      manifest: [{ pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false }],
+      manifest: [
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
       fileBytes: { f1: flatBytes },
     });
     expect(result.success).toBe(true);
@@ -369,8 +510,20 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
     // Reorder: export page 1 first (blank), then page 0 (form page)
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'blank', fileId: 'f1', sourcePageIndex: 1, rotation: 0, deleted: false },
-        { pageId: 'form', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false },
+        {
+          pageId: 'blank',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'form',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       fileBytes: { f1: flatBytes },
     });
@@ -391,7 +544,15 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
     expect(await countEditableFields(flatBytes)).toBe(0);
 
     const result = await assemblePdf({
-      manifest: [{ pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false }],
+      manifest: [
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
       fileBytes: { f1: flatBytes },
     });
     expect(result.success).toBe(true);
@@ -410,8 +571,20 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
 
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'p0', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false },
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 1, rotation: 0, deleted: false },
+        {
+          pageId: 'p0',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       fileBytes: { f1: flatBytes },
     });
@@ -431,8 +604,20 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
     // Export only page 1 (index 1), skip page 0
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'p0', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: true },
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 1, rotation: 0, deleted: false },
+        {
+          pageId: 'p0',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: true,
+        },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       fileBytes: { f1: flatBytes },
     });
@@ -451,7 +636,13 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
 
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 90, deleted: false },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 90,
+          deleted: false,
+        },
       ],
       fileBytes: { f1: flatBytes },
     });
@@ -474,8 +665,20 @@ describe('AcroForm fill/flatten strategy (fixture proof)', () => {
 
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'form-page', fileId: 'form', sourcePageIndex: 0, rotation: 0, deleted: false },
-        { pageId: 'plain-page', fileId: 'plain', sourcePageIndex: 0, rotation: 0, deleted: false },
+        {
+          pageId: 'form-page',
+          fileId: 'form',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+        {
+          pageId: 'plain-page',
+          fileId: 'plain',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       fileBytes: { form: flatFormBytes, plain: new Uint8Array(plainBytes) },
     });
@@ -506,23 +709,39 @@ describe('Export with form values and signature overlays', () => {
     const sourceBytes = await createSingleFieldPdf();
 
     const result = await assemblePdf({
-      manifest: [{ pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false }],
+      manifest: [
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
       fileBytes: { f1: new Uint8Array(sourceBytes) },
-      formFieldValues: [{ fileId: 'f1', fieldName: 'firstName', value: 'Jane Doe' }],
-      signatureOverlays: [{
-        id: 'sig-1',
-        pageId: 'p1',
-        assetId: 'asset-uuid',
-        x: 10,
-        y: 10,
-        width: 30,
-        height: 15,
-        rotation: 0,
-        opacity: 100,
-        zIndex: 1,
-      }],
+      formFieldValues: [
+        { fileId: 'f1', fieldName: 'firstName', value: 'Jane Doe' },
+      ],
+      signatureOverlays: [
+        {
+          id: 'sig-1',
+          pageId: 'p1',
+          assetId: 'asset-uuid',
+          x: 10,
+          y: 10,
+          width: 30,
+          height: 15,
+          rotation: 0,
+          opacity: 100,
+          zIndex: 1,
+        },
+      ],
       signatureArtifacts: {
-        'asset-uuid': { userId: 'u1', sessionId: 's1', fileName: 'sig-asset-uuid.png' },
+        'asset-uuid': {
+          userId: 'u1',
+          sessionId: 's1',
+          fileName: 'sig-asset-uuid.png',
+        },
       },
     });
 
@@ -534,20 +753,30 @@ describe('Export with form values and signature overlays', () => {
     const sourceBytes = await createPlainPdf(1);
 
     const result = await assemblePdf({
-      manifest: [{ pageId: 'p1', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: false }],
+      manifest: [
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: false,
+        },
+      ],
       fileBytes: { f1: new Uint8Array(sourceBytes) },
-      signatureOverlays: [{
-        id: 'sig-1',
-        pageId: 'p1',
-        assetId: 'missing-uuid',
-        x: 10,
-        y: 10,
-        width: 20,
-        height: 10,
-        rotation: 0,
-        opacity: 100,
-        zIndex: 1,
-      }],
+      signatureOverlays: [
+        {
+          id: 'sig-1',
+          pageId: 'p1',
+          assetId: 'missing-uuid',
+          x: 10,
+          y: 10,
+          width: 20,
+          height: 10,
+          rotation: 0,
+          opacity: 100,
+          zIndex: 1,
+        },
+      ],
       signatureArtifacts: {}, // deliberate — missing-uuid not present
     });
 
@@ -563,24 +792,42 @@ describe('Export with form values and signature overlays', () => {
 
     const result = await assemblePdf({
       manifest: [
-        { pageId: 'p0', fileId: 'f1', sourcePageIndex: 0, rotation: 0, deleted: true },
-        { pageId: 'p1', fileId: 'f1', sourcePageIndex: 1, rotation: 0, deleted: false },
+        {
+          pageId: 'p0',
+          fileId: 'f1',
+          sourcePageIndex: 0,
+          rotation: 0,
+          deleted: true,
+        },
+        {
+          pageId: 'p1',
+          fileId: 'f1',
+          sourcePageIndex: 1,
+          rotation: 0,
+          deleted: false,
+        },
       ],
       fileBytes: { f1: new Uint8Array(sourceBytes) },
-      signatureOverlays: [{
-        id: 'sig-del',
-        pageId: 'p0', // belongs to the deleted page — must be skipped
-        assetId: 'asset-uuid',
-        x: 5,
-        y: 5,
-        width: 20,
-        height: 10,
-        rotation: 0,
-        opacity: 100,
-        zIndex: 1,
-      }],
+      signatureOverlays: [
+        {
+          id: 'sig-del',
+          pageId: 'p0', // belongs to the deleted page — must be skipped
+          assetId: 'asset-uuid',
+          x: 5,
+          y: 5,
+          width: 20,
+          height: 10,
+          rotation: 0,
+          opacity: 100,
+          zIndex: 1,
+        },
+      ],
       signatureArtifacts: {
-        'asset-uuid': { userId: 'u1', sessionId: 's1', fileName: 'sig-asset-uuid.png' },
+        'asset-uuid': {
+          userId: 'u1',
+          sessionId: 's1',
+          fileName: 'sig-asset-uuid.png',
+        },
       },
     });
 

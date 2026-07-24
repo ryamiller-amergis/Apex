@@ -912,6 +912,7 @@ describe('useOverlayEditor', () => {
         width: 12,
         height: 3,
       });
+      expect(overlay.replacementOriginalText).toBe('A');
       expect(overlay.replacementBounds).toEqual({
         xMin: 8,
         xMax: 40,

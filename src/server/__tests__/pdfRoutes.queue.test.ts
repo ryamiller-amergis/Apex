@@ -3,6 +3,7 @@ import os from 'os';
 import request from 'supertest';
 
 const mockQueuePdfExport = jest.fn();
+const mockGetApryseStatus = jest.fn();
 
 jest.mock('../middleware/auth', () => ({
   ensureAuthenticated: (
@@ -47,6 +48,12 @@ jest.mock('../services/pdfArtifactStore', () => ({
   getPdfArtifactStore: jest.fn(),
 }));
 
+jest.mock('../services/aprysePdfEditingService', () => ({
+  aprysePdfEditingService: {
+    getStatus: (...args: unknown[]) => mockGetApryseStatus(...args),
+  },
+}));
+
 jest.mock('../services/pdfAssemblyService', () => ({
   getPdfTempDir: () => os.tmpdir(),
   createSession: jest.fn(),
@@ -70,6 +77,28 @@ app.use('/api/pdf', pdfRouter);
 describe('PDF export queue routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  test('returns Apryse POC capability status without exposing the key', async () => {
+    mockGetApryseStatus.mockResolvedValue({
+      configured: true,
+      sdkAvailable: true,
+      findReplaceAvailable: true,
+      message:
+        'Apryse FindReplace API is available; license entitlement is validated during export.',
+    });
+
+    const response = await request(app).get('/api/pdf/apryse/status');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      configured: true,
+      sdkAvailable: true,
+      findReplaceAvailable: true,
+      message:
+        'Apryse FindReplace API is available; license entitlement is validated during export.',
+    });
+    expect(JSON.stringify(response.body)).not.toContain('demo-key');
   });
 
   test('returns 202 with queue status for accepted exports', async () => {

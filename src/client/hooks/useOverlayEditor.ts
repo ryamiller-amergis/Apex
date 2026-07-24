@@ -232,6 +232,7 @@ export function useOverlayEditor({
         backgroundColor: replacementDraft.backgroundColor,
         coverActive: false,
         replacementCover: replacementDraft.item.geometry,
+        replacementOriginalText: replacementDraft.item.text,
         replacementBounds: replacementDraft.item.replacementBounds,
         replacementOverflow: false,
       };
@@ -771,6 +772,7 @@ export function useOverlayEditor({
         kind: 'replace',
         backgroundColor: draft.backgroundColor,
         replacementCover: draft.item.geometry,
+        replacementOriginalText: draft.item.text,
         replacementBounds: draft.item.replacementBounds,
         ...patch,
         coverActive: true,

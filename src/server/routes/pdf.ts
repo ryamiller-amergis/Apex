@@ -27,6 +27,7 @@ import {
   PdfQueueSaturatedError,
 } from '../services/pdfConversionJobService';
 import { getPdfArtifactStore } from '../services/pdfArtifactStore';
+import { aprysePdfEditingService } from '../services/aprysePdfEditingService';
 import {
   PDF_ERROR_CODES,
   PDF_MVP_PERFORMANCE_TARGETS,
@@ -105,6 +106,13 @@ async function loadAndValidateSession(
   }
   return session as any;
 }
+
+// ── GET /api/pdf/apryse/status ────────────────────────────────────────────────
+
+router.get('/apryse/status', async (_req, res): Promise<void> => {
+  const status = await aprysePdfEditingService.getStatus();
+  res.json(status);
+});
 
 // ── GET /api/pdf/sessions ─────────────────────────────────────────────────────
 
@@ -426,7 +434,7 @@ router.post('/sessions/:sessionId/export', async (req, res): Promise<void> => {
       userId,
       filename,
       pages,
-      (format as PdfExportFormat | undefined) ?? 'pdf',
+      (format as PdfExportFormat | undefined) ?? 'pdf'
     );
     res.status(202).json(result);
   } catch (err: unknown) {
@@ -520,7 +528,8 @@ router.get('/jobs/:jobId/result', async (req, res): Promise<void> => {
 
     // Resolve format and artifact filename from the mapped job fields.
     const isDocx = job.resultFormat === 'docx';
-    const resultFileName = job.resultFileName ?? `${job.id}.${isDocx ? 'docx' : 'pdf'}`;
+    const resultFileName =
+      job.resultFileName ?? `${job.id}.${isDocx ? 'docx' : 'pdf'}`;
     const ref = { userId, sessionId: job.sessionId, fileName: resultFileName };
 
     if (!(await getPdfArtifactStore().exists(ref))) {
@@ -621,7 +630,11 @@ router.put(
         return;
       }
 
-      const result = await replaceFormValues(sessionId, userId, body.values as PdfTextFormValue[]);
+      const result = await replaceFormValues(
+        sessionId,
+        userId,
+        body.values as PdfTextFormValue[]
+      );
       res.json(result);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
@@ -724,14 +737,22 @@ router.get(
       // Ownership check: load the session
       const session = await getSession(sessionId);
       if (!session) {
-        res.status(404).json({ error: 'Session not found', code: PDF_ERROR_CODES.SESSION_NOT_FOUND });
+        res.status(404).json({
+          error: 'Session not found',
+          code: PDF_ERROR_CODES.SESSION_NOT_FOUND,
+        });
         return;
       }
       if ((session as any).userId !== userId) {
-        res.status(403).json({ error: 'Forbidden', code: PDF_ERROR_CODES.SESSION_FORBIDDEN });
+        res.status(403).json({
+          error: 'Forbidden',
+          code: PDF_ERROR_CODES.SESSION_FORBIDDEN,
+        });
         return;
       }
-      const sigState = (session as any).signatureState as { assets: Array<{ assetId: string }> } | undefined;
+      const sigState = (session as any).signatureState as
+        | { assets: Array<{ assetId: string }> }
+        | undefined;
       const knownIds = new Set((sigState?.assets ?? []).map((a) => a.assetId));
       if (!knownIds.has(assetId)) {
         res.status(404).json({
@@ -747,7 +768,10 @@ router.get(
       (stream as NodeJS.ReadableStream).pipe(res);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
-      if (code === PDF_ERROR_CODES.SESSION_NOT_FOUND || code === PDF_ERROR_CODES.SIGNATURE_ASSET_NOT_FOUND) {
+      if (
+        code === PDF_ERROR_CODES.SESSION_NOT_FOUND ||
+        code === PDF_ERROR_CODES.SIGNATURE_ASSET_NOT_FOUND
+      ) {
         res.status(404).json({ error: 'Not found', code });
         return;
       }
@@ -782,7 +806,11 @@ router.put(
         return;
       }
 
-      const result = await replaceSignatureOverlays(sessionId, userId, body.overlays);
+      const result = await replaceSignatureOverlays(
+        sessionId,
+        userId,
+        body.overlays
+      );
       res.json(result);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
