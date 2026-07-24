@@ -655,6 +655,22 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
  * Returns true when content was persisted, false when the row was already finalised
  * by another caller (guard triggered).
  */
+/**
+ * True when a design_docs generation row should be updated in place (one agent
+ * thread → one doc) rather than treated as a legacy multi-feature seed that
+ * fans out to child rows.
+ *
+ * - Prototype approval path: designPrototypeId set (+ featureIndex)
+ * - PRD "generate design docs" path: featureIndex set, no prototype
+ * - Legacy seed: neither — post-run calls syncPerFeatureDesignDocs instead
+ */
+export function isSingleFeatureDesignDocRow(row: {
+  designPrototypeId?: string | null;
+  featureIndex?: number | null;
+}): boolean {
+  return row.designPrototypeId != null || row.featureIndex != null;
+}
+
 export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,

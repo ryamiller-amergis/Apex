@@ -34,6 +34,11 @@ jest.mock('../services/designDocService', () => ({
   syncDesignDocContent: jest.fn(),
   syncValidationResult: jest.fn(),
   syncPerFeatureDesignDocs: jest.fn(),
+  finalizeSingleFeatureDoc: jest.fn(),
+  isSingleFeatureDesignDocRow: jest.fn(
+    (row: { designPrototypeId?: string | null; featureIndex?: number | null }) =>
+      row.designPrototypeId != null || row.featureIndex != null,
+  ),
 }));
 jest.mock('../services/telemetry', () => ({
   trackAgentError: jest.fn(),

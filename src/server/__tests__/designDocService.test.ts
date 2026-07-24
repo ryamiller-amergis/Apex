@@ -111,6 +111,7 @@ import {
   startSingleFeatureDocWatcher,
   startSingleFeatureDesignDocWatcher,
   finalizeSingleFeatureDoc,
+  isSingleFeatureDesignDocRow,
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -1492,5 +1493,22 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
+  });
+});
+
+// ── isSingleFeatureDesignDocRow ────────────────────────────────────────────────
+
+describe('isSingleFeatureDesignDocRow', () => {
+  it('is true for prototype-linked docs', () => {
+    expect(isSingleFeatureDesignDocRow({ designPrototypeId: 'proto-1', featureIndex: 0 })).toBe(true);
+  });
+
+  it('is true for PRD-spawned per-feature docs (featureIndex only)', () => {
+    expect(isSingleFeatureDesignDocRow({ designPrototypeId: null, featureIndex: 2 })).toBe(true);
+  });
+
+  it('is false for legacy multi-feature seeds (neither set)', () => {
+    expect(isSingleFeatureDesignDocRow({ designPrototypeId: null, featureIndex: null })).toBe(false);
+    expect(isSingleFeatureDesignDocRow({})).toBe(false);
   });
 });

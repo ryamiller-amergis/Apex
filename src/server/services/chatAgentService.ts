@@ -1805,17 +1805,23 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   // Check if this thread belongs to a design doc (generation thread)
   const ddGenRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.chatThreadId, threadId),
-    columns: { id: true, prdId: true, project: true, authorId: true, designPrototypeId: true },
+    columns: {
+      id: true,
+      prdId: true,
+      project: true,
+      authorId: true,
+      designPrototypeId: true,
+      featureIndex: true,
+    },
   });
   if (ddGenRow) {
-    if (ddGenRow.designPrototypeId) {
-      // Prototype-linked single-feature doc — update the existing row. The watcher
-      // may have already handled this; finalizeSingleFeatureDoc is idempotent.
-      const { finalizeSingleFeatureDoc } = await import('./designDocService');
+    const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } = await import('./designDocService');
+    // Single-feature docs finalize in place; legacy seeds fan out to child rows.
+    if (isSingleFeatureDesignDocRow(ddGenRow)) {
+      // Watcher may have already handled this; finalizeSingleFeatureDoc is idempotent.
       await finalizeSingleFeatureDoc(ddGenRow.id, threadId, ddGenRow.project);
-      console.log(`[chat] post-run: finalised prototype-linked design doc (designDocId=${ddGenRow.id})`);
+      console.log(`[chat] post-run: finalised single-feature design doc (designDocId=${ddGenRow.id})`);
     } else {
-      // Legacy multi-feature or direct-from-PRD seed doc — fan out to child rows.
       await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
       console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
     }
@@ -1823,12 +1829,19 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   }
 
   // Fallback: the watcher may have nulled chatThreadId prematurely while the
-  // agent was still running. If the workspace has feature triplets, look for
-  // the seed doc in generating status (chatThreadId=NULL) and sync the features.
+  // agent was still running. If the workspace has feature triplets, look for a
+  // *legacy multi-feature seed* (no featureIndex / prototype) still in generating
+  // with chatThreadId=NULL and sync the features. Do not match PRD/prototype
+  // single-feature rows — those must finalize in place, not spawn children.
   const orphanFeatures = readAllOutputDesignDocFeatures(threadId);
   if (orphanFeatures.length > 0) {
     const seedRow = await db.query.designDocs.findFirst({
-      where: and(eq(designDocs.status, 'generating'), isNull(designDocs.chatThreadId)),
+      where: and(
+        eq(designDocs.status, 'generating'),
+        isNull(designDocs.chatThreadId),
+        isNull(designDocs.featureIndex),
+        isNull(designDocs.designPrototypeId),
+      ),
       columns: { id: true, prdId: true, project: true, authorId: true },
     });
     if (seedRow) {
