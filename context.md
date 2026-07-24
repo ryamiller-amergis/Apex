@@ -247,7 +247,7 @@ A developer-focused view for managing personal work items and development sessio
 
 | Nav Item | Route | Permission | Description |
 |----------|-------|------------|-------------|
-| Home | `/home` | (any authenticated user) | Agent chat home with skill pills for guided conversations |
+| Home | `/home` | `home:view` permission + `agent-home` feature flag (both granted to all roles by default) | Agent chat home with skill pills for guided conversations |
 | Calendar | `/calendar` | `calendar:view` + menu enabled | Work item calendar with drag-and-drop scheduling |
 | Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |

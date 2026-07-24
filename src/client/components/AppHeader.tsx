@@ -34,6 +34,7 @@ interface AppHeaderProps {
   repoConfigs?: ProjectRepoConfigSummary[];
   selectedSkillSettingsId?: string | null;
   onChangeSkillSettings?: (id: string) => void;
+  canAccessHome?: boolean;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
   onNavigateCalendar: () => void;
@@ -67,6 +68,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   repoConfigs = [],
   selectedSkillSettingsId,
   onChangeSkillSettings,
+  canAccessHome = true,
   onNavigateHome,
   onNavigateProjects,
   onNavigateCalendar,
@@ -123,7 +125,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   ];
 
   const visibleNavItems = navItems.filter((item) => {
-    if (item.view === 'home') return true;
+    if (item.view === 'home') return canAccessHome;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
       if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;

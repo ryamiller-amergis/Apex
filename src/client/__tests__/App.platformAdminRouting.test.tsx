@@ -21,6 +21,10 @@ jest.mock('../hooks/useChatThreads', () => ({
 
 jest.mock('../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
+  useFeatureFlags: jest.fn().mockReturnValue({
+    flags: { 'agent-home': true },
+    isLoading: false,
+  }),
 }));
 
 jest.mock('../components/BetaAnnouncementModal', () => ({
@@ -108,6 +112,8 @@ function setupAppShell() {
     availableProjects: ['MaxView'],
     changeProject: jest.fn(),
     changeAreaPath: jest.fn(),
+    changeSkillSettings: jest.fn(),
+    selectedSkillSettingsId: null,
     scheduledItems: [],
     unscheduledItems: [],
     pendingDueDateChange: null,
