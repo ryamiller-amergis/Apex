@@ -154,6 +154,12 @@ jobs:
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
               PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
+              LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
+              LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
+              LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
+              LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
+              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
@@ -162,13 +168,33 @@ jobs:
               WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
 
           # Mark sticky slot settings (these stay with their slot during swap)
+          # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
+          # to the staging host and production keeps the production host.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
-              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
+              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+
+          # Production slot sticky callback + shared MI runner auth (not swapped away).
+          az webapp config appsettings set \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot-settings \
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
+
+          az webapp config appsettings set \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --settings \
+              LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
+              LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
+              LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
+              LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
+              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
           # feature shells out to git at runtime. Install it on boot before
@@ -193,6 +219,14 @@ jobs:
           app-name: ${{ env.APP_SERVICE_NAME }}
           slot-name: ${{ env.SLOT_NAME }}
           package: ./deploy.zip
+
+      - name: Publish load-test k6 runner image
+        env:
+          LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
+          LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
+          LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-lt-k6-runner.sh
 
       - name: Health check staging slot
         run: |

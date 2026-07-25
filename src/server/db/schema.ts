@@ -37,10 +37,11 @@ import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
   LoadProfile,
   LoadTestEngine,
+  LoadTestExecutionSnapshot,
   LoadTestFlowType,
   LoadTestRunSource,
   LoadTestScriptSource,
-  RequirementRef,
+  FlowStep,
   RunStatus,
   Threshold,
   ThresholdResult,
@@ -627,6 +628,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   cursorServiceAccountId: text('cursor_service_account_id'),
   calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
   calendarAssistantModel: text('calendar_assistant_model'),
+  loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
+  loadTestGenerationModel: text('load_test_generation_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -1551,7 +1554,6 @@ export const loadTests = pgTable('load_test', {
   projectId: text('project_id').notNull(),
   name: text('name').notNull(),
   description: text('description'),
-  requirementRef: jsonb('requirement_ref').$type<RequirementRef>(),
   targetUrl: text('target_url').notNull(),
   environment: text('environment').notNull(),
   engine: text('engine').$type<LoadTestEngine>().notNull().default('k6'),
@@ -1560,6 +1562,7 @@ export const loadTests = pgTable('load_test', {
   script: text('script').notNull(),
   loadProfile: jsonb('load_profile').$type<LoadProfile>().notNull(),
   clientThresholds: jsonb('client_thresholds').$type<Threshold[]>().notNull().default([]),
+  flowSteps: jsonb('flow_steps').$type<FlowStep[] | null>(),
   runSource: text('run_source').$type<LoadTestRunSource>(),
   secretRefs: jsonb('secret_refs').$type<Record<string, string>>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -1588,6 +1591,8 @@ export const loadTestRuns = pgTable('load_test_run', {
   summaryArtifactRef: jsonb('summary_artifact_ref').$type<ArtifactRef>(),
   timeseriesArtifactRef: jsonb('timeseries_artifact_ref').$type<ArtifactRef>(),
   errorDetail: text('error_detail'),
+  targetKey: text('target_key'),
+  executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
@@ -1603,12 +1608,14 @@ export const loadTestTargets = pgTable('load_test_target', {
   baseUrl: text('base_url').notNull(),
   environmentLabel: text('environment_label').notNull(),
   isReachable: boolean('is_reachable').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   createdBy: text('created_by').notNull(),
   updatedBy: text('updated_by').notNull(),
 }, (t) => ({
   projectIdIdx: index('idx_load_test_target_project_id').on(t.projectId),
+  projectBaseUrlUq: uniqueIndex('uq_load_test_target_project_base_url').on(t.projectId, t.baseUrl),
 }));
 
 export const loadTestsRelations = relations(loadTests, ({ many }) => ({

@@ -1,0 +1,147 @@
+.page {
+  padding: 24px 32px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.backBtn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.backBtn:hover {
+  color: var(--accent-color);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.saveBtn,
+.runBtn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.runBtn {
+  background: var(--success-color);
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.runBtn:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.saveBtn:disabled,
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.deleteBtn,
+.secondaryBtn {
+  padding: 8px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.deleteBtn {
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.readonlyBanner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.errorToast {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--error-color);
+  background: var(--bg-secondary);
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+.dirtyHint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.skeleton {
+  height: 240px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color-light);
+}
+
+.sectionTabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sectionTab {
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sectionTab:hover {
+  color: var(--text-primary);
+}
+
+.sectionTabActive {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}

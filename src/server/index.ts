@@ -62,7 +62,10 @@ import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
+import loadTestTargetsRoutes from './routes/loadTestTargets';
+import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -165,12 +168,19 @@ const internalOnlyPaths = [
 // external monitoring. req.path is relative to /api (prefix is stripped by Express).
 const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
 
+// Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
+// on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
+const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
   const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+  const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath) return next();
+  if (isHealthPath || isLoadTestRunnerCallback) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -211,6 +221,9 @@ app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
+app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
+// Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
+app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
@@ -336,6 +349,7 @@ const server = app.listen(PORT, () => {
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
   startReaper();
+  startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.

@@ -7,7 +7,8 @@
 #
 # Identity model:
 #   lt_runner MI  — Container Apps Job executor:
-#                   queue receive, blob contribute (lt-artifacts), Key Vault Secrets User
+#                   queue receive, blob contribute (lt-artifacts), Key Vault Secrets User,
+#                   AcrPull (apex-lt-k6 images)
 #   Apex API MI   — existing App Service system identity (pdf_api_principal_id):
 #                   queue send, blob read (lt-artifacts)
 #
@@ -16,6 +17,7 @@
 #   cae-apex-lt-dev  / cae-apex-lt-prd    Container Apps Environment
 #   caj-apex-lt-dev  / caj-apex-lt-prd    Container Apps Job
 #   mi-apex-lt-runner-dev / mi-apex-lt-runner-prd  Runner user-assigned identity
+#   acrapexlt{env}                         ACR for apex-lt-k6 runner image (alphanumeric)
 #   lt-artifacts                           Blob container (env already in account name)
 
 locals {
@@ -24,7 +26,10 @@ locals {
   lt_cae_name       = coalesce(var.lt_container_app_env_name, "cae-apex-lt-${var.environment}")
   lt_job_name       = coalesce(var.lt_container_app_job_name, "caj-apex-lt-${var.environment}")
   lt_runner_mi_name = coalesce(var.lt_runner_identity_name, "mi-apex-lt-runner-${var.environment}")
-  lt_blob_container = coalesce(var.lt_blob_container_name, "lt-artifacts")
+  # ACR names are globally unique and alphanumeric-only (no hyphens).
+  lt_acr_name                = coalesce(var.lt_acr_name, "acrapexlt${var.environment}")
+  lt_blob_container          = coalesce(var.lt_blob_container_name, "lt-artifacts")
+  lt_runner_image_repository = "apex-lt-k6"
 
   lt_runner_principal_id = azurerm_user_assigned_identity.lt_runner.principal_id
 }
@@ -53,6 +58,22 @@ resource "azurerm_servicebus_queue" "lt_dispatch" {
   # Keep messages long enough for cold-start + max job duration (60 min).
   # Default lock duration 1 min; session lock is not required (FIFO not needed).
   lock_duration = "PT5M"
+}
+
+# SAS for the KEDA azure-servicebus scaler.
+# KEDA polls queue length via the Service Bus management API, which requires
+# Manage (EntityRead) — Listen-only returns 401 and DesiredJobCount stays 0.
+# azurerm 3.x cannot set scale-rule identity_id (added in azurerm 4.73+);
+# without a connection setting KEDA fails with:
+#   "error parsing azure service bus metadata: no connection setting given"
+# Runner message receive still uses the user-assigned MI (Data Receiver).
+resource "azurerm_servicebus_namespace_authorization_rule" "lt_keda_listen" {
+  name         = "lt-keda-listen"
+  namespace_id = azurerm_servicebus_namespace.load_test.id
+
+  listen = true
+  send   = true
+  manage = true
 }
 
 # ---------------------------------------------------------------------------
@@ -106,6 +127,35 @@ resource "azurerm_user_assigned_identity" "lt_runner" {
 }
 
 # ---------------------------------------------------------------------------
+# ACR — apex-lt-k6 runner images (published by PR deploy / production deploy)
+# ---------------------------------------------------------------------------
+
+resource "azurerm_container_registry" "lt" {
+  name                = local.lt_acr_name
+  resource_group_name = local.app_resource_group_name
+  location            = local.app_service_location
+  sku                 = "Basic"
+  admin_enabled       = false
+  tags                = merge(var.tags, { Environment = var.environment, Workload = "load-test" })
+}
+
+# Runner pulls private images via the job's user-assigned identity.
+resource "azurerm_role_assignment" "lt_runner_acr_pull" {
+  scope                = azurerm_container_registry.lt.id
+  role_definition_name = "AcrPull"
+  principal_id         = local.lt_runner_principal_id
+}
+
+# GitHub Actions deploy SP(s) push images (set object IDs via lt_acr_push_principal_ids).
+resource "azurerm_role_assignment" "lt_ci_acr_push" {
+  for_each = toset(var.lt_acr_push_principal_ids)
+
+  scope                = azurerm_container_registry.lt.id
+  role_definition_name = "AcrPush"
+  principal_id         = each.value
+}
+
+# ---------------------------------------------------------------------------
 # RBAC — runner MI (queue receive + blob contribute + Key Vault Secrets User)
 # ---------------------------------------------------------------------------
 
@@ -151,6 +201,25 @@ resource "azurerm_role_assignment" "lt_api_blob_reader" {
   principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
 }
 
+# Staging slot identity is slot-specific and does not move on swap (same pattern
+# as staging_pdf_blob_contributor). Grant Send + Blob Reader so pre-swap smoke
+# and staging-slot deploys can enqueue and read artifacts.
+resource "azurerm_role_assignment" "lt_staging_sb_sender" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.lt_dispatch.id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "lt_staging_blob_reader" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_storage_container.lt_artifacts.resource_manager_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
 # ---------------------------------------------------------------------------
 # Container Apps Environment (VNet-integrated for non-prod target reachability)
 # ---------------------------------------------------------------------------
@@ -186,10 +255,32 @@ resource "azurerm_container_app_job" "load_test_runner" {
   replica_timeout_in_seconds = 3600
 
   # User-assigned identity allows the runner to authenticate to Service Bus,
-  # Blob, and Key Vault without connection strings.
+  # Blob, Key Vault, and private ACR without connection strings.
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.lt_runner.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.lt.login_server
+    identity = azurerm_user_assigned_identity.lt_runner.id
+  }
+
+  # KEDA scaler auth (SAS with Manage — required for queue-length polling).
+  # Prefer scale-rule identity_id once on azurerm >= 4.73; until then the
+  # connection secret is required.
+  secret {
+    name  = "lt-keda-sb-connection"
+    value = azurerm_servicebus_namespace_authorization_rule.lt_keda_listen.primary_connection_string
+  }
+
+  # Short-term shared runner→Apex ingest token (omit when MI Entra path is enabled).
+  dynamic "secret" {
+    for_each = var.lt_runner_callback_token != null && var.lt_runner_callback_token != "" ? [1] : []
+    content {
+      name  = "lt-runner-callback-token"
+      value = var.lt_runner_callback_token
+    }
   }
 
   # Event-driven: scale from 0; KEDA fires one execution per queued message
@@ -202,21 +293,19 @@ resource "azurerm_container_app_job" "load_test_runner" {
       min_executions = 0
       max_executions = var.lt_max_executions
 
-      # KEDA Service Bus trigger. Uses workload identity (runner MI clientId)
-      # so no connection string secret is needed.
       rules {
         name             = "lt-servicebus-keda"
         custom_rule_type = "azure-servicebus"
 
         metadata = {
-          # Queue to monitor for scale decisions.
           queueName    = local.lt_queue_name
           namespace    = azurerm_servicebus_namespace.load_test.name
           messageCount = "1"
+        }
 
-          # Workload identity: KEDA uses the runner MI to authenticate.
-          # clientId must match the user-assigned MI client ID.
-          clientId = azurerm_user_assigned_identity.lt_runner.client_id
+        authentication {
+          secret_name       = "lt-keda-sb-connection"
+          trigger_parameter = "connection"
         }
       }
     }
@@ -229,16 +318,37 @@ resource "azurerm_container_app_job" "load_test_runner" {
       cpu    = var.lt_runner_cpu
       memory = var.lt_runner_memory
 
-      # Runtime configuration consumed by the entrypoint (FEAT-008 will wire
-      # run-specific env vars via the dispatch message payload).
+      # Runtime configuration consumed by the entrypoint (FEAT-008).
       env {
         name  = "APEX_CALLBACK_URL"
         value = var.lt_apex_callback_base_url
       }
 
+      dynamic "env" {
+        for_each = var.lt_runner_callback_token != null && var.lt_runner_callback_token != "" ? [1] : []
+        content {
+          name        = "LT_RUNNER_CALLBACK_TOKEN"
+          secret_name = "lt-runner-callback-token"
+        }
+      }
+
+      # Long-term MI audience (only when Entra ingest app is enabled or explicitly set).
+      dynamic "env" {
+        for_each = var.lt_enable_entra_ingest_app || var.lt_callback_token_audience != null ? [1] : []
+        content {
+          name  = "LT_CALLBACK_TOKEN_AUDIENCE"
+          value = local.lt_ingest_identifier_uri
+        }
+      }
+
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.lt_runner.client_id
+      }
+
+      env {
+        name  = "AZURE_TENANT_ID"
+        value = var.azure_tenant_id
       }
 
       env {
@@ -264,4 +374,13 @@ resource "azurerm_container_app_job" "load_test_runner" {
   }
 
   tags = merge(var.tags, { Environment = var.environment, Workload = "load-test" })
+
+  # CI (pr-tests / deploy) publishes a new apex-lt-k6 tag and updates the job
+  # image outside Terraform. Ignore drift so plan/apply does not revert to the
+  # placeholder image.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
+  }
 }

@@ -283,11 +283,13 @@ group (current dev), both groups resolve to the same resource group.
 |----------|---------|
 | `azurerm_servicebus_namespace.load_test` | Dedicated dispatch namespace; not shared with other async workloads |
 | `azurerm_servicebus_queue.lt_dispatch` | KEDA trigger queue; DLQ auto-created at `lt-dispatch/$DeadLetterQueue` |
+| `azurerm_servicebus_namespace_authorization_rule.lt_keda_listen` | SAS with Manage for the KEDA scaler (`lt-keda-listen`; Listen-only 401s on queue metrics) |
 | `azurerm_storage_container.lt_artifacts` | Blob container on the shared storage account; holds summary + time-series artifacts |
 | `azurerm_storage_management_policy.lt_artifacts_lifecycle` | ~90-day deletion policy scoped to the `lt-artifacts/` prefix |
 | `azurerm_container_app_environment.load_test` | VNet-integrated CAE for non-prod target reachability |
+| `azurerm_container_registry.lt` | Basic ACR for `apex-lt-k6` runner images (CI publish) |
 | `azurerm_container_app_job.load_test_runner` | KEDA-scaled k6 runner; max-executions enforces platform concurrency cap |
-| `azurerm_user_assigned_identity.lt_runner` | Runner MI: queue receive + blob contribute + Key Vault Secrets User |
+| `azurerm_user_assigned_identity.lt_runner` | Runner MI: queue receive + blob contribute + Key Vault Secrets User + AcrPull |
 
 ### Identity and RBAC
 
@@ -298,6 +300,8 @@ group (current dev), both groups resolve to the same resource group.
 | Runner MI | Key Vault Secrets **User** | `var.lt_key_vault_id` (when set) |
 | Apex API (App Service system identity) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
 | Apex API | Storage Blob Data **Reader** | `lt-artifacts` container |
+| Apex staging slot (when enabled) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
+| Apex staging slot (when enabled) | Storage Blob Data **Reader** | `lt-artifacts` container |
 
 ### Terraform outputs (app config contract for FEAT-007/008)
 
@@ -324,6 +328,41 @@ App setting keys expected by the Apex API (FEAT-007):
 | `LT_SERVICEBUS_QUEUE_NAME` | `lt_servicebus_queue_name` output |
 | `LT_BLOB_ACCOUNT_NAME` | `lt_blob_account_name` output |
 | `LT_BLOB_CONTAINER_NAME` | `lt_blob_container_name` output |
+| `LT_APEX_CALLBACK_BASE_URL` | Host that should receive runner ingest (sticky per slot: staging URL vs prod URL) |
+| `LT_RUNNER_CALLBACK_TOKEN` | Short-term shared ingest bearer (GitHub secret → App Service / job) |
+| `LT_CALLBACK_TOKEN_AUDIENCE` | Long-term only — when `lt_enable_entra_ingest_app=true` |
+| `LT_RUNNER_ALLOWED_CLIENT_IDS` | Long-term only — runner MI client ID |
+
+### Runner callback auth
+
+**Short-term (default):** shared bearer `LT_RUNNER_CALLBACK_TOKEN` on App Service and
+the Container Apps Job. Set via GitHub environment secret `LT_RUNNER_CALLBACK_TOKEN`
+(deploy / pr-tests pipelines) and optionally `var.lt_runner_callback_token` for the job.
+
+**Long-term:** set `lt_enable_entra_ingest_app = true` after the apply identity has
+Graph `Application.ReadWrite.*` + `AppRoleAssignment.ReadWrite.All`. Terraform then
+creates `apex-lt-ingest-{environment}` + `LoadTest.Runner` role assignment; wire
+`LT_CALLBACK_TOKEN_AUDIENCE` / `LT_RUNNER_ALLOWED_CLIENT_IDS` and remove the shared
+secret.
+
+### KEDA scale-rule authentication
+
+The Container Apps Job event trigger must supply a Service Bus **connection**
+setting. Putting `clientId` in scale-rule metadata alone is not enough — KEDA
+fails with `error parsing azure service bus metadata: no connection setting given`
+and never starts executions (runs stay `dispatched`).
+
+Until the module is on **azurerm >= 4.73** (which supports scale-rule
+`identity_id`), Terraform wires a namespace SAS with **Manage** rights
+(`lt-keda-listen`) into a job secret `lt-keda-sb-connection` and references it
+from the scale rule `authentication` block (`trigger_parameter = connection`).
+KEDA's Service Bus scaler calls the management API for queue length — Listen-only
+returns `401 Manage,EntityRead claims required` and jobs never start.
+Runner **message receive** still uses the user-assigned MI (Data Receiver) —
+the SAS is only for KEDA queue-length polling.
+
+Smoke signal: Container Apps system logs must **not** show repeating
+`KEDAScalerFailed` / `ScaledJobCheckFailed` after apply.
 
 ### Concurrency guardrail
 
@@ -346,16 +385,39 @@ lt_vnet_subnet_id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsof
 
 ### Runner image (Lane B)
 
-The Container Apps Job references `var.lt_runner_image` (default
-`grafana/k6:latest` as a placeholder). After building the Apex runner image
-(see `runner/Dockerfile`), update this variable to the pinned ACR digest:
+Terraform provisions a dedicated Basic ACR (`acrapexlt{environment}`) and wires
+the Container Apps Job to pull via the runner MI (`AcrPull` + `registry` block).
 
-```hcl
-lt_runner_image = "<acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>"
+CI publishes the Apex runner on every PR deploy (`pr-tests.yml`) and production
+staging deploy (`deploy.yml`) via `scripts/ci/publish-lt-k6-runner.sh`:
+
+1. `docker build -f runners/load-test-k6/Dockerfile` (requires prior `npm run build`)
+2. Push `apex-lt-k6:<git-sha>` and `:latest` to the env ACR
+3. `az containerapp job update --image …:<git-sha>`
+
+Terraform **ignores** job image drift after apply so CI updates are not reverted.
+The initial `var.lt_runner_image` placeholder (`grafana/k6:latest`) is only used
+until the first successful publish.
+
+**GitHub environment variables** (set per `dev` / `prd`):
+
+| Variable | Example (dev) |
+|----------|----------------|
+| `LT_ACR_NAME` | `acrapexltdev` |
+| `LT_CONTAINER_APP_JOB_NAME` | `caj-apex-lt-dev` |
+| `LT_RESOURCE_GROUP` | `rg-scrum-dev` (optional; PR defaults to this, prod defaults to `RESOURCE_GROUP_NAME`) |
+
+Grant the deploy SP **AcrPush** on the ACR (Terraform:
+`lt_acr_push_principal_ids = ["<sp-object-id>"]`, or one-time
+`az role assignment create --role AcrPush …`).
+
+```bash
+terraform output lt_acr_name
+terraform output lt_acr_login_server
 ```
 
-Always pin by **digest** (not `:latest`) in production to guarantee supply-chain
-reproducibility (TBI-002 D4).
+Optional: pin a digest in `lt_runner_image` for a controlled roll-forward; CI will
+still overwrite the live job image on the next deploy.
 
 ### Non-prod verification (load-test module)
 
@@ -375,8 +437,8 @@ terraform output lt_runner_identity_client_id
 Smoke checks:
 1. Verify Service Bus namespace name starts with `sbns-apex-lt-` and is **not** the shared async namespace.
 2. Confirm Container Apps Job `caj-apex-lt-dev` references the expected runner image.
-3. Confirm KEDA scale rule `lt-servicebus-keda` is present on the job and binds to `lt-dispatch`.
-4. Confirm `max_executions` is 1 or 2.
+3. Confirm KEDA scale rule `lt-servicebus-keda` is present on the job, binds to `lt-dispatch`, and authenticates via secret `lt-keda-sb-connection` (not metadata `clientId` alone).
+4. Confirm `max_executions` is 1 or 2. Confirm system logs are free of `KEDAScalerFailed`.
 5. Confirm `lt-artifacts` container exists on the shared storage account with the 90-day lifecycle rule.
 6. **Negative check:** Attempt queue receive and blob write with a non-module identity; both must be denied by Azure RBAC (VT-04).
 

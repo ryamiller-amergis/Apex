@@ -59,6 +59,7 @@ const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ def
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
+const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
@@ -71,6 +72,15 @@ const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ defau
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
+const LoadTestDefinitionBuilderView = lazy(() =>
+  import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
+);
+const LoadTestRunDetailView = lazy(() =>
+  import('./components/LoadTestRunDetailView').then((m) => ({ default: m.LoadTestRunDetailView })),
+);
+const LoadTestsRouteGuard = lazy(() =>
+  import('./components/LoadTestsRouteGuard').then((m) => ({ default: m.LoadTestsRouteGuard })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -167,7 +177,7 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
-                    : location.pathname === '/load-tests'
+                    : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
                     : 'calendar';
 
@@ -708,6 +718,13 @@ function App() {
                     >
                       Notifications
                     </button>
+                    <button
+                      className={`admin-tab${location.pathname === '/admin/load-test-targets' ? ' admin-tab-active' : ''}`}
+                      onClick={() => navigate('/admin/load-test-targets')}
+                      type="button"
+                    >
+                      Load Test Targets
+                    </button>
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -717,6 +734,8 @@ function App() {
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/notifications' ? (
                     <AdminNotifications />
+                  ) : location.pathname === '/admin/load-test-targets' ? (
+                    <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}
@@ -794,10 +813,52 @@ function App() {
           ) : currentView === 'load-tests' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <LoadTestsListPage
-                  project={selectedProject}
-                  canView={isSuperAdmin || can('load-test:view')}
-                />
+                <LoadTestsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
+                  {(() => {
+                    const segments = location.pathname.split('/').filter(Boolean);
+                    // /load-tests | /load-tests/new | /load-tests/runs/:runId
+                    // /load-tests/:definitionId/runs | /load-tests/:definitionId
+                    if (segments[0] === 'load-tests' && segments[1] === 'new') {
+                      return <LoadTestDefinitionBuilderView project={selectedProject} />;
+                    }
+                    if (segments[0] === 'load-tests' && segments[1] === 'runs' && segments[2]) {
+                      return (
+                        <LoadTestRunDetailView
+                          project={selectedProject}
+                          runId={segments[2]}
+                        />
+                      );
+                    }
+                    if (
+                      segments[0] === 'load-tests' &&
+                      segments[1] &&
+                      segments[2] === 'runs'
+                    ) {
+                      return (
+                        <LoadTestDefinitionBuilderView
+                          project={selectedProject}
+                          definitionId={segments[1]}
+                          section="runs"
+                        />
+                      );
+                    }
+                    if (segments[0] === 'load-tests' && segments[1]) {
+                      return (
+                        <LoadTestDefinitionBuilderView
+                          project={selectedProject}
+                          definitionId={segments[1]}
+                          section="definition"
+                        />
+                      );
+                    }
+                    return (
+                      <LoadTestsListPage
+                        project={selectedProject}
+                        canView={isSuperAdmin || can('load-test:view')}
+                      />
+                    );
+                  })()}
+                </LoadTestsRouteGuard>
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (

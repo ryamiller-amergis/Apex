@@ -97,7 +97,10 @@ pdf_blob_container_name = "pdf-artifacts"
 
 # Runner image — update to pinned ACR digest after Lane B (image build) completes.
 # Format: <acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>
-# lt_runner_image = "grafana/k6:latest"
+# lt_runner_image = "grafana/k6:latest"  # placeholder until CI publishes apex-lt-k6
+# lt_acr_name = null                     # derives acrapexlt{environment}
+# Grant GitHub Actions deploy SP AcrPush (object ID):
+# lt_acr_push_principal_ids = ["00000000-0000-0000-0000-000000000000"]
 
 # VNet subnet for runner egress to non-prod targets (A-007).
 # Required before load tests can reach VNet-peered allowlisted hosts.
@@ -106,5 +109,20 @@ pdf_blob_container_name = "pdf-artifacts"
 # Key Vault for target auth secret injection at runner execution time.
 # lt_key_vault_id = "/subscriptions/.../vaults/kv-apex-dev"
 
-# Apex API callback URL (set to App Service URL; wired by FEAT-008).
-# lt_apex_callback_base_url = "https://app-apex-dev.azurewebsites.net"
+# Apex API callback URL (fallback on the Container Apps Job; dispatch message
+# callbackBaseUrl from the API takes precedence).
+# Dev:  https://app-scrum-dev.azurewebsites.net
+# Prod: https://app-apex-prd.azurewebsites.net
+# lt_apex_callback_base_url = "https://app-scrum-dev.azurewebsites.net"
+#
+# Short-term runner ingest auth (shared bearer). Prefer GitHub secret
+# LT_RUNNER_CALLBACK_TOKEN for App Service; optionally set here for the job:
+# lt_runner_callback_token = "generate-a-long-random-string"
+#
+# Long-term MI path (requires Graph Application.ReadWrite.* on apply identity):
+# lt_enable_entra_ingest_app = true
+# lt_callback_token_audience = null   # → api://apex-lt-ingest-{environment}
+#
+# App Service sticky callback host (via deploy pipeline):
+#   LT_APEX_CALLBACK_BASE_URL = staging host vs prod host per slot
+

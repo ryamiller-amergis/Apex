@@ -266,6 +266,7 @@ const SKILL_FIELDS = [
   { key: 'featureRequestSkillPath' as const, label: 'Feature Request Analysis Skill', desc: 'Analyzes feature requests for feasibility and impact', emptyLabel: 'None (use default)' },
   { key: 'technicalSkillPath' as const, label: 'Technical Analysis Skill', desc: 'Analyzes technical backlog items for approach and engineering risk', emptyLabel: 'None (analysis unavailable)' },
   { key: 'issueSkillPath' as const, label: 'Issue Analysis Skill', desc: 'Analyzes reported issues for impact, severity, and urgency', emptyLabel: 'None (analysis unavailable)' },
+  { key: 'loadTestGenerationSkillPath' as const, label: 'Load Test Generation Skill', desc: 'Generates k6 load-test scripts and suggested thresholds from a requirement', emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)' },
 ] as const;
 
 const MODEL_FIELDS = [
@@ -282,6 +283,7 @@ const MODEL_FIELDS = [
   { key: 'featureRequestModel' as const, label: 'Feature Request Analysis Model' },
   { key: 'technicalModel' as const, label: 'Technical Analysis Model' },
   { key: 'issueModel' as const, label: 'Issue Analysis Model' },
+  { key: 'loadTestGenerationModel' as const, label: 'Load Test Generation Model' },
 ] as const;
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
@@ -580,6 +582,7 @@ interface EditState {
   featureRequestSkillPath: string;
   technicalSkillPath: string;
   issueSkillPath: string;
+  loadTestGenerationSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -594,6 +597,7 @@ interface EditState {
   featureRequestModel: string;
   technicalModel: string;
   issueModel: string;
+  loadTestGenerationModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -632,12 +636,12 @@ const emptyEdit = (): EditState => ({
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
-  technicalSkillPath: '', issueSkillPath: '',
+  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
-  technicalModel: '', issueModel: '',
+  technicalModel: '', issueModel: '', loadTestGenerationModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -800,6 +804,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       featureRequestSkillPath: config.featureRequestSkillPath ?? '',
       technicalSkillPath: config.technicalSkillPath ?? '',
       issueSkillPath: config.issueSkillPath ?? '',
+      loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -814,6 +819,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       featureRequestModel: config.featureRequestModel ?? '',
       technicalModel: config.technicalModel ?? '',
       issueModel: config.issueModel ?? '',
+      loadTestGenerationModel: config.loadTestGenerationModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -890,6 +896,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         featureRequestSkillPath: edit.featureRequestSkillPath || null,
         technicalSkillPath: edit.technicalSkillPath || null,
         issueSkillPath: edit.issueSkillPath || null,
+        loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -904,6 +911,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         featureRequestModel: edit.featureRequestModel || null,
         technicalModel: edit.technicalModel || null,
         issueModel: edit.issueModel || null,
+        loadTestGenerationModel: edit.loadTestGenerationModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

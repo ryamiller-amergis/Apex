@@ -152,6 +152,21 @@ output "lt_blob_container_name" {
   value       = azurerm_storage_container.lt_artifacts.name
 }
 
+output "lt_acr_name" {
+  description = "Load-test ACR name — set GitHub env var LT_ACR_NAME for runner image publish"
+  value       = azurerm_container_registry.lt.name
+}
+
+output "lt_acr_login_server" {
+  description = "Load-test ACR login server (e.g. acrapexltdev.azurecr.io)"
+  value       = azurerm_container_registry.lt.login_server
+}
+
+output "lt_runner_image_repository" {
+  description = "Repository name used by CI for the k6 runner image"
+  value       = local.lt_runner_image_repository
+}
+
 output "lt_runner_identity_client_id" {
   description = "Runner user-assigned MI client ID — needed for FEAT-008 workload identity wiring"
   value       = azurerm_user_assigned_identity.lt_runner.client_id
@@ -168,11 +183,30 @@ output "lt_runner_identity_id" {
 }
 
 output "lt_api_app_setting_names" {
-  description = "App setting key contract for the Apex API to wire load-test Service Bus + Blob access (FEAT-007)"
+  description = "App setting key contract for the Apex API to wire load-test Service Bus + Blob + runner auth (FEAT-007)"
   value = {
-    servicebus_namespace = "LT_SERVICEBUS_NAMESPACE"
-    servicebus_queue     = "LT_SERVICEBUS_QUEUE_NAME"
-    blob_account_name    = "LT_BLOB_ACCOUNT_NAME"
-    blob_container_name  = "LT_BLOB_CONTAINER_NAME"
+    servicebus_namespace      = "LT_SERVICEBUS_NAMESPACE"
+    servicebus_queue          = "LT_SERVICEBUS_QUEUE_NAME"
+    blob_account_name         = "LT_BLOB_ACCOUNT_NAME"
+    blob_container_name       = "LT_BLOB_CONTAINER_NAME"
+    apex_callback_base_url    = "LT_APEX_CALLBACK_BASE_URL"
+    runner_callback_token     = "LT_RUNNER_CALLBACK_TOKEN"
+    callback_token_audience   = "LT_CALLBACK_TOKEN_AUDIENCE"
+    runner_allowed_client_ids = "LT_RUNNER_ALLOWED_CLIENT_IDS"
   }
+}
+
+output "lt_callback_token_audience" {
+  description = "AAD App ID URI for MI ingest JWTs when lt_enable_entra_ingest_app is true"
+  value       = var.lt_enable_entra_ingest_app || var.lt_callback_token_audience != null ? local.lt_ingest_identifier_uri : null
+}
+
+output "lt_ingest_application_client_id" {
+  description = "Client ID of the dedicated load-test ingest Entra application (null when disabled)"
+  value       = try(azuread_application.lt_ingest[0].client_id, null)
+}
+
+output "lt_ingest_app_role_id" {
+  description = "LoadTest.Runner app role ID (null when Entra ingest app disabled)"
+  value       = try(random_uuid.lt_ingest_app_role[0].result, null)
 }
