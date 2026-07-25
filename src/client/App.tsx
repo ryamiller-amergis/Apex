@@ -75,6 +75,9 @@ const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').th
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
 );
+const LoadTestRunDetailView = lazy(() =>
+  import('./components/LoadTestRunDetailView').then((m) => ({ default: m.LoadTestRunDetailView })),
+);
 const LoadTestsRouteGuard = lazy(() =>
   import('./components/LoadTestsRouteGuard').then((m) => ({ default: m.LoadTestsRouteGuard })),
 );
@@ -813,9 +816,17 @@ function App() {
                 <LoadTestsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
                   {(() => {
                     const segments = location.pathname.split('/').filter(Boolean);
-                    // /load-tests | /load-tests/new | /load-tests/:definitionId
+                    // /load-tests | /load-tests/new | /load-tests/runs/:runId | /load-tests/:definitionId
                     if (segments[0] === 'load-tests' && segments[1] === 'new') {
                       return <LoadTestDefinitionBuilderView project={selectedProject} />;
+                    }
+                    if (segments[0] === 'load-tests' && segments[1] === 'runs' && segments[2]) {
+                      return (
+                        <LoadTestRunDetailView
+                          project={selectedProject}
+                          runId={segments[2]}
+                        />
+                      );
                     }
                     if (segments[0] === 'load-tests' && segments[1]) {
                       return (

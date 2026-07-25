@@ -9,9 +9,13 @@ interface LoadTestsListResponse {
   items: LoadTestDefinitionListItem[];
 }
 
-/** List DTO may include optional latest-run summary for badges (FEAT-009 may enrich later). */
+/** List DTO may include optional latest-run summary for badges (FEAT-009). */
 export type LoadTestDefinitionListItem = LoadTestDefinition & {
-  latestRun?: { status: string; overallResult?: string | null } | null;
+  latestRun?: {
+    id?: string;
+    status: string;
+    overallResult?: string | null;
+  } | null;
 };
 
 class LoadTestApiError extends Error {

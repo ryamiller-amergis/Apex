@@ -115,10 +115,24 @@ export const LoadTestsListPage: React.FC<LoadTestsListPageProps> = ({ project, c
                   </td>
                   <td>{requirementLabel(item)}</td>
                   <td>
-                    <LoadTestLastRunBadge
-                      status={item.latestRun?.status}
-                      overallResult={item.latestRun?.overallResult}
-                    />
+                    {item.latestRun?.id ? (
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        data-testid={`load-test-last-run-link-${item.id}`}
+                        onClick={() => navigate(`/load-tests/runs/${item.latestRun!.id}`)}
+                      >
+                        <LoadTestLastRunBadge
+                          status={item.latestRun?.status}
+                          overallResult={item.latestRun?.overallResult}
+                        />
+                      </button>
+                    ) : (
+                      <LoadTestLastRunBadge
+                        status={item.latestRun?.status}
+                        overallResult={item.latestRun?.overallResult}
+                      />
+                    )}
                   </td>
                   <td>
                     <button
