@@ -159,6 +159,24 @@ describe('LoadTestThresholdResultsTable (TBI-009 DoD-1)', () => {
     expect(screen.getByText('Pass')).toBeInTheDocument();
     expect(screen.getByText('412')).toBeInTheDocument();
   });
+
+  it('shows No data when threshold was not evaluated (missing k6 ok flag)', () => {
+    render(
+      <LoadTestThresholdResultsTable
+        results={[
+          {
+            metric: 'http_req_duration',
+            expression: 'p(95)<500',
+            passed: false,
+            evaluated: false,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('No data')).toBeInTheDocument();
+    expect(screen.queryByText('Fail')).not.toBeInTheDocument();
+  });
 });
 
 describe('LoadTestRunDetailView (FEAT-009)', () => {

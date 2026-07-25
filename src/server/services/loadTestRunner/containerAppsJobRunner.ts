@@ -6,7 +6,7 @@ import type {
   LoadProfileStage,
 } from '../../../shared/types/loadTest';
 import { buildLoadTestArtifactKey } from './artifactKey';
-import { mapK6ThresholdResults } from './thresholdMapper';
+import { mapK6ThresholdResults, summaryHasMetrics } from './thresholdMapper';
 
 export type IngestResponse = {
   ok: boolean;
@@ -29,6 +29,8 @@ export type K6RunResult = {
   summary: unknown;
   timeseries: unknown;
   stagesCompleted: number;
+  /** Truncated k6 stderr for diagnosis when summary is empty */
+  stderr?: string;
 };
 
 export type LoadTestRunnerDeps = {
@@ -42,6 +44,8 @@ export type LoadTestRunnerDeps = {
     body: LoadTestRunIngestBody,
   ) => Promise<IngestResponse>;
   now?: () => Date;
+  /** Progress heartbeat interval while k6 is executing (ms). Default 5s. */
+  progressHeartbeatMs?: number;
 };
 
 function metricOnlySummary(summary: unknown): string {
@@ -53,6 +57,16 @@ function metricOnlySummary(summary: unknown): string {
   return JSON.stringify(safe);
 }
 
+function formatEmptySummaryError(exitCode: number, stderr?: string): string {
+  const base =
+    `k6 produced no usable metrics (exit ${exitCode}). ` +
+    'This usually means the script failed to load or never issued requests — ' +
+    'not that an SLO threshold was breached.';
+  const trimmed = stderr?.trim();
+  if (!trimmed) return base;
+  return `${base}\n\nk6 stderr:\n${trimmed.slice(0, 4000)}`;
+}
+
 /**
  * v1 LoadTestRunner implementation for Azure Container Apps Jobs.
  */
@@ -60,6 +74,7 @@ export function createContainerAppsJobRunner(
   deps: LoadTestRunnerDeps,
 ): LoadTestRunner {
   const now = () => (deps.now ? deps.now() : new Date()).toISOString();
+  const heartbeatMs = deps.progressHeartbeatMs ?? 5000;
 
   async function postProgress(
     dispatch: LoadTestDispatchMessage,
@@ -78,6 +93,10 @@ export function createContainerAppsJobRunner(
   async function postFinalError(
     dispatch: LoadTestDispatchMessage,
     errorDetail: string,
+    artifacts?: {
+      summaryBlobRef?: ArtifactRef;
+      timeseriesBlobRef?: ArtifactRef;
+    },
   ): Promise<void> {
     await deps.postIngest(dispatch.projectId, dispatch.runId, {
       dispatchMessageId: dispatch.dispatchMessageId,
@@ -85,7 +104,54 @@ export function createContainerAppsJobRunner(
       heartbeatAt: now(),
       errorDetail,
       thresholdResults: [],
+      summaryBlobRef: artifacts?.summaryBlobRef,
+      timeseriesBlobRef: artifacts?.timeseriesBlobRef,
     });
+  }
+
+  /**
+   * Run k6 while posting periodic progress so the UI can leave dispatched → running
+   * and show live heartbeats instead of only a terminal "k6-finished".
+   */
+  async function runK6WithHeartbeats(
+    dispatch: LoadTestDispatchMessage,
+    opts: Parameters<LoadTestRunnerDeps['runK6']>[0],
+    message: string,
+  ): Promise<{ result: K6RunResult; cancelled: boolean }> {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      const cancel = await postProgress(dispatch, { message });
+      if (cancel) cancelled = true;
+    };
+
+    // Immediate running heartbeat before the possibly long k6 spawn.
+    await tick();
+    if (cancelled) {
+      return {
+        result: {
+          exitCode: 0,
+          summary: { metrics: {} },
+          timeseries: [],
+          stagesCompleted: 0,
+        },
+        cancelled: true,
+      };
+    }
+
+    let interval: ReturnType<typeof setInterval> | undefined;
+    if (heartbeatMs > 0) {
+      interval = setInterval(() => {
+        void tick();
+      }, heartbeatMs);
+    }
+
+    try {
+      const result = await deps.runK6(opts);
+      return { result, cancelled };
+    } finally {
+      if (interval) clearInterval(interval);
+    }
   }
 
   return {
@@ -147,47 +213,53 @@ export function createContainerAppsJobRunner(
 
         let lastSummary: unknown = { metrics: {} };
         let lastTimeseries: unknown = [];
+        let lastExitCode = 0;
+        let lastStderr: string | undefined;
         let cancelled = false;
 
         if (stages) {
           for (let i = 0; i < stages.length; i++) {
-            const cancelAtBoundary = await postProgress(dispatch, {
-              message: `stage-boundary:${i}`,
-              vu: stages[i].target,
-            });
-            if (cancelAtBoundary) {
+            const { result, cancelled: stageCancelled } = await runK6WithHeartbeats(
+              dispatch,
+              {
+                script: dispatch.script,
+                env: { ...secretEnv, TARGET_URL: dispatch.targetUrl },
+                targetUrl: dispatch.targetUrl,
+                loadProfile: dispatch.loadProfile,
+                clientThresholds: dispatch.clientThresholds,
+                stages: [stages[i]],
+                stageIndex: i,
+              },
+              `stage-running:${i}`,
+            );
+            if (stageCancelled) {
               cancelled = true;
               break;
             }
-
-            const result = await deps.runK6({
-              script: dispatch.script,
-              env: { ...secretEnv, TARGET_URL: dispatch.targetUrl },
-              targetUrl: dispatch.targetUrl,
-              loadProfile: dispatch.loadProfile,
-              clientThresholds: dispatch.clientThresholds,
-              stages: [stages[i]],
-              stageIndex: i,
-            });
             lastSummary = result.summary;
             lastTimeseries = result.timeseries;
+            lastExitCode = result.exitCode;
+            lastStderr = result.stderr;
           }
         } else {
-          const cancelBefore = await postProgress(dispatch, {
-            message: 'starting-k6',
-          });
-          if (cancelBefore) {
-            cancelled = true;
-          } else {
-            const result = await deps.runK6({
+          const { result, cancelled: runCancelled } = await runK6WithHeartbeats(
+            dispatch,
+            {
               script: dispatch.script,
               env: { ...secretEnv, TARGET_URL: dispatch.targetUrl },
               targetUrl: dispatch.targetUrl,
               loadProfile: dispatch.loadProfile,
               clientThresholds: dispatch.clientThresholds,
-            });
+            },
+            'k6-running',
+          );
+          if (runCancelled) {
+            cancelled = true;
+          } else {
             lastSummary = result.summary;
             lastTimeseries = result.timeseries;
+            lastExitCode = result.exitCode;
+            lastStderr = result.stderr;
 
             const cancelAfter = await postProgress(dispatch, {
               message: 'k6-finished',
@@ -213,11 +285,6 @@ export function createContainerAppsJobRunner(
           return;
         }
 
-        const thresholdResults = mapK6ThresholdResults(
-          dispatch.clientThresholds,
-          lastSummary as Parameters<typeof mapK6ThresholdResults>[1],
-        );
-
         const summaryKey = buildLoadTestArtifactKey({
           projectId: dispatch.projectId,
           runId: dispatch.runId,
@@ -237,6 +304,31 @@ export function createContainerAppsJobRunner(
           timeseriesKey,
           JSON.stringify(lastTimeseries ?? []),
         );
+
+        const thresholdResults = mapK6ThresholdResults(
+          dispatch.clientThresholds,
+          lastSummary as Parameters<typeof mapK6ThresholdResults>[1],
+        );
+
+        const metricsOk = summaryHasMetrics(
+          lastSummary as Parameters<typeof summaryHasMetrics>[0],
+        );
+        const allEvaluated =
+          thresholdResults.length === 0 ||
+          thresholdResults.every((r) => r.evaluated !== false);
+
+        // Empty/unevaluated summary → errored with stderr, never fake SLO Fail.
+        if (!metricsOk || !allEvaluated) {
+          await postFinalError(
+            dispatch,
+            formatEmptySummaryError(lastExitCode, lastStderr),
+            {
+              summaryBlobRef: summaryRef,
+              timeseriesBlobRef: timeseriesRef,
+            },
+          );
+          return;
+        }
 
         await deps.postIngest(dispatch.projectId, dispatch.runId, {
           dispatchMessageId: dispatch.dispatchMessageId,

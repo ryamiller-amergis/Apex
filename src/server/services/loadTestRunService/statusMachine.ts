@@ -47,8 +47,10 @@ export function assertTransition(from: RunStatus, to: RunStatus): void {
 
 /** Derive terminal pass/fail from client-side threshold results only (BR-007). */
 export function evaluateThresholdOutcome(
-  results: Array<{ passed: boolean }> | null | undefined,
+  results: Array<{ passed: boolean; evaluated?: boolean }> | null | undefined,
 ): 'passed' | 'failed' | 'errored' {
   if (!results || results.length === 0) return 'errored';
+  // Missing k6 evaluation (empty summary / no ok flag) is incomplete — not Fail.
+  if (results.some((r) => r.evaluated === false)) return 'errored';
   return results.every((r) => r.passed) ? 'passed' : 'failed';
 }

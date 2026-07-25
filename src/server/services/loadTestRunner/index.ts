@@ -5,7 +5,11 @@
  * callbacks owned by loadTestRunService (FEAT-007).
  */
 export { buildLoadTestArtifactKey } from './artifactKey';
-export { mapK6ThresholdResults } from './thresholdMapper';
+export {
+  mapK6ThresholdResults,
+  extractObservedValue,
+  summaryHasMetrics,
+} from './thresholdMapper';
 export {
   createContainerAppsJobRunner,
   type LoadTestRunnerDeps,
@@ -23,4 +27,4 @@ export {
 } from './allowlistGate';
 export { createKeyVaultSecretResolver } from './secretResolver';
 export { createBlobArtifactUploader } from './blobUploader';
-export { createProcessK6Executor } from './k6Executor';
+export { createProcessK6Executor, stripExportedOptions } from './k6Executor';

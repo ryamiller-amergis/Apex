@@ -39,23 +39,32 @@ export const LoadTestThresholdResultsTable: React.FC<LoadTestThresholdResultsTab
           </tr>
         </thead>
         <tbody>
-          {results.map((row, index) => (
-            <tr key={`${row.metric}-${row.expression}-${index}`}>
-              <td>{row.metric}</td>
-              <td>
-                <code className={styles.code}>{row.expression}</code>
-              </td>
-              <td>{row.observed != null ? String(row.observed) : '—'}</td>
-              <td>
-                <span
-                  className={row.passed ? styles.pass : styles.fail}
-                  data-passed={row.passed ? 'true' : 'false'}
-                >
-                  {row.passed ? 'Pass' : 'Fail'}
-                </span>
-              </td>
-            </tr>
-          ))}
+          {results.map((row, index) => {
+            const noData = row.evaluated === false;
+            return (
+              <tr key={`${row.metric}-${row.expression}-${index}`}>
+                <td>{row.metric}</td>
+                <td>
+                  <code className={styles.code}>{row.expression}</code>
+                </td>
+                <td>{row.observed != null ? String(row.observed) : '—'}</td>
+                <td>
+                  {noData ? (
+                    <span className={styles.unknown} data-passed="unknown">
+                      No data
+                    </span>
+                  ) : (
+                    <span
+                      className={row.passed ? styles.pass : styles.fail}
+                      data-passed={row.passed ? 'true' : 'false'}
+                    >
+                      {row.passed ? 'Pass' : 'Fail'}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

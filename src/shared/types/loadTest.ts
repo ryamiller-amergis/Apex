@@ -48,6 +48,12 @@ export type ThresholdResult = {
   passed: boolean;
   /** Observed value at completion, e.g. "452.1" or 452.1 */
   observed?: string | number;
+  /**
+   * False when k6 did not report an ok flag for this threshold (empty/missing
+   * summary). Incomplete rows must not be treated as an SLO Fail.
+   * Undefined = legacy rows (pre-field) — treat as evaluated.
+   */
+  evaluated?: boolean;
 };
 
 // ── Multi-step Flow ────────────────────────────────────────────────────────────

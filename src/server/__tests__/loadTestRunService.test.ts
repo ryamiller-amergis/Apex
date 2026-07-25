@@ -187,6 +187,9 @@ describe('statusMachine (TBI-007 / VT-11)', () => {
     expect(evaluateThresholdOutcome([{ passed: true }, { passed: false }])).toBe('failed');
     expect(evaluateThresholdOutcome([])).toBe('errored');
     expect(evaluateThresholdOutcome(null)).toBe('errored');
+    expect(
+      evaluateThresholdOutcome([{ passed: false, evaluated: false }]),
+    ).toBe('errored');
   });
 });
 

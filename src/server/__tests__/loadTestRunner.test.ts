@@ -13,6 +13,7 @@ import {
   buildLoadTestArtifactKey,
   createContainerAppsJobRunner,
   mapK6ThresholdResults,
+  stripExportedOptions,
   type LoadTestRunnerDeps,
   type K6RunResult,
 } from '../services/loadTestRunner';
@@ -77,7 +78,10 @@ function createDeps(overrides: Partial<LoadTestRunnerDeps> = {}): {
         exitCode: 0,
         summary: {
           metrics: {
-            http_req_failed: { values: { rate: 0.001 } },
+            http_req_failed: {
+              thresholds: { 'rate<0.01': { ok: true } },
+              values: { rate: 0.001 },
+            },
           },
           root_group: { checks: [] },
         },
@@ -86,6 +90,7 @@ function createDeps(overrides: Partial<LoadTestRunnerDeps> = {}): {
       };
       return result;
     },
+    progressHeartbeatMs: 0,
     uploadArtifact: async (key, body) => {
       const text = typeof body === 'string' ? body : body.toString('utf8');
       calls.blob.push({ key, body: text });
@@ -152,8 +157,39 @@ describe('loadTestRunner helpers', () => {
         expression: 'rate<0.01',
         passed: true,
         observed: 0.002,
+        evaluated: true,
       },
     ]);
+  });
+
+  it('mapK6ThresholdResults marks missing ok as evaluated:false (not a silent Fail)', () => {
+    const results = mapK6ThresholdResults(
+      [
+        { metric: 'http_req_duration', expression: 'p(95)<500' },
+        { metric: 'http_req_failed', expression: 'rate<0.01' },
+      ],
+      { metrics: {} },
+    );
+    expect(results.every((r) => r.evaluated === false)).toBe(true);
+    expect(results.every((r) => r.observed == null)).toBe(true);
+  });
+
+  it('stripExportedOptions removes a guided-script options block so executor injects one', () => {
+    const guided = `import http from 'k6/http';
+export const options = {
+  vus: 5,
+  duration: '1m',
+  thresholds: { http_req_failed: ['rate<0.01'] },
+};
+
+export default function () {
+  http.get(__ENV.TARGET_URL);
+}
+`;
+    const stripped = stripExportedOptions(guided);
+    expect(stripped).not.toMatch(/export\s+const\s+options/);
+    expect(stripped).toContain('export default function');
+    expect(stripped).toContain('http.get');
   });
 });
 
@@ -226,17 +262,24 @@ describe('containerAppsJobRunner — TBI-008 / PBI-010', () => {
         stageScripts.push(opts.script);
         return {
           exitCode: 0,
-          summary: { metrics: {} },
+          summary: {
+            metrics: {
+              http_req_failed: {
+                thresholds: { 'rate<0.01': { ok: true } },
+                values: { rate: 0 },
+              },
+            },
+          },
           timeseries: [],
           stagesCompleted: 1,
         };
       },
       postIngest: async (_p, _r, body) => {
         calls.ingest.push(body);
-        // Cancel when reaching the second stage boundary (after stage 0 ran).
+        // Cancel when starting the second stage (after stage 0 ran).
         if (
           body.kind === 'progress' &&
-          body.progress?.message === 'stage-boundary:1'
+          body.progress?.message === 'stage-running:1'
         ) {
           return { ok: true, cancelRequested: true };
         }
@@ -252,6 +295,26 @@ describe('containerAppsJobRunner — TBI-008 / PBI-010', () => {
     expect(calls.ingest.some((b) => b.kind === 'final')).toBe(false);
     expect(stageScripts).toHaveLength(1);
     expect(stageScripts.length).toBeLessThan(BASE_DISPATCH.loadProfile.stages!.length);
+  });
+
+  it('empty k6 summary posts errored with stderr — not fake threshold Fail', async () => {
+    const { deps, calls } = createDeps({
+      runK6: async () => ({
+        exitCode: 107,
+        summary: { metrics: {} },
+        timeseries: [],
+        stagesCompleted: 0,
+        stderr: 'SyntaxError: Identifier \'options\' has already been declared',
+      }),
+    });
+    const runner = createContainerAppsJobRunner(deps);
+    await runner.execute(BASE_DISPATCH);
+
+    const finals = calls.ingest.filter((b) => b.kind === 'final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0].thresholdResults ?? []).toHaveLength(0);
+    expect(finals[0].errorDetail).toMatch(/no usable metrics/i);
+    expect(finals[0].errorDetail).toMatch(/already been declared/);
   });
 
   it('AC-3 / VT-04: Key Vault resolution failure errors without load or secret material in Blob', async () => {
