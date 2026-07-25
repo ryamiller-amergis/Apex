@@ -57,11 +57,18 @@ function metricOnlySummary(summary: unknown): string {
   return JSON.stringify(safe);
 }
 
-function formatEmptySummaryError(exitCode: number, stderr?: string): string {
+function formatEmptySummaryError(
+  exitCode: number,
+  stderr: string | undefined,
+  reason: 'empty_metrics' | 'unevaluated_thresholds',
+): string {
   const base =
-    `k6 produced no usable metrics (exit ${exitCode}). ` +
-    'This usually means the script failed to load or never issued requests — ' +
-    'not that an SLO threshold was breached.';
+    reason === 'empty_metrics'
+      ? `k6 produced no usable metrics (exit ${exitCode}). ` +
+        'This usually means the script failed to load or never issued requests — ' +
+        'not that an SLO threshold was breached.'
+      : `k6 returned metrics but Apex could not read threshold evaluation results (exit ${exitCode}). ` +
+        'This is usually a summary-format mismatch, not an SLO breach.';
   const trimmed = stderr?.trim();
   if (!trimmed) return base;
   return `${base}\n\nk6 stderr:\n${trimmed.slice(0, 4000)}`;
@@ -321,7 +328,11 @@ export function createContainerAppsJobRunner(
         if (!metricsOk || !allEvaluated) {
           await postFinalError(
             dispatch,
-            formatEmptySummaryError(lastExitCode, lastStderr),
+            formatEmptySummaryError(
+              lastExitCode,
+              lastStderr,
+              !metricsOk ? 'empty_metrics' : 'unevaluated_thresholds',
+            ),
             {
               summaryBlobRef: summaryRef,
               timeseriesBlobRef: timeseriesRef,

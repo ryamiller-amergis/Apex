@@ -9,6 +9,7 @@ export {
   mapK6ThresholdResults,
   extractObservedValue,
   summaryHasMetrics,
+  normalizeK6Metric,
 } from './thresholdMapper';
 export {
   createContainerAppsJobRunner,

@@ -1,11 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAppShell } from '../hooks/useAppShell';
 import { useCancelRun, useLoadTestRun } from '../hooks/useLoadTestRuns';
 import {
   isTerminalRunStatus,
   useLoadTestRunStream,
 } from '../hooks/useLoadTestRunStream';
+import { useMyPermissions } from '../hooks/useRbac';
 import type { RunStatus } from '../../shared/types/loadTest';
 import { LoadTestRunStatusBadge } from './LoadTestRunStatusBadge';
 import { LoadTestThresholdResultsTable } from './LoadTestThresholdResultsTable';
@@ -59,9 +59,18 @@ export const LoadTestRunDetailView: React.FC<LoadTestRunDetailViewProps> = ({
   runId,
 }) => {
   const navigate = useNavigate();
-  const { can } = useAppShell();
-  const canView = can('load-test:view');
-  const canRun = can('load-test:run');
+  // Prefer the shared React Query cache (warmed by LoadTestsRouteGuard) instead of
+  // useAppShell's per-mount fetch — that cold start briefly returns can()=false and
+  // flashes "You do not have permission" on every navigation to a run.
+  const {
+    can: canPerm,
+    isLoading: permLoading,
+    data: permData,
+  } = useMyPermissions(project);
+  const isSuperAdmin = Boolean(permData?.isSuperAdmin);
+  const canView = isSuperAdmin || canPerm('load-test:view');
+  const canRun = isSuperAdmin || canPerm('load-test:run');
+  const permissionsReady = Boolean(permData) || !permLoading;
 
   const {
     data: run,
@@ -87,6 +96,15 @@ export const LoadTestRunDetailView: React.FC<LoadTestRunDetailViewProps> = ({
   const canCancel =
     canRun && Boolean(status) && !terminal && !cancelMutation.isPending;
   const snapshot = run?.executionSnapshot ?? null;
+
+  if (!permissionsReady) {
+    return (
+      <div className={styles.page} data-testid="load-test-run-detail" aria-busy="true">
+        <div className={styles.skeleton} />
+        <div className={styles.skeleton} />
+      </div>
+    );
+  }
 
   if (!canView) {
     return (

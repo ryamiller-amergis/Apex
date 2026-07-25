@@ -41,6 +41,16 @@ const baseRun: LoadTestRun = {
 };
 
 let mockCanRun = true;
+let mockPermLoading = false;
+let mockPermData: {
+  permissions: string[];
+  roles: string[];
+  isSuperAdmin: boolean;
+} | undefined = {
+  permissions: ['load-test:view', 'load-test:run'],
+  roles: [],
+  isSuperAdmin: false,
+};
 let mockStream = {
   status: 'running' as string | null,
   cancelRequested: false,
@@ -56,13 +66,15 @@ let mockStream = {
   error: null as string | null,
 };
 
-jest.mock('../../hooks/useAppShell', () => ({
-  useAppShell: () => ({
+jest.mock('../../hooks/useRbac', () => ({
+  useMyPermissions: () => ({
     can: (key: string) => {
-      if (key === 'load-test:view') return true;
+      if (key === 'load-test:view') return Boolean(mockPermData?.permissions.includes('load-test:view'));
       if (key === 'load-test:run') return mockCanRun;
       return false;
     },
+    isLoading: mockPermLoading,
+    data: mockPermData,
   }),
 }));
 
@@ -113,6 +125,12 @@ function renderDetail(run: LoadTestRun = baseRun) {
 beforeEach(() => {
   jest.restoreAllMocks();
   mockCanRun = true;
+  mockPermLoading = false;
+  mockPermData = {
+    permissions: ['load-test:view', 'load-test:run'],
+    roles: [],
+    isSuperAdmin: false,
+  };
   mockStream = {
     status: 'running',
     cancelRequested: false,
@@ -180,6 +198,31 @@ describe('LoadTestThresholdResultsTable (TBI-009 DoD-1)', () => {
 });
 
 describe('LoadTestRunDetailView (FEAT-009)', () => {
+  it('does not flash permission denied while permissions are still loading', () => {
+    mockPermLoading = true;
+    mockPermData = undefined;
+    mockRunQuery = {
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: jest.fn(),
+    };
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <LoadTestRunDetailView project={PROJECT} runId={RUN_ID} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('load-test-run-detail')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText(/do not have permission/i)).not.toBeInTheDocument();
+  });
+
   it('AC-0 / DoD-0: shows live status, progress, and threshold table on completion', async () => {
     mockStream = {
       ...mockStream,

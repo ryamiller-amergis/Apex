@@ -162,6 +162,70 @@ describe('loadTestRunner helpers', () => {
     ]);
   });
 
+  it('mapK6ThresholdResults reads legacy --summary-export flat metrics + boolean thresholds', () => {
+    // k6 0.54 --summary-export: values are flat; threshold true = exceeded (failed).
+    const results = mapK6ThresholdResults(
+      [
+        { metric: 'http_req_duration', expression: 'p(95)<500' },
+        { metric: 'http_req_failed', expression: 'rate<0.01' },
+      ],
+      {
+        metrics: {
+          http_req_duration: {
+            avg: 120,
+            min: 80,
+            med: 110,
+            max: 200,
+            'p(90)': 150,
+            'p(95)': 180,
+            thresholds: { 'p(95)<500': false },
+          },
+          http_req_failed: {
+            rate: 0.002,
+            passes: 998,
+            fails: 2,
+            thresholds: { 'rate<0.01': false },
+          },
+        },
+      },
+    );
+    expect(results).toEqual<ThresholdResult[]>([
+      {
+        metric: 'http_req_duration',
+        expression: 'p(95)<500',
+        passed: true,
+        observed: 180,
+        evaluated: true,
+      },
+      {
+        metric: 'http_req_failed',
+        expression: 'rate<0.01',
+        passed: true,
+        observed: 0.002,
+        evaluated: true,
+      },
+    ]);
+  });
+
+  it('mapK6ThresholdResults treats legacy threshold true as Fail (exceeded)', () => {
+    const results = mapK6ThresholdResults(
+      [{ metric: 'http_req_duration', expression: 'p(95)<500' }],
+      {
+        metrics: {
+          http_req_duration: {
+            'p(95)': 612,
+            thresholds: { 'p(95)<500': true },
+          },
+        },
+      },
+    );
+    expect(results[0]).toMatchObject({
+      passed: false,
+      observed: 612,
+      evaluated: true,
+    });
+  });
+
   it('mapK6ThresholdResults marks missing ok as evaluated:false (not a silent Fail)', () => {
     const results = mapK6ThresholdResults(
       [

@@ -1,14 +1,65 @@
 import type { Threshold, ThresholdResult } from '../../../shared/types/loadTest';
 
-type K6SummaryLike = {
-  metrics?: Record<
-    string,
-    {
-      thresholds?: Record<string, { ok?: boolean }>;
-      values?: Record<string, number>;
-    }
-  >;
+type K6MetricLike = {
+  thresholds?: Record<string, { ok?: boolean } | boolean>;
+  values?: Record<string, number>;
+  type?: string;
+  contains?: string;
+  [key: string]: unknown;
 };
+
+type K6SummaryLike = {
+  metrics?: Record<string, K6MetricLike>;
+};
+
+const NON_VALUE_KEYS = new Set(['thresholds', 'type', 'contains', 'values']);
+
+/**
+ * k6 --summary-export (v0.54 / legacy) stores trend/rate stats as flat fields on
+ * the metric (`avg`, `p(95)`, `rate`, …) and threshold results as bare booleans
+ * where `true` means "threshold exceeded" (failed).
+ *
+ * handleSummary / newer machine-readable summaries nest stats under `.values`
+ * and use `{ ok: boolean }` (ok=true means passed).
+ *
+ * Normalize both shapes into { values, thresholds: { expr: { ok } } }.
+ */
+export function normalizeK6Metric(metric: K6MetricLike | undefined): {
+  values: Record<string, number>;
+  thresholds: Record<string, { ok: boolean }>;
+} {
+  if (!metric || typeof metric !== 'object') {
+    return { values: {}, thresholds: {} };
+  }
+
+  const values: Record<string, number> = {};
+  if (metric.values && typeof metric.values === 'object') {
+    for (const [k, v] of Object.entries(metric.values)) {
+      if (typeof v === 'number' && Number.isFinite(v)) values[k] = v;
+    }
+  } else {
+    // Legacy --summary-export: numeric fields live on the metric itself.
+    for (const [k, v] of Object.entries(metric)) {
+      if (NON_VALUE_KEYS.has(k)) continue;
+      if (typeof v === 'number' && Number.isFinite(v)) values[k] = v;
+    }
+  }
+
+  const thresholds: Record<string, { ok: boolean }> = {};
+  const rawThresholds = metric.thresholds;
+  if (rawThresholds && typeof rawThresholds === 'object') {
+    for (const [expr, raw] of Object.entries(rawThresholds)) {
+      if (typeof raw === 'boolean') {
+        // Legacy: true = exceeded (failed) → ok is the inverse.
+        thresholds[expr] = { ok: !raw };
+      } else if (raw && typeof raw === 'object' && typeof raw.ok === 'boolean') {
+        thresholds[expr] = { ok: raw.ok };
+      }
+    }
+  }
+
+  return { values, thresholds };
+}
 
 /** Pull the observed value that matches the threshold expression when possible. */
 export function extractObservedValue(
@@ -19,7 +70,9 @@ export function extractObservedValue(
 
   const percentile = expression.match(/p\(\s*\d+\s*\)/i)?.[0]?.replace(/\s+/g, '');
   if (percentile) {
-    const key = Object.keys(values).find((k) => k.replace(/\s+/g, '').toLowerCase() === percentile.toLowerCase());
+    const key = Object.keys(values).find(
+      (k) => k.replace(/\s+/g, '').toLowerCase() === percentile.toLowerCase(),
+    );
     if (key != null && values[key] != null) return values[key];
   }
 
@@ -46,7 +99,7 @@ export function summaryHasMetrics(summary: K6SummaryLike | null | undefined): bo
 
 /**
  * Map Apex client_thresholds + k6 summary JSON into ThresholdResult[].
- * Prefer k6's own threshold ok flags when present.
+ * Accepts both legacy --summary-export and handleSummary shapes.
  * Missing ok flags are marked evaluated:false — callers must treat that as
  * incomplete data (errored), not an SLO Fail.
  */
@@ -55,9 +108,9 @@ export function mapK6ThresholdResults(
   summary: K6SummaryLike | null | undefined,
 ): ThresholdResult[] {
   return clientThresholds.map((t) => {
-    const metric = summary?.metrics?.[t.metric];
-    const thresholdOk = metric?.thresholds?.[t.expression]?.ok;
-    const observed = extractObservedValue(t.expression, metric?.values);
+    const normalized = normalizeK6Metric(summary?.metrics?.[t.metric]);
+    const thresholdOk = normalized.thresholds[t.expression]?.ok;
+    const observed = extractObservedValue(t.expression, normalized.values);
     const evaluated = typeof thresholdOk === 'boolean';
 
     return {
