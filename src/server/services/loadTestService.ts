@@ -6,6 +6,7 @@ import type {
   CreateLoadTestRunInput,
   LoadProfile,
   LoadTestDefinition,
+  LoadTestDefinitionListItem,
   LoadTestPortableDefinition,
   LoadTestRun,
   RunStatus,
@@ -364,7 +365,7 @@ export async function getDefinition(
   return rows.length > 0 ? mapDefinitionRow(rows[0]) : null;
 }
 
-export async function listDefinitions(projectId: string): Promise<LoadTestDefinition[]> {
+export async function listDefinitions(projectId: string): Promise<LoadTestDefinitionListItem[]> {
   assertProjectId(projectId);
 
   const rows = await db
@@ -373,7 +374,41 @@ export async function listDefinitions(projectId: string): Promise<LoadTestDefini
     .where(eq(loadTests.projectId, projectId))
     .orderBy(desc(loadTests.createdAt));
 
-  return rows.map(mapDefinitionRow);
+  if (rows.length === 0) return [];
+
+  const runRows = await db
+    .select({
+      id: loadTestRuns.id,
+      loadTestId: loadTestRuns.loadTestId,
+      status: loadTestRuns.status,
+      overallResult: loadTestRuns.overallResult,
+      createdAt: loadTestRuns.createdAt,
+    })
+    .from(loadTestRuns)
+    .where(eq(loadTestRuns.projectId, projectId))
+    .orderBy(desc(loadTestRuns.createdAt));
+
+  const latestByDefinition = new Map<string, (typeof runRows)[number]>();
+  for (const run of runRows) {
+    if (!latestByDefinition.has(run.loadTestId)) {
+      latestByDefinition.set(run.loadTestId, run);
+    }
+  }
+
+  return rows.map((row) => {
+    const definition = mapDefinitionRow(row);
+    const latest = latestByDefinition.get(row.id);
+    return {
+      ...definition,
+      latestRun: latest
+        ? {
+            id: latest.id,
+            status: latest.status,
+            overallResult: latest.overallResult ?? null,
+          }
+        : null,
+    };
+  });
 }
 
 export async function updateDefinition(

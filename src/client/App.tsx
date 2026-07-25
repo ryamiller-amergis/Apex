@@ -816,7 +816,8 @@ function App() {
                 <LoadTestsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
                   {(() => {
                     const segments = location.pathname.split('/').filter(Boolean);
-                    // /load-tests | /load-tests/new | /load-tests/runs/:runId | /load-tests/:definitionId
+                    // /load-tests | /load-tests/new | /load-tests/runs/:runId
+                    // /load-tests/:definitionId/runs | /load-tests/:definitionId
                     if (segments[0] === 'load-tests' && segments[1] === 'new') {
                       return <LoadTestDefinitionBuilderView project={selectedProject} />;
                     }
@@ -828,11 +829,25 @@ function App() {
                         />
                       );
                     }
+                    if (
+                      segments[0] === 'load-tests' &&
+                      segments[1] &&
+                      segments[2] === 'runs'
+                    ) {
+                      return (
+                        <LoadTestDefinitionBuilderView
+                          project={selectedProject}
+                          definitionId={segments[1]}
+                          section="runs"
+                        />
+                      );
+                    }
                     if (segments[0] === 'load-tests' && segments[1]) {
                       return (
                         <LoadTestDefinitionBuilderView
                           project={selectedProject}
                           definitionId={segments[1]}
+                          section="definition"
                         />
                       );
                     }

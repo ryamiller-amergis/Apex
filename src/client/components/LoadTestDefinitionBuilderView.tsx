@@ -10,6 +10,10 @@ import {
   useLoadTest,
   useUpdateLoadTest,
 } from '../hooks/useLoadTests';
+import {
+  LoadTestRunApiError,
+  useEnqueueRun,
+} from '../hooks/useLoadTestRuns';
 import { useLoadTestTargets } from '../hooks/useLoadTestTargets';
 import { useProjectRepoConfigs } from '../hooks/useProjectRepoConfigs';
 import {
@@ -31,13 +35,18 @@ import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ConfirmRegenerateScriptModal } from './ConfirmRegenerateScriptModal';
 import { LoadTestAiGeneratePanel } from './LoadTestAiGeneratePanel';
 import { LoadTestBuilderModeTabs, type BuilderMode } from './LoadTestBuilderModeTabs';
+import { LoadTestDefinitionRunsPanel } from './LoadTestDefinitionRunsPanel';
 import { LoadTestGuidedForm } from './LoadTestGuidedForm';
 import { LoadTestRawScriptEditor } from './LoadTestRawScriptEditor';
 import styles from './LoadTestDefinitionBuilderView.module.css';
 
+export type LoadTestDefinitionSection = 'definition' | 'runs';
+
 interface LoadTestDefinitionBuilderViewProps {
   project: string;
   definitionId?: string | null;
+  /** Which top-level section to show for an existing definition. Defaults to definition. */
+  section?: LoadTestDefinitionSection;
 }
 
 function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormValues {
@@ -71,19 +80,24 @@ function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormVal
 export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderViewProps> = ({
   project,
   definitionId = null,
+  section = 'definition',
 }) => {
   const navigate = useNavigate();
   const { can } = useAppShell();
   const canManage = can('load-test:manage');
+  const canRun = can('load-test:run');
   const readOnly = !canManage;
 
   const isNew = !definitionId;
+  const activeSection: LoadTestDefinitionSection =
+    !isNew && section === 'runs' ? 'runs' : 'definition';
   const { data: definition, isLoading: defLoading } = useLoadTest(project, definitionId);
   const { data: targets = [], isLoading: targetsLoading } = useLoadTestTargets(project);
   const { data: repoConfigs = [] } = useProjectRepoConfigs(project);
   const createMutation = useCreateLoadTest(project);
   const updateMutation = useUpdateLoadTest(project);
   const deleteMutation = useDeleteLoadTest(project);
+  const enqueueMutation = useEnqueueRun(project);
 
   // AC-2: AI generate is only available once the project has at least one connected repo.
   const hasConnectedRepo = repoConfigs.some((config) => Boolean(config.skillRepo?.trim()));
@@ -265,6 +279,23 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     }
   };
 
+  const onRun = async () => {
+    if (!definitionId || !canRun || isDirty) return;
+    setSaveError(null);
+    try {
+      const run = await enqueueMutation.mutateAsync({ definitionId });
+      navigate(`/load-tests/runs/${run.id}`);
+    } catch (err) {
+      const message =
+        err instanceof LoadTestRunApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to start load test run';
+      setSaveError(message);
+    }
+  };
+
   if (!isNew && defLoading) {
     return (
       <div className={styles.page} data-testid="load-test-builder">
@@ -293,7 +324,19 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
               Delete
             </button>
           )}
-          {canManage && (
+          {canRun && !isNew && (
+            <button
+              type="button"
+              className={styles.runBtn}
+              data-testid="load-test-run-btn"
+              onClick={onRun}
+              disabled={isDirty || enqueueMutation.isPending}
+              title={isDirty ? 'Save changes before running' : undefined}
+            >
+              {enqueueMutation.isPending ? 'Starting…' : 'Run'}
+            </button>
+          )}
+          {canManage && activeSection === 'definition' && (
             <button
               type="button"
               className={styles.saveBtn}
@@ -306,6 +349,38 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
           )}
         </div>
       </div>
+
+      {!isNew && (
+        <div
+          className={styles.sectionTabs}
+          role="tablist"
+          aria-label="Load test sections"
+          data-testid="load-test-section-tabs"
+        >
+          <button
+            type="button"
+            role="tab"
+            id="load-test-section-definition"
+            aria-selected={activeSection === 'definition'}
+            className={`${styles.sectionTab} ${activeSection === 'definition' ? styles.sectionTabActive : ''}`}
+            data-testid="load-test-section-definition"
+            onClick={() => navigate(`/load-tests/${definitionId}`)}
+          >
+            Definition
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="load-test-section-runs"
+            aria-selected={activeSection === 'runs'}
+            className={`${styles.sectionTab} ${activeSection === 'runs' ? styles.sectionTabActive : ''}`}
+            data-testid="load-test-section-runs"
+            onClick={() => navigate(`/load-tests/${definitionId}/runs`)}
+          >
+            Runs
+          </button>
+        </div>
+      )}
 
       {readOnly && (
         <div
@@ -323,6 +398,10 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         </div>
       )}
 
+      {activeSection === 'runs' && definitionId ? (
+        <LoadTestDefinitionRunsPanel project={project} definitionId={definitionId} />
+      ) : (
+        <>
       <LoadTestBuilderModeTabs
         mode={mode}
         disabled={readOnly}
@@ -386,7 +465,7 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         )}
       </div>
 
-      {isDirty && canManage && (
+      {isDirty && canManage && activeSection === 'definition' && (
         <p className={styles.dirtyHint} aria-live="polite">
           Unsaved changes
         </p>
@@ -400,6 +479,8 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
           }}
           onConfirm={confirmRegenerate}
         />
+      )}
+        </>
       )}
 
       {showDeleteConfirm && definition && (

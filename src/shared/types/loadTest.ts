@@ -100,6 +100,18 @@ export interface LoadTestDefinition {
   updatedBy: string;
 }
 
+/** Latest-run summary attached to definition list rows (FEAT-009 list badges). */
+export type LoadTestLatestRunSummary = {
+  id: string;
+  status: RunStatus;
+  overallResult?: 'passed' | 'failed' | null;
+};
+
+/** Definition list DTO — includes optional latest-run badge fields. */
+export type LoadTestDefinitionListItem = LoadTestDefinition & {
+  latestRun?: LoadTestLatestRunSummary | null;
+};
+
 /** Immutable execution snapshot frozen at enqueue (A-018). */
 export type LoadTestExecutionSnapshot = {
   targetUrl: string;

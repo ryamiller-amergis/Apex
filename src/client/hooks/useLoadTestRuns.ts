@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  LoadTestDefinitionListItem,
   LoadTestRun,
   LoadTestRunSource,
   RunStatus,
 } from '../../shared/types/loadTest';
+import { loadTestsQueryKey } from './useLoadTests';
 
 interface LoadTestRunsListResponse {
   items: LoadTestRun[];
@@ -109,8 +111,27 @@ export function useEnqueueRun(projectId: string | null) {
     },
     onSuccess: (run) => {
       if (!projectId) return;
-      void queryClient.invalidateQueries({ queryKey: ['load-test-runs', projectId] });
       queryClient.setQueryData(loadTestRunQueryKey(projectId, run.id), run);
+      queryClient.setQueryData(
+        loadTestsQueryKey(projectId),
+        (previous: LoadTestDefinitionListItem[] | undefined) => {
+          if (!previous) return previous;
+          return previous.map((item) =>
+            item.id === run.loadTestId
+              ? {
+                  ...item,
+                  latestRun: {
+                    id: run.id,
+                    status: run.status,
+                    overallResult: run.overallResult ?? null,
+                  },
+                }
+              : item,
+          );
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: ['load-test-runs', projectId] });
+      void queryClient.invalidateQueries({ queryKey: loadTestsQueryKey(projectId) });
     },
   });
 }

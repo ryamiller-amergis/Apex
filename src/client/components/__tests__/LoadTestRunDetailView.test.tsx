@@ -192,6 +192,54 @@ describe('LoadTestRunDetailView (FEAT-009)', () => {
     expect(screen.getByTestId('load-test-threshold-results')).toBeInTheDocument();
     expect(screen.getByTestId('load-test-run-overall-result')).toHaveTextContent(/pass/i);
     expect(screen.getByTestId('load-test-run-live-region')).toBeInTheDocument();
+    expect(screen.getByTestId('load-test-run-pipeline')).toBeInTheDocument();
+    expect(screen.getByTestId('load-test-run-execution')).toBeInTheDocument();
+    expect(screen.getByTestId('load-test-run-script-preview')).toHaveTextContent(
+      'export default function() {}',
+    );
+  });
+
+  it('shows empty live-progress guidance while dispatched', async () => {
+    mockStream = {
+      ...mockStream,
+      status: 'dispatched',
+      progress: null,
+      thresholdResults: null,
+      overallResult: null,
+      reconnecting: false,
+    };
+
+    renderDetail({ ...baseRun, status: 'dispatched' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-progress-empty')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-run-pipeline-dispatched')).toHaveAttribute(
+      'data-active',
+      'true',
+    );
+    expect(screen.getByTestId('load-test-run-status-explain')).toHaveTextContent(/noop|runner/i);
+  });
+
+  it('explains reaper stale-heartbeat errors for noop local dispatch', async () => {
+    mockStream = {
+      ...mockStream,
+      status: 'errored',
+      progress: null,
+      thresholdResults: null,
+      overallResult: null,
+    };
+
+    renderDetail({
+      ...baseRun,
+      status: 'errored',
+      errorDetail: 'Stale heartbeat — run marked errored by reaper',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-status-explain')).toHaveTextContent(/reaper|noop/i);
+    });
+    expect(screen.getByText(/Stale heartbeat/i)).toBeInTheDocument();
   });
 
   it('AC-1: reconnect banner keeps run id context when SSE drops', async () => {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateLoadTestDefinitionInput,
   LoadTestDefinition,
+  LoadTestDefinitionListItem,
   UpdateLoadTestDefinitionInput,
 } from '../../shared/types/loadTest';
 
@@ -9,14 +10,8 @@ interface LoadTestsListResponse {
   items: LoadTestDefinitionListItem[];
 }
 
-/** List DTO may include optional latest-run summary for badges (FEAT-009). */
-export type LoadTestDefinitionListItem = LoadTestDefinition & {
-  latestRun?: {
-    id?: string;
-    status: string;
-    overallResult?: string | null;
-  } | null;
-};
+/** @deprecated Prefer LoadTestDefinitionListItem from shared types. */
+export type { LoadTestDefinitionListItem };
 
 class LoadTestApiError extends Error {
   status: number;

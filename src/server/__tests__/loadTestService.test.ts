@@ -509,18 +509,70 @@ describe('listDefinitions — BR-009 project isolation', () => {
     const db = getMockDb();
     const projectARow = makeRow({ projectId: PROJECT_A });
 
-    db.select.mockReturnValue({
-      from: jest.fn().mockReturnValue({
-        where: jest.fn().mockReturnValue({
-          orderBy: jest.fn().mockResolvedValue([projectARow]),
+    db.select
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockReturnValue({
+            orderBy: jest.fn().mockResolvedValue([projectARow]),
+          }),
         }),
-      }),
-    });
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockReturnValue({
+            orderBy: jest.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
 
     const results = await svc.listDefinitions(PROJECT_A);
 
     expect(results).toHaveLength(1);
     expect(results[0].projectId).toBe(PROJECT_A);
+    expect(results[0].latestRun).toBeNull();
+  });
+
+  it('attaches the latest run summary per definition', async () => {
+    const db = getMockDb();
+    const projectARow = makeRow({ projectId: PROJECT_A, id: DEF_ID });
+
+    db.select
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockReturnValue({
+            orderBy: jest.fn().mockResolvedValue([projectARow]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockReturnValue({
+            orderBy: jest.fn().mockResolvedValue([
+              {
+                id: 'run-newer',
+                loadTestId: DEF_ID,
+                status: 'dispatched',
+                overallResult: null,
+                createdAt: '2026-07-25T12:00:00.000Z',
+              },
+              {
+                id: 'run-older',
+                loadTestId: DEF_ID,
+                status: 'passed',
+                overallResult: 'passed',
+                createdAt: '2026-07-24T12:00:00.000Z',
+              },
+            ]),
+          }),
+        }),
+      });
+
+    const results = await svc.listDefinitions(PROJECT_A);
+    expect(results[0].latestRun).toEqual({
+      id: 'run-newer',
+      status: 'dispatched',
+      overallResult: null,
+    });
   });
 });
 

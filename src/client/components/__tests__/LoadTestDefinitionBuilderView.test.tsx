@@ -7,7 +7,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { LoadTestDefinitionBuilderView } from '../LoadTestDefinitionBuilderView';
 
-const mockCan = jest.fn((key: string) => key === 'load-test:manage' || key === 'load-test:view');
+const mockCan = jest.fn(
+  (key: string) =>
+    key === 'load-test:manage' || key === 'load-test:view' || key === 'load-test:run',
+);
 const mockNavigate = jest.fn();
 
 jest.mock('../../hooks/useAppShell', () => ({
@@ -32,14 +35,18 @@ const target = {
   updatedBy: 'u',
 };
 
-function renderBuilder(definitionId?: string) {
+function renderBuilder(definitionId?: string, section?: 'definition' | 'runs') {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <LoadTestDefinitionBuilderView project="project-a" definitionId={definitionId} />
+        <LoadTestDefinitionBuilderView
+          project="project-a"
+          definitionId={definitionId}
+          section={section}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -49,7 +56,8 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCan.mockImplementation(
-      (key: string) => key === 'load-test:manage' || key === 'load-test:view',
+      (key: string) =>
+        key === 'load-test:manage' || key === 'load-test:view' || key === 'load-test:run',
     );
   });
 
@@ -263,8 +271,316 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     });
     expect(screen.queryByTestId('load-test-save-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('load-test-delete-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('load-test-run-btn')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Name$/i)).toBeDisabled();
     // Secret refs show identifiers only
     expect(screen.getByLabelText(/Ref identifier/i)).toHaveValue('kv://vault/token');
+  });
+
+  it('Run enqueues saved definition and navigates to run detail', async () => {
+    const user = userEvent.setup();
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1') && !href.includes('/runs')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Runnable',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      if (init?.method === 'POST' && href.endsWith('/load-tests/def-1/runs')) {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            run: {
+              id: 'run-new',
+              projectId: 'project-a',
+              loadTestId: 'def-1',
+              status: 'dispatched',
+              runSource: 'app',
+              queuedAt: '2026-07-25T00:00:00.000Z',
+              cancelRequested: false,
+              createdAt: '2026-07-25T00:00:00.000Z',
+              updatedAt: '2026-07-25T00:00:00.000Z',
+            },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-run-btn')).not.toBeDisabled();
+
+    await user.click(screen.getByTestId('load-test-run-btn'));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/load-tests/runs/run-new');
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/projects/project-a/load-tests/def-1/runs',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('Run is disabled while the form has unsaved changes', async () => {
+    const user = userEvent.setup();
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Runnable',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeEnabled();
+    });
+
+    await user.type(screen.getByLabelText(/^Name$/i), ' edited');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeDisabled();
+    });
+  });
+
+  it('Run API error surfaces as a toast without navigating', async () => {
+    const user = userEvent.setup();
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1') && !href.includes('/runs')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Runnable',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      if (init?.method === 'POST' && href.includes('/runs')) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: 'Target already has an active run' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeEnabled();
+    });
+
+    await user.click(screen.getByTestId('load-test-run-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-builder-error-toast')).toHaveTextContent(
+        'Target already has an active run',
+      );
+    });
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining('/runs/'));
+  });
+
+  it('shows Definition/Runs section tabs for saved definitions', async () => {
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Runnable',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1', 'definition');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-section-tabs')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-section-definition')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('load-test-section-runs')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('Runs section renders the definition run history panel', async () => {
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/runs')) {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (href.includes('/load-tests/def-1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Runnable',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1', 'runs');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-definition-runs')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-section-runs')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.queryByTestId('load-test-guided-form')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('load-test-save-btn')).not.toBeInTheDocument();
   });
 });
