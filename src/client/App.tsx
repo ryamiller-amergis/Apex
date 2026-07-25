@@ -29,7 +29,8 @@ import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
-import { useFeatureFlag } from './hooks/useFeatureFlags';
+import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
+import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
@@ -227,6 +228,11 @@ function App() {
   } = useAppShell();
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
+  const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
+  const agentHomeFlag = homeFlags['agent-home'] ?? false;
+
+  const canAccessHome =
+    !homeFlagsLoading && permissionsLoaded && agentHomeFlag && (isSuperAdmin || can('home:view'));
 
   const planningTab: PlanningTab = isPlanningTab(planningTabSegment) ? planningTabSegment
     : (VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t])) ?? VISIBLE_PLANNING_TABS[0]);
@@ -251,7 +257,14 @@ function App() {
       changeAreaPath(project);
       changeSkillSettings(settingsId);
       setPendingProject(null);
-      navigate('/home');
+      navigate(resolveAccessibleRoute({
+        canAccessHome,
+        can,
+        isSuperAdmin,
+        enabledViews,
+        selectedProject: project,
+        isInAnyGroup,
+      }));
       fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
         method: 'POST',
         credentials: 'include',
@@ -264,37 +277,49 @@ function App() {
       completePendingSelect(repoConfigs[0].id);
     }
     // >1 configs: handled by RepoSelector render branch
-  }, [pendingProject, repoConfigs, repoConfigsFetched, repoConfigsError, changeProject, changeAreaPath, changeSkillSettings, navigate]);
+  }, [pendingProject, repoConfigs, repoConfigsFetched, repoConfigsError, changeProject, changeAreaPath, changeSkillSettings, navigate, canAccessHome, can, isSuperAdmin, enabledViews, isInAnyGroup]);
 
   // Guard all gated routes: redirect if the user lacks the required permission.
-  // Wait for permissionsLoaded to avoid redirecting before the permissions fetch completes.
+  // Wait for permissionsLoaded and homeFlagsLoading to avoid redirecting before
+  // the permissions and flag fetches complete.
   useEffect(() => {
-    if (!permissionsLoaded || menuConfigLoading) return;
+    if (!permissionsLoaded || menuConfigLoading || homeFlagsLoading) return;
+
+    const fallback = resolveAccessibleRoute({
+      canAccessHome,
+      can,
+      isSuperAdmin,
+      enabledViews,
+      selectedProject,
+      isInAnyGroup,
+    });
+
     if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
-    if (currentView === 'admin'         && !can('admin:roles'))   navigate('/home');
-    if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate('/home');
-    if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate('/home');
-    if (currentView === 'ai-cost'       && !isSuperAdmin && (!enabledViews.includes('ai-cost')    || !can('analytics:ai-cost:view'))) navigate('/home');
-    if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate('/home');
-    if (currentView === 'adr'           && !isSuperAdmin && (!enabledViews.includes('adr')       || !can('adr:view'))) navigate('/home');
-    if (currentView === 'notifications' && !can('notifications:view'))  navigate('/home');
-    if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate('/home');
-    if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
-    if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate('/home');
-    if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate('/home');
-    if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate('/home');
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
-    if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate('/home');
-    if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate('/home');
+    if (currentView === 'home'           && !canAccessHome) navigate(fallback);
+    if (currentView === 'admin'         && !can('admin:roles'))   navigate(fallback);
+    if (currentView === 'calendar'      && !isSuperAdmin && (!enabledViews.includes('calendar')  || !can('calendar:view')))  navigate(fallback);
+    if (currentView === 'cloudcost'     && !isSuperAdmin && (!enabledViews.includes('cloudcost') || !can('cost:view')))      navigate(fallback);
+    if (currentView === 'ai-cost'       && !isSuperAdmin && (!enabledViews.includes('ai-cost')    || !can('analytics:ai-cost:view'))) navigate(fallback);
+    if (currentView === 'backlog'       && !isSuperAdmin && (!enabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
+    if (currentView === 'adr'           && !isSuperAdmin && (!enabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
+    if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
+    if (currentView === 'my-work'       && !isSuperAdmin && (!enabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
+    if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
+    if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
+    if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
+    if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
+    if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
+    if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
-        navigate('/home');
+        navigate(fallback);
       } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
         const firstAccessible = VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
-        navigate(firstAccessible ? `/planning/${firstAccessible}` : '/home');
+        navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigLoading, can, isInAnyGroup, isSuperAdmin, enabledViews, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigLoading, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, enabledViews, selectedProject, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -346,7 +371,14 @@ function App() {
               changeAreaPath(project);
               changeSkillSettings(settingsId);
               setPendingProject(null);
-              navigate('/home');
+              navigate(resolveAccessibleRoute({
+                canAccessHome,
+                can,
+                isSuperAdmin,
+                enabledViews,
+                selectedProject: project,
+                isInAnyGroup,
+              }));
               fetch(`/api/projects/${encodeURIComponent(project)}/select`, {
                 method: 'POST',
                 credentials: 'include',
@@ -433,6 +465,7 @@ function App() {
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
             selectedProject={selectedProject}
+            canAccessHome={canAccessHome}
             onNavigateHome={() => navigate('/home')}
             onNavigateCalendar={() => navigate('/calendar')}
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
@@ -476,6 +509,7 @@ function App() {
             menuEnabledViews={enabledViews}
             isSuperAdmin={isSuperAdmin}
             selectedProject={selectedProject}
+            canAccessHome={canAccessHome}
             repoConfigs={repoConfigs}
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={changeSkillSettings}
@@ -509,12 +543,15 @@ function App() {
           )}
           {error && <div className="error-banner">{error}</div>}
 
-          {currentView === 'home' ? (
+          {currentView === 'home' && canAccessHome ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               {/* Top-level split: demo component gated by "example-flag-demo" flag */}
               <FeatureFlagDemo project={selectedProject} />
               <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} />
             </ErrorBoundary>
+          ) : currentView === 'home' ? (
+            /* Access controls still loading — withhold content to avoid a flash */
+            null
           ) : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>

@@ -30,10 +30,16 @@ beforeEach(() => {
 });
 
 describe('AppSidebar — desktop navigation', () => {
-  it('renders Home and collapse controls', () => {
-    render(<AppSidebar {...baseProps} />);
+  it('renders Home and collapse controls when canAccessHome is true (default)', () => {
+    render(<AppSidebar {...baseProps} canAccessHome />);
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it('hides the Home button when canAccessHome is false', () => {
+    render(<AppSidebar {...baseProps} canAccessHome={false} />);
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
   });
 

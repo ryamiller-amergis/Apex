@@ -18,10 +18,11 @@ describe('RBAC integration — getUserPermissions', () => {
   it('returns permissions for the "member" role assigned to BA persona', async () => {
     const permissions = await getUserPermissions(BA_OID, 'MaxView');
 
-    // member role should include calendar:view, backlog:view, chat:view
+    // member role should include calendar:view, backlog:view, chat:view, home:view
     expect(permissions).toContain('calendar:view');
     expect(permissions).toContain('chat:view');
     expect(permissions).toContain('chat:create');
+    expect(permissions).toContain('home:view');
     // admin-only permissions must NOT be present for a plain member
     expect(permissions).not.toContain('admin:roles');
     expect(permissions).not.toContain('analytics:ai-cost:view');
@@ -33,6 +34,7 @@ describe('RBAC integration — getUserPermissions', () => {
     const permissions = await getUserPermissions('nonexistent-oid-12345', 'MaxView');
     expect(permissions).toContain('calendar:view');
     expect(permissions).toContain('chat:view');
+    expect(permissions).toContain('home:view');
     // but never admin-only permissions
     expect(permissions).not.toContain('admin:roles');
     expect(permissions).not.toContain('analytics:ai-cost:view');
