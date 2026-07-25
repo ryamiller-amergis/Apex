@@ -20,6 +20,7 @@ interface AppSidebarProps {
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
   selectedProject?: string;
+  canAccessHome?: boolean;
   onNavigateHome: () => void;
   onNavigateCalendar: () => void;
   onNavigatePlanning: () => void;
@@ -164,6 +165,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   menuEnabledViews = [],
   isSuperAdmin = false,
   selectedProject,
+  canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
   onNavigatePlanning,
@@ -249,17 +251,19 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       className={`${styles.sidebar} ${collapsed ? styles.collapsed : styles.expanded}`}
       aria-label="Main navigation"
     >
-      <div className={styles.top}>
-        <button
-          className={`${styles.navItem} ${isActive('home') ? styles.active : ''}`}
-          onClick={onNavigateHome}
-          type="button"
-          title={collapsed ? 'Home' : undefined}
-        >
-          <span className={styles.icon}><IconHome /></span>
-          {!collapsed && <span className={styles.label}>Home</span>}
-        </button>
-      </div>
+      {canAccessHome && (
+        <div className={styles.top}>
+          <button
+            className={`${styles.navItem} ${isActive('home') ? styles.active : ''}`}
+            onClick={onNavigateHome}
+            type="button"
+            title={collapsed ? 'Home' : undefined}
+          >
+            <span className={styles.icon}><IconHome /></span>
+            {!collapsed && <span className={styles.label}>Home</span>}
+          </button>
+        </div>
+      )}
 
       <div className={styles.divider} />
 

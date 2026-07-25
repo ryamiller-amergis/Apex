@@ -42,9 +42,14 @@ jest.mock('../UserMenu', () => ({
 describe('AppHeader — no menuEnabledViews, not super admin', () => {
   const can = (_key: string) => false;
 
-  it('renders the Home button (always visible)', () => {
-    render(<AppHeader {...baseProps} can={can} />);
+  it('renders the Home button when canAccessHome is true (default)', () => {
+    render(<AppHeader {...baseProps} can={can} canAccessHome />);
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+  });
+
+  it('hides the Home button when canAccessHome is false', () => {
+    render(<AppHeader {...baseProps} can={can} canAccessHome={false} />);
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
 
   it('does NOT render Calendar (not in enabledViews)', () => {
@@ -144,7 +149,7 @@ describe('AppHeader — isSuperAdmin=true', () => {
   const can = (key: string) => key === 'admin:roles';
 
   it('renders all feature views for super admin regardless of permissions or menu config', () => {
-    render(<AppHeader {...baseProps} can={can} isSuperAdmin menuEnabledViews={[]} />);
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin menuEnabledViews={[]} canAccessHome />);
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();

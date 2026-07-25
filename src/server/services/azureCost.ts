@@ -248,7 +248,11 @@ export class AzureCostService {
         () => costClient.query.usage(scope, usageQuery),
         `getCostData(${subscriptionId})`
       );
-      
+
+      if (!result) {
+        throw new Error(`No result returned from Azure Cost API for subscription ${subscriptionId}`);
+      }
+
       console.log('API Response columns:', result.columns?.map((c: any) => c.name));
       console.log('API Response row count:', result.rows?.length || 0);
       

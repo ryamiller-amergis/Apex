@@ -42,6 +42,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `chat:create` | chat | admin, member |
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
+| `home:view` | chat | admin, member, viewer |
 | `cost:view` | cost | admin, viewer |
 | `load-test:view` | load-test | admin, member, viewer |
 | `load-test:run` | load-test | admin, member |
