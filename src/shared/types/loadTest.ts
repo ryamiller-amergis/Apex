@@ -111,6 +111,18 @@ export interface LoadTestDefinition {
   updatedBy: string;
 }
 
+/** Immutable execution snapshot frozen at enqueue (A-018). */
+export type LoadTestExecutionSnapshot = {
+  targetUrl: string;
+  script: string;
+  loadProfile: LoadProfile;
+  clientThresholds: Threshold[];
+  /** Key Vault refs only — never plaintext */
+  secretRefs: string[];
+  environment: string;
+  definitionName: string;
+};
+
 export interface LoadTestRun {
   id: string;
   projectId: string;
@@ -128,9 +140,52 @@ export interface LoadTestRun {
   summaryArtifactRef?: ArtifactRef | null;
   timeseriesArtifactRef?: ArtifactRef | null;
   errorDetail?: string | null;
+  /** Normalized allowlist host/base URL used for one-run-per-target lock */
+  targetKey?: string | null;
+  executionSnapshot?: LoadTestExecutionSnapshot | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Service Bus dispatch payload (FEAT-007). */
+export type LoadTestDispatchMessage = {
+  dispatchMessageId: string;
+  projectId: string;
+  runId: string;
+  definitionId: string;
+  targetUrl: string;
+  script: string;
+  loadProfile: LoadProfile;
+  clientThresholds: Threshold[];
+  secretRefs: string[];
+  callbackBaseUrl: string;
+};
+
+/** Unified runner/pipeline ingest body (FEAT-007 / PBI-009). */
+export type LoadTestRunIngestBody = {
+  dispatchMessageId: string;
+  kind: 'progress' | 'final' | 'cancel_ack';
+  status?: RunStatus;
+  heartbeatAt?: string;
+  thresholdResults?: ThresholdResult[];
+  overallPassed?: boolean;
+  summaryBlobRef?: string | ArtifactRef;
+  timeseriesBlobRef?: string | ArtifactRef;
+  errorDetail?: string;
+  progress?: { vu?: number; iteration?: number; message?: string };
+};
+
+export type LoadTestRunProgressEvent = {
+  type: 'status' | 'progress' | 'terminal' | 'cancel';
+  runId: string;
+  projectId: string;
+  status: RunStatus;
+  cancelRequested?: boolean;
+  progress?: { vu?: number; iteration?: number; message?: string };
+  thresholdResults?: ThresholdResult[] | null;
+  overallResult?: 'passed' | 'failed' | null;
+  at: string;
+};
 
 export interface LoadTestTarget {
   id: string;

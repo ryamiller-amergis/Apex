@@ -37,6 +37,7 @@ import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
   LoadProfile,
   LoadTestEngine,
+  LoadTestExecutionSnapshot,
   LoadTestFlowType,
   LoadTestRunSource,
   LoadTestScriptSource,
@@ -1588,6 +1589,8 @@ export const loadTestRuns = pgTable('load_test_run', {
   summaryArtifactRef: jsonb('summary_artifact_ref').$type<ArtifactRef>(),
   timeseriesArtifactRef: jsonb('timeseries_artifact_ref').$type<ArtifactRef>(),
   errorDetail: text('error_detail'),
+  targetKey: text('target_key'),
+  executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({

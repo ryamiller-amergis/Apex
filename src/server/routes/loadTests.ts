@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as loadTestService from '../services/loadTestService';
 import { LoadTestValidationError } from '../../shared/types/loadTest';
+import loadTestRunsRouter from './loadTestRuns';
 
 const router = Router({ mergeParams: true });
 
@@ -66,6 +67,10 @@ router.post(
     }
   },
 );
+
+// ── Run lifecycle routes (FEAT-007) — enqueue, list, get, cancel, SSE, ingest ─
+// Mounted before /:id so /runs is not captured as a definition id.
+router.use(loadTestRunsRouter);
 
 // ── GET /api/projects/:projectId/load-tests/:id ───────────────────────────────
 
@@ -154,18 +159,7 @@ router.get(
   },
 );
 
-// ── POST /api/projects/:projectId/load-tests/:definitionId/runs ───────────────
-// Stub enqueue endpoint for FEAT-003 acceptance criteria (d).
-// Callers without load-test:run receive 403 and no load_test_run row is
-// created. Callers with the permission receive 501 until FEAT-007 ships
-// loadTestRunService.enqueue().
-
-router.post(
-  '/:definitionId/runs',
-  requirePermission('load-test:run'),
-  (_req, res) => {
-    res.status(501).json({ error: 'Run execution not yet implemented' });
-  },
-);
+// Run lifecycle (enqueue/list/cancel/SSE/ingest) lives on loadTestRunsRouter
+// mounted above — FEAT-007 replaced the 501 stub.
 
 export default router;

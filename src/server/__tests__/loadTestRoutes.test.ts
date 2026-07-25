@@ -53,7 +53,19 @@ jest.mock('../services/loadTestService', () => ({
   getPortable: jest.fn(),
 }));
 
+jest.mock('../services/loadTestRunService', () => ({
+  enqueue: jest.fn(),
+  listRuns: jest.fn(),
+  getRun: jest.fn(),
+  cancel: jest.fn(),
+  ingest: jest.fn(),
+  subscribeRunProgress: jest.fn(() => () => undefined),
+}));
+
+import * as loadTestRunService from '../services/loadTestRunService';
+
 const mockSvc = loadTestService as jest.Mocked<typeof loadTestService>;
+const mockRunSvc = loadTestRunService as jest.Mocked<typeof loadTestRunService>;
 
 // ── App builder ───────────────────────────────────────────────────────────────
 
@@ -325,20 +337,35 @@ describe('GET /api/projects/:projectId/load-tests/:id/portable', () => {
   });
 });
 
-// ── POST /:definitionId/runs — FEAT-003 stub still enforces load-test:run ─────
+// ── POST /:definitionId/runs — FEAT-007 enqueue (replaces FEAT-003 stub) ───────
 
 describe('POST /api/projects/:projectId/load-tests/:definitionId/runs', () => {
-  it('returns 403 when caller lacks load-test:run (FEAT-003 AC-d)', async () => {
+  it('AC-3: returns 403 when caller lacks load-test:run and does not enqueue', async () => {
     mockPermissions = new Set(['load-test:view']);
 
     const res = await request(buildApp()).post(`${BASE}/${DEF_ID}/runs`).send({});
     expect(res.status).toBe(403);
+    expect(mockRunSvc.enqueue).not.toHaveBeenCalled();
   });
 
-  it('returns 501 when caller has load-test:run (stub pending FEAT-007)', async () => {
+  it('AC-0: returns 201 with run when caller has load-test:run', async () => {
     mockPermissions = new Set(['load-test:run']);
+    mockRunSvc.enqueue.mockResolvedValue({
+      id: 'run-1',
+      projectId: PROJECT,
+      loadTestId: DEF_ID,
+      status: 'dispatched',
+      runSource: 'app',
+      queuedAt: NOW,
+      cancelRequested: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+    } as any);
 
     const res = await request(buildApp()).post(`${BASE}/${DEF_ID}/runs`).send({});
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(201);
+    expect(res.body.run.status).toBe('dispatched');
+    expect(res.body.run.runSource).toBe('app');
+    expect(mockRunSvc.enqueue).toHaveBeenCalledWith(PROJECT, DEF_ID, { runSource: 'app' });
   });
 });

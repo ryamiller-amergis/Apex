@@ -63,7 +63,9 @@ import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
+import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -213,6 +215,8 @@ app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
+// Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
+app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
@@ -338,6 +342,7 @@ const server = app.listen(PORT, () => {
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
   startReaper();
+  startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.

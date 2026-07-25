@@ -224,6 +224,8 @@ function mapRunRow(row: LoadTestRunRow): LoadTestRun {
     summaryArtifactRef: row.summaryArtifactRef ?? null,
     timeseriesArtifactRef: row.timeseriesArtifactRef ?? null,
     errorDetail: row.errorDetail ?? null,
+    targetKey: row.targetKey ?? null,
+    executionSnapshot: row.executionSnapshot ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
