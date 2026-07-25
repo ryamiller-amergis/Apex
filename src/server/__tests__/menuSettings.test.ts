@@ -7,8 +7,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 12 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(12);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 13 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(13);
   });
 
   it('contains the expected keys in order', () => {
@@ -26,6 +26,7 @@ describe('menuSettings shared types', () => {
       'pdf-tools',
       'ai-cost',
       'design-module',
+      'load-tests',
     ]);
   });
 
@@ -44,6 +45,7 @@ describe('menuSettings shared types', () => {
       'PDF Assembly Tool',
       'AI Cost Analytics',
       'Design Module',
+      'Load Tests',
     ]);
   });
 
@@ -56,6 +58,7 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('adr');
     expect(keys).toContain('ui-lab');
     expect(keys).toContain('feature-requests');
+    expect(keys).toContain('load-tests');
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

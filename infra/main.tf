@@ -161,6 +161,13 @@ resource "azurerm_linux_web_app_slot" "staging" {
   https_only     = true
   tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
 
+  # Slot identities are not swapped with application code. Keep a dedicated
+  # system identity on staging so pre-swap PDF smoke tests retain managed-
+  # identity access to the production shared Blob account.
+  identity {
+    type = "SystemAssigned"
+  }
+
   site_config {
     always_on = true
 

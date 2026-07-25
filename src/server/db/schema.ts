@@ -34,6 +34,18 @@ import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmi
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
+import type {
+  LoadProfile,
+  LoadTestEngine,
+  LoadTestFlowType,
+  LoadTestRunSource,
+  LoadTestScriptSource,
+  RequirementRef,
+  RunStatus,
+  Threshold,
+  ThresholdResult,
+  ArtifactRef,
+} from '../../shared/types/loadTest';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -1531,3 +1543,81 @@ export const workItemChangeProposalsRelations = relations(workItemChangeProposal
 
 // Add calendar assistant columns to projectSkillSettings (applied via migration)
 // Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql
+
+// ── Load Testing Module ───────────────────────────────────────────────────────
+
+export const loadTests = pgTable('load_test', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  requirementRef: jsonb('requirement_ref').$type<RequirementRef>(),
+  targetUrl: text('target_url').notNull(),
+  environment: text('environment').notNull(),
+  engine: text('engine').$type<LoadTestEngine>().notNull().default('k6'),
+  flowType: text('flow_type').$type<LoadTestFlowType>().notNull().default('single'),
+  scriptSource: text('script_source').$type<LoadTestScriptSource>().notNull().default('form_builder'),
+  script: text('script').notNull(),
+  loadProfile: jsonb('load_profile').$type<LoadProfile>().notNull(),
+  clientThresholds: jsonb('client_thresholds').$type<Threshold[]>().notNull().default([]),
+  runSource: text('run_source').$type<LoadTestRunSource>(),
+  secretRefs: jsonb('secret_refs').$type<Record<string, string>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_project_created').on(t.projectId, t.createdAt),
+}));
+
+export const loadTestRuns = pgTable('load_test_run', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  loadTestId: uuid('load_test_id').notNull().references(() => loadTests.id, { onDelete: 'restrict' }),
+  status: text('status').$type<RunStatus>().notNull().default('queued'),
+  runSource: text('run_source').$type<LoadTestRunSource>().notNull().default('app'),
+  queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  dispatchMessageId: text('dispatch_message_id'),
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  overallResult: text('overall_result').$type<'passed' | 'failed'>(),
+  thresholdResults: jsonb('threshold_results').$type<ThresholdResult[]>(),
+  summaryArtifactRef: jsonb('summary_artifact_ref').$type<ArtifactRef>(),
+  timeseriesArtifactRef: jsonb('timeseries_artifact_ref').$type<ArtifactRef>(),
+  errorDetail: text('error_detail'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_run_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_run_project_created').on(t.projectId, t.createdAt),
+  loadTestIdIdx: index('idx_load_test_run_load_test_id').on(t.loadTestId),
+  statusHeartbeatIdx: index('idx_load_test_run_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+export const loadTestTargets = pgTable('load_test_target', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  baseUrl: text('base_url').notNull(),
+  environmentLabel: text('environment_label').notNull(),
+  isReachable: boolean('is_reachable').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_target_project_id').on(t.projectId),
+}));
+
+export const loadTestsRelations = relations(loadTests, ({ many }) => ({
+  runs: many(loadTestRuns),
+}));
+
+export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
+  loadTest: one(loadTests, {
+    fields: [loadTestRuns.loadTestId],
+    references: [loadTests.id],
+  }),
+}));
