@@ -3,7 +3,7 @@
 #   npm run build:server
 #   docker build -f runners/load-test-k6/Dockerfile -t apex-lt-k6:local .
 
-FROM grafana/k6:v0.54.0 AS k6
+FROM grafana/k6:0.54.0 AS k6
 
 FROM node:24-bookworm-slim
 
