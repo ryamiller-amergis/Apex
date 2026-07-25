@@ -60,7 +60,9 @@ resource "azurerm_servicebus_queue" "lt_dispatch" {
   lock_duration = "PT5M"
 }
 
-# Listen-only SAS for the KEDA azure-servicebus scaler.
+# SAS for the KEDA azure-servicebus scaler.
+# KEDA polls queue length via the Service Bus management API, which requires
+# Manage (EntityRead) — Listen-only returns 401 and DesiredJobCount stays 0.
 # azurerm 3.x cannot set scale-rule identity_id (added in azurerm 4.73+);
 # without a connection setting KEDA fails with:
 #   "error parsing azure service bus metadata: no connection setting given"
@@ -70,8 +72,8 @@ resource "azurerm_servicebus_namespace_authorization_rule" "lt_keda_listen" {
   namespace_id = azurerm_servicebus_namespace.load_test.id
 
   listen = true
-  send   = false
-  manage = false
+  send   = true
+  manage = true
 }
 
 # ---------------------------------------------------------------------------
@@ -264,8 +266,9 @@ resource "azurerm_container_app_job" "load_test_runner" {
     identity = azurerm_user_assigned_identity.lt_runner.id
   }
 
-  # KEDA scaler auth (Listen-only SAS). Prefer scale-rule identity_id once the
-  # module is on azurerm >= 4.73; until then the connection secret is required.
+  # KEDA scaler auth (SAS with Manage — required for queue-length polling).
+  # Prefer scale-rule identity_id once on azurerm >= 4.73; until then the
+  # connection secret is required.
   secret {
     name  = "lt-keda-sb-connection"
     value = azurerm_servicebus_namespace_authorization_rule.lt_keda_listen.primary_connection_string

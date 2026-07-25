@@ -283,7 +283,7 @@ group (current dev), both groups resolve to the same resource group.
 |----------|---------|
 | `azurerm_servicebus_namespace.load_test` | Dedicated dispatch namespace; not shared with other async workloads |
 | `azurerm_servicebus_queue.lt_dispatch` | KEDA trigger queue; DLQ auto-created at `lt-dispatch/$DeadLetterQueue` |
-| `azurerm_servicebus_namespace_authorization_rule.lt_keda_listen` | Listen-only SAS for the KEDA scaler (`lt-keda-listen`) |
+| `azurerm_servicebus_namespace_authorization_rule.lt_keda_listen` | SAS with Manage for the KEDA scaler (`lt-keda-listen`; Listen-only 401s on queue metrics) |
 | `azurerm_storage_container.lt_artifacts` | Blob container on the shared storage account; holds summary + time-series artifacts |
 | `azurerm_storage_management_policy.lt_artifacts_lifecycle` | ~90-day deletion policy scoped to the `lt-artifacts/` prefix |
 | `azurerm_container_app_environment.load_test` | VNet-integrated CAE for non-prod target reachability |
@@ -353,9 +353,11 @@ fails with `error parsing azure service bus metadata: no connection setting give
 and never starts executions (runs stay `dispatched`).
 
 Until the module is on **azurerm >= 4.73** (which supports scale-rule
-`identity_id`), Terraform wires a Listen-only namespace SAS
+`identity_id`), Terraform wires a namespace SAS with **Manage** rights
 (`lt-keda-listen`) into a job secret `lt-keda-sb-connection` and references it
 from the scale rule `authentication` block (`trigger_parameter = connection`).
+KEDA's Service Bus scaler calls the management API for queue length — Listen-only
+returns `401 Manage,EntityRead claims required` and jobs never start.
 Runner **message receive** still uses the user-assigned MI (Data Receiver) —
 the SAS is only for KEDA queue-length polling.
 

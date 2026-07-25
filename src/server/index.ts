@@ -168,12 +168,19 @@ const internalOnlyPaths = [
 // external monitoring. req.path is relative to /api (prefix is stripped by Express).
 const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
 
+// Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
+// on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
+const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
   const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+  const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath) return next();
+  if (isHealthPath || isLoadTestRunnerCallback) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
