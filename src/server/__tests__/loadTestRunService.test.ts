@@ -30,10 +30,6 @@ jest.mock('../services/loadTestTargetService', () => ({
   },
 }));
 
-jest.mock('../services/loadTestTraceabilityService', () => ({
-  scheduleRunCompletionActivity: jest.fn(),
-}));
-
 import {
   assertTransition,
   cancel,
@@ -66,7 +62,6 @@ const definition = {
   projectId: PROJECT,
   name: 'API smoke',
   description: null,
-  requirementRef: null,
   targetUrl: 'https://staging.example.com',
   environment: 'staging',
   engine: 'k6' as const,

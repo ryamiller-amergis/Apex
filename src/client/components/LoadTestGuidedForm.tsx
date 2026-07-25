@@ -56,31 +56,6 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
         <textarea id="load-test-description" rows={2} disabled={readOnly} {...register('description')} />
       </div>
 
-      <fieldset className={styles.fieldset} disabled={readOnly}>
-        <legend>Requirement reference</legend>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <label htmlFor="load-test-requirement-id">Work item ID</label>
-            <input
-              id="load-test-requirement-id"
-              type="text"
-              aria-invalid={Boolean(errors.requirementId)}
-              aria-describedby={errors.requirementId ? 'load-test-requirement-error' : undefined}
-              {...register('requirementId')}
-            />
-            {errors.requirementId && (
-              <span id="load-test-requirement-error" className={styles.error} role="alert">
-                {errors.requirementId.message}
-              </span>
-            )}
-          </div>
-          <div className={styles.field}>
-            <label htmlFor="load-test-requirement-label">Display label</label>
-            <input id="load-test-requirement-label" type="text" {...register('requirementLabel')} />
-          </div>
-        </div>
-      </fieldset>
-
       <div className={styles.field}>
         <label htmlFor="load-test-target">Allowlisted target</label>
         {targetsLoading ? (

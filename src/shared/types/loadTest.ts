@@ -19,16 +19,6 @@ export type LoadTestScriptSource = 'ai_generated' | 'form_builder' | 'raw';
 
 export type LoadTestRunSource = 'app' | 'pipeline';
 
-// ── Requirement Reference ──────────────────────────────────────────────────────
-
-export type RequirementRef = {
-  kind: 'ado_work_item' | 'apex_requirement';
-  id: string;
-  projectId?: string;
-  /** Optional display label for UI convenience; not authoritative */
-  displayLabel?: string;
-};
-
 // ── Load Profile ───────────────────────────────────────────────────────────────
 
 export type LoadProfileStage = {
@@ -91,7 +81,6 @@ export interface LoadTestDefinition {
   projectId: string;
   name: string;
   description?: string | null;
-  requirementRef?: RequirementRef | null;
   targetUrl: string;
   environment: string;
   engine: LoadTestEngine;
@@ -143,29 +132,9 @@ export interface LoadTestRun {
   /** Normalized allowlist host/base URL used for one-run-per-target lock */
   targetKey?: string | null;
   executionSnapshot?: LoadTestExecutionSnapshot | null;
-  /** ADO comment id when requirement activity was posted (FEAT-010) */
-  requirementActivityExternalId?: string | null;
-  requirementActivityPostedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
-
-/** Latest run summary for requirement traceability surface (FEAT-010). */
-export type LatestRunSummary = {
-  runId: string;
-  status: RunStatus;
-  overallResult?: 'passed' | 'failed' | null;
-  completedAt?: string | null;
-  updatedAt: string;
-};
-
-/** Definition + latest run for a requirement linkage (FEAT-010). */
-export type LoadTestRequirementLinkSummary = {
-  definitionId: string;
-  name: string;
-  requirementRef: RequirementRef;
-  latestRun: LatestRunSummary | null;
-};
 
 /** Service Bus dispatch payload (FEAT-007 / FEAT-008). */
 export type LoadTestDispatchMessage = {
@@ -234,7 +203,6 @@ export interface LoadTestTarget {
 export interface CreateLoadTestDefinitionInput {
   name: string;
   description?: string | null;
-  requirementRef?: RequirementRef | null;
   targetUrl: string;
   environment: string;
   engine?: LoadTestEngine;
@@ -272,7 +240,6 @@ export interface UpdateLoadTestTargetInput {
 export interface UpdateLoadTestDefinitionInput {
   name?: string;
   description?: string | null;
-  requirementRef?: RequirementRef | null;
   targetUrl?: string;
   environment?: string;
   engine?: LoadTestEngine;

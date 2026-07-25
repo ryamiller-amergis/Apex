@@ -7,8 +7,6 @@ import styles from './LoadTestAiGeneratePanel.module.css';
 
 interface LoadTestAiGeneratePanelProps {
   project: string;
-  requirementId: string;
-  requirementLabel?: string;
   /** True when at least one ProjectRepoConfigSummary has a non-empty skillRepo (AC-2). */
   connected: boolean;
   canManage: boolean;
@@ -21,15 +19,13 @@ interface LoadTestAiGeneratePanelProps {
 /**
  * FEAT-011 / PBI-014 — AI generate panel for the Load Test builder.
  *
- * Requirement summary + Generate/Cancel + streaming preview; applies the
+ * Flow-hints input + Generate/Cancel + streaming preview; applies the
  * result into shared form state via `onApply` once the backend reports
  * status 'ready'. Errors and cancellation never call `onApply`, so prior
  * builder content (script/thresholds) is left untouched (AC-1).
  */
 export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = ({
   project,
-  requirementId,
-  requirementLabel,
   connected,
   canManage,
   needsConfirm,
@@ -38,6 +34,7 @@ export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = (
   const { start, cancel, status, streamingText, progressLabel, result, error, isGenerating } =
     useLoadTestAiGenerate(project);
 
+  const [flowHints, setFlowHints] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
   const appliedResultRef = useRef<LoadTestAiGenerateResult | null>(null);
 
@@ -52,20 +49,13 @@ export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = (
     return <LoadTestAiUnavailableState />;
   }
 
-  const trimmedRequirementId = requirementId.trim();
-  const requirementMissing = !trimmedRequirementId;
-  const generateDisabled = !canManage || requirementMissing || isGenerating;
+  const trimmedHints = flowHints.trim();
+  const hintsMissing = !trimmedHints;
+  const generateDisabled = !canManage || hintsMissing || isGenerating;
 
   const runGenerate = () => {
-    if (!trimmedRequirementId) return;
-    void start({
-      requirementRef: {
-        kind: 'ado_work_item',
-        id: trimmedRequirementId,
-        displayLabel: requirementLabel?.trim() || undefined,
-        projectId: project,
-      },
-    });
+    if (!trimmedHints) return;
+    void start({ flowHints: trimmedHints });
   };
 
   const handleGenerateClick = () => {
@@ -85,13 +75,23 @@ export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = (
     <div className={styles.panel} data-testid="load-test-ai-panel">
       <div className={styles.summary}>
         <h3 className={styles.title}>AI generate</h3>
-        {trimmedRequirementId ? (
-          <p className={styles.requirement}>
-            Requirement: <strong>{requirementLabel?.trim() || trimmedRequirementId}</strong>
-          </p>
-        ) : (
-          <p className={styles.hint}>Select a requirement above to enable AI generate.</p>
-        )}
+        <p className={styles.hint}>
+          Describe the HTTP flow to simulate (endpoints, sequence, auth placeholders). The agent
+          writes a k6 script from these hints — no requirement linkage required.
+        </p>
+        <label className={styles.flowHintsLabel} htmlFor="load-test-ai-flow-hints">
+          Flow hints
+        </label>
+        <textarea
+          id="load-test-ai-flow-hints"
+          className={styles.flowHints}
+          data-testid="load-test-ai-flow-hints"
+          rows={4}
+          disabled={!canManage || isGenerating}
+          placeholder="e.g. GET /health then POST /api/login then GET /api/items with Bearer ${__ENV.AUTH_TOKEN}"
+          value={flowHints}
+          onChange={(e) => setFlowHints(e.target.value)}
+        />
       </div>
 
       <div className={styles.actions}>

@@ -20,16 +20,36 @@
   color: var(--text-primary);
 }
 
-.requirement {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-}
-
 .hint {
   margin: 0;
   font-size: 0.875rem;
   color: var(--text-muted);
+}
+
+.flowHintsLabel {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.flowHints {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.flowHints:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .actions {

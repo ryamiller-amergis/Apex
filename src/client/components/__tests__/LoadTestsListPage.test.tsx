@@ -66,7 +66,6 @@ describe('LoadTestsListPage (TBI-006)', () => {
             name: 'Checkout',
             targetUrl: 'https://api.staging.example.internal',
             environment: 'staging',
-            requirementRef: { kind: 'ado_work_item', id: '99', displayLabel: 'PBI 99' },
             engine: 'k6',
             flowType: 'single',
             scriptSource: 'form_builder',

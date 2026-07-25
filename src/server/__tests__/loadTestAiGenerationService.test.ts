@@ -76,7 +76,6 @@ const FAKE_SKILL_CONFIG = {
 };
 
 const REQUEST_BODY = {
-  requirementRef: { kind: 'ado_work_item' as const, id: '100' },
   flowHints: 'login then browse',
   loadProfileCaps: { vus: 50, durationMinutes: 5 },
 };
@@ -137,7 +136,7 @@ describe('startGeneration', () => {
       model: FAKE_SKILL_CONFIG.loadTestGenerationModel,
       freeformContext: expect.stringContaining('login then browse'),
     }));
-    // Never leak secret values into freeform context — sanity check requirementRef is present instead.
+    // Never leak secret values into freeform context — sanity check project id + hints present instead.
     expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain(PROJECT_ID);
   });
 
@@ -169,9 +168,9 @@ describe('startGeneration', () => {
     }));
   });
 
-  it('throws a validation error when requirementRef is missing', async () => {
+  it('throws a validation error when flowHints is missing', async () => {
     await expect(
-      startGeneration(PROJECT_ID, { ...REQUEST_BODY, requirementRef: undefined as any }, USER_ID),
+      startGeneration(PROJECT_ID, { ...REQUEST_BODY, flowHints: '' }, USER_ID),
     ).rejects.toThrow(LoadTestAiGenerationError);
     expect(mockedResolveSkillConfig).not.toHaveBeenCalled();
     expect(mockedCreateThread).not.toHaveBeenCalled();

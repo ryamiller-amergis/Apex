@@ -23,8 +23,6 @@ export function mapRunRow(row: LoadTestRunRow): LoadTestRun {
     errorDetail: row.errorDetail ?? null,
     targetKey: row.targetKey ?? null,
     executionSnapshot: row.executionSnapshot ?? null,
-    requirementActivityExternalId: row.requirementActivityExternalId ?? null,
-    requirementActivityPostedAt: row.requirementActivityPostedAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

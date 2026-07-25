@@ -188,7 +188,6 @@ function mapDefinitionRow(row: LoadTestRow): LoadTestDefinition {
     projectId: row.projectId,
     name: row.name,
     description: row.description ?? null,
-    requirementRef: row.requirementRef ?? null,
     targetUrl: row.targetUrl,
     environment: row.environment,
     engine: row.engine,
@@ -331,7 +330,6 @@ export async function createDefinition(
         projectId,
         name: input.name,
         description: input.description ?? null,
-        requirementRef: input.requirementRef ?? null,
         targetUrl: input.targetUrl,
         environment: input.environment,
         engine: input.engine ?? 'k6',
@@ -418,7 +416,6 @@ export async function updateDefinition(
 
   if (input.name !== undefined) updateValues.name = input.name;
   if (input.description !== undefined) updateValues.description = input.description ?? null;
-  if ('requirementRef' in input) updateValues.requirementRef = input.requirementRef ?? null;
   if (input.targetUrl !== undefined) updateValues.targetUrl = input.targetUrl;
   if (input.environment !== undefined) updateValues.environment = input.environment;
   if (input.engine !== undefined) updateValues.engine = input.engine;

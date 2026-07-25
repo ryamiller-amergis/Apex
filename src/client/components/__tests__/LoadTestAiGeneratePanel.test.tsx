@@ -43,8 +43,6 @@ function renderPanel(overrides: Partial<Parameters<typeof LoadTestAiGeneratePane
   render(
     <LoadTestAiGeneratePanel
       project={PROJECT}
-      requirementId="100"
-      requirementLabel="TBI-100"
       connected
       canManage
       needsConfirm={false}
@@ -53,6 +51,10 @@ function renderPanel(overrides: Partial<Parameters<typeof LoadTestAiGeneratePane
     />,
   );
   return { onApply };
+}
+
+async function fillFlowHints(user: ReturnType<typeof userEvent.setup>, text = 'GET /health') {
+  await user.type(screen.getByTestId('load-test-ai-flow-hints'), text);
 }
 
 beforeEach(() => {
@@ -68,14 +70,16 @@ describe('LoadTestAiGeneratePanel', () => {
     expect(screen.queryByTestId('load-test-ai-generate-btn')).not.toBeInTheDocument();
   });
 
-  it('Generate is disabled until a requirement is selected', () => {
-    renderPanel({ requirementId: '' });
+  it('Generate is disabled until flow hints are provided', () => {
+    renderPanel();
 
     expect(screen.getByTestId('load-test-ai-generate-btn')).toBeDisabled();
   });
 
-  it('Generate is disabled for view-only users', () => {
+  it('Generate is disabled for view-only users', async () => {
+    const user = userEvent.setup();
     renderPanel({ canManage: false });
+    await fillFlowHints(user);
 
     expect(screen.getByTestId('load-test-ai-generate-btn')).toBeDisabled();
   });
@@ -113,13 +117,14 @@ describe('LoadTestAiGeneratePanel', () => {
   it('clicking Generate starts generation immediately when no confirm is required', async () => {
     const user = userEvent.setup();
     renderPanel({ needsConfirm: false });
+    await fillFlowHints(user, 'login then browse');
 
     await user.click(screen.getByTestId('load-test-ai-generate-btn'));
 
     expect(mockStart).toHaveBeenCalledTimes(1);
     expect(mockStart).toHaveBeenCalledWith(
       expect.objectContaining({
-        requirementRef: expect.objectContaining({ id: '100' }),
+        flowHints: 'login then browse',
       }),
     );
     expect(screen.queryByTestId('load-test-ai-regenerate-confirm')).not.toBeInTheDocument();
@@ -128,6 +133,7 @@ describe('LoadTestAiGeneratePanel', () => {
   it('BR-010: raw script source requires confirm before overwrite; cancelling does not start generation', async () => {
     const user = userEvent.setup();
     renderPanel({ needsConfirm: true });
+    await fillFlowHints(user);
 
     await user.click(screen.getByTestId('load-test-ai-generate-btn'));
 
@@ -143,6 +149,7 @@ describe('LoadTestAiGeneratePanel', () => {
   it('BR-010: confirming the overwrite dialog starts generation', async () => {
     const user = userEvent.setup();
     renderPanel({ needsConfirm: true });
+    await fillFlowHints(user);
 
     await user.click(screen.getByTestId('load-test-ai-generate-btn'));
     await user.click(screen.getByRole('button', { name: /generate anyway/i }));

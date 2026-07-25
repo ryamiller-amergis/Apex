@@ -76,7 +76,6 @@ describe('needsConfirmBeforeRegenerate (TBI-006 DoD-3, BR-010)', () => {
 describe('loadTestBuilderFormSchema (VT-09, VT-10)', () => {
   const validBase = {
     name: 'Checkout load',
-    requirementId: '12345',
     targetId: 'target-1',
     flowType: 'single' as const,
     steps: [{ method: 'GET', path: '/health' }],

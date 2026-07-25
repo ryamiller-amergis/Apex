@@ -6,7 +6,6 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { TERMINAL_WORK_ITEM_STATES } from '../../shared/types/calendarWorkItemAssistant';
 import { env } from '../config/env';
-import { RequirementLoadTestsSection } from './RequirementLoadTestsSection';
 import './DetailsPanel.css';
 
 interface DetailsPanelProps {
@@ -926,9 +925,6 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             )}
           </div>
         )}
-
-        {/* FEAT-010 — Load Tests traceability (read-only; gated inside section) */}
-        <RequirementLoadTestsSection projectId={project} workItemId={workItem.id} />
 
         {/* Link to Release Epic */}
         <div className="link-to-release-section">

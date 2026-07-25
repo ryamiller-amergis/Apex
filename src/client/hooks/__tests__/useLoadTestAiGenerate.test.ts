@@ -56,7 +56,7 @@ describe('useLoadTestAiGenerate', () => {
     const { result } = renderHook(() => useLoadTestAiGenerate(PROJECT));
 
     await act(async () => {
-      await result.current.start({ requirementRef: { kind: 'ado_work_item', id: '100' } });
+      await result.current.start({ flowHints: 'login then browse' });
     });
 
     expect(mockedFetch).toHaveBeenCalledWith(
@@ -89,7 +89,7 @@ describe('useLoadTestAiGenerate', () => {
     const { result } = renderHook(() => useLoadTestAiGenerate(PROJECT));
 
     await act(async () => {
-      await result.current.start({ requirementRef: { kind: 'ado_work_item', id: '100' } });
+      await result.current.start({ flowHints: 'login then browse' });
     });
 
     expect(result.current.status).toBe('failed');
@@ -106,7 +106,7 @@ describe('useLoadTestAiGenerate', () => {
     const { result } = renderHook(() => useLoadTestAiGenerate(PROJECT));
 
     await act(async () => {
-      await result.current.start({ requirementRef: { kind: 'ado_work_item', id: '100' } });
+      await result.current.start({ flowHints: 'login then browse' });
     });
 
     await waitFor(() => expect(result.current.status).toBe('failed'));
@@ -131,7 +131,7 @@ describe('useLoadTestAiGenerate', () => {
     const { result } = renderHook(() => useLoadTestAiGenerate(PROJECT));
 
     await act(async () => {
-      await result.current.start({ requirementRef: { kind: 'ado_work_item', id: '100' } });
+      await result.current.start({ flowHints: 'login then browse' });
     });
     expect(result.current.status).toBe('pending');
 
@@ -162,7 +162,7 @@ describe('useLoadTestAiGenerate', () => {
     const { result } = renderHook(() => useLoadTestAiGenerate(PROJECT));
 
     await act(async () => {
-      await result.current.start({ requirementRef: { kind: 'ado_work_item', id: '100' } });
+      await result.current.start({ flowHints: 'login then browse' });
     });
     expect(result.current.status).toBe('failed');
 

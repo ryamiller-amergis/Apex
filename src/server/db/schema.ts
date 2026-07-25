@@ -41,7 +41,6 @@ import type {
   LoadTestFlowType,
   LoadTestRunSource,
   LoadTestScriptSource,
-  RequirementRef,
   RunStatus,
   Threshold,
   ThresholdResult,
@@ -1554,7 +1553,6 @@ export const loadTests = pgTable('load_test', {
   projectId: text('project_id').notNull(),
   name: text('name').notNull(),
   description: text('description'),
-  requirementRef: jsonb('requirement_ref').$type<RequirementRef>(),
   targetUrl: text('target_url').notNull(),
   environment: text('environment').notNull(),
   engine: text('engine').$type<LoadTestEngine>().notNull().default('k6'),
@@ -1593,12 +1591,6 @@ export const loadTestRuns = pgTable('load_test_run', {
   errorDetail: text('error_detail'),
   targetKey: text('target_key'),
   executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
-  /** Idempotency for FEAT-010 requirement activity (ADO comment id) */
-  requirementActivityExternalId: text('requirement_activity_external_id'),
-  requirementActivityPostedAt: timestamp('requirement_activity_posted_at', {
-    withTimezone: true,
-    mode: 'string',
-  }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({

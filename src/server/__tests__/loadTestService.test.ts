@@ -5,7 +5,7 @@
  *   TBI-004 DoD-0: CRUD happy paths (createDefinition, getDefinition, updateDefinition, deleteDefinition)
  *   TBI-004 DoD-1: getPortable omits secrets
  *   TBI-004 DoD-2: allowlist + prod hard-refuse
- *   PBI-004 AC-0:  Happy — saved with script_source + requirement_ref
+ *   PBI-004 AC-0:  Happy — saved with script_source
  *   PBI-004 AC-1:  Error — cap exceeded
  *   PBI-004 AC-2:  Edge — raw threshold reconcile
  *   PBI-004 AC-3:  Negative — plaintext secret rejected
@@ -113,7 +113,6 @@ function makeRow(overrides: Record<string, unknown> = {}) {
     projectId: PROJECT_A,
     name: 'My Test',
     description: null,
-    requirementRef: null,
     targetUrl: 'https://staging.example.com',
     environment: 'staging',
     engine: 'k6',
@@ -288,13 +287,12 @@ describe('reconcileThresholds — PBI-004 AC-2', () => {
 // ── createDefinition ──────────────────────────────────────────────────────────
 
 describe('createDefinition', () => {
-  // PBI-004 AC-0: Happy path — saved with script_source + requirement_ref
-  it('persists and returns definition with requirementRef intact (AC-0)', async () => {
+  // PBI-004 AC-0: Happy path — saved with script_source
+  it('persists and returns definition with scriptSource intact (AC-0)', async () => {
     setupAllowlistHit();
     const db = getMockDb();
 
     const row = makeRow({
-      requirementRef: { kind: 'apex_requirement', id: 'req-1' },
       scriptSource: 'form_builder',
     });
     db.transaction.mockImplementation(async (fn: (tx: any) => Promise<any[]>) => {
@@ -303,12 +301,11 @@ describe('createDefinition', () => {
     });
 
     const input = makeInput({
-      requirementRef: { kind: 'apex_requirement', id: 'req-1' },
       scriptSource: 'form_builder',
     });
     const result = await svc.createDefinition(PROJECT_A, input, USER_ID);
 
-    expect(result.requirementRef).toEqual({ kind: 'apex_requirement', id: 'req-1' });
+    expect(result.name).toBe('My Test');
     expect(result.scriptSource).toBe('form_builder');
   });
 

@@ -71,8 +71,6 @@ export const loadTestBuilderFormSchema = z
   .object({
     name: z.string().trim().min(1, 'Name is required'),
     description: z.string().optional(),
-    requirementId: z.string().trim().min(1, 'Requirement is required'),
-    requirementLabel: z.string().optional(),
     targetId: z.string().trim().min(1, 'Allowlisted target is required'),
     flowType: z.enum(['single', 'multi_step']),
     steps: z.array(stepSchema).min(1, 'Add at least one step'),
@@ -115,8 +113,6 @@ export type LoadTestBuilderFormValues = z.infer<typeof loadTestBuilderFormSchema
 export const defaultLoadTestBuilderValues: LoadTestBuilderFormValues = {
   name: '',
   description: '',
-  requirementId: '',
-  requirementLabel: '',
   targetId: '',
   flowType: 'single',
   steps: [{ method: 'GET', path: '/health', extractions: [] }],

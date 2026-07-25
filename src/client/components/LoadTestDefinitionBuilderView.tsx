@@ -46,8 +46,6 @@ function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormVal
     ...defaultLoadTestBuilderValues,
     name: def.name,
     description: def.description ?? '',
-    requirementId: def.requirementRef?.id ?? '',
-    requirementLabel: def.requirementRef?.displayLabel ?? '',
     targetId: '', // resolved after targets load via URL match
     flowType: def.flowType,
     steps:
@@ -111,8 +109,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   });
 
   const scriptValue = watch('script') ?? '';
-  const requirementIdValue = watch('requirementId') ?? '';
-  const requirementLabelValue = watch('requirementLabel') ?? '';
 
   useEffect(() => {
     if (!definition) return;
@@ -222,12 +218,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     return {
       name: values.name.trim(),
       description: values.description?.trim() || null,
-      requirementRef: {
-        kind: 'ado_work_item',
-        id: values.requirementId.trim(),
-        displayLabel: values.requirementLabel?.trim() || undefined,
-        projectId: project,
-      },
       targetUrl: target.baseUrl,
       environment: target.environmentLabel,
       engine: 'k6',
@@ -388,8 +378,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         {mode === 'ai' && (
           <LoadTestAiGeneratePanel
             project={project}
-            requirementId={requirementIdValue}
-            requirementLabel={requirementLabelValue}
             connected={hasConnectedRepo}
             canManage={canManage}
             needsConfirm={needsConfirmBeforeRegenerate(scriptSource)}

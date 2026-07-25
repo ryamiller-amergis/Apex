@@ -1,19 +1,13 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
-import { useLoadTests, type LoadTestDefinitionListItem } from '../hooks/useLoadTests';
+import { useLoadTests } from '../hooks/useLoadTests';
 import { LoadTestLastRunBadge } from './LoadTestLastRunBadge';
 import styles from './LoadTestsListPage.module.css';
 
 interface LoadTestsListPageProps {
   project: string;
   canView: boolean;
-}
-
-function requirementLabel(item: LoadTestDefinitionListItem): string {
-  const ref = item.requirementRef;
-  if (!ref) return '—';
-  return ref.displayLabel || ref.id;
 }
 
 export const LoadTestsListPage: React.FC<LoadTestsListPageProps> = ({ project, canView }) => {
@@ -90,7 +84,6 @@ export const LoadTestsListPage: React.FC<LoadTestsListPageProps> = ({ project, c
               <tr>
                 <th scope="col">Name</th>
                 <th scope="col">Target</th>
-                <th scope="col">Requirement</th>
                 <th scope="col">Last run</th>
                 <th scope="col">
                   <span className={styles.srOnly}>Actions</span>
@@ -113,7 +106,6 @@ export const LoadTestsListPage: React.FC<LoadTestsListPageProps> = ({ project, c
                     <span className={styles.muted}>{item.environment}</span>
                     <div className={styles.url}>{item.targetUrl}</div>
                   </td>
-                  <td>{requirementLabel(item)}</td>
                   <td>
                     {item.latestRun?.id ? (
                       <button

@@ -9,7 +9,6 @@ import type { LoadTestRun } from '../../../shared/types/loadTest';
 import { publishRunProgress } from './progressHub';
 import { mapRunRow } from './mapRun';
 import { tryPromoteNextQueuedRun } from './promote';
-import { scheduleRunCompletionActivity } from '../loadTestTraceabilityService';
 
 const DEFAULT_STALE_MS = 5 * 60_000;
 const DEFAULT_INTERVAL_MS = 60_000;
@@ -75,7 +74,6 @@ export async function reapStaleLoadTestRuns(options?: {
     if (mapped.targetKey) {
       await tryPromoteNextQueuedRun(mapped.projectId, mapped.targetKey);
     }
-    scheduleRunCompletionActivity({ projectId: mapped.projectId, runId: mapped.id });
   }
 
   return reaped;

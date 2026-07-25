@@ -89,7 +89,6 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     });
 
     await user.type(screen.getByLabelText(/^Name$/i), 'Multi-step checkout');
-    await user.type(screen.getByLabelText(/Work item ID/i), '12345');
     await user.selectOptions(screen.getByLabelText(/Allowlisted target/i), 'target-1');
     await user.selectOptions(screen.getByLabelText(/Flow type/i), 'multi_step');
     await user.click(screen.getByRole('button', { name: /Add step/i }));
@@ -143,7 +142,6 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     await waitFor(() => expect(screen.getByTestId('load-test-guided-form')).toBeInTheDocument());
 
     await user.type(screen.getByLabelText(/^Name$/i), 'Keep me');
-    await user.type(screen.getByLabelText(/Work item ID/i), '99');
     await user.selectOptions(screen.getByLabelText(/Allowlisted target/i), 'target-1');
     await user.click(screen.getByTestId('load-test-save-btn'));
 
@@ -177,7 +175,6 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
             projectId: 'project-a',
             name: 'Raw edited',
             description: null,
-            requirementRef: { kind: 'ado_work_item', id: '1' },
             targetUrl: target.baseUrl,
             environment: target.environmentLabel,
             engine: 'k6',
@@ -240,7 +237,6 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
             projectId: 'project-a',
             name: 'Visible',
             description: null,
-            requirementRef: { kind: 'ado_work_item', id: '1' },
             targetUrl: target.baseUrl,
             environment: target.environmentLabel,
             engine: 'k6',

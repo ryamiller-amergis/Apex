@@ -1,13 +1,12 @@
 // ── Load Testing Module — AI Generation Shared Types (FEAT-011) ───────────────
 
-import type { LoadProfile, RequirementRef, Threshold } from './loadTest';
+import type { LoadProfile, Threshold } from './loadTest';
 
 // ── Request / Response Shapes ───────────────────────────────────────────────────
 
 export interface LoadTestAiGenerateRequest {
-  requirementRef: RequirementRef;
   /** Freeform description of the flow to simulate (endpoints, sequence, target URL). */
-  flowHints?: string;
+  flowHints: string;
   /** Optional caps the generated load profile / thresholds must respect. */
   loadProfileCaps?: Partial<LoadProfile>;
 }

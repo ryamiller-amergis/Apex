@@ -19,7 +19,7 @@ test.describe('Load test AI generate @load-test-ai-generate', () => {
     await page.getByTestId('load-test-ai-mode-tab').click();
     await expect(page.getByTestId('load-test-ai-generate-btn')).toBeDisabled();
 
-    await page.getByLabel(/requirement/i).fill('TBI-100');
+    await page.getByTestId('load-test-ai-flow-hints').fill('GET /health then GET /api/items');
     await expect(page.getByTestId('load-test-ai-generate-btn')).toBeEnabled();
     await page.getByTestId('load-test-ai-generate-btn').click();
 
@@ -59,6 +59,7 @@ test.describe('Load test AI generate @load-test-ai-generate', () => {
 
     // Existing definition has scriptSource 'raw' with hand-edited content.
     await page.getByTestId('load-test-ai-mode-tab').click();
+    await page.getByTestId('load-test-ai-flow-hints').fill('GET /health');
     await page.getByTestId('load-test-ai-generate-btn').click();
 
     await expect(page.getByTestId('load-test-ai-regenerate-confirm')).toBeVisible();

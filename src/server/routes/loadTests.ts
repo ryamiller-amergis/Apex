@@ -1,10 +1,8 @@
 import { Router } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as loadTestService from '../services/loadTestService';
-import * as loadTestTraceabilityService from '../services/loadTestTraceabilityService';
 import * as loadTestAiGenerationService from '../services/loadTestAiGenerationService';
 import { LoadTestValidationError } from '../../shared/types/loadTest';
-import type { RequirementRef } from '../../shared/types/loadTest';
 import { LoadTestAiGenerationError } from '../../shared/types/loadTestAi';
 import type { LoadTestAiGenerateRequest } from '../../shared/types/loadTestAi';
 import loadTestRunsRouter from './loadTestRuns';
@@ -96,37 +94,6 @@ router.post(
 // Mounted before /:id so /runs is not captured as a definition id.
 router.use(loadTestRunsRouter);
 
-// ── GET /api/projects/:projectId/load-tests/by-requirement (FEAT-010) ─────────
-// Registered before /:id so "by-requirement" is not captured as a definition id.
-// Query uses live RequirementRef.kind (not design-doc "type").
-
-router.get(
-  '/by-requirement',
-  requirePermission('load-test:view'),
-  async (req, res, next) => {
-    try {
-      const { projectId } = req.params;
-      const kind = String(req.query.kind ?? req.query.type ?? '') as RequirementRef['kind'];
-      const id = String(req.query.id ?? '');
-      if (!kind || !id) {
-        res.status(400).json({
-          error: 'Query params kind (or type) and id are required',
-          code: 'LOAD_TEST_TRACEABILITY_BAD_REQUEST',
-        });
-        return;
-      }
-      const items = await loadTestTraceabilityService.listByRequirement({
-        projectId,
-        kind,
-        id,
-      });
-      res.json({ items });
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
 // ── AI generation routes (FEAT-011 TBI-011) ───────────────────────────────────
 // Registered before /:id so "ai-generate" is not captured as a definition id.
 
@@ -138,10 +105,10 @@ router.post(
     try {
       const { projectId } = req.params;
       const userId = getUserId(req);
-      const { requirementRef, flowHints, loadProfileCaps } = (req.body ?? {}) as LoadTestAiGenerateRequest;
+      const { flowHints, loadProfileCaps } = (req.body ?? {}) as LoadTestAiGenerateRequest;
       const started = await loadTestAiGenerationService.startGeneration(
         projectId,
-        { requirementRef, flowHints, loadProfileCaps },
+        { flowHints, loadProfileCaps },
         userId,
       );
       res.status(202).json(started);

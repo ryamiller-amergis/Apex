@@ -55,11 +55,10 @@ export function validateForApply(result: Pick<LoadTestAiGenerateResult, 'script'
 function buildFreeformContext(projectId: string, input: LoadTestAiGenerateRequest): string {
   const lines = [
     `Project: ${projectId}`,
-    `Requirement: ${JSON.stringify(input.requirementRef)}`,
+    '',
+    'Flow hints:',
+    input.flowHints.trim(),
   ];
-  if (input.flowHints) {
-    lines.push('', 'Flow hints:', input.flowHints);
-  }
   if (input.loadProfileCaps) {
     lines.push('', `Load profile caps: ${JSON.stringify(input.loadProfileCaps)}`);
   }
@@ -73,8 +72,8 @@ export async function startGeneration(
   input: LoadTestAiGenerateRequest,
   userId: string,
 ): Promise<LoadTestAiGenerateStartResponse> {
-  if (!input?.requirementRef) {
-    throw new LoadTestAiGenerationError('requirementRef is required', 'LOAD_TEST_AI_VALIDATION');
+  if (!input?.flowHints?.trim()) {
+    throw new LoadTestAiGenerationError('flowHints is required', 'LOAD_TEST_AI_VALIDATION');
   }
 
   const skillConfig = await resolveSkillConfig({ project: projectId });

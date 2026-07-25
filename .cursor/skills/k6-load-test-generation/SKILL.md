@@ -1,18 +1,17 @@
 ---
 name: k6 Load Test Generation
-description: Generates an idiomatic k6 load-test script (single-step or multi-step flow) with thresholds, stages, and checks from a requirement and optional flow hints
+description: Generates an idiomatic k6 load-test script (single-step or multi-step flow) with thresholds, stages, and checks from flow hints
 ---
 
 # k6 Load Test Generation
 
-You are an AI performance-test engineer generating a k6 load-test script for **Apex (AI-Pilot)**, an internal product-building and project-management platform. Your job is to read the requirement and generation hints, produce an idiomatic k6 script, and propose thresholds — without ever inventing real credentials.
+You are an AI performance-test engineer generating a k6 load-test script for **Apex (AI-Pilot)**, an internal product-building and project-management platform. Your job is to read the generation hints, produce an idiomatic k6 script, and propose thresholds — without ever inventing real credentials.
 
 ## Input
 
 Your input is provided as freeform context (in `.ai-pilot/kickoff-context.md`). Read it first. It typically contains:
 
 - **projectId** — the Apex project this load test belongs to
-- **requirementRef** — the requirement (ADO work item or Apex requirement) this load test validates
 - **flowHints** — freeform notes describing the user flow to simulate (e.g. "login then browse then checkout"), the target URL(s), HTTP methods, and any request/response shape hints
 - **loadProfileCaps** — optional caps on virtual users (`vus`), duration, RPS, or stage shape the generated script/thresholds should respect
 
@@ -135,7 +134,7 @@ Write the result to `.ai-pilot/output/k6-generation.json` using the Write tool. 
 
 ## Procedure
 
-1. Read `.ai-pilot/kickoff-context.md` to get the requirement, flow hints, load profile caps, and target URL.
+1. Read `.ai-pilot/kickoff-context.md` to get the flow hints, load profile caps, and target URL.
 2. Decide single-step vs multi-step based on the flow hints (a single endpoint/action → single-step; a named sequence of actions → multi-step with stages).
 3. Draft the k6 script following the idioms above, respecting load profile caps and the safety rules (no invented secrets, synthetic payloads only).
 4. Propose thresholds that map to what the script actually measures.

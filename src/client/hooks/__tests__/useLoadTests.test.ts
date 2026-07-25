@@ -46,7 +46,6 @@ const definition: LoadTestDefinition = {
   projectId: PROJECT,
   name: 'Health check',
   description: null,
-  requirementRef: { kind: 'ado_work_item', id: '42', displayLabel: 'PBI 42' },
   targetUrl: 'https://api.staging.example.internal',
   environment: 'staging',
   engine: 'k6',
@@ -72,7 +71,6 @@ const createInput: CreateLoadTestDefinitionInput = {
   clientThresholds: definition.clientThresholds,
   flowType: 'single',
   scriptSource: 'form_builder',
-  requirementRef: definition.requirementRef,
 };
 
 describe('useLoadTests family (TBI-006 DoD-4)', () => {
