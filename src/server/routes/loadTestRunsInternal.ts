@@ -4,7 +4,8 @@
  * Mount WITHOUT ensureAuthenticated, e.g.:
  *   app.use('/api/internal/load-test-runs', loadTestRunsInternalRouter);
  *
- * Auth is requireLoadTestRunnerAuth (LT_RUNNER_CALLBACK_TOKEN) only.
+ * Auth is requireLoadTestRunnerAuth (runner MI JWT preferred; optional static
+ * LT_RUNNER_CALLBACK_TOKEN for local/tests only).
  * Project scope is enforced inside loadTestRunService.ingest via projectId + runId.
  *
  * FEAT-008 also uses:

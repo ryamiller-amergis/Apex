@@ -20,15 +20,20 @@ From the repo root (after `npm run build:server`):
 docker build -f runners/load-test-k6/Dockerfile -t apex-lt-k6:local .
 ```
 
-Pin the resulting digest on the Container Apps Job (`var.lt_runner_image` in Terraform).
+### CI publish (PR deploy + production deploy)
+
+`scripts/ci/publish-lt-k6-runner.sh` builds, pushes `apex-lt-k6:<sha>` to the
+env ACR (`LT_ACR_NAME`), and updates the Container Apps Job image. See
+`infra/README.md` → Runner image for GitHub vars and AcrPush setup.
 
 ## Runtime env
 
 | Variable | Purpose |
 |----------|---------|
 | `APEX_CALLBACK_URL` / message `callbackBaseUrl` | Apex base URL for ingest |
-| `LT_RUNNER_CALLBACK_TOKEN` | Shared bearer for FEAT-007 runner auth (dev/non-MI) |
-| `LT_CALLBACK_TOKEN_AUDIENCE` | Optional AAD audience when using MI JWT instead of static token |
+| `LT_RUNNER_CALLBACK_TOKEN` | Shared bearer for **short-term Azure + local/tests** (preferred until Entra ingest app is enabled) |
+| `LT_CALLBACK_TOKEN_AUDIENCE` | AAD App ID URI for MI ingest JWTs (long-term; only when static token is unset) |
+| `LT_RUNNER_ALLOWED_CLIENT_IDS` | Comma-separated runner MI client IDs allowed by Apex (API side, long-term MI) |
 | `LT_BLOB_ACCOUNT_NAME` | Storage account for artifacts |
 | `LT_BLOB_CONTAINER_NAME` | Default `lt-artifacts` |
 | `LT_SERVICEBUS_NAMESPACE` | Dedicated load-test namespace |

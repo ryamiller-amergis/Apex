@@ -382,8 +382,20 @@ variable "lt_max_executions" {
   }
 }
 
+variable "lt_acr_name" {
+  description = "Azure Container Registry name for apex-lt-k6 images (alphanumeric only). Null derives acrapexlt{environment}."
+  type        = string
+  default     = null
+}
+
+variable "lt_acr_push_principal_ids" {
+  description = "Entra object IDs granted AcrPush on the load-test ACR (typically the GitHub Actions deploy service principal)."
+  type        = list(string)
+  default     = []
+}
+
 variable "lt_runner_image" {
-  description = "Fully-qualified runner image reference including digest for supply-chain pinning (e.g. <acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>). Placeholder until Lane B image is published."
+  description = "Fully-qualified runner image reference including digest for supply-chain pinning (e.g. <acr>.azurecr.io/apex-lt-k6:<tag>@sha256:<digest>). Placeholder until CI publishes the first image; job image updates from CI are ignored by Terraform lifecycle."
   type        = string
   default     = "grafana/k6:latest"
 }
@@ -413,7 +425,26 @@ variable "lt_key_vault_id" {
 }
 
 variable "lt_apex_callback_base_url" {
-  description = "Base URL of the Apex API that the runner calls for progress/completion callbacks (e.g. https://app-apex-dev.azurewebsites.net). Wired by FEAT-008."
+  description = "Fallback Apex API base URL for runner callbacks (dispatch message callbackBaseUrl takes precedence). E.g. https://app-apex-prd.azurewebsites.net."
   type        = string
   default     = ""
+}
+
+variable "lt_callback_token_audience" {
+  description = "AAD App ID URI for load-test ingest MI JWTs (long-term). Null derives api://apex-lt-ingest-{environment} when lt_enable_entra_ingest_app is true."
+  type        = string
+  default     = null
+}
+
+variable "lt_enable_entra_ingest_app" {
+  description = "When true, Terraform creates the dedicated apex-lt-ingest Entra app + LoadTest.Runner role assignment (requires Graph Application.ReadWrite.*). Default false — use LT_RUNNER_CALLBACK_TOKEN short-term."
+  type        = bool
+  default     = false
+}
+
+variable "lt_runner_callback_token" {
+  description = "Shared bearer token for runner→Apex ingest (short-term). When set, wired into the Container Apps Job secret. Prefer GitHub secret LT_RUNNER_CALLBACK_TOKEN for App Service via deploy pipeline."
+  type        = string
+  sensitive   = true
+  default     = null
 }

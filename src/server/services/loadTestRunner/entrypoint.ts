@@ -19,25 +19,28 @@ import {
 } from './index';
 
 async function getCallbackToken(): Promise<string> {
+  // Short-term / local: shared secret (set LT_RUNNER_CALLBACK_TOKEN).
+  // Long-term Azure: omit the secret and set LT_CALLBACK_TOKEN_AUDIENCE for MI JWTs.
   const staticToken = process.env.LT_RUNNER_CALLBACK_TOKEN?.trim();
   if (staticToken) return staticToken;
 
-  // Prefer Azure AD token for the Apex API app when configured.
   const audience =
     process.env.LT_CALLBACK_TOKEN_AUDIENCE?.trim() ||
-    process.env.APEX_API_APP_ID_URI?.trim();
-  if (!audience) {
-    throw new Error(
-      'LT_RUNNER_CALLBACK_TOKEN or LT_CALLBACK_TOKEN_AUDIENCE is required',
-    );
+    process.env.APEX_API_APP_ID_URI?.trim() ||
+    '';
+  if (audience) {
+    const credential = new DefaultAzureCredential();
+    const scope = audience.endsWith('/.default') ? audience : `${audience}/.default`;
+    const token = await credential.getToken(scope);
+    if (!token?.token) {
+      throw new Error('Failed to acquire runner callback token');
+    }
+    return token.token;
   }
-  const credential = new DefaultAzureCredential();
-  const scope = audience.endsWith('/.default') ? audience : `${audience}/.default`;
-  const token = await credential.getToken(scope);
-  if (!token?.token) {
-    throw new Error('Failed to acquire runner callback token');
-  }
-  return token.token;
+
+  throw new Error(
+    'LT_RUNNER_CALLBACK_TOKEN (short-term) or LT_CALLBACK_TOKEN_AUDIENCE (MI) is required',
+  );
 }
 
 async function receiveDispatchFromServiceBus(): Promise<LoadTestDispatchMessage> {
