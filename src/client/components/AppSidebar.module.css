@@ -92,6 +92,15 @@
   background: color-mix(in srgb, var(--accent-color) 20%, transparent);
 }
 
+/* Collapsed: center icons so the active highlight frames them evenly */
+.collapsed .navItem,
+.collapsed .collapseBtn {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+}
+
 /* ── Icon & Label ─────────────────────────────────────────────────────── */
 .icon {
   display: flex;

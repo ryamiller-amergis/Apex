@@ -32,6 +32,7 @@ export interface DesignModule extends DesignModuleSummary {
   content: string | null;
   sourceFingerprint: string | null;
   sourceCommit: string | null;
+  scopingThreadId: string | null;
   createdBy: string | null;
   updatedBy: string | null;
 }
@@ -43,6 +44,8 @@ export interface CreateDesignModuleInput {
   iconKey: DesignModuleIconKey;
   sourceGlobs: string[];
   sortOrder?: number;
+  /** Persist an AI scoping thread started before the module was saved. */
+  scopingThreadId?: string | null;
 }
 
 export type UpdateDesignModuleInput = Partial<CreateDesignModuleInput>;

@@ -106,12 +106,14 @@ export function derivePrdReadiness(
   prd: ReadinessPrd,
   testCase: TestCaseSummary | null | undefined,
   scoreThreshold?: number,
+  options?: { testCasesRequired?: boolean },
 ): PrdReadiness {
+  const testCasesRequired = options?.testCasesRequired !== false;
   const hasContentSignal = Object.prototype.hasOwnProperty.call(prd, 'content');
   const prdGenerated =
     prd.status !== 'generating' && (!hasContentSignal || !!prd.content);
   const testCaseStatus = testCase?.status;
-  const testCaseValidation = validationStatus(testCase);
+  const testCaseValidation = testCasesRequired ? validationStatus(testCase) : 'not_available';
   const prdSpecValidation = prdSpecValidationStatus(prd, scoreThreshold);
   const validation =
     testCaseValidation === 'failed' || testCaseValidation === 'validating'
@@ -119,16 +121,24 @@ export function derivePrdReadiness(
       : prdSpecValidation !== 'not_available'
         ? prdSpecValidation
         : testCaseValidation;
-  const testCaseCoverageHasFailures = coverageHasFailures(testCase?.coverageSummary);
+  const testCaseCoverageHasFailures = testCasesRequired
+    ? coverageHasFailures(testCase?.coverageSummary)
+    : false;
   const testCasesReadyForValidation =
-    testCaseStatus === 'ready' && !testCaseCoverageHasFailures;
-  const qaFailures = [
-    ...coverageFailures(testCase?.coverageSummary),
-    ...(prdSpecValidation === 'failed'
-      ? [`PRD validation score is ${Math.round(prd.validationScore ?? prd.validationScorecard?.overall_score ?? 0)}%.`]
-      : []),
-    ...(testCase?.validationSummary?.failures ?? []),
-  ];
+    testCasesRequired && testCaseStatus === 'ready' && !testCaseCoverageHasFailures;
+  const qaFailures = testCasesRequired
+    ? [
+        ...coverageFailures(testCase?.coverageSummary),
+        ...(prdSpecValidation === 'failed'
+          ? [`PRD validation score is ${Math.round(prd.validationScore ?? prd.validationScorecard?.overall_score ?? 0)}%.`]
+          : []),
+        ...(testCase?.validationSummary?.failures ?? []),
+      ]
+    : [
+        ...(prdSpecValidation === 'failed'
+          ? [`PRD validation score is ${Math.round(prd.validationScore ?? prd.validationScorecard?.overall_score ?? 0)}%.`]
+          : []),
+      ];
 
   const prdStage: PrdReadinessStage = {
     id: 'prd',
@@ -137,37 +147,44 @@ export function derivePrdReadiness(
     detail: prdGenerated ? undefined : 'PRD content is still being produced.',
   };
 
-  const testCaseStage: PrdReadinessStage = {
-    id: 'test_cases',
-    label:
-      testCaseStatus === 'failed'
-        ? 'Test-case generation failed'
-        : testCaseStatus === 'ready' && testCaseCoverageHasFailures
-          ? 'Coverage gaps remain'
-          : testCaseStatus === 'generating'
-            ? 'Generating test cases'
-            : 'Test-case generation',
-    status:
-      testCaseStatus === 'ready'
-        ? testCaseCoverageHasFailures
-          ? 'blocked'
-          : 'complete'
-        : testCaseStatus === 'failed'
-          ? 'blocked'
-          : testCaseStatus === 'generating'
-            ? 'current'
-            : prdGenerated
-              ? 'current'
-              : 'pending',
-    detail:
-      testCaseStatus === 'ready'
-        ? coverageDetail(testCase?.coverageSummary) ?? 'Generated without a coverage summary.'
-        : testCaseStatus === 'failed'
-          ? 'Generation did not complete.'
-          : testCaseStatus === 'generating'
-            ? 'Generating from the PRD backlog.'
-            : 'Waiting for test-case generation.',
-  };
+  const testCaseStage: PrdReadinessStage = !testCasesRequired
+    ? {
+        id: 'test_cases',
+        label: 'Test cases not required',
+        status: prdGenerated ? 'complete' : 'pending',
+        detail: 'Skipped for this interview skill.',
+      }
+    : {
+        id: 'test_cases',
+        label:
+          testCaseStatus === 'failed'
+            ? 'Test-case generation failed'
+            : testCaseStatus === 'ready' && testCaseCoverageHasFailures
+              ? 'Coverage gaps remain'
+              : testCaseStatus === 'generating'
+                ? 'Generating test cases'
+                : 'Test-case generation',
+        status:
+          testCaseStatus === 'ready'
+            ? testCaseCoverageHasFailures
+              ? 'blocked'
+              : 'complete'
+            : testCaseStatus === 'failed'
+              ? 'blocked'
+              : testCaseStatus === 'generating'
+                ? 'current'
+                : prdGenerated
+                  ? 'current'
+                  : 'pending',
+        detail:
+          testCaseStatus === 'ready'
+            ? coverageDetail(testCase?.coverageSummary) ?? 'Generated without a coverage summary.'
+            : testCaseStatus === 'failed'
+              ? 'Generation did not complete.'
+              : testCaseStatus === 'generating'
+                ? 'Generating from the PRD backlog.'
+                : 'Waiting for test-case generation.',
+      };
 
   const validationStage: PrdReadinessStage = {
     id: 'validation',
@@ -225,11 +242,12 @@ export function derivePrdReadiness(
     status: 'pending',
   };
 
-  const qaGatesPassed =
-    prdGenerated &&
-    testCaseStatus === 'ready' &&
-    !testCaseCoverageHasFailures &&
-    validation === 'passed';
+  const qaGatesPassed = testCasesRequired
+    ? prdGenerated &&
+      testCaseStatus === 'ready' &&
+      !testCaseCoverageHasFailures &&
+      validation === 'passed'
+    : prdGenerated && (validation === 'passed' || validation === 'not_available');
 
   if (prd.status === 'approved' && qaGatesPassed) {
     readyStage.label = 'Ready for review';
@@ -258,71 +276,73 @@ export function derivePrdReadiness(
     };
   }
 
-  if (!testCase) {
-    return {
-      state: 'test_cases_pending',
-      label: 'Waiting on test cases',
-      description: 'Test-case generation is required before PRD review.',
-      severity: 'warning',
-      readyForReviewActions: false,
-      blockingReason: 'Generate PRD test cases before submitting for review.',
-      stages: [prdStage, testCaseStage, validationStage, readyStage],
-      qaFailures,
-    };
-  }
+  if (testCasesRequired) {
+    if (!testCase) {
+      return {
+        state: 'test_cases_pending',
+        label: 'Waiting on test cases',
+        description: 'Test-case generation is required before PRD review.',
+        severity: 'warning',
+        readyForReviewActions: false,
+        blockingReason: 'Generate PRD test cases before submitting for review.',
+        stages: [prdStage, testCaseStage, validationStage, readyStage],
+        qaFailures,
+      };
+    }
 
-  if (testCase.status === 'generating') {
-    return {
-      state: 'test_cases_generating',
-      label: 'Generating test cases',
-      description: 'The PRD is viewable while QA test cases are generated.',
-      severity: 'info',
-      readyForReviewActions: false,
-      blockingReason: 'Test-case generation must finish before review.',
-      stages: [prdStage, testCaseStage, validationStage, readyStage],
-      qaFailures,
-    };
-  }
+    if (testCase.status === 'generating') {
+      return {
+        state: 'test_cases_generating',
+        label: 'Generating test cases',
+        description: 'The PRD is viewable while QA test cases are generated.',
+        severity: 'info',
+        readyForReviewActions: false,
+        blockingReason: 'Test-case generation must finish before review.',
+        stages: [prdStage, testCaseStage, validationStage, readyStage],
+        qaFailures,
+      };
+    }
 
-  if (testCase.status === 'failed' || coverageHasFailures(testCase.coverageSummary)) {
-    const hasCoverageFailures = coverageHasFailures(testCase.coverageSummary);
-    readyStage.status = 'blocked';
-    readyStage.detail =
-      testCase.status === 'failed'
-        ? 'Regenerate test cases before review.'
-        : 'Coverage gaps block review.';
-    return {
-      state: testCase.status === 'failed' ? 'test_case_generation_failed' : 'coverage_gaps',
-      label: testCase.status === 'failed' ? 'Test-case generation failed' : 'Coverage gaps remain',
-      description: testCase.status === 'failed'
-        ? 'Test-case generation failed before validation could run.'
-        : 'Test cases were generated, but coverage gaps must be resolved before review.',
-      severity: 'error',
-      readyForReviewActions: false,
-      blockingReason: testCase.status === 'failed'
-        ? 'Regenerate PRD test cases before review.'
-        : 'Resolve coverage gaps before review.',
-      stages: [prdStage, testCaseStage, validationStage, readyStage],
-      qaFailures:
-        qaFailures.length > 0
-          ? qaFailures
-          : hasCoverageFailures
-            ? ['Coverage gaps remain.']
-            : ['Test-case generation did not complete.'],
-    };
-  }
+    if (testCase.status === 'failed' || coverageHasFailures(testCase.coverageSummary)) {
+      const hasCoverageFailures = coverageHasFailures(testCase.coverageSummary);
+      readyStage.status = 'blocked';
+      readyStage.detail =
+        testCase.status === 'failed'
+          ? 'Regenerate test cases before review.'
+          : 'Coverage gaps block review.';
+      return {
+        state: testCase.status === 'failed' ? 'test_case_generation_failed' : 'coverage_gaps',
+        label: testCase.status === 'failed' ? 'Test-case generation failed' : 'Coverage gaps remain',
+        description: testCase.status === 'failed'
+          ? 'Test-case generation failed before validation could run.'
+          : 'Test cases were generated, but coverage gaps must be resolved before review.',
+        severity: 'error',
+        readyForReviewActions: false,
+        blockingReason: testCase.status === 'failed'
+          ? 'Regenerate PRD test cases before review.'
+          : 'Resolve coverage gaps before review.',
+        stages: [prdStage, testCaseStage, validationStage, readyStage],
+        qaFailures:
+          qaFailures.length > 0
+            ? qaFailures
+            : hasCoverageFailures
+              ? ['Coverage gaps remain.']
+              : ['Test-case generation did not complete.'],
+      };
+    }
 
-  if (validation === 'validating') {
-    return {
-      state: 'test_cases_validating',
-      label: 'Validating test cases',
-      description: 'Test-case validation must complete before review.',
-      severity: 'info',
-      readyForReviewActions: false,
-      blockingReason: 'Test-case validation must finish before review.',
-      stages: [prdStage, testCaseStage, validationStage, readyStage],
-      qaFailures,
-    };
+    if (validation === 'validating') {
+      return {
+        state: 'test_cases_validating',
+        label: 'Validating test cases',
+        description: 'Test-case validation must complete before review.',
+        severity: 'info',
+        readyForReviewActions: false,
+        blockingReason: 'Test-case validation must finish before review.',
+        stages: [prdStage, testCaseStage, validationStage, readyStage],
+        qaFailures,
+      };
+    }
   }
 
   if (validation === 'failed') {

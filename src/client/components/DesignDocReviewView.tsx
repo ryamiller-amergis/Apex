@@ -1628,7 +1628,8 @@ export const DesignDocReviewView: React.FC = () => {
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
-  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
+  const validationThreshold = doc.validationScoreThreshold ?? 90;
+  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < validationThreshold;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
@@ -1789,7 +1790,7 @@ export const DesignDocReviewView: React.FC = () => {
                 {statusLabel(doc.status)}
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
-                <span className={`${styles.validationBadge} ${doc.validationScore >= 90 ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
+                <span className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
                   {doc.validationScore}% validated
                 </span>
               )}
@@ -1916,14 +1917,14 @@ export const DesignDocReviewView: React.FC = () => {
                   Submit for Review
                 </button>
               )}
-              {doc.status === 'validating' && doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore >= 90 && (
+              {doc.status === 'validating' && doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore >= validationThreshold && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={() => void handleMarkValidationReady()}
                   disabled={markValidationReady.isPending}
                   type="button"
                 >
-                  {markValidationReady.isPending ? 'Submitting…' : 'Submit for Review (Score ≥ 90%)'}
+                  {markValidationReady.isPending ? 'Submitting…' : `Submit for Review (Score ≥ ${validationThreshold}%)`}
                 </button>
               )}
               {doc.status === 'pending_review' && (
@@ -1967,7 +1968,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
                           : undefined
                   }
                   type="button"
@@ -2127,7 +2128,7 @@ export const DesignDocReviewView: React.FC = () => {
                 <div className={styles.failureBannerSummary}>
                   {pendingGapCount > 0
                     ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
-                    : 'The validation score is below the 90% threshold required for submission.'}
+                    : `The validation score is below the ${validationThreshold}% threshold required for submission.`}
                 </div>
                 <div className={styles.failureBannerActions}>
                   <button

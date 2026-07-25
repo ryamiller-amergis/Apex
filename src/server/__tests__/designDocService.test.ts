@@ -914,6 +914,23 @@ describe('markValidationReady', () => {
 describe('reviewDesignDoc (approve with validation gate)', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it('throws 409 when validation is configured and score is below the project threshold', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 60 }),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      designDocValidationSkillPath: '/skills/validate.md',
+      designDocValidationScoreThreshold: 80,
+    });
+
+    await expect(
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('Validation score must be >= 80'),
+      status: 409,
+    });
+  });
+
   it('throws 409 when validation is configured and score is below 90', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(
       makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 50 }),

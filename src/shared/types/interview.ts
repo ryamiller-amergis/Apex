@@ -58,6 +58,10 @@ export interface PrdSummary {
   updatedAt: string;
   latestTestCase?: TestCaseSummary | null;
   validationScoreThreshold?: number | null;
+  /** Resolved from the interview snapshot at creation (fallback: project default). */
+  prototypeStageEnabled?: boolean;
+  /** Resolved from the interview snapshot; when false, PRD review is not blocked on test cases. */
+  testCasesRequired?: boolean;
 }
 
 export interface Prd extends PrdSummary {
@@ -129,6 +133,9 @@ export interface CreateInterviewRequest {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  /** Snapshot of resolved per-skill / project defaults at interview start. */
+  prototypeStageEnabled?: boolean;
+  testCasesEnabled?: boolean;
 }
 
 export interface CreateInterviewResponse {
@@ -257,6 +264,8 @@ export interface DesignDocSummary {
   validationThreadId?: string | null;
   validationScore?: number | null;
   validationScorecard?: ValidationScorecard | null;
+  /** Project-configured minimum score (%) for design-doc validation gates. Defaults to 90 when unset. */
+  validationScoreThreshold?: number | null;
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: ContentSnapshot | null;

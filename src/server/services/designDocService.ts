@@ -21,6 +21,16 @@ import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
+const DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD = 90;
+
+async function resolveDesignDocValidationThreshold(
+  project: string,
+  settingsId?: string | null,
+): Promise<number> {
+  const skillConfig = await resolveSkillConfig({ project, settingsId: settingsId ?? undefined });
+  return skillConfig?.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+}
+
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
     const row = await db.query.chatThreads.findFirst({
@@ -204,9 +214,13 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
 
   if (rows.length === 0) return null;
   const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
-  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
+  const [skillSettingsName, validationScoreThreshold] = await Promise.all([
+    getSkillSettingsName(row.skillSettingsId),
+    resolveDesignDocValidationThreshold(row.project, row.skillSettingsId),
+  ]);
   return {
     ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName, skillSettingsName),
+    validationScoreThreshold,
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -339,8 +353,9 @@ export async function reviewDesignDoc(
 
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   if (skillConfig?.designDocValidationSkillPath && !admin) {
-    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
-      const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+    const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < threshold) {
+      const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
       (err as any).status = 409;
       throw err;
     }
@@ -1308,8 +1323,9 @@ export async function markValidationReady(id: string, requestingUserId: string):
     throw forbidden('Only the author can mark validation as ready');
   }
   if (row.status !== 'validating') throw conflict(`Cannot mark ready from status '${row.status}'`);
-  if (!row.validationScore || row.validationScore < 90) {
-    const err = new Error(`Validation score must be >= 90. Current: ${row.validationScore ?? 'not scored'}`);
+  const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
+  if (!row.validationScore || row.validationScore < threshold) {
+    const err = new Error(`Validation score must be >= ${threshold}. Current: ${row.validationScore ?? 'not scored'}`);
     (err as any).status = 409;
     throw err;
   }
@@ -1500,12 +1516,13 @@ export async function triggerFixValidation(
   const sectionsToUpdate = Object.keys(gapsBySection);
   const pendingGaps = Object.values(gapsBySection).flat();
 
-  const scoreDeficit = 90 - scorecard.overall_score;
+  const threshold = await resolveDesignDocValidationThreshold(doc.project, doc.skillSettingsId);
+  const scoreDeficit = Math.max(0, threshold - scorecard.overall_score);
 
   const prompt = [
     '# Fix Validation Gaps',
     '',
-    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥90%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
+    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥${threshold}%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
     '',
     '## ⚠️ MOST IMPORTANT INSTRUCTION — YOU MUST CALL THE TOOL',
     '',
@@ -1518,7 +1535,7 @@ export async function triggerFixValidation(
     '',
     '## How Scoring Works',
     '',
-    'Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above 90%, every gap currently scored 1 or 2 must reach a 3.',
+    `Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above ${threshold}%, every gap currently scored 1 or 2 must reach a 3.`,
     '',
     '**What it takes to earn a 3:** The "what a 3 looks like" description for each gap is the EXACT rubric the validator uses. You must write content that directly and completely satisfies that description — not just acknowledge it, but provide the actual details, plans, tables, or specifications it calls for.',
     '',

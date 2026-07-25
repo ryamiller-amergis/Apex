@@ -67,6 +67,12 @@ export interface QuickSkillPill {
 export interface InterviewSkillOption {
   path: string;
   friendlyName: string;
+  /** Model override for this interview skill; null/undefined uses project default. */
+  model?: string | null;
+  /** When unset, falls back to project-level prototypeStageEnabled. */
+  wantsDesignPrototype?: boolean;
+  /** When unset, defaults to true (test cases are generated). */
+  wantsTestCases?: boolean;
 }
 
 export interface ProjectSkillConfig {
@@ -111,6 +117,8 @@ export interface ProjectSkillConfig {
   designPlanBedrockModelId?: string | null;
   designPlanBedrockMaxTokens?: number | null;
   prdValidationScoreThreshold?: number | null;
+  /** Minimum design-doc validation score (%) to pass the readiness gate. Defaults to 90. */
+  designDocValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
   standupSkillPath?: string | null;
@@ -205,6 +213,8 @@ export interface UpsertProjectSkillConfigRequest {
   designPlanBedrockModelId?: string | null;
   designPlanBedrockMaxTokens?: number | null;
   prdValidationScoreThreshold?: number | null;
+  /** Minimum design-doc validation score (%) to pass the readiness gate. Defaults to 90. */
+  designDocValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
   standupSkillPath?: string | null;

@@ -56,6 +56,7 @@ jest.mock('../../hooks/useDesignModules', () => ({
       generatedByModel: null,
       createdBy: 'user-1',
       updatedBy: 'user-1',
+      scopingThreadId: null,
       createdAt: '2026-07-15T00:00:00.000Z',
       updatedAt: '2026-07-15T00:00:00.000Z',
     },

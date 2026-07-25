@@ -382,7 +382,13 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
+  const prototypeStageEnabled = prd?.prototypeStageEnabled !== false;
+  const testCasesRequired = prd?.testCasesRequired !== false;
+  const readiness = prd
+    ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
+        testCasesRequired,
+      })
+    : null;
 
   const updateContent = useUpdatePrdContent();
   const updateBacklog = useUpdatePrdBacklog();
@@ -609,10 +615,10 @@ export const PrdReviewView: React.FC = () => {
       const hasRealDocs = relatedDesignDocs && relatedDesignDocs.length > 0;
       groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle(designDocReviewerRows.length), rows: designDocReviewerRows });
     }
-    if (designPrototypeReviewerRows.length > 0) {
+    if (prototypeStageEnabled && designPrototypeReviewerRows.length > 0) {
       groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle(designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
     }
-    if (qaReviewerRows.length > 0) {
+    if (testCasesRequired && qaReviewerRows.length > 0) {
       groups.push({ label: 'QA Review', subtitle: buildSubtitle(qaReviewerRows.length), rows: qaReviewerRows });
     }
 
@@ -627,7 +633,7 @@ export const PrdReviewView: React.FC = () => {
     }
 
     return groups;
-  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs]);
+  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs, testCasesRequired, prototypeStageEnabled]);
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -741,10 +747,10 @@ export const PrdReviewView: React.FC = () => {
       prdId: id,
       action: 'approve',
     });
-    if (result?.approved) {
+    if (result?.approved && prototypeStageEnabled) {
       navigate(`/backlog/design-plan/${id}`);
     }
-  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate]);
+  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate, prototypeStageEnabled]);
 
   const handleQaApprove = useCallback(async () => {
     if (!id) return;
@@ -754,8 +760,10 @@ export const PrdReviewView: React.FC = () => {
   const handleOwnerApprove = useCallback(async () => {
     if (!id) return;
     await ownerApprovePrd.mutateAsync({ status: 'approved' });
-    navigate(`/backlog/design-plan/${id}`);
-  }, [id, ownerApprovePrd, navigate]);
+    if (prototypeStageEnabled) {
+      navigate(`/backlog/design-plan/${id}`);
+    }
+  }, [id, ownerApprovePrd, navigate, prototypeStageEnabled]);
 
   const handleOwnerRevision = useCallback(async () => {
     if (!id) return;
@@ -1110,12 +1118,14 @@ export const PrdReviewView: React.FC = () => {
   const canShowApprovalsAction = approvalChecklistGroups.length > 0;
   const canShowAssistantAction = prd.status !== 'approved';
   const canGenerateTestCasesAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     !!prd.content &&
     (readiness.state === 'test_cases_pending' ||
       readiness.state === 'test_case_generation_failed');
   const canRecalculateTestCaseCoverageAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     readiness.state === 'coverage_gaps';
@@ -1126,7 +1136,7 @@ export const PrdReviewView: React.FC = () => {
     prd.status !== 'validating' &&
     !!prd.content &&
     !!prd.backlogJson &&
-    prd.latestTestCase?.status === 'ready';
+    (!testCasesRequired || prd.latestTestCase?.status === 'ready');
   const canCancelValidationAction = canManage && prd.status === 'validating';
   const canManageDraftReviewAction =
     canManage && (isAuthor || isOwner || isAdmin);
@@ -1272,7 +1282,10 @@ export const PrdReviewView: React.FC = () => {
                 {statusLabel(prd.status)}
               </span>
               {prd.prdValidationEnabled && (() => {
-                const hasAllArtifacts = !!prd.content && !!prd.backlogJson && prd.latestTestCase?.status === 'ready';
+                const hasAllArtifacts =
+                  !!prd.content &&
+                  !!prd.backlogJson &&
+                  (!testCasesRequired || prd.latestTestCase?.status === 'ready');
                 if (prd.status === 'validating') {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeRunning}`}>
@@ -1514,6 +1527,7 @@ export const PrdReviewView: React.FC = () => {
             )}
 
           {canReview &&
+            testCasesRequired &&
             isAssignedQaApprover &&
             !hasAlreadyApprovedQa &&
             prd.status === 'pending_review' && (
@@ -1819,11 +1833,11 @@ export const PrdReviewView: React.FC = () => {
 
       <PrdReadinessPanel
         readiness={readiness}
-        coverage={latestTestCase?.coverageSummary ?? null}
+        coverage={testCasesRequired ? (latestTestCase?.coverageSummary ?? null) : null}
       />
 
       <div className={styles.bannerRow}>
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && designPlanResponse?.plan && (
+        {prototypeStageEnabled && prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {designPlanResponse.plan.status === 'generating'
@@ -1842,7 +1856,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length > 0 && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {relatedPrototypes.length === 1
@@ -1861,7 +1875,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               No design prototypes exist for this PRD. Generate them to continue the design flow.
@@ -2220,8 +2234,8 @@ export const PrdReviewView: React.FC = () => {
                       >
                         <BacklogViewer
                           data={prd.backlogJson}
-                          testCasesJson={testCaseRecord?.testCasesJson}
-                          testCaseStatus={latestTestCase?.status}
+                          testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                          testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                           editable={canEditContent}
                           routeOptions={routeOptions}
                           onSaveBacklog={(updatedData) => {
@@ -2236,8 +2250,8 @@ export const PrdReviewView: React.FC = () => {
                     ) : (
                       <BacklogViewer
                         data={prd.backlogJson}
-                        testCasesJson={testCaseRecord?.testCasesJson}
-                        testCaseStatus={latestTestCase?.status}
+                        testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                        testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                         editable={canEditContent}
                         routeOptions={routeOptions}
                         onSaveBacklog={(updatedData) => {

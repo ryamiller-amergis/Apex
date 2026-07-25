@@ -279,6 +279,14 @@ beforeEach(() => {
   mockReadOutputValidationScorecardMd.mockReturnValue(null);
   mockCreateThread.mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' });
   mockSendMessage.mockResolvedValue(undefined);
+  mockDb.query.interviews.findFirst.mockResolvedValue({
+    prdApproverIds: null,
+    designDocApproverIds: null,
+    designPrototypeApproverIds: null,
+    testCaseApproverIds: null,
+    testCasesEnabled: true,
+    prototypeStageEnabled: true,
+  });
 });
 
 // ── Select chain helper ────────────────────────────────────────────────────────
@@ -657,6 +665,35 @@ describe('submitForReview', () => {
       status: 409,
     });
     expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('allows submission without test cases when interview testCasesEnabled is false', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(
+      makePrdRow({ status: 'draft', content: 'some content', interviewId: 'interview-1' }),
+    );
+    mockGetTestCases.mockResolvedValue(null);
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      prdApproverIds: null,
+      designDocApproverIds: null,
+      designPrototypeApproverIds: null,
+      testCaseApproverIds: ['qa-1'],
+      testCasesEnabled: false,
+    });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+    expect(mockAssignApprovers).not.toHaveBeenCalledWith(
+      'prd-1',
+      'test_case',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('stores designDocApproverIds on PRD row when provided', async () => {

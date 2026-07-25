@@ -19,6 +19,13 @@ jest.mock('../services/designModuleService', () => ({
   listModules: jest.fn(),
   regenerateModule: jest.fn(),
   updateModule: jest.fn(),
+  resolveGlobFiles: jest.fn(),
+}));
+
+jest.mock('../services/designModuleScopingService', () => ({
+  startScoping: jest.fn(),
+  getScopingResult: jest.fn(),
+  cancelScoping: jest.fn(),
 }));
 
 const service = jest.requireMock('../services/designModuleService') as {
@@ -28,6 +35,15 @@ const service = jest.requireMock('../services/designModuleService') as {
   listModules: jest.Mock;
   regenerateModule: jest.Mock;
   updateModule: jest.Mock;
+  resolveGlobFiles: jest.Mock;
+};
+
+const scopingService = jest.requireMock(
+  '../services/designModuleScopingService'
+) as {
+  startScoping: jest.Mock;
+  getScopingResult: jest.Mock;
+  cancelScoping: jest.Mock;
 };
 
 function buildApp() {
@@ -97,5 +113,55 @@ describe('design module routes', () => {
       '/api/design-modules/missing'
     );
     expect(response.status).toBe(404);
+  });
+
+  it('starts AI scoping and returns 202', async () => {
+    scopingService.startScoping.mockResolvedValue({ threadId: 'thread-9' });
+    const response = await request(buildApp())
+      .post('/api/design-modules/scoping')
+      .send({
+        project: 'Apex',
+        name: 'Load Testing',
+        description: 'k6',
+      });
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ threadId: 'thread-9' });
+    expect(scopingService.startScoping).toHaveBeenCalledWith(
+      'Apex',
+      expect.objectContaining({ name: 'Load Testing' }),
+      'user-1'
+    );
+  });
+
+  it('requires project for scoping', async () => {
+    const response = await request(buildApp())
+      .post('/api/design-modules/scoping')
+      .send({ name: 'Load Testing' });
+    expect(response.status).toBe(400);
+    expect(scopingService.startScoping).not.toHaveBeenCalled();
+  });
+
+  it('returns scoping poll result', async () => {
+    scopingService.getScopingResult.mockResolvedValue({
+      status: 'pending',
+    });
+    const response = await request(buildApp()).get(
+      '/api/design-modules/scoping/thread-9/result'
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ status: 'pending' });
+  });
+
+  it('previews matched files for source globs', async () => {
+    service.resolveGlobFiles.mockReturnValue([
+      { pattern: 'src/a.ts', files: ['src/a.ts'] },
+    ]);
+    const response = await request(buildApp())
+      .post('/api/design-modules/preview-globs')
+      .send({ sourceGlobs: ['src/a.ts'] });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      matches: [{ pattern: 'src/a.ts', files: ['src/a.ts'] }],
+    });
   });
 });

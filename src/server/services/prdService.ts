@@ -204,6 +204,8 @@ export async function listPrds(
       authorDisplayName: authorUser.displayName,
       prdOwnerId: interviews.prdOwnerId,
       prdOwnerDisplayName: prdOwnerUser.displayName,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
+      testCasesEnabled: interviews.testCasesEnabled,
     })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
@@ -228,7 +230,7 @@ export async function listPrds(
   const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
   const settingsNameMap = new Map(settingsNameEntries);
 
-  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) => ({
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, prototypeStageEnabled, testCasesEnabled }) => ({
     ...rowToPrdSummary(
       prd,
       reviewerDisplayName,
@@ -237,6 +239,7 @@ export async function listPrds(
       prdOwnerDisplayName,
       latestTestCases.get(prd.id) ?? null,
       prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
+      { prototypeStageEnabled, testCasesEnabled },
     ),
     validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
   }));
@@ -250,6 +253,8 @@ export async function getPrd(id: string): Promise<Prd | null> {
       authorDisplayName: authorUser.displayName,
       prdOwnerId: interviews.prdOwnerId,
       prdOwnerDisplayName: prdOwnerUser.displayName,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
+      testCasesEnabled: interviews.testCasesEnabled,
     })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
@@ -260,14 +265,34 @@ export async function getPrd(id: string): Promise<Prd | null> {
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
+  const {
+    prd: row,
+    reviewerDisplayName,
+    authorDisplayName,
+    prdOwnerId,
+    prdOwnerDisplayName,
+    prototypeStageEnabled,
+    testCasesEnabled,
+  } = rows[0];
   const [latestTestCase, skillConfig, skillSettingsName] = await Promise.all([
     getTestCases(id),
     resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined }),
     getSkillSettingsName(row.skillSettingsId),
   ]);
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, latestTestCase, skillSettingsName),
+    ...rowToPrdSummary(
+      row,
+      reviewerDisplayName,
+      authorDisplayName,
+      prdOwnerId,
+      prdOwnerDisplayName,
+      latestTestCase,
+      skillSettingsName,
+      {
+        prototypeStageEnabled: prototypeStageEnabled ?? (skillConfig?.prototypeStageEnabled !== false),
+        testCasesEnabled: testCasesEnabled ?? true,
+      },
+    ),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
@@ -353,6 +378,27 @@ export async function submitForReview(
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
+  let testCasesRequired = true;
+  let interviewWorkflow: {
+    prdApproverIds: string[] | null;
+    designDocApproverIds: string[] | null;
+    designPrototypeApproverIds: string[] | null;
+    testCaseApproverIds: string[] | null;
+    testCasesEnabled: boolean | null;
+  } | null = null;
+  if (row.interviewId) {
+    interviewWorkflow = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: {
+        prdApproverIds: true,
+        designDocApproverIds: true,
+        designPrototypeApproverIds: true,
+        testCaseApproverIds: true,
+        testCasesEnabled: true,
+      },
+    }) ?? null;
+    testCasesRequired = interviewWorkflow?.testCasesEnabled !== false;
+  }
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -362,6 +408,7 @@ export async function submitForReview(
     },
     await getTestCases(id),
     skillConfig?.prdValidationScoreThreshold ?? undefined,
+    { testCasesRequired },
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
@@ -372,22 +419,18 @@ export async function submitForReview(
   let effectivePrototypeApproverIds = opts?.designPrototypeApproverIds;
   let effectiveQaApproverIds = opts?.qaApproverIds;
 
-  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
-    const interview = await db.query.interviews.findFirst({
-      where: eq(interviews.id, row.interviewId),
-      columns: { prdApproverIds: true, designDocApproverIds: true, designPrototypeApproverIds: true, testCaseApproverIds: true },
-    });
-    if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
-      effectivePrdApproverIds = interview.prdApproverIds;
+  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && interviewWorkflow) {
+    if (interviewWorkflow.prdApproverIds && interviewWorkflow.prdApproverIds.length > 0) {
+      effectivePrdApproverIds = interviewWorkflow.prdApproverIds;
     }
     if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
-      effectiveDdApproverIds = interview?.designDocApproverIds ?? undefined;
+      effectiveDdApproverIds = interviewWorkflow.designDocApproverIds ?? undefined;
     }
     if (!effectivePrototypeApproverIds || effectivePrototypeApproverIds.length === 0) {
-      effectivePrototypeApproverIds = interview?.designPrototypeApproverIds ?? undefined;
+      effectivePrototypeApproverIds = interviewWorkflow.designPrototypeApproverIds ?? undefined;
     }
     if (!effectiveQaApproverIds || effectiveQaApproverIds.length === 0) {
-      effectiveQaApproverIds = interview?.testCaseApproverIds ?? undefined;
+      effectiveQaApproverIds = interviewWorkflow.testCaseApproverIds ?? undefined;
     }
   }
 
@@ -412,7 +455,7 @@ export async function submitForReview(
     await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
   }
 
-  if (effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
+  if (testCasesRequired && effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
     await assignApprovers(id, 'test_case', effectiveQaApproverIds, requestingUserId);
   }
 }
@@ -461,6 +504,14 @@ export async function reviewPrd(
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
   const reviewSkillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
+  let reviewTestCasesRequired = true;
+  if (row.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    reviewTestCasesRequired = interview?.testCasesEnabled !== false;
+  }
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -470,6 +521,7 @@ export async function reviewPrd(
     },
     await getTestCases(id),
     reviewSkillConfig?.prdValidationScoreThreshold ?? undefined,
+    { testCasesRequired: reviewTestCasesRequired },
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
@@ -649,9 +701,32 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
         await syncPrdContent(prdId, content, backlog);
         console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
         try {
-          const { triggerTestCaseGeneration } = await import('./testCaseService');
-          const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
-          if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+          const prdRowAfterSync = await db.query.prds.findFirst({
+            where: eq(prds.id, prdId),
+            columns: { interviewId: true },
+          });
+          let testCasesEnabled = true;
+          if (prdRowAfterSync?.interviewId) {
+            const interview = await db.query.interviews.findFirst({
+              where: eq(interviews.id, prdRowAfterSync.interviewId),
+              columns: { testCasesEnabled: true },
+            });
+            testCasesEnabled = interview?.testCasesEnabled !== false;
+          }
+
+          if (!testCasesEnabled) {
+            console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
+            cleanupWorkspace(chatThreadId);
+            try {
+              await autoStartPrdValidation(prdId);
+            } catch (err) {
+              console.error(`[prdWatcher] Auto PRD validation failed (prdId=${prdId})`, err);
+            }
+          } else {
+            const { triggerTestCaseGeneration } = await import('./testCaseService');
+            const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
+            if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+          }
         } catch (err) {
           console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
           cleanupWorkspace(chatThreadId);
@@ -673,6 +748,7 @@ function rowToPrdSummary(
   prdOwnerName?: string | null,
   latestTestCase?: TestCaseSummary | null,
   skillSettingsName?: string | null,
+  workflowFlags?: { prototypeStageEnabled?: boolean | null; testCasesEnabled?: boolean | null },
 ): PrdSummary {
   const effectiveOwnerId = prdOwnerId ?? row.authorId;
   const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
@@ -697,6 +773,8 @@ function rowToPrdSummary(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     latestTestCase: latestTestCase ?? null,
+    prototypeStageEnabled: workflowFlags?.prototypeStageEnabled ?? true,
+    testCasesRequired: workflowFlags?.testCasesEnabled !== false,
   };
 }
 
@@ -1368,9 +1446,19 @@ const activePrdValidationWatchers = new Map<string, boolean>();
 export async function arePrdValidationArtifactsReady(prdId: string): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
-    columns: { content: true, backlogJson: true },
+    columns: { content: true, backlogJson: true, interviewId: true },
   });
   if (!prdRow || !prdRow.content || !prdRow.backlogJson) return false;
+
+  let testCasesRequired = true;
+  if (prdRow.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, prdRow.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    testCasesRequired = interview?.testCasesEnabled !== false;
+  }
+  if (!testCasesRequired) return true;
 
   const tc = await db.query.testCases.findFirst({
     where: and(eq(testCases.prdId, prdId), eq(testCases.status, 'ready')),

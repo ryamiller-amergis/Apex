@@ -251,6 +251,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
 
       {formMode && (
         <DesignModuleFormModal
+          project={selectedProject}
           module={formMode === 'edit' ? activeModule : null}
           onClose={() => setFormMode(null)}
           onSaved={(slug) => {

@@ -238,4 +238,23 @@ describe('derivePrdReadiness', () => {
       expect.objectContaining({ label: 'Validation failed', status: 'blocked' }),
     );
   });
+
+  it('does not block on missing test cases when testCasesRequired is false', () => {
+    const readiness = derivePrdReadiness(generatedPrd, null, undefined, {
+      testCasesRequired: false,
+    });
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'validation_unavailable',
+        readyForReviewActions: true,
+      }),
+    );
+    expect(getStage(readiness, 'test_cases')).toEqual(
+      expect.objectContaining({
+        label: 'Test cases not required',
+        status: 'complete',
+      }),
+    );
+  });
 });
