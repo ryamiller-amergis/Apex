@@ -143,9 +143,29 @@ export interface LoadTestRun {
   /** Normalized allowlist host/base URL used for one-run-per-target lock */
   targetKey?: string | null;
   executionSnapshot?: LoadTestExecutionSnapshot | null;
+  /** ADO comment id when requirement activity was posted (FEAT-010) */
+  requirementActivityExternalId?: string | null;
+  requirementActivityPostedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Latest run summary for requirement traceability surface (FEAT-010). */
+export type LatestRunSummary = {
+  runId: string;
+  status: RunStatus;
+  overallResult?: 'passed' | 'failed' | null;
+  completedAt?: string | null;
+  updatedAt: string;
+};
+
+/** Definition + latest run for a requirement linkage (FEAT-010). */
+export type LoadTestRequirementLinkSummary = {
+  definitionId: string;
+  name: string;
+  requirementRef: RequirementRef;
+  latestRun: LatestRunSummary | null;
+};
 
 /** Service Bus dispatch payload (FEAT-007 / FEAT-008). */
 export type LoadTestDispatchMessage = {

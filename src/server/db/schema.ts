@@ -1591,6 +1591,12 @@ export const loadTestRuns = pgTable('load_test_run', {
   errorDetail: text('error_detail'),
   targetKey: text('target_key'),
   executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
+  /** Idempotency for FEAT-010 requirement activity (ADO comment id) */
+  requirementActivityExternalId: text('requirement_activity_external_id'),
+  requirementActivityPostedAt: timestamp('requirement_activity_posted_at', {
+    withTimezone: true,
+    mode: 'string',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({

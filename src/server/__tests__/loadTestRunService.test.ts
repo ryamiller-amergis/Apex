@@ -30,6 +30,10 @@ jest.mock('../services/loadTestTargetService', () => ({
   },
 }));
 
+jest.mock('../services/loadTestTraceabilityService', () => ({
+  scheduleRunCompletionActivity: jest.fn(),
+}));
+
 import {
   assertTransition,
   cancel,

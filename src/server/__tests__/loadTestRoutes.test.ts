@@ -53,6 +53,12 @@ jest.mock('../services/loadTestService', () => ({
   getPortable: jest.fn(),
 }));
 
+jest.mock('../services/loadTestTraceabilityService', () => ({
+  listByRequirement: jest.fn(),
+  recordRunCompletionActivity: jest.fn(),
+  scheduleRunCompletionActivity: jest.fn(),
+}));
+
 jest.mock('../services/loadTestRunService', () => ({
   enqueue: jest.fn(),
   listRuns: jest.fn(),
@@ -63,9 +69,13 @@ jest.mock('../services/loadTestRunService', () => ({
 }));
 
 import * as loadTestRunService from '../services/loadTestRunService';
+import * as loadTestTraceabilityService from '../services/loadTestTraceabilityService';
 
 const mockSvc = loadTestService as jest.Mocked<typeof loadTestService>;
 const mockRunSvc = loadTestRunService as jest.Mocked<typeof loadTestRunService>;
+const mockTraceability = loadTestTraceabilityService as jest.Mocked<
+  typeof loadTestTraceabilityService
+>;
 
 // ── App builder ───────────────────────────────────────────────────────────────
 
@@ -367,5 +377,55 @@ describe('POST /api/projects/:projectId/load-tests/:definitionId/runs', () => {
     expect(res.body.run.status).toBe('dispatched');
     expect(res.body.run.runSource).toBe('app');
     expect(mockRunSvc.enqueue).toHaveBeenCalledWith(PROJECT, DEF_ID, { runSource: 'app' });
+  });
+});
+
+// ── GET /by-requirement — FEAT-010 ────────────────────────────────────────────
+
+describe('GET /api/projects/:projectId/load-tests/by-requirement', () => {
+  it('VT-04 / PBI-012 AC-3: returns 403 without load-test:view', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp()).get(
+      `${BASE}/by-requirement?kind=ado_work_item&id=100`,
+    );
+    expect(res.status).toBe(403);
+    expect(mockTraceability.listByRequirement).not.toHaveBeenCalled();
+  });
+
+  it('VT-01 / PBI-012 AC-0: returns 200 with items for authorized viewer', async () => {
+    mockPermissions = new Set(['load-test:view']);
+    mockTraceability.listByRequirement.mockResolvedValue([
+      {
+        definitionId: DEF_ID,
+        name: 'My Test',
+        requirementRef: { kind: 'ado_work_item', id: '100' },
+        latestRun: {
+          runId: 'run-1',
+          status: 'passed',
+          overallResult: 'passed',
+          completedAt: NOW,
+          updatedAt: NOW,
+        },
+      },
+    ]);
+
+    const res = await request(buildApp()).get(
+      `${BASE}/by-requirement?kind=ado_work_item&id=100`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].latestRun.runId).toBe('run-1');
+    expect(mockTraceability.listByRequirement).toHaveBeenCalledWith({
+      projectId: PROJECT,
+      kind: 'ado_work_item',
+      id: '100',
+    });
+  });
+
+  it('returns 400 when kind/id missing', async () => {
+    mockPermissions = new Set(['load-test:view']);
+    const res = await request(buildApp()).get(`${BASE}/by-requirement`);
+    expect(res.status).toBe(400);
   });
 });

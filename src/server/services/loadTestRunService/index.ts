@@ -25,6 +25,7 @@ import {
   getDefinition,
 } from '../loadTestService';
 import { normalizeTargetUrl } from '../loadTestTargetService';
+import { scheduleRunCompletionActivity } from '../loadTestTraceabilityService';
 import { getDispatchPublisher, resolveCallbackBaseUrl } from './dispatchPublisher';
 import { mapRunRow } from './mapRun';
 import { publishRunProgress } from './progressHub';
@@ -420,6 +421,7 @@ export async function ingest(
 
   if (body.kind === 'cancel_ack') {
     if (isTerminalStatus(existing.status)) {
+      scheduleRunCompletionActivity({ projectId, runId });
       return existing;
     }
     assertTransition(existing.status, 'cancelled');
@@ -447,11 +449,13 @@ export async function ingest(
     if (mapped.targetKey) {
       await tryPromoteNextQueuedRun(mapped.projectId, mapped.targetKey);
     }
+    scheduleRunCompletionActivity({ projectId: mapped.projectId, runId: mapped.id });
     return mapped;
   }
 
   // kind === 'final'
   if (isTerminalStatus(existing.status)) {
+    scheduleRunCompletionActivity({ projectId, runId });
     return existing;
   }
 
@@ -514,6 +518,7 @@ export async function ingest(
     await tryPromoteNextQueuedRun(mapped.projectId, mapped.targetKey);
   }
 
+  scheduleRunCompletionActivity({ projectId: mapped.projectId, runId: mapped.id });
   return mapped;
 }
 
