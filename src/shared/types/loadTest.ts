@@ -174,6 +174,37 @@ export interface CreateLoadTestTargetInput {
   isReachable?: boolean;
 }
 
+// ── Update Input ───────────────────────────────────────────────────────────────
+
+export interface UpdateLoadTestDefinitionInput {
+  name?: string;
+  description?: string | null;
+  requirementRef?: RequirementRef | null;
+  targetUrl?: string;
+  environment?: string;
+  engine?: LoadTestEngine;
+  flowType?: LoadTestFlowType;
+  scriptSource?: LoadTestScriptSource;
+  script?: string;
+  loadProfile?: LoadProfile;
+  clientThresholds?: Threshold[];
+  runSource?: LoadTestRunSource | null;
+  secretRefs?: Record<string, string> | null;
+}
+
+// ── Portable Definition ─────────────────────────────────────────────────────────
+// Secret-free artifact for pipeline / CI consumption.
+
+export interface LoadTestPortableDefinition {
+  id: string;
+  name: string;
+  engine: LoadTestEngine;
+  flowType: LoadTestFlowType;
+  script: string;
+  loadProfile: LoadProfile;
+  clientThresholds: Threshold[];
+}
+
 // ── Validation Error ───────────────────────────────────────────────────────────
 
 export class LoadTestValidationError extends Error {
