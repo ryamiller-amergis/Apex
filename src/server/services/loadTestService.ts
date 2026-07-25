@@ -197,6 +197,7 @@ function mapDefinitionRow(row: LoadTestRow): LoadTestDefinition {
     script: row.script,
     loadProfile: row.loadProfile,
     clientThresholds: row.clientThresholds,
+    flowSteps: row.flowSteps ?? null,
     runSource: row.runSource ?? null,
     secretRefs: row.secretRefs ?? null,
     createdAt: row.createdAt,
@@ -339,6 +340,7 @@ export async function createDefinition(
         script: input.script,
         loadProfile: input.loadProfile,
         clientThresholds: resolvedThresholds,
+        flowSteps: input.flowSteps ?? null,
         runSource: input.runSource ?? null,
         secretRefs: input.secretRefs ?? null,
         createdBy: userId,
@@ -458,6 +460,7 @@ export async function updateDefinition(
   if (input.scriptSource !== undefined) updateValues.scriptSource = input.scriptSource;
   if (input.script !== undefined) updateValues.script = input.script;
   if (input.loadProfile !== undefined) updateValues.loadProfile = input.loadProfile;
+  if ('flowSteps' in input) updateValues.flowSteps = input.flowSteps ?? null;
   if ('runSource' in input) updateValues.runSource = input.runSource ?? null;
   if ('secretRefs' in input) updateValues.secretRefs = input.secretRefs ?? null;
 

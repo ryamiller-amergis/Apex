@@ -91,9 +91,34 @@
   padding: 8px 10px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: var(--bg-primary);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   font-size: 0.875rem;
+  color-scheme: inherit;
+  transition: border-color 0.2s ease;
+}
+
+.field input:focus,
+.field select:focus,
+.fieldWide input:focus,
+.field textarea:focus,
+.fieldWide textarea:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+.field input:-webkit-autofill,
+.field input:-webkit-autofill:focus,
+.fieldWide input:-webkit-autofill,
+.fieldWide input:-webkit-autofill:focus,
+.field textarea:-webkit-autofill,
+.fieldWide textarea:-webkit-autofill {
+  -webkit-text-fill-color: var(--text-primary);
+  caret-color: var(--text-primary);
+  box-shadow: 0 0 0 1000px var(--bg-tertiary) inset;
+  transition: background-color 99999s ease-out;
 }
 
 .extractions {

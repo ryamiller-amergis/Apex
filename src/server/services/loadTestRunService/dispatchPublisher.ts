@@ -4,8 +4,14 @@
  * Uses the Azure Service Bus REST API + @azure/identity so we do not require
  * adding @azure/service-bus to package.json (protected without explicit permission).
  * Tests inject a mock publisher via setDispatchPublisher().
+ *
+ * Credential choice matches pdfArtifactStore: AZURE_CLIENT_* on App Service are
+ * the Apex AAD login SP (EnvironmentCredential), which does not have Service Bus
+ * Data Sender. Prefer the App Service system-assigned managed identity in
+ * production and Azure CLI locally.
  */
-import { DefaultAzureCredential } from '@azure/identity';
+import { AzureCliCredential, ManagedIdentityCredential } from '@azure/identity';
+import type { TokenCredential } from '@azure/identity';
 import type { LoadTestDispatchMessage } from '../../../shared/types/loadTest';
 
 export type DispatchPublisher = {
@@ -21,6 +27,13 @@ export function setDispatchPublisher(publisher: DispatchPublisher | null): void 
 export function getDispatchPublisher(): DispatchPublisher {
   if (injected) return injected;
   return createDefaultDispatchPublisher();
+}
+
+/** Exported for unit tests — production uses MI so AZURE_CLIENT_* AAD SP is not used. */
+export function createDispatchCredential(): TokenCredential {
+  return process.env.NODE_ENV === 'production'
+    ? new ManagedIdentityCredential()
+    : new AzureCliCredential();
 }
 
 function createDefaultDispatchPublisher(): DispatchPublisher {
@@ -43,7 +56,7 @@ function createDefaultDispatchPublisher(): DispatchPublisher {
         );
       }
 
-      const credential = new DefaultAzureCredential();
+      const credential = createDispatchCredential();
       const token = await credential.getToken('https://servicebus.azure.net/.default');
       if (!token?.token) {
         throw new Error('Failed to acquire Service Bus access token for load-test dispatch');

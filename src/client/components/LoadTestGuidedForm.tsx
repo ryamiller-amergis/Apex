@@ -1,7 +1,9 @@
 import React from 'react';
 import type { UseFormRegister, FieldErrors, UseFormSetValue, UseFormWatch } from 'react-hook-form';
 import type { LoadTestBuilderFormValues } from '../utils/loadTestBuilderSchema';
+import { LOAD_TEST_CLIENT_CAPS } from '../utils/loadTestBuilderSchema';
 import { LoadTestMultiStepEditor } from './LoadTestMultiStepEditor';
+import { NumberStepper } from './NumberStepper';
 import styles from './LoadTestGuidedForm.module.css';
 
 export type AllowlistedTargetOption = {
@@ -11,6 +13,26 @@ export type AllowlistedTargetOption = {
   isReachable: boolean;
 };
 
+/** Curated k6 client-threshold metrics for the guided builder. */
+export const LOAD_TEST_METRIC_OPTIONS = [
+  { value: 'http_req_duration', label: 'http_req_duration' },
+  { value: 'http_req_failed', label: 'http_req_failed' },
+  { value: 'http_reqs', label: 'http_reqs' },
+  { value: 'iteration_duration', label: 'iteration_duration' },
+  { value: 'checks', label: 'checks' },
+] as const;
+
+/** Curated k6 threshold expressions paired with common SLOs. */
+export const LOAD_TEST_EXPRESSION_OPTIONS = [
+  { value: 'p(95)<500', label: 'p(95) < 500ms' },
+  { value: 'p(95)<1000', label: 'p(95) < 1s' },
+  { value: 'p(99)<1500', label: 'p(99) < 1.5s' },
+  { value: 'avg<300', label: 'avg < 300ms' },
+  { value: 'rate<0.01', label: 'rate < 1%' },
+  { value: 'rate<0.05', label: 'rate < 5%' },
+  { value: 'rate>0.99', label: 'rate > 99% (checks)' },
+] as const;
+
 interface LoadTestGuidedFormProps {
   register: UseFormRegister<LoadTestBuilderFormValues>;
   errors: FieldErrors<LoadTestBuilderFormValues>;
@@ -19,6 +41,10 @@ interface LoadTestGuidedFormProps {
   targets: AllowlistedTargetOption[];
   targetsLoading?: boolean;
   readOnly?: boolean;
+}
+
+function selectOrCustomValue(options: readonly { value: string }[], current: string): string {
+  return options.some((o) => o.value === current) ? current : '__custom__';
 }
 
 export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
@@ -31,6 +57,13 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
   readOnly = false,
 }) => {
   const flowType = watch('flowType');
+  const vus = watch('loadProfile.vus') ?? 1;
+  const durationMinutes = watch('loadProfile.durationMinutes') ?? 1;
+  const rpsCap = watch('loadProfile.rpsCap');
+  const metric = watch('clientThresholds.0.metric') ?? '';
+  const expression = watch('clientThresholds.0.expression') ?? '';
+  const metricSelect = selectOrCustomValue(LOAD_TEST_METRIC_OPTIONS, metric);
+  const expressionSelect = selectOrCustomValue(LOAD_TEST_EXPRESSION_OPTIONS, expression);
 
   return (
     <div className={styles.form} data-testid="load-test-guided-form">
@@ -92,7 +125,7 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
           {...register('flowType')}
           onChange={(e) => {
             const next = e.target.value as 'single' | 'multi_step';
-            setValue('flowType', next);
+            setValue('flowType', next, { shouldDirty: true });
           }}
         >
           <option value="single">Single endpoint</option>
@@ -113,41 +146,72 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
         <legend>Load profile</legend>
         <div className={styles.row}>
           <div className={styles.field}>
-            <label htmlFor="load-test-vus">Virtual users</label>
-            <input
+            <label id="load-test-vus-label" htmlFor="load-test-vus">
+              Virtual users
+            </label>
+            <NumberStepper
               id="load-test-vus"
-              type="number"
+              aria-label="Virtual users"
+              aria-describedby={errors.loadProfile?.vus ? 'load-test-vus-error' : undefined}
               aria-invalid={Boolean(errors.loadProfile?.vus)}
-              {...register('loadProfile.vus', { valueAsNumber: true })}
+              value={vus}
+              min={1}
+              max={LOAD_TEST_CLIENT_CAPS.maxVus}
+              step={1}
+              unit="VUs"
+              disabled={readOnly}
+              onChange={(next) => setValue('loadProfile.vus', next, { shouldDirty: true, shouldValidate: true })}
             />
             {errors.loadProfile?.vus && (
-              <span className={styles.error} role="alert">
+              <span id="load-test-vus-error" className={styles.error} role="alert">
                 {errors.loadProfile.vus.message}
               </span>
             )}
           </div>
           <div className={styles.field}>
-            <label htmlFor="load-test-duration">Duration (minutes)</label>
-            <input
+            <label htmlFor="load-test-duration">Duration</label>
+            <NumberStepper
               id="load-test-duration"
-              type="number"
-              {...register('loadProfile.durationMinutes', { valueAsNumber: true })}
+              aria-label="Duration in minutes"
+              aria-describedby={
+                errors.loadProfile?.durationMinutes ? 'load-test-duration-error' : undefined
+              }
+              aria-invalid={Boolean(errors.loadProfile?.durationMinutes)}
+              value={durationMinutes}
+              min={1}
+              max={LOAD_TEST_CLIENT_CAPS.maxDurationMinutes}
+              step={1}
+              unit="min"
+              disabled={readOnly}
+              onChange={(next) =>
+                setValue('loadProfile.durationMinutes', next, { shouldDirty: true, shouldValidate: true })
+              }
             />
             {errors.loadProfile?.durationMinutes && (
-              <span className={styles.error} role="alert">
+              <span id="load-test-duration-error" className={styles.error} role="alert">
                 {errors.loadProfile.durationMinutes.message}
               </span>
             )}
           </div>
           <div className={styles.field}>
             <label htmlFor="load-test-rps">RPS cap (optional)</label>
-            <input
+            <NumberStepper
               id="load-test-rps"
-              type="number"
-              {...register('loadProfile.rpsCap', {
-                setValueAs: (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? undefined : Number(v)),
-              })}
+              aria-label="RPS cap"
+              value={rpsCap ?? 0}
+              min={0}
+              max={LOAD_TEST_CLIENT_CAPS.maxRpsCap}
+              step={10}
+              unit="RPS"
+              disabled={readOnly}
+              onChange={(next) =>
+                setValue('loadProfile.rpsCap', next === 0 ? undefined : next, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
             />
+            <span className={styles.hint}>0 means no RPS cap</span>
           </div>
         </div>
       </fieldset>
@@ -157,11 +221,82 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
         <div className={styles.row}>
           <div className={styles.field}>
             <label htmlFor="load-test-threshold-metric">Metric</label>
-            <input id="load-test-threshold-metric" type="text" {...register('clientThresholds.0.metric')} />
+            <select
+              id="load-test-threshold-metric"
+              value={metricSelect}
+              disabled={readOnly}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === '__custom__') {
+                  setValue('clientThresholds.0.metric', metric || '', { shouldDirty: true });
+                  return;
+                }
+                setValue('clientThresholds.0.metric', next, { shouldDirty: true, shouldValidate: true });
+              }}
+            >
+              {LOAD_TEST_METRIC_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+              <option value="__custom__">Custom…</option>
+            </select>
+            {metricSelect === '__custom__' && (
+              <input
+                type="text"
+                className={styles.customFollowUp}
+                aria-label="Custom metric"
+                disabled={readOnly}
+                value={metric}
+                onChange={(e) =>
+                  setValue('clientThresholds.0.metric', e.target.value, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
+              />
+            )}
           </div>
           <div className={styles.field}>
             <label htmlFor="load-test-threshold-expr">Expression</label>
-            <input id="load-test-threshold-expr" type="text" {...register('clientThresholds.0.expression')} />
+            <select
+              id="load-test-threshold-expr"
+              value={expressionSelect}
+              disabled={readOnly}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === '__custom__') {
+                  setValue('clientThresholds.0.expression', expression || '', { shouldDirty: true });
+                  return;
+                }
+                setValue('clientThresholds.0.expression', next, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                });
+              }}
+            >
+              {LOAD_TEST_EXPRESSION_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+              <option value="__custom__">Custom…</option>
+            </select>
+            {expressionSelect === '__custom__' && (
+              <input
+                type="text"
+                className={styles.customFollowUp}
+                aria-label="Custom expression"
+                disabled={readOnly}
+                value={expression}
+                onChange={(e) =>
+                  setValue('clientThresholds.0.expression', e.target.value, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
+              />
+            )}
           </div>
         </div>
         {errors.clientThresholds && (

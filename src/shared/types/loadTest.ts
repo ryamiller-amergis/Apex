@@ -90,6 +90,11 @@ export interface LoadTestDefinition {
   script: string;
   loadProfile: LoadProfile;
   clientThresholds: Threshold[];
+  /**
+   * Guided-form steps used to compile the script (PBI form builder).
+   * Null/absent for raw or AI-authored scripts that were not driven by the form.
+   */
+  flowSteps?: FlowStep[] | null;
   /** Default/preferred run source; actual run source stored per-run */
   runSource?: LoadTestRunSource | null;
   /** Key Vault secret references only — never plaintext credentials */
@@ -223,6 +228,8 @@ export interface CreateLoadTestDefinitionInput {
   script: string;
   loadProfile: LoadProfile;
   clientThresholds: Threshold[];
+  /** Persist guided steps so path/method edits round-trip in the builder UI. */
+  flowSteps?: FlowStep[] | null;
   runSource?: LoadTestRunSource | null;
   secretRefs?: Record<string, string> | null;
 }
@@ -260,6 +267,7 @@ export interface UpdateLoadTestDefinitionInput {
   script?: string;
   loadProfile?: LoadProfile;
   clientThresholds?: Threshold[];
+  flowSteps?: FlowStep[] | null;
   runSource?: LoadTestRunSource | null;
   secretRefs?: Record<string, string> | null;
 }

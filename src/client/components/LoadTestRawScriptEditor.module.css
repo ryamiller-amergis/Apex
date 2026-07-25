@@ -15,17 +15,25 @@
   padding: 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   font-size: 0.8rem;
   line-height: 1.45;
   resize: vertical;
+  color-scheme: inherit;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
 }
 
 .textarea:disabled {
   opacity: 0.75;
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
   cursor: not-allowed;
 }
 

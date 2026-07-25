@@ -330,6 +330,11 @@ jobs:
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
               PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
+              LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
+              LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
+              LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
+              LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
+              LT_APEX_CALLBACK_BASE_URL="${{ vars.LT_APEX_CALLBACK_BASE_URL }}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \

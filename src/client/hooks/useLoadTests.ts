@@ -101,8 +101,9 @@ export function useUpdateLoadTest(projectId: string | null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       }),
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
       if (!projectId) return;
+      queryClient.setQueryData(loadTestQueryKey(projectId, vars.id), data);
       queryClient.invalidateQueries({ queryKey: loadTestsQueryKey(projectId) });
       queryClient.invalidateQueries({ queryKey: loadTestQueryKey(projectId, vars.id) });
     },

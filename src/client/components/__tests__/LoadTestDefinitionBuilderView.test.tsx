@@ -118,13 +118,63 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
       clientThresholds: Array<{ metric: string; expression: string }>;
       scriptSource: string;
       flowType: string;
+      flowSteps: Array<{ method: string; path: string }>;
     };
     expect(body.script).toContain('/api/login');
     expect(body.script).toContain('/api/orders');
+    expect(body.flowSteps.map((s) => s.path)).toEqual(['/api/login', '/api/orders']);
     expect(body.clientThresholds.length).toBeGreaterThan(0);
     expect(body.scriptSource).toBe('form_builder');
     expect(body.flowType).toBe('multi_step');
     expect(mockNavigate).toHaveBeenCalledWith('/load-tests/def-new');
+  });
+
+  it('restores saved path from flowSteps when reopening a definition', async () => {
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-1',
+            projectId: 'project-a',
+            name: 'Persisted path',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'form_builder',
+            script: 'export default function () {}',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            flowSteps: [{ method: 'GET', path: '/api/health/db', tag: 'step_1' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Path$/i)).toHaveValue('/api/health/db');
+    });
   });
 
   it('AC-1: save API error shows toast and keeps edits editable', async () => {
@@ -406,6 +456,73 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('load-test-run-btn')).toBeDisabled();
+    });
+  });
+
+  it('Run re-enables after a successful save clears dirty state', async () => {
+    const user = userEvent.setup();
+    const hrefOf = (url: RequestInfo | URL) =>
+      typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+
+    const definition = {
+      id: 'def-1',
+      projectId: 'project-a',
+      name: 'Runnable',
+      description: null as string | null,
+      targetUrl: target.baseUrl,
+      environment: target.environmentLabel,
+      engine: 'k6',
+      flowType: 'single',
+      scriptSource: 'form_builder',
+      script: 'export default function () {}',
+      loadProfile: { vus: 5, durationMinutes: 2 },
+      clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+      secretRefs: null as Record<string, string> | null,
+      createdAt: '2026-07-24T00:00:00.000Z',
+      updatedAt: '2026-07-24T00:00:00.000Z',
+      createdBy: 'u',
+      updatedBy: 'u',
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (href.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (href.includes('/load-tests/def-1') && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { name: string; script: string };
+        definition.name = body.name;
+        definition.script = body.script;
+        definition.updatedAt = '2026-07-25T12:00:00.000Z';
+        return { ok: true, status: 200, json: async () => ({ ...definition }) };
+      }
+      if (href.includes('/load-tests/def-1') && !href.includes('/runs')) {
+        return { ok: true, status: 200, json: async () => ({ ...definition }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeEnabled();
+    });
+
+    await user.type(screen.getByLabelText(/^Name$/i), ' edited');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-run-btn')).toBeDisabled();
+      expect(screen.getByTestId('load-test-dirty-hint')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('load-test-save-btn'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('load-test-dirty-hint')).not.toBeInTheDocument();
+      expect(screen.getByTestId('load-test-run-btn')).toBeEnabled();
     });
   });
 

@@ -56,7 +56,7 @@ function parseHeaders(headersText?: string): Record<string, string> | undefined 
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-function toFlowSteps(steps: GuidedFormStep[]): FlowStep[] {
+export function toFlowSteps(steps: GuidedFormStep[]): FlowStep[] {
   return steps.map((step, index) => ({
     method: step.method.trim().toUpperCase(),
     path: step.path.trim(),
@@ -64,6 +64,25 @@ function toFlowSteps(steps: GuidedFormStep[]): FlowStep[] {
     body: step.body?.trim() ? step.body : undefined,
     extractions: step.extractions?.filter((e) => e.name.trim() && e.expression.trim()),
     tag: step.tag?.trim() || `step_${index + 1}`,
+  }));
+}
+
+/** Restore guided-form step fields from persisted FlowStep rows. */
+export function flowStepsToGuidedForm(steps: FlowStep[]): GuidedFormStep[] {
+  if (steps.length === 0) {
+    return [{ method: 'GET', path: '/health', extractions: [] }];
+  }
+  return steps.map((step) => ({
+    method: step.method || 'GET',
+    path: step.path || '/',
+    headersText: step.headers ? JSON.stringify(step.headers, null, 2) : '',
+    body: step.body ?? '',
+    tag: step.tag,
+    extractions: (step.extractions ?? []).map((e) => ({
+      name: e.name,
+      source: e.source,
+      expression: e.expression,
+    })),
   }));
 }
 

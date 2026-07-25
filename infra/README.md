@@ -298,6 +298,8 @@ group (current dev), both groups resolve to the same resource group.
 | Runner MI | Key Vault Secrets **User** | `var.lt_key_vault_id` (when set) |
 | Apex API (App Service system identity) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
 | Apex API | Storage Blob Data **Reader** | `lt-artifacts` container |
+| Apex staging slot (when enabled) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
+| Apex staging slot (when enabled) | Storage Blob Data **Reader** | `lt-artifacts` container |
 
 ### Terraform outputs (app config contract for FEAT-007/008)
 

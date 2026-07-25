@@ -151,6 +151,25 @@ resource "azurerm_role_assignment" "lt_api_blob_reader" {
   principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
 }
 
+# Staging slot identity is slot-specific and does not move on swap (same pattern
+# as staging_pdf_blob_contributor). Grant Send + Blob Reader so pre-swap smoke
+# and staging-slot deploys can enqueue and read artifacts.
+resource "azurerm_role_assignment" "lt_staging_sb_sender" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.lt_dispatch.id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "lt_staging_blob_reader" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_storage_container.lt_artifacts.resource_manager_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
 # ---------------------------------------------------------------------------
 # Container Apps Environment (VNet-integrated for non-prod target reachability)
 # ---------------------------------------------------------------------------

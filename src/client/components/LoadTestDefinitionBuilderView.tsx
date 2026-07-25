@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useForm, type Resolver } from 'react-hook-form';
+import { useForm, useWatch, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -23,7 +23,9 @@ import {
 } from '../utils/loadTestBuilderSchema';
 import {
   compileGuidedFormToK6,
+  flowStepsToGuidedForm,
   needsConfirmBeforeRegenerate,
+  toFlowSteps,
 } from '../utils/loadTestScriptCompile';
 import type {
   CreateLoadTestDefinitionInput,
@@ -51,16 +53,17 @@ interface LoadTestDefinitionBuilderViewProps {
 
 function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormValues {
   const secretEntries = Object.entries(def.secretRefs ?? {});
+  const restoredSteps =
+    def.flowSteps && def.flowSteps.length > 0
+      ? flowStepsToGuidedForm(def.flowSteps)
+      : [{ method: 'GET', path: '/health', extractions: [] }];
   return {
     ...defaultLoadTestBuilderValues,
     name: def.name,
     description: def.description ?? '',
     targetId: '', // resolved after targets load via URL match
     flowType: def.flowType,
-    steps:
-      def.flowType === 'multi_step'
-        ? [{ method: 'GET', path: '/', extractions: [] }]
-        : [{ method: 'GET', path: '/', extractions: [] }],
+    steps: restoredSteps,
     loadProfile: {
       vus: def.loadProfile.vus,
       durationMinutes: def.loadProfile.durationMinutes,
@@ -94,10 +97,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   const { data: definition, isLoading: defLoading } = useLoadTest(project, definitionId);
   const { data: targets = [], isLoading: targetsLoading } = useLoadTestTargets(project);
   const { data: repoConfigs = [] } = useProjectRepoConfigs(project);
-  const createMutation = useCreateLoadTest(project);
-  const updateMutation = useUpdateLoadTest(project);
-  const deleteMutation = useDeleteLoadTest(project);
-  const enqueueMutation = useEnqueueRun(project);
 
   // AC-2: AI generate is only available once the project has at least one connected repo.
   const hasConnectedRepo = repoConfigs.some((config) => Boolean(config.skillRepo?.trim()));
@@ -108,6 +107,29 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
   const [pendingMode, setPendingMode] = useState<BuilderMode | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // Track which definition we've hydrated local UI state from. Adjust during
+  // render (React-recommended) instead of setState-in-effect.
+  const [hydratedDefinitionId, setHydratedDefinitionId] = useState<string | null | undefined>(
+    undefined,
+  );
+  const loadedDefinitionId = definition?.id ?? null;
+
+  if (hydratedDefinitionId !== loadedDefinitionId) {
+    setHydratedDefinitionId(loadedDefinitionId);
+    if (definition) {
+      const values = definitionToFormValues(definition);
+      setMode(values.mode);
+      setScriptSource(definition.scriptSource);
+    } else {
+      setMode('guided');
+      setScriptSource('form_builder');
+    }
+  }
+
+  const createMutation = useCreateLoadTest(project);
+  const updateMutation = useUpdateLoadTest(project);
+  const deleteMutation = useDeleteLoadTest(project);
+  const enqueueMutation = useEnqueueRun(project);
 
   const {
     register,
@@ -115,6 +137,7 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     reset,
     setValue,
     watch,
+    control,
     getValues,
     formState: { errors, isDirty },
   } = useForm<LoadTestBuilderFormValues>({
@@ -122,7 +145,7 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     defaultValues: defaultLoadTestBuilderValues,
   });
 
-  const scriptValue = watch('script') ?? '';
+  const scriptValue = useWatch({ control, name: 'script' }) ?? '';
 
   useEffect(() => {
     if (!definition) return;
@@ -132,8 +155,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     );
     if (matched) values.targetId = matched.id;
     reset(values);
-    setMode(values.mode);
-    setScriptSource(definition.scriptSource);
   }, [definition, targets, reset]);
 
   const applyGuidedCompileToScript = () => {
@@ -155,14 +176,15 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       return;
     }
     setMode(next);
-    setValue('mode', next);
+    // Authoring-tab switches are not definition edits — don't block Run.
+    setValue('mode', next, { shouldDirty: false });
   };
 
   const confirmRegenerate = () => {
     applyGuidedCompileToScript();
     if (pendingMode) {
       setMode(pendingMode);
-      setValue('mode', pendingMode);
+      setValue('mode', pendingMode, { shouldDirty: false });
     }
     setPendingMode(null);
     setShowRegenerateConfirm(false);
@@ -240,33 +262,64 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       script,
       loadProfile,
       clientThresholds,
+      flowSteps:
+        nextSource === 'form_builder' || mode === 'guided'
+          ? toFlowSteps(values.steps)
+          : null,
       secretRefs,
     };
   };
 
-  const onSave = handleSubmit(async (values) => {
-    if (readOnly) return;
-    setSaveError(null);
-    try {
-      const payload = buildPayload({ ...values, mode });
-      if (isNew) {
-        const created = await createMutation.mutateAsync(payload);
-        navigate(`/load-tests/${created.id}`);
-      } else if (definitionId) {
-        await updateMutation.mutateAsync({ id: definitionId, input: payload });
-        setScriptSource(payload.scriptSource ?? scriptSource);
-      }
-    } catch (err) {
-      const message =
-        err instanceof LoadTestApiError
-          ? err.message
-          : err instanceof Error
+  const onSave = handleSubmit(
+    async (values) => {
+      if (readOnly) return;
+      setSaveError(null);
+      try {
+        const payload = buildPayload({ ...values, mode });
+        if (isNew) {
+          const created = await createMutation.mutateAsync(payload);
+          navigate(`/load-tests/${created.id}`);
+        } else if (definitionId) {
+          await updateMutation.mutateAsync({ id: definitionId, input: payload });
+          const nextSource = payload.scriptSource ?? scriptSource;
+          setScriptSource(nextSource);
+          // Clear dirty immediately — do not wait on query invalidate/refetch,
+          // which can leave Run disabled with no toast after a successful save.
+          reset({
+            ...values,
+            name: payload.name,
+            description: payload.description ?? '',
+            script: payload.script,
+            loadProfile: payload.loadProfile,
+            clientThresholds: payload.clientThresholds,
+            mode,
+          });
+        }
+      } catch (err) {
+        const message =
+          err instanceof LoadTestApiError
             ? err.message
-            : 'Failed to save load test';
-      setSaveError(message);
-      // Keep dirty form editable — do not reset
-    }
-  });
+            : err instanceof Error
+              ? err.message
+              : 'Failed to save load test';
+        setSaveError(message);
+        // Keep dirty form editable — do not reset
+      }
+    },
+    (formErrors) => {
+      const first =
+        formErrors.targetId?.message ??
+        formErrors.name?.message ??
+        formErrors.script?.message ??
+        formErrors.loadProfile?.vus?.message ??
+        formErrors.loadProfile?.durationMinutes?.message ??
+        formErrors.clientThresholds?.message ??
+        formErrors.secretRefValue?.message ??
+        formErrors.steps?.message ??
+        'Fix the highlighted fields before saving';
+      setSaveError(String(first));
+    },
+  );
 
   const onDelete = async () => {
     if (!definitionId || readOnly) return;
@@ -466,8 +519,8 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       </div>
 
       {isDirty && canManage && activeSection === 'definition' && (
-        <p className={styles.dirtyHint} aria-live="polite">
-          Unsaved changes
+        <p className={styles.dirtyHint} aria-live="polite" data-testid="load-test-dirty-hint">
+          Unsaved changes — save before running
         </p>
       )}
 
