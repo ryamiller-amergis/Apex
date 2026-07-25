@@ -7,7 +7,7 @@ ALTER TABLE load_test_target
 CREATE UNIQUE INDEX IF NOT EXISTS uq_load_test_target_project_base_url
   ON load_test_target (project_id, base_url);
 
----- DOWN ----
+-- Down Migration
 
 DROP INDEX IF EXISTS uq_load_test_target_project_base_url;
 

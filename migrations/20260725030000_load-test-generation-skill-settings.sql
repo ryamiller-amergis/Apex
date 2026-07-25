@@ -4,7 +4,7 @@ ALTER TABLE project_skill_settings
   ADD COLUMN IF NOT EXISTS load_test_generation_skill_path TEXT,
   ADD COLUMN IF NOT EXISTS load_test_generation_model TEXT;
 
----- DOWN ----
+-- Down Migration
 
 ALTER TABLE project_skill_settings
   DROP COLUMN IF EXISTS load_test_generation_model,

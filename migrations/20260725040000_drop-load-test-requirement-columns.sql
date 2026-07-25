@@ -7,7 +7,7 @@ ALTER TABLE load_test_run
   DROP COLUMN IF EXISTS requirement_activity_posted_at,
   DROP COLUMN IF EXISTS requirement_activity_external_id;
 
----- DOWN ----
+-- Down Migration
 
 ALTER TABLE load_test
   ADD COLUMN IF NOT EXISTS requirement_ref JSONB;

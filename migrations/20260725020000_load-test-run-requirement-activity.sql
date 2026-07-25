@@ -4,7 +4,7 @@ ALTER TABLE load_test_run
   ADD COLUMN IF NOT EXISTS requirement_activity_external_id TEXT,
   ADD COLUMN IF NOT EXISTS requirement_activity_posted_at TIMESTAMPTZ;
 
----- DOWN ----
+-- Down Migration
 
 ALTER TABLE load_test_run
   DROP COLUMN IF EXISTS requirement_activity_posted_at,
