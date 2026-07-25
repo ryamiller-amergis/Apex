@@ -96,15 +96,6 @@
   font-size: 0.875rem;
 }
 
-.infoBanner {
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
 .dirtyHint {
   margin: 0;
   font-size: 0.8rem;

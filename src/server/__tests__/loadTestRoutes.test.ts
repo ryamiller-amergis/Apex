@@ -17,6 +17,7 @@ import express from 'express';
 import loadTestRouter from '../routes/loadTests';
 import * as loadTestService from '../services/loadTestService';
 import { LoadTestValidationError } from '../../shared/types/loadTest';
+import { LoadTestAiGenerationError } from '../../shared/types/loadTestAi';
 
 // ── Permission mock state ──────────────────────────────────────────────────────
 
@@ -68,13 +69,23 @@ jest.mock('../services/loadTestRunService', () => ({
   subscribeRunProgress: jest.fn(() => () => undefined),
 }));
 
+jest.mock('../services/loadTestAiGenerationService', () => ({
+  startGeneration: jest.fn(),
+  getGenerationResult: jest.fn(),
+  cancelGeneration: jest.fn(),
+}));
+
 import * as loadTestRunService from '../services/loadTestRunService';
 import * as loadTestTraceabilityService from '../services/loadTestTraceabilityService';
+import * as loadTestAiGenerationService from '../services/loadTestAiGenerationService';
 
 const mockSvc = loadTestService as jest.Mocked<typeof loadTestService>;
 const mockRunSvc = loadTestRunService as jest.Mocked<typeof loadTestRunService>;
 const mockTraceability = loadTestTraceabilityService as jest.Mocked<
   typeof loadTestTraceabilityService
+>;
+const mockAiGeneration = loadTestAiGenerationService as jest.Mocked<
+  typeof loadTestAiGenerationService
 >;
 
 // ── App builder ───────────────────────────────────────────────────────────────
@@ -427,5 +438,98 @@ describe('GET /api/projects/:projectId/load-tests/by-requirement', () => {
     mockPermissions = new Set(['load-test:view']);
     const res = await request(buildApp()).get(`${BASE}/by-requirement`);
     expect(res.status).toBe(400);
+  });
+});
+
+// ── POST /ai-generate — FEAT-011 TBI-011 ──────────────────────────────────────
+
+describe('POST /api/projects/:projectId/load-tests/ai-generate', () => {
+  const generateBody = {
+    requirementRef: { kind: 'ado_work_item', id: '100' },
+    flowHints: 'login then browse',
+  };
+
+  // AC-3 / DoD-3: 403 without load-test:manage; service must not be invoked
+  it('AC-3 / DoD-3: returns 403 when caller lacks load-test:manage and does not start generation', async () => {
+    mockPermissions = new Set(['load-test:view']);
+
+    const res = await request(buildApp()).post(`${BASE}/ai-generate`).send(generateBody);
+    expect(res.status).toBe(403);
+    expect(mockAiGeneration.startGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 202 + threadId when caller has load-test:manage', async () => {
+    mockPermissions = new Set(['load-test:manage']);
+    mockAiGeneration.startGeneration.mockResolvedValue({ threadId: 'thread-1' });
+
+    const res = await request(buildApp()).post(`${BASE}/ai-generate`).send(generateBody);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ threadId: 'thread-1' });
+    expect(mockAiGeneration.startGeneration).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({ requirementRef: generateBody.requirementRef, flowHints: generateBody.flowHints }),
+      'user-1',
+    );
+  });
+
+  // DoD-2: repo gate — service throws NO_REPO_CONNECTED
+  it('DoD-2: returns 409 NO_REPO_CONNECTED when project has no connected repo', async () => {
+    mockPermissions = new Set(['load-test:manage']);
+    mockAiGeneration.startGeneration.mockRejectedValue(
+      new LoadTestAiGenerationError('No connected repository', 'NO_REPO_CONNECTED'),
+    );
+
+    const res = await request(buildApp()).post(`${BASE}/ai-generate`).send(generateBody);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_REPO_CONNECTED');
+  });
+});
+
+// ── GET /ai-generate/:threadId/result — FEAT-011 TBI-011 ──────────────────────
+
+describe('GET /api/projects/:projectId/load-tests/ai-generate/:threadId/result', () => {
+  it('returns 403 when caller lacks load-test:manage', async () => {
+    mockPermissions = new Set(['load-test:view']);
+
+    const res = await request(buildApp()).get(`${BASE}/ai-generate/thread-1/result`);
+    expect(res.status).toBe(403);
+    expect(mockAiGeneration.getGenerationResult).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 + result body when ready', async () => {
+    mockPermissions = new Set(['load-test:manage']);
+    mockAiGeneration.getGenerationResult.mockResolvedValue({
+      status: 'ready',
+      result: {
+        script: "export default function() {}",
+        suggested_thresholds: [{ metric: 'http_req_duration', expression: 'p(95)<500' }],
+      },
+    });
+
+    const res = await request(buildApp()).get(`${BASE}/ai-generate/thread-1/result`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ready');
+    expect(res.body.result.script).toBeDefined();
+  });
+});
+
+// ── POST /ai-generate/:threadId/cancel — FEAT-011 TBI-011 ─────────────────────
+
+describe('POST /api/projects/:projectId/load-tests/ai-generate/:threadId/cancel', () => {
+  it('returns 403 when caller lacks load-test:manage', async () => {
+    mockPermissions = new Set(['load-test:view']);
+
+    const res = await request(buildApp()).post(`${BASE}/ai-generate/thread-1/cancel`);
+    expect(res.status).toBe(403);
+    expect(mockAiGeneration.cancelGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 + cancelled status', async () => {
+    mockPermissions = new Set(['load-test:manage']);
+    mockAiGeneration.cancelGeneration.mockResolvedValue({ status: 'cancelled' });
+
+    const res = await request(buildApp()).post(`${BASE}/ai-generate/thread-1/cancel`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('cancelled');
   });
 });

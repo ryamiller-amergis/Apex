@@ -160,6 +160,8 @@ export interface ProjectSkillConfig {
   uiLabSkillPath?: string | null;
   calendarAssistantSkillPath?: string | null;
   calendarAssistantModel?: string | null;
+  loadTestGenerationSkillPath?: string | null;
+  loadTestGenerationModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -233,6 +235,8 @@ export interface UpsertProjectSkillConfigRequest {
   uiLabSkillPath?: string | null;
   calendarAssistantSkillPath?: string | null;
   calendarAssistantModel?: string | null;
+  loadTestGenerationSkillPath?: string | null;
+  loadTestGenerationModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -317,6 +321,8 @@ export interface ProjectSkillConfigResponse {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+  loadTestGenerationSkillPath?: string | null;
+  loadTestGenerationModel?: string | null;
 }
 
 /** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */

@@ -2,8 +2,11 @@ import { Router } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as loadTestService from '../services/loadTestService';
 import * as loadTestTraceabilityService from '../services/loadTestTraceabilityService';
+import * as loadTestAiGenerationService from '../services/loadTestAiGenerationService';
 import { LoadTestValidationError } from '../../shared/types/loadTest';
 import type { RequirementRef } from '../../shared/types/loadTest';
+import { LoadTestAiGenerationError } from '../../shared/types/loadTestAi';
+import type { LoadTestAiGenerateRequest } from '../../shared/types/loadTestAi';
 import loadTestRunsRouter from './loadTestRuns';
 
 const router = Router({ mergeParams: true });
@@ -19,6 +22,25 @@ function handleServiceError(
       err.code === 'LOAD_TEST_ACTIVE_RUN'
         ? 409
         : err.code === 'LOAD_TEST_NOT_FOUND'
+          ? 404
+          : 422;
+    res.status(status).json({ error: err.message, code: err.code });
+    return;
+  }
+  throw err;
+}
+
+// ── AI generation error mapper (FEAT-011 TBI-011) ─────────────────────────────
+
+function handleAiGenerationError(
+  err: unknown,
+  res: import('express').Response,
+): void {
+  if (err instanceof LoadTestAiGenerationError) {
+    const status =
+      err.code === 'NO_REPO_CONNECTED'
+        ? 409
+        : err.code === 'THREAD_NOT_FOUND'
           ? 404
           : 422;
     res.status(status).json({ error: err.message, code: err.code });
@@ -101,6 +123,74 @@ router.get(
       res.json({ items });
     } catch (err) {
       next(err);
+    }
+  },
+);
+
+// ── AI generation routes (FEAT-011 TBI-011) ───────────────────────────────────
+// Registered before /:id so "ai-generate" is not captured as a definition id.
+
+// POST /api/projects/:projectId/load-tests/ai-generate
+router.post(
+  '/ai-generate',
+  requirePermission('load-test:manage'),
+  async (req, res, next) => {
+    try {
+      const { projectId } = req.params;
+      const userId = getUserId(req);
+      const { requirementRef, flowHints, loadProfileCaps } = (req.body ?? {}) as LoadTestAiGenerateRequest;
+      const started = await loadTestAiGenerationService.startGeneration(
+        projectId,
+        { requirementRef, flowHints, loadProfileCaps },
+        userId,
+      );
+      res.status(202).json(started);
+    } catch (err) {
+      try {
+        handleAiGenerationError(err, res);
+      } catch {
+        next(err);
+      }
+    }
+  },
+);
+
+// GET /api/projects/:projectId/load-tests/ai-generate/:threadId/result
+router.get(
+  '/ai-generate/:threadId/result',
+  requirePermission('load-test:manage'),
+  async (req, res, next) => {
+    try {
+      const { threadId } = req.params;
+      const userId = getUserId(req);
+      const result = await loadTestAiGenerationService.getGenerationResult(threadId, userId);
+      res.json(result);
+    } catch (err) {
+      try {
+        handleAiGenerationError(err, res);
+      } catch {
+        next(err);
+      }
+    }
+  },
+);
+
+// POST /api/projects/:projectId/load-tests/ai-generate/:threadId/cancel
+router.post(
+  '/ai-generate/:threadId/cancel',
+  requirePermission('load-test:manage'),
+  async (req, res, next) => {
+    try {
+      const { threadId } = req.params;
+      const userId = getUserId(req);
+      const result = await loadTestAiGenerationService.cancelGeneration(threadId, userId);
+      res.json(result);
+    } catch (err) {
+      try {
+        handleAiGenerationError(err, res);
+      } catch {
+        next(err);
+      }
     }
   },
 );

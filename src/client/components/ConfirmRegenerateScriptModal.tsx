@@ -3,12 +3,25 @@ import styles from './ConfirmRegenerateScriptModal.module.css';
 
 interface ConfirmRegenerateScriptModalProps {
   isPending?: boolean;
+  /** Overridable copy so this modal can be reused for other overwrite-confirmation flows (e.g. AI generate — BR-010). */
+  title?: string;
+  body?: string;
+  warning?: string;
+  confirmLabel?: string;
+  pendingLabel?: string;
+  testId?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
 export const ConfirmRegenerateScriptModal: React.FC<ConfirmRegenerateScriptModalProps> = ({
   isPending = false,
+  title = 'Regenerate script from guided form?',
+  body = 'You edited the raw k6 script. Re-applying the guided form will overwrite those changes.',
+  warning = 'This cannot be undone.',
+  confirmLabel = 'Overwrite script',
+  pendingLabel = 'Regenerating…',
+  testId = 'confirm-regenerate-script-modal',
   onConfirm,
   onCancel,
 }) => {
@@ -34,16 +47,14 @@ export const ConfirmRegenerateScriptModal: React.FC<ConfirmRegenerateScriptModal
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-regenerate-title"
-      data-testid="confirm-regenerate-script-modal"
+      data-testid={testId}
     >
       <div className={styles.card}>
         <h2 className={styles.title} id="confirm-regenerate-title">
-          Regenerate script from guided form?
+          {title}
         </h2>
-        <p className={styles.body}>
-          You edited the raw k6 script. Re-applying the guided form will overwrite those changes.
-        </p>
-        <p className={styles.warning}>This cannot be undone.</p>
+        <p className={styles.body}>{body}</p>
+        <p className={styles.warning}>{warning}</p>
         <div className={styles.actions}>
           <button
             ref={cancelRef}
@@ -60,7 +71,7 @@ export const ConfirmRegenerateScriptModal: React.FC<ConfirmRegenerateScriptModal
             onClick={onConfirm}
             disabled={isPending}
           >
-            {isPending ? 'Regenerating…' : 'Overwrite script'}
+            {isPending ? pendingLabel : confirmLabel}
           </button>
         </div>
       </div>

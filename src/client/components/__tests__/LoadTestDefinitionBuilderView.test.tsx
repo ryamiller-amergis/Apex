@@ -57,6 +57,9 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     const user = userEvent.setup();
     let posted: unknown;
     global.fetch = jest.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
       if (typeof url === 'string' && url.includes('/load-test-targets')) {
         return { ok: true, status: 200, json: async () => ({ items: [target] }) };
       }
@@ -120,6 +123,9 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
   it('AC-1: save API error shows toast and keeps edits editable', async () => {
     const user = userEvent.setup();
     global.fetch = jest.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
       if (typeof url === 'string' && url.includes('/load-test-targets')) {
         return { ok: true, status: 200, json: async () => ({ items: [target] }) };
       }
@@ -156,6 +162,9 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
 
     global.fetch = jest.fn().mockImplementation(async (url: RequestInfo | URL) => {
       const href = hrefOf(url);
+      if (href.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
       if (href.includes('/load-test-targets')) {
         return { ok: true, status: 200, json: async () => ({ items: [target] }) };
       }
@@ -216,6 +225,9 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
   it('AC-3: view-only shows readonly banner and hides save/delete', async () => {
     mockCan.mockImplementation((key: string) => key === 'load-test:view');
     global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
       if (typeof url === 'string' && url.includes('/load-test-targets')) {
         return { ok: true, status: 200, json: async () => ({ items: [target] }) };
       }

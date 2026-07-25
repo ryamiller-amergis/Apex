@@ -11,6 +11,7 @@ import {
   useUpdateLoadTest,
 } from '../hooks/useLoadTests';
 import { useLoadTestTargets } from '../hooks/useLoadTestTargets';
+import { useProjectRepoConfigs } from '../hooks/useProjectRepoConfigs';
 import {
   defaultLoadTestBuilderValues,
   loadTestBuilderFormSchema,
@@ -25,9 +26,10 @@ import type {
   LoadTestDefinition,
   LoadTestScriptSource,
 } from '../../shared/types/loadTest';
+import type { LoadTestAiGenerateResult } from '../../shared/types/loadTestAi';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ConfirmRegenerateScriptModal } from './ConfirmRegenerateScriptModal';
-import { LoadTestAiModePlaceholder } from './LoadTestAiModePlaceholder';
+import { LoadTestAiGeneratePanel } from './LoadTestAiGeneratePanel';
 import { LoadTestBuilderModeTabs, type BuilderMode } from './LoadTestBuilderModeTabs';
 import { LoadTestGuidedForm } from './LoadTestGuidedForm';
 import { LoadTestRawScriptEditor } from './LoadTestRawScriptEditor';
@@ -80,9 +82,13 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   const isNew = !definitionId;
   const { data: definition, isLoading: defLoading } = useLoadTest(project, definitionId);
   const { data: targets = [], isLoading: targetsLoading } = useLoadTestTargets(project);
+  const { data: repoConfigs = [] } = useProjectRepoConfigs(project);
   const createMutation = useCreateLoadTest(project);
   const updateMutation = useUpdateLoadTest(project);
   const deleteMutation = useDeleteLoadTest(project);
+
+  // AC-2: AI generate is only available once the project has at least one connected repo.
+  const hasConnectedRepo = repoConfigs.some((config) => Boolean(config.skillRepo?.trim()));
 
   const [mode, setMode] = useState<BuilderMode>('guided');
   const [scriptSource, setScriptSource] = useState<LoadTestScriptSource>('form_builder');
@@ -90,7 +96,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
   const [pendingMode, setPendingMode] = useState<BuilderMode | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [aiNotice, setAiNotice] = useState(false);
 
   const {
     register,
@@ -106,6 +111,8 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   });
 
   const scriptValue = watch('script') ?? '';
+  const requirementIdValue = watch('requirementId') ?? '';
+  const requirementLabelValue = watch('requirementLabel') ?? '';
 
   useEffect(() => {
     if (!definition) return;
@@ -132,10 +139,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
   };
 
   const requestModeChange = (next: BuilderMode) => {
-    if (next === 'ai') {
-      setAiNotice(true);
-      return;
-    }
     if (next === 'guided' && mode === 'raw' && needsConfirmBeforeRegenerate(scriptSource)) {
       setPendingMode(next);
       setShowRegenerateConfirm(true);
@@ -153,6 +156,20 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     }
     setPendingMode(null);
     setShowRegenerateConfirm(false);
+  };
+
+  // FEAT-011 / PBI-014 AC-0, BR-005 — apply an AI-generated result into shared form
+  // state. Never auto-saves or auto-enqueues; the author reviews before Save.
+  const handleAiApply = (result: LoadTestAiGenerateResult) => {
+    setValue('script', result.script, { shouldDirty: true });
+    setValue(
+      'clientThresholds',
+      result.suggested_thresholds.length > 0
+        ? result.suggested_thresholds
+        : defaultLoadTestBuilderValues.clientThresholds,
+      { shouldDirty: true },
+    );
+    setScriptSource('ai_generated');
   };
 
   const buildPayload = (values: LoadTestBuilderFormValues): CreateLoadTestDefinitionInput => {
@@ -180,6 +197,21 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       nextSource = 'form_builder';
     } else if (mode === 'raw') {
       nextSource = 'raw';
+    } else if (mode === 'ai' && !script.trim()) {
+      // No AI result generated yet — fall back to the compiled guided script rather
+      // than persisting blank content (out of scope: auto-enqueue after generation).
+      const compiled = compileGuidedFormToK6({
+        flowType: values.flowType,
+        steps: values.steps,
+        loadProfile: values.loadProfile,
+        clientThresholds: values.clientThresholds,
+      });
+      script = compiled.script;
+      loadProfile = compiled.loadProfile;
+      clientThresholds = compiled.clientThresholds;
+      nextSource = 'form_builder';
+    } else if (mode === 'ai') {
+      nextSource = 'ai_generated';
     }
 
     const secretRefs =
@@ -301,17 +333,12 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         </div>
       )}
 
-      {aiNotice && (
-        <div className={styles.infoBanner} role="status">
-          AI generate is not available yet. Use Guided or Raw script modes.
-        </div>
-      )}
-
       <LoadTestBuilderModeTabs
         mode={mode}
         disabled={readOnly}
+        aiDisabled={readOnly}
+        aiDisabledReason="You have view-only access. Save and run-manage actions are unavailable."
         onChange={requestModeChange}
-        onAiAttempt={() => setAiNotice(true)}
       />
 
       <div id="load-test-mode-panel" role="tabpanel">
@@ -358,7 +385,17 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
           />
         )}
 
-        {mode === 'ai' && <LoadTestAiModePlaceholder />}
+        {mode === 'ai' && (
+          <LoadTestAiGeneratePanel
+            project={project}
+            requirementId={requirementIdValue}
+            requirementLabel={requirementLabelValue}
+            connected={hasConnectedRepo}
+            canManage={canManage}
+            needsConfirm={needsConfirmBeforeRegenerate(scriptSource)}
+            onApply={handleAiApply}
+          />
+        )}
       </div>
 
       {isDirty && canManage && (

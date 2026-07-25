@@ -118,6 +118,8 @@ export interface UpsertSkillConfigOptions {
   uiLabSkillPath?: string | null;
   calendarAssistantSkillPath?: string | null;
   calendarAssistantModel?: string | null;
+  loadTestGenerationSkillPath?: string | null;
+  loadTestGenerationModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
@@ -192,6 +194,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     uiLabSkillPath: opts.uiLabSkillPath ?? null,
     calendarAssistantSkillPath: opts.calendarAssistantSkillPath ?? null,
     calendarAssistantModel: opts.calendarAssistantModel ?? null,
+    loadTestGenerationSkillPath: opts.loadTestGenerationSkillPath ?? null,
+    loadTestGenerationModel: opts.loadTestGenerationModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,

@@ -6,6 +6,10 @@ export type BuilderMode = 'guided' | 'raw' | 'ai';
 interface LoadTestBuilderModeTabsProps {
   mode: BuilderMode;
   disabled?: boolean;
+  /** True when AI generate should stay greyed out (no can('load-test:manage') or view-only) — AC-3. */
+  aiDisabled?: boolean;
+  /** Tooltip/title shown while AI generate is disabled. */
+  aiDisabledReason?: string;
   onChange: (mode: BuilderMode) => void;
   onAiAttempt?: () => void;
 }
@@ -13,9 +17,12 @@ interface LoadTestBuilderModeTabsProps {
 export const LoadTestBuilderModeTabs: React.FC<LoadTestBuilderModeTabsProps> = ({
   mode,
   disabled = false,
+  aiDisabled = false,
+  aiDisabledReason,
   onChange,
   onAiAttempt,
 }) => {
+  const aiTabDisabled = disabled || aiDisabled;
   return (
     <div
       className={styles.tabs}
@@ -55,12 +62,12 @@ export const LoadTestBuilderModeTabs: React.FC<LoadTestBuilderModeTabsProps> = (
         id="load-test-mode-ai"
         aria-selected={mode === 'ai'}
         aria-controls="load-test-mode-panel"
-        className={`${styles.tab} ${styles.disabledTab}`}
-        data-testid="load-test-mode-ai"
-        disabled
-        aria-disabled="true"
-        title="AI generate will be available in a later release"
-        onClick={() => onAiAttempt?.()}
+        className={`${styles.tab} ${mode === 'ai' ? styles.active : ''} ${aiTabDisabled ? styles.disabledTab : ''}`}
+        data-testid="load-test-ai-mode-tab"
+        disabled={aiTabDisabled}
+        aria-disabled={aiTabDisabled}
+        title={aiTabDisabled ? aiDisabledReason ?? 'AI generate is unavailable' : undefined}
+        onClick={() => (aiTabDisabled ? onAiAttempt?.() : onChange('ai'))}
       >
         AI generate
       </button>
