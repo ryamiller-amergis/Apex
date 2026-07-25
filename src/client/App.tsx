@@ -72,6 +72,12 @@ const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ defau
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
+const LoadTestDefinitionBuilderView = lazy(() =>
+  import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
+);
+const LoadTestsRouteGuard = lazy(() =>
+  import('./components/LoadTestsRouteGuard').then((m) => ({ default: m.LoadTestsRouteGuard })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -168,7 +174,7 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
-                    : location.pathname === '/load-tests'
+                    : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
                     : 'calendar';
 
@@ -804,10 +810,29 @@ function App() {
           ) : currentView === 'load-tests' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <LoadTestsListPage
-                  project={selectedProject}
-                  canView={isSuperAdmin || can('load-test:view')}
-                />
+                <LoadTestsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
+                  {(() => {
+                    const segments = location.pathname.split('/').filter(Boolean);
+                    // /load-tests | /load-tests/new | /load-tests/:definitionId
+                    if (segments[0] === 'load-tests' && segments[1] === 'new') {
+                      return <LoadTestDefinitionBuilderView project={selectedProject} />;
+                    }
+                    if (segments[0] === 'load-tests' && segments[1]) {
+                      return (
+                        <LoadTestDefinitionBuilderView
+                          project={selectedProject}
+                          definitionId={segments[1]}
+                        />
+                      );
+                    }
+                    return (
+                      <LoadTestsListPage
+                        project={selectedProject}
+                        canView={isSuperAdmin || can('load-test:view')}
+                      />
+                    );
+                  })()}
+                </LoadTestsRouteGuard>
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (

@@ -1,0 +1,41 @@
+.never {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.passed {
+  color: var(--success-color);
+  border-color: var(--success-color);
+}
+
+.failed,
+.errored {
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.running,
+.queued,
+.dispatched {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}
