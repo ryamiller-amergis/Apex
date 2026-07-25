@@ -100,8 +100,8 @@ resource "azurerm_storage_management_policy" "lt_artifacts_lifecycle" {
 
 resource "azurerm_user_assigned_identity" "lt_runner" {
   name                = local.lt_runner_mi_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.app_service_location
+  resource_group_name = local.app_resource_group_name
   tags                = merge(var.tags, { Environment = var.environment, Workload = "load-test" })
 }
 
@@ -157,8 +157,8 @@ resource "azurerm_role_assignment" "lt_api_blob_reader" {
 
 resource "azurerm_container_app_environment" "load_test" {
   name                = local.lt_cae_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.app_service_location
+  resource_group_name = local.app_resource_group_name
 
   # VNet integration is required for runner egress to allowlisted non-prod
   # targets (A-007). Provide var.lt_vnet_subnet_id when the VNet/subnet exists.
@@ -178,8 +178,8 @@ resource "azurerm_container_app_environment" "load_test" {
 
 resource "azurerm_container_app_job" "load_test_runner" {
   name                         = local.lt_job_name
-  location                     = azurerm_resource_group.main.location
-  resource_group_name          = azurerm_resource_group.main.name
+  location                     = local.app_service_location
+  resource_group_name          = local.app_resource_group_name
   container_app_environment_id = azurerm_container_app_environment.load_test.id
 
   # Maximum wall-clock time for a single execution (60 min PRD guardrail).

@@ -198,7 +198,11 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 | `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
 | `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
 
-The cross-cutting Apex managed identity receives Storage Account-scoped Blob contributor. No connection strings or shared keys are emitted.
+The production Apex app and its staging deployment slot each have a distinct
+system-assigned managed identity. Both receive Storage Account-scoped Blob
+contributor so narrow pre-swap PDF smoke tests use the same production Blob
+boundary without connection strings or shared keys. Slot identities do not
+move during swaps; Terraform must retain the staging identity and its RBAC grant.
 
 When adding the system identity to an existing App Service with AzureRM 3.x,
 provisioning is intentionally two-stage:
@@ -209,6 +213,10 @@ provisioning is intentionally two-stage:
 
 Do not deploy the Blob-backed application settings until the second plan shows
 `azurerm_role_assignment.api_pdf_blob_contributor` will be created.
+When enabling the production staging slot, the plan must also retain the slot's
+system identity and manage
+`azurerm_role_assignment.staging_pdf_blob_contributor`; removing the identity
+would cause staging PDF requests to fail with Blob authorization errors.
 
 #### Extending for another module
 
@@ -255,6 +263,20 @@ Resources follow the Apex convention `{type}-apex-lt-{environment}`:
 | Runner managed identity | `mi-apex-lt-runner-dev` | `mi-apex-lt-runner-prd` |
 | Blob container | `lt-artifacts` | `lt-artifacts` |
 
+### Resource placement
+
+Load-test data-plane resources follow the data lifecycle, while executable
+compute and its identity follow the application lifecycle:
+
+| Resource group | Resources |
+|----------------|-----------|
+| Data (`resource_group_name`; prod `rg-apex-prd-data`) | Service Bus namespace/queue, shared Storage Account, `lt-artifacts`, lifecycle policy |
+| App (`app_service_resource_group_name`, otherwise data RG; prod `rg-apex-prd-app`) | Container Apps Environment, Container Apps Job, runner managed identity |
+
+The compute resources use `app_service_location`; Service Bus and Blob continue
+to use the main data location. In environments without a dedicated app resource
+group (current dev), both groups resolve to the same resource group.
+
 ### Provisioned resources
 
 | Resource | Purpose |
@@ -284,6 +306,8 @@ terraform output lt_servicebus_namespace_name   # sbns-apex-lt-dev
 terraform output lt_servicebus_namespace_fqdn   # sbns-apex-lt-dev.servicebus.windows.net
 terraform output lt_servicebus_queue_name        # lt-dispatch
 terraform output lt_servicebus_dlq_name          # lt-dispatch/$DeadLetterQueue
+terraform output lt_data_resource_group_name
+terraform output lt_compute_resource_group_name
 terraform output lt_container_app_environment_name
 terraform output lt_container_app_job_name
 terraform output lt_blob_account_name

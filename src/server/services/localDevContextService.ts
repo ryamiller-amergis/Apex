@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { AzureDevOpsService } from './azureDevOps';
 import { normalizeAdoHtml } from '../utils/adoRichText';
 import { sanitizeSlug, resolveFeatureIndex } from './devContextService';
+import { getSkillConfig } from './projectSettingsService';
 import type { LocalDevContextFile, LocalDevContextResponse } from '../../shared/types/devWorkbench';
 
 export interface BuildLocalDevContextInput {
@@ -61,8 +62,10 @@ function buildPrompt(args: {
   typeLabel?: string;
   filePaths: string[];
   prototypePath?: string;
+  devSkillPath?: string | null;
+  featureId?: string | null;
 }): string {
-  const { title, slug, idLabel, typeLabel, filePaths, prototypePath } = args;
+  const { title, slug, idLabel, typeLabel, filePaths, prototypePath, devSkillPath, featureId } = args;
   const lines = [
     `Implement the following work item locally in this repository.`,
     ``,
@@ -87,15 +90,46 @@ function buildPrompt(args: {
       `The file \`${prototypePath}\` is the approved UI prototype HTML — treat it as the intended visual/UX reference when implementing UI.`,
     );
   }
-  lines.push(
-    ``,
-    `Implement according to the acceptance criteria and design docs. Follow this repository's coding conventions, patterns, and existing architecture. Prefer minimal, focused changes.`,
-  );
+
+  // If the project has a development skill configured, emit an explicit invocation
+  // block so the agent knows to load the skill rather than improvise.
+  if (devSkillPath && featureId) {
+    const featMatch = featureId.match(/FEAT-\d+/i);
+    const featToken = featMatch ? featMatch[0].toUpperCase() : featureId;
+    lines.push(
+      ``,
+      `## Development skill`,
+      ``,
+      `This project is configured to use the \`${devSkillPath}\` skill. Begin by invoking:`,
+      ``,
+      `  /${devSkillPath} feature ${slug} ${featToken}`,
+      ``,
+      `### Local execution policy (overrides Dev Workbench defaults)`,
+      ``,
+      `- **Artifact root:** \`.ai-pilot/local-dev/${slug}/\` (not \`.ai-pilot/output/\`)`,
+      `- **Git:** local Cursor session — do NOT run \`git commit\` or \`git push\` unless explicitly asked.`,
+      `- **E2E tests:** author required Playwright specs where acceptance criteria require them; defer *execution* only when a Playwright environment is unavailable.`,
+      `- **Assumption gate:** stop and resolve any ⚠ unresolved items in \`assumptions.md\` that affect behavior, security, or scope before writing code.`,
+      `- **Naming:** verify all file/key names against the live repository before implementing.`,
+      `- **Stubs:** thin permission-gated route stubs are acceptable for routes that downstream features will replace.`,
+      `- **Protected files** (require explicit permission): \`src/server/index.ts\`, \`package.json\`, \`tsconfig*.json\`, \`vite.config.ts\`, \`jest.config.*\`, any CI/CD files.`,
+    );
+  } else {
+    lines.push(
+      ``,
+      `Implement according to the acceptance criteria and design docs. Follow this repository's coding conventions, patterns, and existing architecture. Prefer minimal, focused changes.`,
+    );
+  }
+
   return lines.join('\n');
 }
 
-async function buildApexContext(prdId: string, featureId: string): Promise<LocalDevContextResponse> {
-  const prdRow = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+async function buildApexContext(project: string, prdId: string, featureId: string): Promise<LocalDevContextResponse> {
+  const [prdRow, skillConfig] = await Promise.all([
+    db.query.prds.findFirst({ where: eq(prds.id, prdId) }),
+    getSkillConfig(project).catch(() => null),
+  ]);
+  const devSkillPath = skillConfig?.developmentSkillPath ?? null;
   if (!prdRow) {
     throw Object.assign(new Error('PRD not found'), { status: 404 });
   }
@@ -181,6 +215,8 @@ async function buildApexContext(prdId: string, featureId: string): Promise<Local
     typeLabel: 'Apex Feature',
     filePaths,
     prototypePath,
+    devSkillPath,
+    featureId,
   });
 
   push(`${root}/KICKOFF-PROMPT.md`, prompt);
@@ -362,7 +398,7 @@ export async function buildLocalDevContext(
   }
 
   if (hasApexPath) {
-    return buildApexContext(prdId!, featureId!);
+    return buildApexContext(project, prdId!, featureId!);
   }
   return buildAdoContext(project, workItemId!);
 }

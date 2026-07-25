@@ -78,6 +78,11 @@ output "pdf_api_managed_identity_principal_id" {
   value       = try(azurerm_linux_web_app.main.identity[0].principal_id, null)
 }
 
+output "pdf_staging_managed_identity_principal_id" {
+  description = "Production staging-slot identity granted PDF Blob contributor role"
+  value       = var.enable_staging_slot ? try(azurerm_linux_web_app_slot.staging[0].identity[0].principal_id, null) : null
+}
+
 output "pdf_app_setting_names" {
   description = "Non-secret app setting contract for PDF assembly inside the Apex application"
   value = {
@@ -110,6 +115,16 @@ output "lt_servicebus_queue_name" {
 output "lt_servicebus_dlq_name" {
   description = "Load-test dead-letter queue name (Azure auto-creates as <queue>/$DeadLetterQueue)"
   value       = "${azurerm_servicebus_queue.lt_dispatch.name}/$DeadLetterQueue"
+}
+
+output "lt_data_resource_group_name" {
+  description = "Resource group containing load-test Service Bus and shared Blob data resources"
+  value       = azurerm_servicebus_namespace.load_test.resource_group_name
+}
+
+output "lt_compute_resource_group_name" {
+  description = "Resource group containing the load-test Container Apps compute and runner identity"
+  value       = azurerm_container_app_job.load_test_runner.resource_group_name
 }
 
 output "lt_container_app_environment_name" {

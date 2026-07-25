@@ -8,6 +8,7 @@ interface NavItem {
   icon: React.ReactNode;
   permission: string | null;
   onNavigate: () => void;
+  testId?: string;
 }
 
 interface AppSidebarProps {
@@ -32,6 +33,7 @@ interface AppSidebarProps {
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
+  onNavigateLoadTests?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -126,6 +128,14 @@ const IconDesignModule: React.FC = () => (
   </svg>
 );
 
+const IconLoadTests: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 3a7 7 0 100 14A7 7 0 0010 3z" />
+    <path d="M10 7v3l2 2" />
+    <path d="M3.5 10h1M15.5 10h1M10 3.5v1M10 15.5v1" />
+  </svg>
+);
+
 const IconAdmin: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -167,6 +177,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
+  onNavigateLoadTests,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -191,6 +202,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
+    { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
   ];
 
   const visibleModuleItems = moduleItems.filter((item) => {
@@ -259,7 +271,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             onClick={item.onNavigate}
             type="button"
             title={collapsed ? item.label : undefined}
-            data-testid={`nav-item-${item.view}`}
+            data-testid={item.testId ?? `nav-item-${item.view}`}
           >
             <span className={styles.icon}>{item.icon}</span>
             {!collapsed && <span className={styles.label}>{item.label}</span>}
