@@ -147,7 +147,7 @@ function baseRun(overrides: Record<string, unknown> = {}) {
       script: definition.script,
       loadProfile: definition.loadProfile,
       clientThresholds: definition.clientThresholds,
-      secretRefs: ['kv://vault/secret'],
+      secretRefs: { token: 'kv://vault/secret' },
       environment: 'staging',
       definitionName: 'API smoke',
     },

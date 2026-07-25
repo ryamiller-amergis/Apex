@@ -180,7 +180,11 @@ router.post(
     try {
       const { projectId, runId } = req.params;
       const run = await loadTestRunService.ingest(projectId, runId, req.body);
-      res.status(202).json({ ok: true, run });
+      res.status(202).json({
+        ok: true,
+        cancelRequested: run.cancelRequested,
+        run,
+      });
     } catch (err) {
       if (!handleServiceError(err, res)) next(err);
     }

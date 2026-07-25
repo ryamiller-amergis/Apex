@@ -117,8 +117,8 @@ export type LoadTestExecutionSnapshot = {
   script: string;
   loadProfile: LoadProfile;
   clientThresholds: Threshold[];
-  /** Key Vault refs only — never plaintext */
-  secretRefs: string[];
+  /** Key Vault refs keyed by injection env name — never plaintext */
+  secretRefs: Record<string, string>;
   environment: string;
   definitionName: string;
 };
@@ -147,19 +147,27 @@ export interface LoadTestRun {
   updatedAt: string;
 }
 
-/** Service Bus dispatch payload (FEAT-007). */
+/** Service Bus dispatch payload (FEAT-007 / FEAT-008). */
 export type LoadTestDispatchMessage = {
   dispatchMessageId: string;
   projectId: string;
   runId: string;
   definitionId: string;
   targetUrl: string;
+  /** Environment label used for final non-prod assertion at the runner */
+  environment: string;
   script: string;
   loadProfile: LoadProfile;
   clientThresholds: Threshold[];
-  secretRefs: string[];
+  /** Key Vault refs keyed by injection env name — never plaintext */
+  secretRefs: Record<string, string>;
   callbackBaseUrl: string;
 };
+
+/** Swappable load-test execution abstraction (FEAT-008). */
+export interface LoadTestRunner {
+  execute(dispatch: LoadTestDispatchMessage): Promise<void>;
+}
 
 /** Unified runner/pipeline ingest body (FEAT-007 / PBI-009). */
 export type LoadTestRunIngestBody = {

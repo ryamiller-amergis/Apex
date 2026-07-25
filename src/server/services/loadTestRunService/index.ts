@@ -90,15 +90,12 @@ function parseArtifactRef(
 function buildSnapshot(
   definition: NonNullable<Awaited<ReturnType<typeof getDefinition>>>,
 ): LoadTestExecutionSnapshot {
-  const secretRefs = definition.secretRefs
-    ? Object.values(definition.secretRefs)
-    : [];
   return {
     targetUrl: definition.targetUrl,
     script: definition.script,
     loadProfile: definition.loadProfile,
     clientThresholds: definition.clientThresholds,
-    secretRefs,
+    secretRefs: definition.secretRefs ? { ...definition.secretRefs } : {},
     environment: definition.environment,
     definitionName: definition.name,
   };
@@ -230,6 +227,7 @@ export async function enqueue(
     runId: run.id,
     definitionId,
     targetUrl: snapshot.targetUrl,
+    environment: snapshot.environment,
     script: snapshot.script,
     loadProfile: snapshot.loadProfile,
     clientThresholds: snapshot.clientThresholds,

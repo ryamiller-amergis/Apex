@@ -56,10 +56,20 @@ describe('POST /api/internal/load-test-runs/:projectId/:runId/ingest', () => {
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
+    expect(res.body.cancelRequested).toBe(false);
     expect(mockIngest).toHaveBeenCalledWith(
       'project-a',
       'run-1',
       expect.objectContaining({ kind: 'progress' }),
     );
+  });
+});
+
+describe('POST /api/internal/load-test-runs/:projectId/targets/validate', () => {
+  it('FEAT-008: requires runner auth for allowlist validate', async () => {
+    const res = await request(buildApp())
+      .post('/api/internal/load-test-runs/project-a/targets/validate')
+      .send({ targetUrl: 'https://staging.example.com', environment: 'staging' });
+    expect(res.status).toBe(401);
   });
 });

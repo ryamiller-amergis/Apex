@@ -57,6 +57,7 @@ export async function tryPromoteNextQueuedRun(
     runId: row.id,
     definitionId: row.loadTestId,
     targetUrl: snapshot.targetUrl,
+    environment: snapshot.environment,
     script: snapshot.script,
     loadProfile: snapshot.loadProfile,
     clientThresholds: snapshot.clientThresholds,
