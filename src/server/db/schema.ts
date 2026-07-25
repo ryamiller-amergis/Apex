@@ -1603,12 +1603,14 @@ export const loadTestTargets = pgTable('load_test_target', {
   baseUrl: text('base_url').notNull(),
   environmentLabel: text('environment_label').notNull(),
   isReachable: boolean('is_reachable').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   createdBy: text('created_by').notNull(),
   updatedBy: text('updated_by').notNull(),
 }, (t) => ({
   projectIdIdx: index('idx_load_test_target_project_id').on(t.projectId),
+  projectBaseUrlUq: uniqueIndex('uq_load_test_target_project_base_url').on(t.projectId, t.baseUrl),
 }));
 
 export const loadTestsRelations = relations(loadTests, ({ many }) => ({

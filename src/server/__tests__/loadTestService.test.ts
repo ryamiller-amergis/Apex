@@ -139,6 +139,7 @@ function makeTargetRow(baseUrl = 'https://staging.example.com') {
     baseUrl,
     environmentLabel: 'staging',
     isReachable: true,
+    isActive: true,
     createdAt: NOW,
     updatedAt: NOW,
     createdBy: USER_ID,
@@ -151,7 +152,9 @@ function setupAllowlistHit(baseUrl = 'https://staging.example.com') {
   const db = getMockDb();
   db.select.mockReturnValue({
     from: jest.fn().mockReturnValue({
-      where: jest.fn().mockResolvedValue([makeTargetRow(baseUrl)]),
+      where: jest.fn().mockReturnValue({
+        orderBy: jest.fn().mockResolvedValue([makeTargetRow(baseUrl)]),
+      }),
     }),
   });
 }
@@ -161,7 +164,9 @@ function setupAllowlistMiss() {
   const db = getMockDb();
   db.select.mockReturnValue({
     from: jest.fn().mockReturnValue({
-      where: jest.fn().mockResolvedValue([]),
+      where: jest.fn().mockReturnValue({
+        orderBy: jest.fn().mockResolvedValue([]),
+      }),
     }),
   });
 }

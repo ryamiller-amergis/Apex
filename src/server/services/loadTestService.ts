@@ -1,26 +1,29 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { loadTestRuns, loadTests, loadTestTargets } from '../db/schema';
+import { loadTestRuns, loadTests } from '../db/schema';
 import type {
   CreateLoadTestDefinitionInput,
   CreateLoadTestRunInput,
-  CreateLoadTestTargetInput,
   LoadProfile,
   LoadTestDefinition,
   LoadTestPortableDefinition,
   LoadTestRun,
-  LoadTestTarget,
   RunStatus,
   Threshold,
   UpdateLoadTestDefinitionInput,
 } from '../../shared/types/loadTest';
 import { LoadTestValidationError } from '../../shared/types/loadTest';
+import {
+  assertTargetAllowlisted,
+  isProdEnvironmentLabel,
+  isProdHostname,
+  normalizeTargetUrl,
+} from './loadTestTargetService';
 
 // ── Row type aliases ───────────────────────────────────────────────────────────
 
 type LoadTestRow = typeof loadTests.$inferSelect;
 type LoadTestRunRow = typeof loadTestRuns.$inferSelect;
-type LoadTestTargetRow = typeof loadTestTargets.$inferSelect;
 
 // ── Constants — profile caps (platform defaults, A-005) ───────────────────────
 
@@ -30,18 +33,17 @@ export const LOAD_TEST_CAPS = {
   maxRpsCap: 10_000,
 } as const;
 
-// ── Prod-pattern detection (BR-001) ───────────────────────────────────────────
-
-const PROD_PATTERNS = [
-  /\bprod(?:uction)?\b/i,
-  /\.prod\./i,
-  /\bprod-/i,
-  /-prod\b/i,
-];
+// ── Prod-pattern detection (BR-001) — delegates to FEAT-005 helpers ───────────
 
 export function isProdTarget(target: string, environment: string): boolean {
-  const combined = `${target} ${environment}`;
-  return PROD_PATTERNS.some((p) => p.test(combined));
+  if (isProdEnvironmentLabel(environment)) return true;
+  try {
+    const normalized = normalizeTargetUrl(target);
+    return isProdHostname(new URL(normalized).hostname);
+  } catch {
+    // Fallback for non-URL strings used in unit tests / legacy callers
+    return isProdHostname(target) || /(?:^|[.-/\s])prod(?:[.-/\s]|$)/i.test(target);
+  }
 }
 
 // ── Plaintext secret detection (BR-006) ───────────────────────────────────────
@@ -104,45 +106,23 @@ export function enforceProfileCaps(profile: LoadProfile): void {
   }
 }
 
-// ── Allowlist validation (BR-001, BR-002) — forward-compatible with FEAT-005 ──
-// FEAT-005 ships the admin CRUD for load_test_target. This helper validates
-// at save time by querying the project's load_test_target rows directly.
-// When FEAT-005 exports its own helpers, callers may swap in those imports.
+// ── Allowlist validation (BR-001, BR-002) — FEAT-005 helpers ───────────────────
 
 export async function assertAllowlistedNonProd(
   projectId: string,
   targetUrl: string,
   environment: string,
 ): Promise<void> {
-  // Hard-refuse prod-tagged or prod-patterned targets first (BR-001)
-  if (isProdTarget(targetUrl, environment)) {
+  // Hard-refuse prod-tagged environments first (BR-001)
+  if (isProdEnvironmentLabel(environment)) {
     throw new LoadTestValidationError(
       `Target "${targetUrl}" (environment "${environment}") appears to be a production environment and is refused.`,
       'LOAD_TEST_PROD_TARGET_REFUSED',
     );
   }
 
-  // Verify the target base URL is on the project allowlist (BR-002)
-  const targets = await db
-    .select()
-    .from(loadTestTargets)
-    .where(eq(loadTestTargets.projectId, projectId));
-
-  const normaliseUrl = (u: string) => u.replace(/\/+$/, '').toLowerCase();
-  const normTarget = normaliseUrl(targetUrl);
-
-  const isAllowlisted = targets.some(
-    (t) =>
-      normTarget === normaliseUrl(t.baseUrl) ||
-      normTarget.startsWith(normaliseUrl(t.baseUrl) + '/'),
-  );
-
-  if (!isAllowlisted) {
-    throw new LoadTestValidationError(
-      `Target "${targetUrl}" is not on the project allowlist. Add it via the allowlist admin before saving.`,
-      'LOAD_TEST_TARGET_NOT_ALLOWLISTED',
-    );
-  }
+  // Active allowlist match + hostname prod refuse (BR-001 / BR-002)
+  await assertTargetAllowlisted(projectId, targetUrl);
 }
 
 // ── Raw-script threshold reconciliation (PBI-004 AC-2, A-007) ─────────────────
@@ -246,20 +226,6 @@ function mapRunRow(row: LoadTestRunRow): LoadTestRun {
     errorDetail: row.errorDetail ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-  };
-}
-
-function mapTargetRow(row: LoadTestTargetRow): LoadTestTarget {
-  return {
-    id: row.id,
-    projectId: row.projectId,
-    baseUrl: row.baseUrl,
-    environmentLabel: row.environmentLabel,
-    isReachable: row.isReachable,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    createdBy: row.createdBy,
-    updatedBy: row.updatedBy,
   };
 }
 
@@ -601,58 +567,4 @@ export async function listRuns(
   return rows.map(mapRunRow);
 }
 
-// ── Target (Allowlist) CRUD ────────────────────────────────────────────────────
-
-export async function createTarget(
-  projectId: string,
-  input: CreateLoadTestTargetInput,
-  userId: string,
-): Promise<LoadTestTarget> {
-  assertProjectId(projectId);
-
-  if (!input.baseUrl?.trim()) {
-    throw new LoadTestValidationError('baseUrl is required', 'LOAD_TEST_VALIDATION');
-  }
-  if (!input.environmentLabel?.trim()) {
-    throw new LoadTestValidationError('environmentLabel is required', 'LOAD_TEST_VALIDATION');
-  }
-
-  const rows = await db.transaction(async (tx) => {
-    return tx
-      .insert(loadTestTargets)
-      .values({
-        projectId,
-        baseUrl: input.baseUrl,
-        environmentLabel: input.environmentLabel,
-        isReachable: input.isReachable ?? true,
-        createdBy: userId,
-        updatedBy: userId,
-      })
-      .returning();
-  });
-
-  return mapTargetRow(rows[0]);
-}
-
-export async function listTargets(projectId: string): Promise<LoadTestTarget[]> {
-  assertProjectId(projectId);
-
-  const rows = await db
-    .select()
-    .from(loadTestTargets)
-    .where(eq(loadTestTargets.projectId, projectId))
-    .orderBy(desc(loadTestTargets.createdAt));
-
-  return rows.map(mapTargetRow);
-}
-
-export async function deleteTarget(projectId: string, id: string): Promise<boolean> {
-  assertProjectId(projectId);
-
-  const rows = await db
-    .delete(loadTestTargets)
-    .where(and(eq(loadTestTargets.id, id), eq(loadTestTargets.projectId, projectId)))
-    .returning({ id: loadTestTargets.id });
-
-  return rows.length > 0;
-}
+// Target allowlist CRUD lives in loadTestTargetService (FEAT-005).

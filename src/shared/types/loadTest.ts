@@ -138,6 +138,8 @@ export interface LoadTestTarget {
   baseUrl: string;
   environmentLabel: string;
   isReachable: boolean;
+  /** Soft-disable: inactive entries are excluded from author picker and fail allowlist checks. */
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -172,6 +174,14 @@ export interface CreateLoadTestTargetInput {
   baseUrl: string;
   environmentLabel: string;
   isReachable?: boolean;
+  isActive?: boolean;
+}
+
+export interface UpdateLoadTestTargetInput {
+  baseUrl?: string;
+  environmentLabel?: string;
+  isReachable?: boolean;
+  isActive?: boolean;
 }
 
 // ── Update Input ───────────────────────────────────────────────────────────────

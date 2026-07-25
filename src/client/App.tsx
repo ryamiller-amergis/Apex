@@ -59,6 +59,7 @@ const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ def
 const AdminProjectSettings = lazy(() => import('./components/AdminProjectSettings').then(m => ({ default: m.AdminProjectSettings })));
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
+const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
@@ -708,6 +709,13 @@ function App() {
                     >
                       Notifications
                     </button>
+                    <button
+                      className={`admin-tab${location.pathname === '/admin/load-test-targets' ? ' admin-tab-active' : ''}`}
+                      onClick={() => navigate('/admin/load-test-targets')}
+                      type="button"
+                    >
+                      Load Test Targets
+                    </button>
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -717,6 +725,8 @@ function App() {
                     <AdminProjectSettings selectedProject={selectedProject} availableProjects={availableProjects} />
                   ) : location.pathname === '/admin/notifications' ? (
                     <AdminNotifications />
+                  ) : location.pathname === '/admin/load-test-targets' ? (
+                    <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}
