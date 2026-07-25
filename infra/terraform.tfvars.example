@@ -72,3 +72,39 @@ shared_storage_account_name = null
 # }
 
 pdf_blob_container_name = "pdf-artifacts"
+
+# ---------------------------------------------------------------------------
+# Load Test module — FEAT-002
+# Resource names follow the Apex convention {type}-apex-lt-{environment}.
+# Null values derive the standard name automatically:
+#   sbns-apex-lt-dev  sbns-apex-lt-prd   Service Bus namespace
+#   cae-apex-lt-dev   cae-apex-lt-prd    Container Apps Environment
+#   caj-apex-lt-dev   caj-apex-lt-prd    Container Apps Job
+#   mi-apex-lt-runner-dev  mi-apex-lt-runner-prd  Runner managed identity
+#   lt-artifacts                          Blob container (all environments)
+# Override only for global-name collisions or multi-region deployments.
+# ---------------------------------------------------------------------------
+
+# lt_servicebus_namespace_name = null   # derives "sbns-apex-lt-dev"
+# lt_servicebus_queue_name     = null   # derives "lt-dispatch"
+# lt_container_app_env_name    = null   # derives "cae-apex-lt-dev"
+# lt_container_app_job_name    = null   # derives "caj-apex-lt-dev"
+# lt_runner_identity_name      = null   # derives "mi-apex-lt-runner-dev"
+# lt_blob_container_name       = null   # derives "lt-artifacts"
+
+# Platform concurrency cap (1–2; default 2 per PRD guardrail).
+# lt_max_executions = 2
+
+# Runner image — update to pinned ACR digest after Lane B (image build) completes.
+# Format: <acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>
+# lt_runner_image = "grafana/k6:latest"
+
+# VNet subnet for runner egress to non-prod targets (A-007).
+# Required before load tests can reach VNet-peered allowlisted hosts.
+# lt_vnet_subnet_id = "/subscriptions/.../subnets/snet-apex-lt-dev"
+
+# Key Vault for target auth secret injection at runner execution time.
+# lt_key_vault_id = "/subscriptions/.../vaults/kv-apex-dev"
+
+# Apex API callback URL (set to App Service URL; wired by FEAT-008).
+# lt_apex_callback_base_url = "https://app-apex-dev.azurewebsites.net"

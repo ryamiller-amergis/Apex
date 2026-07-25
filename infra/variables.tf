@@ -322,3 +322,98 @@ variable "pdf_blob_container_name" {
   type        = string
   default     = "pdf-artifacts"
 }
+
+# ---------------------------------------------------------------------------
+# Load Test module — FEAT-002
+# Resource names follow the Apex convention {type}-apex-lt-{environment}.
+# Null values derive the standard Apex name; override only for global-name
+# collisions or multi-region deployments.
+# ---------------------------------------------------------------------------
+
+variable "lt_servicebus_namespace_name" {
+  description = "Service Bus namespace for load-test dispatch. Null derives 'sbns-apex-lt-{environment}' (e.g. sbns-apex-lt-dev, sbns-apex-lt-prd)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.lt_servicebus_namespace_name == null || can(regex("^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$", var.lt_servicebus_namespace_name))
+    error_message = "Service Bus namespace must be 6–50 chars, start with a letter, contain only letters/numbers/hyphens."
+  }
+}
+
+variable "lt_servicebus_queue_name" {
+  description = "Queue name inside the load-test Service Bus namespace. Null uses 'lt-dispatch'."
+  type        = string
+  default     = null
+}
+
+variable "lt_container_app_env_name" {
+  description = "Container Apps Environment for the load-test runner. Null derives 'cae-apex-lt-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "lt_container_app_job_name" {
+  description = "Container Apps Job name for the k6 runner. Null derives 'caj-apex-lt-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "lt_runner_identity_name" {
+  description = "User-assigned managed identity for the load-test runner. Null derives 'mi-apex-lt-runner-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "lt_blob_container_name" {
+  description = "Blob container on the shared storage account for load-test artifacts. Null uses 'lt-artifacts'."
+  type        = string
+  default     = null
+}
+
+variable "lt_max_executions" {
+  description = "Maximum parallel Container Apps Job executions (global concurrency cap). PRD guardrail: 1–2; default 2."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.lt_max_executions >= 1 && var.lt_max_executions <= 2
+    error_message = "lt_max_executions must be 1 or 2 (PRD platform concurrency guardrail)."
+  }
+}
+
+variable "lt_runner_image" {
+  description = "Fully-qualified runner image reference including digest for supply-chain pinning (e.g. <acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>). Placeholder until Lane B image is published."
+  type        = string
+  default     = "grafana/k6:latest"
+}
+
+variable "lt_runner_cpu" {
+  description = "CPU cores allocated per runner execution (supports up to 5000 VUs; default 2.0)."
+  type        = number
+  default     = 2.0
+}
+
+variable "lt_runner_memory" {
+  description = "Memory (GiB string) allocated per runner execution (default '4Gi')."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "lt_vnet_subnet_id" {
+  description = "Subnet resource ID for VNet-integrated Container Apps Environment. Required for non-prod target reachability (A-007). Null disables VNet integration for initial stand-up."
+  type        = string
+  default     = null
+}
+
+variable "lt_key_vault_id" {
+  description = "Key Vault resource ID for runner secret injection. When set, grants the runner MI 'Key Vault Secrets User' on this vault. Null skips the role assignment."
+  type        = string
+  default     = null
+}
+
+variable "lt_apex_callback_base_url" {
+  description = "Base URL of the Apex API that the runner calls for progress/completion callbacks (e.g. https://app-apex-dev.azurewebsites.net). Wired by FEAT-008."
+  type        = string
+  default     = ""
+}

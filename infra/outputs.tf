@@ -85,3 +85,79 @@ output "pdf_app_setting_names" {
     blob_container_name = "PDF_BLOB_CONTAINER_NAME"
   }
 }
+
+# ---------------------------------------------------------------------------
+# Load Test module outputs (FEAT-002)
+# Wire these into Apex app settings and the Container Apps Job environment
+# for FEAT-007 (enqueue) and FEAT-008 (runner callback).
+# ---------------------------------------------------------------------------
+
+output "lt_servicebus_namespace_name" {
+  description = "Load-test dedicated Service Bus namespace name (e.g. sbns-apex-lt-dev)"
+  value       = azurerm_servicebus_namespace.load_test.name
+}
+
+output "lt_servicebus_namespace_fqdn" {
+  description = "Load-test Service Bus FQDN for SDK connection (e.g. sbns-apex-lt-dev.servicebus.windows.net)"
+  value       = "${azurerm_servicebus_namespace.load_test.name}.servicebus.windows.net"
+}
+
+output "lt_servicebus_queue_name" {
+  description = "Load-test dispatch queue name"
+  value       = azurerm_servicebus_queue.lt_dispatch.name
+}
+
+output "lt_servicebus_dlq_name" {
+  description = "Load-test dead-letter queue name (Azure auto-creates as <queue>/$DeadLetterQueue)"
+  value       = "${azurerm_servicebus_queue.lt_dispatch.name}/$DeadLetterQueue"
+}
+
+output "lt_container_app_environment_name" {
+  description = "Container Apps Environment name for the load-test runner (e.g. cae-apex-lt-dev)"
+  value       = azurerm_container_app_environment.load_test.name
+}
+
+output "lt_container_app_job_name" {
+  description = "Container Apps Job name for the k6 runner (e.g. caj-apex-lt-dev)"
+  value       = azurerm_container_app_job.load_test_runner.name
+}
+
+output "lt_container_app_job_id" {
+  description = "Container Apps Job resource ID"
+  value       = azurerm_container_app_job.load_test_runner.id
+}
+
+output "lt_blob_account_name" {
+  description = "Storage Account holding load-test artifacts (shared Apex async account)"
+  value       = azurerm_storage_account.shared.name
+}
+
+output "lt_blob_container_name" {
+  description = "Blob container for load-test summary and time-series artifacts (90-day lifecycle)"
+  value       = azurerm_storage_container.lt_artifacts.name
+}
+
+output "lt_runner_identity_client_id" {
+  description = "Runner user-assigned MI client ID — needed for FEAT-008 workload identity wiring"
+  value       = azurerm_user_assigned_identity.lt_runner.client_id
+}
+
+output "lt_runner_identity_principal_id" {
+  description = "Runner user-assigned MI principal ID — Azure RBAC reference"
+  value       = azurerm_user_assigned_identity.lt_runner.principal_id
+}
+
+output "lt_runner_identity_id" {
+  description = "Runner user-assigned MI resource ID — referenced by Container Apps Job identity block"
+  value       = azurerm_user_assigned_identity.lt_runner.id
+}
+
+output "lt_api_app_setting_names" {
+  description = "App setting key contract for the Apex API to wire load-test Service Bus + Blob access (FEAT-007)"
+  value = {
+    servicebus_namespace = "LT_SERVICEBUS_NAMESPACE"
+    servicebus_queue     = "LT_SERVICEBUS_QUEUE_NAME"
+    blob_account_name    = "LT_BLOB_ACCOUNT_NAME"
+    blob_container_name  = "LT_BLOB_CONTAINER_NAME"
+  }
+}
