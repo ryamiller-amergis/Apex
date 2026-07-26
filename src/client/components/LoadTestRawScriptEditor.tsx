@@ -52,7 +52,8 @@ export const LoadTestRawScriptEditor: React.FC<LoadTestRawScriptEditorProps> = (
         spellCheck={false}
       />
       <p id="load-test-raw-hint" className={styles.hint}>
-        Saving in raw mode sets script source to raw. Regenerating from Guided will ask for confirmation.
+        Edit the k6 script directly, or generate one with AI above. Regenerating from Guided after a
+        hand edit will ask for confirmation.
       </p>
       {error && (
         <span id="load-test-raw-error" className={styles.error} role="alert">

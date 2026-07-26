@@ -145,3 +145,9 @@
   color: var(--accent-color);
   border-bottom-color: var(--accent-color);
 }
+
+.rawModeStack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}

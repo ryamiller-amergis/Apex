@@ -73,7 +73,8 @@ function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormVal
         ? def.clientThresholds
         : defaultLoadTestBuilderValues.clientThresholds,
     script: def.script,
-    mode: def.scriptSource === 'raw' ? 'raw' : 'guided',
+    // AI-generated and hand-edited scripts both live on the Raw script tab.
+    mode: def.scriptSource === 'form_builder' ? 'guided' : 'raw',
   };
 }
 
@@ -213,7 +214,10 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
     let loadProfile = values.loadProfile;
     let clientThresholds = values.clientThresholds;
 
-    if (mode === 'guided' || (mode === 'raw' && scriptSource !== 'raw' && !script.trim())) {
+    if (
+      mode === 'guided' ||
+      (mode === 'raw' && scriptSource === 'form_builder' && !script.trim())
+    ) {
       const compiled = compileGuidedFormToK6({
         flowType: values.flowType,
         steps: values.steps,
@@ -225,22 +229,8 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       clientThresholds = compiled.clientThresholds;
       nextSource = 'form_builder';
     } else if (mode === 'raw') {
-      nextSource = 'raw';
-    } else if (mode === 'ai' && !script.trim()) {
-      // No AI result generated yet — fall back to the compiled guided script rather
-      // than persisting blank content (out of scope: auto-enqueue after generation).
-      const compiled = compileGuidedFormToK6({
-        flowType: values.flowType,
-        steps: values.steps,
-        loadProfile: values.loadProfile,
-        clientThresholds: values.clientThresholds,
-      });
-      script = compiled.script;
-      loadProfile = compiled.loadProfile;
-      clientThresholds = compiled.clientThresholds;
-      nextSource = 'form_builder';
-    } else if (mode === 'ai') {
-      nextSource = 'ai_generated';
+      // Preserve ai_generated until the author hand-edits (which sets scriptSource to raw).
+      nextSource = scriptSource === 'ai_generated' ? 'ai_generated' : 'raw';
     }
 
     return {
@@ -449,8 +439,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       <LoadTestBuilderModeTabs
         mode={mode}
         disabled={readOnly}
-        aiDisabled={readOnly}
-        aiDisabledReason="You have view-only access. Save and run-manage actions are unavailable."
         onChange={requestModeChange}
       />
 
@@ -486,26 +474,25 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         )}
 
         {mode === 'raw' && (
-          <LoadTestRawScriptEditor
-            value={scriptValue}
-            readOnly={readOnly}
-            error={errors.script?.message}
-            onChange={(next) => {
-              setValue('script', next, { shouldDirty: true });
-              setScriptSource('raw');
-              setValue('mode', 'raw');
-            }}
-          />
-        )}
-
-        {mode === 'ai' && (
-          <LoadTestAiGeneratePanel
-            project={project}
-            connected={hasConnectedRepo}
-            canManage={canManage}
-            needsConfirm={needsConfirmBeforeRegenerate(scriptSource)}
-            onApply={handleAiApply}
-          />
+          <div className={styles.rawModeStack} data-testid="load-test-raw-mode-stack">
+            <LoadTestAiGeneratePanel
+              project={project}
+              connected={hasConnectedRepo}
+              canManage={canManage}
+              needsConfirm={needsConfirmBeforeRegenerate(scriptSource)}
+              onApply={handleAiApply}
+            />
+            <LoadTestRawScriptEditor
+              value={scriptValue}
+              readOnly={readOnly}
+              error={errors.script?.message}
+              onChange={(next) => {
+                setValue('script', next, { shouldDirty: true });
+                setScriptSource('raw');
+                setValue('mode', 'raw');
+              }}
+            />
+          </div>
         )}
       </div>
 

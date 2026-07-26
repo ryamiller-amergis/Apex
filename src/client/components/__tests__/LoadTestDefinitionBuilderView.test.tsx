@@ -1,10 +1,12 @@
 /**
  * PBI-007 AC-0..AC-3 / TBI-006 DoD-1, DoD-3 — LoadTestDefinitionBuilderView
+ * FEAT-011 / PBI-014 — AI generate lives on the Raw script tab
  */
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import type { UseLoadTestAiGenerateResult } from '../../hooks/useLoadTestAiGenerate';
 import { LoadTestDefinitionBuilderView } from '../LoadTestDefinitionBuilderView';
 
 const mockCan = jest.fn(
@@ -20,6 +22,26 @@ jest.mock('../../hooks/useAppShell', () => ({
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
   useNavigate: () => mockNavigate,
+}));
+
+function baseAiHookState(): UseLoadTestAiGenerateResult {
+  return {
+    start: jest.fn(),
+    cancel: jest.fn(),
+    reset: jest.fn(),
+    status: 'idle',
+    streamingText: '',
+    progressLabel: null,
+    result: null,
+    error: null,
+    isGenerating: false,
+  };
+}
+
+let mockAiHookState: UseLoadTestAiGenerateResult = baseAiHookState();
+
+jest.mock('../../hooks/useLoadTestAiGenerate', () => ({
+  useLoadTestAiGenerate: () => mockAiHookState,
 }));
 
 const target = {
@@ -55,6 +77,7 @@ function renderBuilder(definitionId?: string, section?: 'definition' | 'runs') {
 describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAiHookState = baseAiHookState();
     mockCan.mockImplementation(
       (key: string) =>
         key === 'load-test:manage' || key === 'load-test:view' || key === 'load-test:run',
@@ -698,5 +721,130 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     );
     expect(screen.queryByTestId('load-test-guided-form')).not.toBeInTheDocument();
     expect(screen.queryByTestId('load-test-save-btn')).not.toBeInTheDocument();
+  });
+
+  it('Raw script tab hosts AI generate above the editor; there is no separate AI mode tab', async () => {
+    const user = userEvent.setup();
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ id: 'cfg-1', skillRepo: 'org/repo' }],
+        };
+      }
+      if (typeof url === 'string' && url.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-guided-form')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('load-test-ai-mode-tab')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('load-test-mode-raw'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-raw-mode-stack')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-ai-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('load-test-raw-editor')).toBeInTheDocument();
+  });
+
+  it('AI apply writes the generated script into the raw editor on the same tab', async () => {
+    const user = userEvent.setup();
+    mockAiHookState = {
+      ...baseAiHookState(),
+      status: 'ready',
+      result: {
+        script: "export default function () { /* ai generated */ }",
+        suggested_thresholds: [{ metric: 'http_req_duration', expression: 'p(95)<400' }],
+      },
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ id: 'cfg-1', skillRepo: 'org/repo' }],
+        };
+      }
+      if (typeof url === 'string' && url.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-guided-form')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('load-test-mode-raw'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-ai-applied')).toBeInTheDocument();
+    });
+    expect((screen.getByTestId('load-test-raw-editor') as HTMLTextAreaElement).value).toContain(
+      'ai generated',
+    );
+  });
+
+  it('ai_generated definitions open on the Raw script tab with script visible', async () => {
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/skill-configs')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ id: 'cfg-1', skillRepo: 'org/repo' }],
+        };
+      }
+      if (typeof url === 'string' && url.includes('/load-test-targets')) {
+        return { ok: true, status: 200, json: async () => ({ items: [target] }) };
+      }
+      if (typeof url === 'string' && url.includes('/load-tests/def-ai')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'def-ai',
+            projectId: 'project-a',
+            name: 'AI authored',
+            description: null,
+            targetUrl: target.baseUrl,
+            environment: target.environmentLabel,
+            engine: 'k6',
+            flowType: 'single',
+            scriptSource: 'ai_generated',
+            script: 'export default function () { /* from ai */ }',
+            loadProfile: { vus: 5, durationMinutes: 2 },
+            clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+            secretRefs: null,
+            createdAt: '2026-07-24T00:00:00.000Z',
+            updatedAt: '2026-07-24T00:00:00.000Z',
+            createdBy: 'u',
+            updatedBy: 'u',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }) as unknown as typeof fetch;
+
+    renderBuilder('def-ai');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('load-test-raw-editor')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('load-test-mode-raw')).toHaveAttribute('aria-selected', 'true');
+    expect((screen.getByTestId('load-test-raw-editor') as HTMLTextAreaElement).value).toContain(
+      'from ai',
+    );
+    expect(screen.getByTestId('load-test-ai-panel')).toBeInTheDocument();
   });
 });

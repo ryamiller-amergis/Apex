@@ -12,8 +12,8 @@ export const LoadTestAiUnavailableState: React.FC = () => {
       <h3 className={styles.title}>AI generate unavailable</h3>
       <p className={styles.body}>
         This project has no connected repository for AI script generation. Connect a repo in Project
-        Settings, then come back here — or continue authoring with the Guided form or Raw script
-        modes in the meantime.
+        Settings, then come back here — or continue authoring with the Guided form or the raw script
+        editor below in the meantime.
       </p>
     </div>
   );

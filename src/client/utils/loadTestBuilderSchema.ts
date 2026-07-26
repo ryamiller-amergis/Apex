@@ -69,7 +69,7 @@ export const loadTestBuilderFormSchema = z
     loadProfile: loadProfileSchema,
     clientThresholds: z.array(thresholdSchema).min(1, 'Add at least one threshold'),
     script: z.string().optional(),
-    mode: z.enum(['guided', 'raw', 'ai']),
+    mode: z.enum(['guided', 'raw']),
   })
   .superRefine((values, ctx) => {
     if (values.mode === 'raw' && !values.script?.trim()) {
