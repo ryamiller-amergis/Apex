@@ -121,7 +121,9 @@ export function buildRunStatusResponse(
       ? 'hard_timeout'
       : row.lastError?.startsWith('Never claimed')
         ? 'never_claimed'
-        : null;
+        : row.lastError?.includes('run aborted')
+          ? 'progress_timeout'
+          : null;
   return {
     runId: row.id,
     status: row.status,

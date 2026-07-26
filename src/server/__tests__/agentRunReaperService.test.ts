@@ -35,6 +35,7 @@ const config: AgentRunHealthConfig = {
   heartbeatTimeoutMs: 5 * 60_000,
   queuedTimeoutMs: 90_000,
   progressStaleMs: 2 * 60_000,
+  progressAbortMs: 5 * 60_000,
   longRunMs: 30 * 60_000,
   hardLimitMs: 2 * 60 * 60_000,
 };
@@ -60,6 +61,23 @@ describe('assessAgentRunHealth', () => {
         config
       )
     ).toBe('progress_stale');
+  });
+
+  it('aborts after sustained progress silence beyond progressAbortMs', () => {
+    expect(
+      assessAgentRunHealth(
+        {
+          status: 'running',
+          createdAt: timestamp(10 * 60_000),
+          startedAt: timestamp(10 * 60_000),
+          heartbeatAt: timestamp(10_000),
+          progressAt: timestamp(6 * 60_000),
+          timeoutAt: timestamp(-60 * 60_000),
+        },
+        now,
+        config
+      )
+    ).toBe('progress_timeout');
   });
 
   it('detects worker loss independently of recent meaningful progress', () => {
@@ -185,6 +203,47 @@ describe('reapOrphanedRuns', () => {
     );
   });
 
+  it('marks a progress-timeout run failed and publishes cancel', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(6 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000),
+        lastError: 'No meaningful progress for more than 2 minutes',
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        lastError: expect.stringMatching(/run aborted/i),
+      })
+    );
+    expect(notifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'health',
+        status: 'failed',
+        event: expect.objectContaining({ health: 'progress_timeout' }),
+      }),
+      { persist: true }
+    );
+    expect(notifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'cancel',
+        status: 'cancelled',
+        event: expect.objectContaining({ type: 'cancel' }),
+      }),
+      { persist: true }
+    );
+  });
+
   it('marks a heartbeat-expired run failed', async () => {
     mockFindMany.mockResolvedValue([
       {
@@ -295,6 +354,25 @@ describe('isThreadRunAlive', () => {
     await expect(
       isThreadRunAlive('thread-1', { now: () => now, config }),
     ).resolves.toBe(true);
+  });
+
+  it('returns false when progress has timed out', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(6 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(false);
   });
 
   it('returns false when the only run is worker_lost', async () => {

@@ -211,6 +211,7 @@ export interface SsePhaseEvent {
 export type AgentRunHealth =
   | 'healthy'
   | 'progress_stale'
+  | 'progress_timeout'
   | 'long_running'
   | 'worker_lost'
   | 'hard_timeout'

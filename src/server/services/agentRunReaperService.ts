@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, chatThreads } from '../db/schema';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventStatus,
@@ -33,6 +33,8 @@ export interface AgentRunHealthConfig {
   heartbeatTimeoutMs: number;
   queuedTimeoutMs: number;
   progressStaleMs: number;
+  /** Fail the run after this much time without meaningful progress (must be >= progressStaleMs). */
+  progressAbortMs: number;
   longRunMs: number;
   hardLimitMs: number;
 }
@@ -57,10 +59,16 @@ function positiveDuration(value: string | undefined, fallback: number): number {
 }
 
 export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
+  const progressStaleMs = positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000);
+  const progressAbortMs = Math.max(
+    progressStaleMs,
+    positiveDuration(process.env.AGENT_PROGRESS_ABORT_MS, 5 * 60_000),
+  );
   return {
     heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
     queuedTimeoutMs: positiveDuration(process.env.AGENT_QUEUE_TIMEOUT_MS, 90_000),
-    progressStaleMs: positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000),
+    progressStaleMs,
+    progressAbortMs,
     longRunMs: positiveDuration(process.env.AGENT_LONG_RUN_MS, 30 * 60_000),
     hardLimitMs: positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000),
   };
@@ -122,7 +130,9 @@ export function assessAgentRunHealth(
   // progressAt is intentionally independent of heartbeatAt. The fallback keeps
   // pre-migration rows bounded until the progress_at column is populated.
   const meaningfulProgressAt = run.progressAt ?? run.startedAt ?? run.createdAt;
-  if (ageMs(meaningfulProgressAt, nowMs) >= config.progressStaleMs) return 'progress_stale';
+  const progressAge = ageMs(meaningfulProgressAt, nowMs);
+  if (progressAge >= config.progressAbortMs) return 'progress_timeout';
+  if (progressAge >= config.progressStaleMs) return 'progress_stale';
   if (ageMs(runStartedAt, nowMs) >= config.longRunMs) return 'long_running';
   return 'healthy';
 }
@@ -147,7 +157,10 @@ export async function isThreadRunAlive(
   return rows.some((row) => {
     const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
     const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
-    return health !== 'worker_lost' && health !== 'hard_timeout' && health !== 'never_claimed';
+    return health !== 'worker_lost'
+      && health !== 'hard_timeout'
+      && health !== 'never_claimed'
+      && health !== 'progress_timeout';
   });
 }
 
@@ -235,14 +248,34 @@ async function failRun(
     .update(agentRuns)
     .set({ status: 'failed', lastError: message, updatedAt })
     .where(and(eq(agentRuns.id, id), eq(agentRuns.status, 'running')));
+  // Also clear desynced threads where recovery wiped active_run_id while this
+  // run was still live (activeRunId null + idle/running).
   await db
     .update(chatThreads)
     .set({ status: 'idle', activeRunId: null, lastError: message, lastActivityAt: updatedAt })
     .where(and(
       eq(chatThreads.id, threadId),
-      eq(chatThreads.activeRunId, id),
-      eq(chatThreads.status, 'running'),
+      or(
+        eq(chatThreads.activeRunId, id),
+        isNull(chatThreads.activeRunId),
+      ),
     ));
+}
+
+async function publishCancelSignal(threadId: string, runId: string, timestamp: string): Promise<void> {
+  await notifyRunEvent({
+    eventId: randomUUID(),
+    threadId,
+    runId,
+    sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(runId, WATCHDOG_SOURCE_INSTANCE),
+    timestamp,
+    type: 'cancel',
+    phase: 'completion',
+    status: 'cancelled',
+    detail: 'Run cancelled by watchdog',
+    event: { type: 'cancel' },
+  }, { persist: true });
 }
 
 /**
@@ -274,6 +307,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish worker-loss event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after worker-loss:', err));
         console.log(`[reaper] Reaped orphaned run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`);
         continue;
       }
@@ -290,7 +325,27 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish timeout event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after hard timeout:', err));
         console.log(`[reaper] Reaped timed-out run (id=${row.id}, threadId=${row.threadId})`);
+        continue;
+      }
+      if (health === 'progress_timeout') {
+        const detail = `No meaningful progress for more than ${Math.round(config.progressAbortMs / 60_000)} minutes — run aborted`;
+        await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail,
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'failed',
+        }).catch((err) => console.error('[reaper] Failed to publish progress-timeout event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after progress timeout:', err));
+        console.log(`[reaper] Reaped progress-stalled run (id=${row.id}, threadId=${row.threadId})`);
         continue;
       }
       if (health === 'never_claimed') {

@@ -112,6 +112,7 @@ const RUN_EVENT_STATUSES = new Set<AgentRunEventStatus>([
 const RUN_HEALTH_VALUES = new Set<AgentRunHealth>([
   'healthy',
   'progress_stale',
+  'progress_timeout',
   'long_running',
   'worker_lost',
   'hard_timeout',

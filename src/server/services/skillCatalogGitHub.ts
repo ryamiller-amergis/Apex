@@ -12,6 +12,10 @@ import type { SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '
 import { parseFrontmatter } from './skillCatalog';
 
 const GITHUB_API = 'https://api.github.com';
+/** Bound outbound GitHub HTTP calls so MCP tools cannot hang the agent stream forever. */
+const GITHUB_FETCH_TIMEOUT_MS = Number(process.env.GITHUB_FETCH_TIMEOUT_MS) > 0
+  ? Number(process.env.GITHUB_FETCH_TIMEOUT_MS)
+  : 30_000;
 const SKILL_ROOTS = ['skills', '.cursor/skills'];
 
 // ── Cache ────────────────────────────────────────────────────────────────────
@@ -94,6 +98,7 @@ async function ghFetch<T>(path: string, textMatchAccept = false): Promise<T> {
       Accept: accept,
       'User-Agent': 'ai-pilot-skill-catalog',
     },
+    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -111,6 +116,7 @@ async function ghFetchRaw(path: string): Promise<string> {
       Accept: 'application/vnd.github.v3.raw',
       'User-Agent': 'ai-pilot-skill-catalog',
     },
+    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -193,6 +199,7 @@ export async function createPullRequest(opts: {
         base: opts.targetBranch,
         body: opts.description ?? '',
       }),
+      signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
     },
   );
 
