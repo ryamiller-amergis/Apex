@@ -11,6 +11,7 @@ import {
   readOutputBacklog,
   isPrdReady,
   getThread,
+  recoverStaleRunningThread,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -480,7 +481,13 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
-  if (thread.status === 'running') return res.status(409).json({ error: 'Agent is already running' });
+  if (thread.status === 'running') {
+    const gate = await recoverStaleRunningThread(req.params.id);
+    if (gate === 'running') {
+      return res.status(409).json({ error: 'Agent is already running' });
+    }
+    // Dead run cleared — accept the message.
+  }
 
   // Fire-and-forget: response streams via SSE, this returns 202 immediately
   res.status(202).json({ ok: true });
