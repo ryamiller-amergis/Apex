@@ -19,14 +19,6 @@ export function looksLikePlaintextSecret(value: string): boolean {
   return PLAINTEXT_SECRET_PATTERNS.some((p) => p.test(value));
 }
 
-const secretRefValueSchema = z
-  .string()
-  .trim()
-  .min(1, 'Secret reference is required')
-  .refine((v) => !looksLikePlaintextSecret(v), {
-    message: 'Use a Key Vault reference identifier (e.g. kv://vault/secret), not a plaintext token',
-  });
-
 const extractionSchema = z.object({
   name: z.string().trim().min(1, 'Variable name is required'),
   source: z.enum(['json_path', 'regex']),
@@ -76,8 +68,6 @@ export const loadTestBuilderFormSchema = z
     steps: z.array(stepSchema).min(1, 'Add at least one step'),
     loadProfile: loadProfileSchema,
     clientThresholds: z.array(thresholdSchema).min(1, 'Add at least one threshold'),
-    secretRefKey: z.string().optional(),
-    secretRefValue: z.string().optional(),
     script: z.string().optional(),
     mode: z.enum(['guided', 'raw', 'ai']),
   })
@@ -87,23 +77,6 @@ export const loadTestBuilderFormSchema = z
         code: z.ZodIssueCode.custom,
         message: 'Raw k6 script is required',
         path: ['script'],
-      });
-    }
-    if (values.secretRefValue?.trim()) {
-      const result = secretRefValueSchema.safeParse(values.secretRefValue);
-      if (!result.success) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: result.error.issues[0]?.message ?? 'Invalid secret reference',
-          path: ['secretRefValue'],
-        });
-      }
-    }
-    if (values.secretRefKey?.trim() && looksLikePlaintextSecret(values.secretRefKey)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Secret key must be an identifier, not a credential',
-        path: ['secretRefKey'],
       });
     }
   });
@@ -121,8 +94,6 @@ export const defaultLoadTestBuilderValues: LoadTestBuilderFormValues = {
     { metric: 'http_req_duration', expression: 'p(95)<500' },
     { metric: 'http_req_failed', expression: 'rate<0.01' },
   ],
-  secretRefKey: '',
-  secretRefValue: '',
   script: '',
   mode: 'guided',
 };

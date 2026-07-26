@@ -303,7 +303,7 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
             script: 'export default function () {}',
             loadProfile: { vus: 5, durationMinutes: 2 },
             clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
-            secretRefs: { auth: 'kv://vault/token' },
+            secretRefs: null,
             createdAt: '2026-07-24T00:00:00.000Z',
             updatedAt: '2026-07-24T00:00:00.000Z',
             createdBy: 'u',
@@ -323,8 +323,7 @@ describe('LoadTestDefinitionBuilderView (PBI-007)', () => {
     expect(screen.queryByTestId('load-test-delete-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('load-test-run-btn')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Name$/i)).toBeDisabled();
-    // Secret refs show identifiers only
-    expect(screen.getByLabelText(/Ref identifier/i)).toHaveValue('kv://vault/token');
+    expect(screen.queryByText(/Secret references/i)).not.toBeInTheDocument();
   });
 
   it('Run enqueues saved definition and navigates to run detail', async () => {

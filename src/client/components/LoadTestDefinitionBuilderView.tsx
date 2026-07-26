@@ -52,7 +52,6 @@ interface LoadTestDefinitionBuilderViewProps {
 }
 
 function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormValues {
-  const secretEntries = Object.entries(def.secretRefs ?? {});
   const restoredSteps =
     def.flowSteps && def.flowSteps.length > 0
       ? flowStepsToGuidedForm(def.flowSteps)
@@ -73,8 +72,6 @@ function definitionToFormValues(def: LoadTestDefinition): LoadTestBuilderFormVal
       def.clientThresholds.length > 0
         ? def.clientThresholds
         : defaultLoadTestBuilderValues.clientThresholds,
-    secretRefKey: secretEntries[0]?.[0] ?? '',
-    secretRefValue: secretEntries[0]?.[1] ?? '',
     script: def.script,
     mode: def.scriptSource === 'raw' ? 'raw' : 'guided',
   };
@@ -246,11 +243,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
       nextSource = 'ai_generated';
     }
 
-    const secretRefs =
-      values.secretRefKey?.trim() && values.secretRefValue?.trim()
-        ? { [values.secretRefKey.trim()]: values.secretRefValue.trim() }
-        : null;
-
     return {
       name: values.name.trim(),
       description: values.description?.trim() || null,
@@ -266,7 +258,7 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         nextSource === 'form_builder' || mode === 'guided'
           ? toFlowSteps(values.steps)
           : null,
-      secretRefs,
+      secretRefs: null,
     };
   };
 
@@ -314,7 +306,6 @@ export const LoadTestDefinitionBuilderView: React.FC<LoadTestDefinitionBuilderVi
         formErrors.loadProfile?.vus?.message ??
         formErrors.loadProfile?.durationMinutes?.message ??
         formErrors.clientThresholds?.message ??
-        formErrors.secretRefValue?.message ??
         formErrors.steps?.message ??
         'Fix the highlighted fields before saving';
       setSaveError(String(first));

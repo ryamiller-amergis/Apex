@@ -110,7 +110,7 @@ describe('needsConfirmBeforeRegenerate (TBI-006 DoD-3, BR-010)', () => {
   });
 });
 
-describe('loadTestBuilderFormSchema (VT-09, VT-10)', () => {
+describe('loadTestBuilderFormSchema (VT-09)', () => {
   const validBase = {
     name: 'Checkout load',
     targetId: 'target-1',
@@ -132,29 +132,8 @@ describe('loadTestBuilderFormSchema (VT-09, VT-10)', () => {
     }
   });
 
-  it('VT-10: rejects plaintext bearer token in secret ref', () => {
+  it('detects plaintext bearer tokens via looksLikePlaintextSecret', () => {
     expect(looksLikePlaintextSecret('Bearer sk-test-plaintext')).toBe(true);
-    const result = loadTestBuilderFormSchema.safeParse({
-      ...validBase,
-      secretRefKey: 'auth',
-      secretRefValue: 'Bearer sk-test-plaintext',
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some((i) =>
-          String(i.message).toLowerCase().includes('key vault'),
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it('accepts Key Vault style secret refs', () => {
-    const result = loadTestBuilderFormSchema.safeParse({
-      ...validBase,
-      secretRefKey: 'authHeader',
-      secretRefValue: 'kv://my-vault/load-test-token',
-    });
-    expect(result.success).toBe(true);
+    expect(looksLikePlaintextSecret('kv://my-vault/load-test-token')).toBe(false);
   });
 });

@@ -306,33 +306,6 @@ export const LoadTestGuidedForm: React.FC<LoadTestGuidedFormProps> = ({
         )}
       </fieldset>
 
-      <fieldset className={styles.fieldset} disabled={readOnly}>
-        <legend>Secret references</legend>
-        <p className={styles.hint}>
-          Store Key Vault reference identifiers only — never paste resolved secrets or bearer tokens.
-        </p>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <label htmlFor="load-test-secret-key">Ref key</label>
-            <input id="load-test-secret-key" type="text" {...register('secretRefKey')} />
-          </div>
-          <div className={styles.field}>
-            <label htmlFor="load-test-secret-value">Ref identifier</label>
-            <input
-              id="load-test-secret-value"
-              type="text"
-              aria-invalid={Boolean(errors.secretRefValue)}
-              {...register('secretRefValue')}
-            />
-            {errors.secretRefValue && (
-              <span className={styles.error} role="alert">
-                {errors.secretRefValue.message}
-              </span>
-            )}
-          </div>
-        </div>
-      </fieldset>
-
       <p className={styles.hint}>
         Payloads must be synthetic or anonymized (no production PII). Scripts are the execution source of
         truth after save.
