@@ -395,7 +395,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     [onSelectThread],
   );
 
+  const skipScrollToEndRef = useRef(false);
+  skipScrollToEndRef.current = Boolean(focusMessageId || highlightedMessageId);
   useEffect(() => {
+    if (skipScrollToEndRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 

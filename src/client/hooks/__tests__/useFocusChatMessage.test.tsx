@@ -116,4 +116,20 @@ describe('useFocusChatMessage (PBI-003)', () => {
     expect(scrollSpy).toHaveBeenCalled();
     expect(screen.getByTestId('chat-message-highlighted')).toBeInTheDocument();
   });
+
+  it('retries after a stale previous-thread snapshot that lacked the focus id', () => {
+    const { rerender } = render(
+      <FocusHarness focusMessageId="msg-new" messageIds={['msg-old']} />,
+    );
+
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('chat-message-highlighted')).not.toBeInTheDocument();
+
+    rerender(
+      <FocusHarness focusMessageId="msg-new" messageIds={['msg-a', 'msg-new']} />,
+    );
+
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(screen.getByTestId('chat-message-highlighted')).toBeInTheDocument();
+  });
 });

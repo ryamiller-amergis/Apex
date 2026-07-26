@@ -595,8 +595,12 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     }
   }, [selectedProject, sessionStorageKey]);
 
-  // Scroll messages to bottom
+  // Scroll messages to bottom — skip while jump-to-match is pending/active so
+  // we do not yank the viewport away from the matched message.
+  const skipScrollToEndRef = useRef(false);
+  skipScrollToEndRef.current = Boolean(focusMessageId || highlightedMessageId);
   useEffect(() => {
+    if (skipScrollToEndRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [visibleMessages.length, streamingText]);
 
