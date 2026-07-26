@@ -434,6 +434,20 @@ describe('listPrds', () => {
       coverageSummary: expect.objectContaining({ totalCases: 2 }),
     });
   });
+
+  it('includes validationScore on each PRD summary for readiness', async () => {
+    mockDb.select.mockReturnValue(makeSelectChain([{
+      prd: makePrdRow({ validationScore: 94 }),
+      reviewerDisplayName: null,
+      authorDisplayName: null,
+      prdOwnerId: null,
+      prdOwnerDisplayName: null,
+    }], 'orderBy'));
+
+    const result = await listPrds();
+
+    expect(result[0].validationScore).toBe(94);
+  });
 });
 
 // ── getPrd ─────────────────────────────────────────────────────────────────────

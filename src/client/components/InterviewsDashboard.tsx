@@ -21,7 +21,6 @@ import type {
 import type { DesignPrototypeSummary, DesignPrototypeStatus } from '../../shared/types/designPrototype';
 import {
   derivePrdReadiness,
-  type PrdReadinessSeverity,
 } from '../../shared/utils/prdReadiness';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -82,13 +81,15 @@ function prdStatusLabel(status: PrdStatus): string {
   }
 }
 
-function prdReadinessBadgeClass(severity: PrdReadinessSeverity): string {
-  switch (severity) {
-    case 'info': return styles.badgeGenerating;
-    case 'warning': return styles.badgePendingReview;
-    case 'error': return styles.badgeRevisionRequested;
-    case 'success': return styles.badgeApproved;
-    case 'neutral': return styles.badgeDraft;
+function prdBadgeClass(status: PrdStatus): string {
+  switch (status) {
+    case 'generating': return styles.badgeGenerating;
+    case 'validating': return styles.badgeValidating;
+    case 'draft': return styles.badgeDraft;
+    case 'pending_review': return styles.badgePendingReview;
+    case 'reviewer_approved': return styles.badgePendingReview;
+    case 'approved': return styles.badgeApproved;
+    case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
 
@@ -238,11 +239,8 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
         )}
       </div>
       <div className={styles.cardFooter}>
-        <span
-          className={`${styles.badge} ${prdReadinessBadgeClass(readiness.severity)}`}
-          title={readiness.description}
-        >
-          {readiness.label}
+        <span className={`${styles.badge} ${prdBadgeClass(prd.status)}`}>
+          {prdStatusLabel(prd.status)}
         </span>
         <div className={styles.cardFooterRight}>
           {prd.skillSettingsName && (
@@ -259,9 +257,11 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
           {prd.reviewerId && (
             <span className={styles.cardPrdBadge}>Reviewer assigned</span>
           )}
-          <span className={styles.cardPrdBadge} title="Human review lifecycle">
-            PRD: {prdStatusLabel(prd.status)}
-          </span>
+          {(readiness.severity === 'warning' || readiness.severity === 'error' || readiness.severity === 'info') && (
+            <span className={styles.cardPrdBadge} title={readiness.description}>
+              {readiness.label}
+            </span>
+          )}
           <span className={styles.cardDate}>{formatDate(prd.createdAt)}</span>
         </div>
       </div>

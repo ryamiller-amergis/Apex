@@ -826,6 +826,7 @@ function rowToPrdSummary(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     latestTestCase: latestTestCase ?? null,
+    validationScore: row.validationScore ?? null,
     prototypeStageEnabled: workflowFlags?.prototypeStageEnabled ?? true,
     testCasesRequired: workflowFlags?.testCasesEnabled !== false,
   };

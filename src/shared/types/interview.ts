@@ -57,6 +57,8 @@ export interface PrdSummary {
   createdAt: string;
   updatedAt: string;
   latestTestCase?: TestCaseSummary | null;
+  /** Persisted PRD validation score; used by list cards for readiness without loading the full scorecard. */
+  validationScore?: number | null;
   validationScoreThreshold?: number | null;
   /** Resolved from the interview snapshot at creation (fallback: project default). */
   prototypeStageEnabled?: boolean;
@@ -75,7 +77,6 @@ export interface Prd extends PrdSummary {
   /** Design doc approver user OIDs stored on the PRD; used to pre-assign reviewers when design docs are submitted. */
   designDocApproverIds?: string[];
   validationThreadId?: string | null;
-  validationScore?: number | null;
   validationScorecard?: ValidationScorecard | null;
   validationReportMd?: string | null;
   validationPhase?: string | null;
