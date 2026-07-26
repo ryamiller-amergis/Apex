@@ -334,14 +334,38 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (!adr || !text.trim() || isRunning || chatLocked) return;
     setInput('');
     setError(null);
-    const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text: text.trim(), model: adr.model }),
-    });
-    if (!response.ok) setError('Failed to send message');
+    try {
+      const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: text.trim(), model: adr.model }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        setError(body.error ?? `Failed to send message (${response.status})`);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to send message');
+    }
   }, [adr, isRunning, chatLocked]);
+
+  const cancelActiveRun = useCallback(async () => {
+    if (!adr?.chatThreadId) return;
+    setError(null);
+    try {
+      const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        setError(body.error ?? `Failed to stop agent (${response.status})`);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to stop agent');
+    }
+  }, [adr?.chatThreadId]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
@@ -479,7 +503,29 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           )}
         </div>
       </div>
-      {error && <div className={styles.sendError}>{error}</div>}
+      {error && (
+        <div className={styles.sendError}>
+          <span>{error}</span>
+          {error.toLowerCase().includes('already running') && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => void cancelActiveRun()}
+              title="Stop the stuck agent"
+            >
+              Stop
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.sendErrorDismiss}
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {adr.content && (
         <div className={styles.adrMetadataSummary}>
           <span><strong>Owner:</strong> {adr.ownerName}</span>
@@ -609,7 +655,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               placeholder={isRunning ? 'Architect is thinking…' : 'Continue the ADR interview…'}
               disabled={isRunning}
             />
-            <button className={styles.sendBtn} type="button" disabled={!input.trim() || isRunning} onClick={() => void send(input)}>→</button>
+            {isRunning ? (
+              <button
+                className={`${styles.sendBtn} ${styles.stopBtn}`}
+                type="button"
+                onClick={() => void cancelActiveRun()}
+                aria-label="Stop"
+                title="Stop"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <rect x="4" y="4" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button className={styles.sendBtn} type="button" disabled={!input.trim()} onClick={() => void send(input)}>→</button>
+            )}
           </div>
         </div>
       ))}

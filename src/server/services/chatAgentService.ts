@@ -28,10 +28,12 @@ import {
   searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
   deleteThread as pgDeleteThread,
+  clearStaleRun,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
-import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -1436,10 +1438,15 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
   if (!thread) return null;
 
   // A thread persisted as 'running' means the server was killed mid-run.
-  // Reset it to 'idle' so the client input isn't permanently locked out.
+  // Reset it to 'idle' so the client input isn't permanently locked out —
+  // but only when no live agent_runs row remains (another instance may own it).
   if (thread.status === 'running') {
-    thread.status = 'idle';
-    thread.activeRunId = undefined;
+    const alive = await isThreadRunAlive(threadId);
+    if (!alive) {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await clearStaleRun(threadId);
+    }
   }
 
   // Recreate the sandbox workspace if it was wiped (e.g. OS temp cleanup on
@@ -2191,7 +2198,11 @@ export async function sendMessage(
     attachmentCount: attachments.length,
     hidden: Boolean(options?.hidden),
   });
-  if (state.thread.status === 'running') throw new Error('Agent is already running');
+  if (state.thread.status === 'running') {
+    const gate = await recoverStaleRunningThread(threadId);
+    if (gate === 'running') throw new Error('Agent is already running');
+    // Dead run cleared — continue with a fresh turn.
+  }
 
   const baseApiKey = process.env.CURSOR_API_KEY;
   if (!baseApiKey) throw new Error('CURSOR_API_KEY is not set');
@@ -2937,6 +2948,43 @@ export async function sendMessage(
   }
 }
 
+/**
+ * If the thread is marked running but no live agent_runs row remains (or the
+ * run is health-dead), force it idle so the user can send again. Returns the
+ * resulting gate state for message acceptance.
+ */
+export async function recoverStaleRunningThread(
+  threadId: string,
+): Promise<'idle' | 'running' | 'missing'> {
+  const alive = await isThreadRunAlive(threadId);
+  if (alive) return 'running';
+
+  const state = await ensureThreadState(threadId);
+  if (!state) return 'missing';
+
+  // Prefer DB truth — ensureThreadState may flip in-memory status to idle without
+  // persisting, which previously left Postgres stuck at 'running' and 409'd forever.
+  const [dbRow] = await db
+    .select({ status: chatThreads.status, activeRunId: chatThreads.activeRunId })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, threadId))
+    .limit(1);
+
+  const stuckInDb = dbRow?.status === 'running' || Boolean(dbRow?.activeRunId);
+  const stuckInMemory = state.thread.status === 'running' || Boolean(state.thread.activeRunId);
+
+  if (stuckInDb || stuckInMemory) {
+    console.warn(
+      `[chat] recoverStaleRunningThread — clearing dead running state (threadId=${threadId})`,
+    );
+    await cancelRun(threadId);
+    await clearStaleRun(threadId);
+    state.thread.status = 'idle';
+    state.thread.activeRunId = undefined;
+  }
+  return 'idle';
+}
+
 export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
@@ -2962,6 +3010,8 @@ export async function cancelRun(threadId: string): Promise<void> {
       broadcast(state, { type: 'done' });
       persistThread(state.thread);
     }
+    // Always persist idle in DB — memory and Postgres can desync across instances.
+    await clearStaleRun(threadId);
     return;
   }
   const myWorkContext = state.isDevSession
@@ -3016,6 +3066,7 @@ export async function cancelRun(threadId: string): Promise<void> {
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
   persistThread(state.thread);
+  await clearStaleRun(threadId);
   if (myWorkContext) {
     logMyWorkSession('run.cancelled', {
       ...myWorkContext,

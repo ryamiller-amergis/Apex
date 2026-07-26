@@ -36,6 +36,7 @@ jest.mock('../services/chatAgentService', () => ({
   sendMessage: jest.fn(),
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
+  recoverStaleRunningThread: jest.fn().mockResolvedValue('idle'),
   permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
@@ -575,5 +576,55 @@ describe('chat thread lifecycle', () => {
 
     expect(listAfterDeleteRes.status).toBe(200);
     expect(listAfterDeleteRes.body).toEqual([]);
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — stale running self-heal', () => {
+  const threadId = 'stuck-thread-id';
+  const runningThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'running',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: runningThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  it('accepts a message after recovering a dead running thread', async () => {
+    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('idle');
+    mockChatService.sendMessage.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Continue' });
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.recoverStaleRunningThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+  });
+
+  it('returns 409 when a live run is still active', async () => {
+    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('running');
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Continue' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'Agent is already running' });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
   });
 });
