@@ -5,10 +5,11 @@
  *  1. "Approve as Owner" shown when status=reviewer_approved and user is owner
  *  2. Reviewer "Approve" shown when status=pending_review (not owner-only stage)
  *  3. Owner approval UI hidden in draft / pending_review statuses
+ *  4. Secondary header actions live in a More dropdown (PRD-style)
  */
 
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DesignDocReviewView } from '../DesignDocReviewView';
@@ -246,5 +247,64 @@ describe('Owner Approval in DesignDocReviewView', () => {
     renderView();
 
     expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
+  });
+});
+
+describe('More actions menu in DesignDocReviewView', () => {
+  it('keeps primary actions visible and hides secondary ones behind More', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-author',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'draft' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Submit for Review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /More actions/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run Validation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete Design Doc' })).not.toBeInTheDocument();
+  });
+
+  it('exposes Run Validation, Withdraw, Approvers, and Delete from the More menu', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-author',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: {
+        ...baseDoc,
+        status: 'pending_review',
+        reviewerId: null,
+        reviewerName: null,
+        reviewedAt: null,
+        validationThreadId: 'validation-thread-1',
+      },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDocumentAssignments.mockReturnValue({
+      data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'pending' }],
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: 'Withdraw' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Approver/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
+
+    expect(screen.getByRole('menuitem', { name: 'Re-run Validation' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Withdraw' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '1 Approver' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Design Doc' })).toBeInTheDocument();
   });
 });

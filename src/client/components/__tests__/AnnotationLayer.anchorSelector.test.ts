@@ -84,4 +84,33 @@ describe('anchorSelector', () => {
     };
     expect(anchorSelector('Some unrelated content.', selector)).toBeNull();
   });
+
+  it('anchors across whitespace drift between stored exact and textContent', () => {
+    // Selection normalized to spaces; rendered textContent uses a newline instead.
+    const containerText = 'Alpha heading\nBeta phrase\nGamma';
+    const selector: TextSelector = {
+      exact: 'Alpha heading Beta phrase',
+      prefix: '',
+      suffix: '',
+      start: 9999,
+      end: 9999,
+    };
+    const result = anchorSelector(containerText, selector);
+    expect(result).toEqual({ start: 0, end: 'Alpha heading\nBeta phrase'.length });
+  });
+
+  it('ignores null start hints from persisted selectors', () => {
+    const containerText = 'Intro then Target Phrase and more.';
+    const selector = {
+      exact: 'Target Phrase',
+      prefix: 'Intro then ',
+      suffix: ' and more.',
+      start: null as unknown as number,
+      end: null as unknown as number,
+    };
+    expect(anchorSelector(containerText, selector)).toEqual({
+      start: containerText.indexOf('Target Phrase'),
+      end: containerText.indexOf('Target Phrase') + 'Target Phrase'.length,
+    });
+  });
 });

@@ -138,12 +138,14 @@ const {
   isAssignedApprover: mockIsAssignedApprover,
   isApprovalComplete: mockIsApprovalComplete,
   notifyApproversDocumentReady: mockNotifyApproversDocumentReady,
+  propagateDesignDocApprovers: mockPropagateDesignDocApprovers,
 } = jest.requireMock('../services/documentApprovalService') as {
   assignApprovers: jest.Mock;
   recordApproverResponse: jest.Mock;
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
   notifyApproversDocumentReady: jest.Mock;
+  propagateDesignDocApprovers: jest.Mock;
 };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -200,6 +202,38 @@ describe('createDesignDoc', () => {
         assumptionsContent: '',
       }),
     );
+  });
+
+  it('auto-assigns design doc reviewers from the parent PRD on create', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createDesignDoc({
+      prdId: 'prd-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-abc',
+      title: 'My Design Doc',
+    });
+
+    expect(mockPropagateDesignDocApprovers).toHaveBeenCalledWith('prd-1', 'doc-new', 'user-1');
+  });
+
+  it('still returns the designDocId when reviewer propagation fails', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockPropagateDesignDocApprovers.mockRejectedValueOnce(new Error('assign failed'));
+
+    await expect(
+      createDesignDoc({
+        prdId: 'prd-1',
+        project: 'proj-alpha',
+        userId: 'user-1',
+        chatThreadId: 'thread-abc',
+      }),
+    ).resolves.toEqual({ designDocId: 'doc-new' });
   });
 
   it('defaults title to "Untitled Design Doc" when not supplied', async () => {

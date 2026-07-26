@@ -221,9 +221,11 @@ export async function listPrds(
 
   const projects = [...new Set(rows.map(({ prd }) => prd.project))];
   const thresholdByProject = new Map<string, number | null>();
+  const validationEnabledByProject = new Map<string, boolean>();
   await Promise.all(projects.map(async (p) => {
     const cfg = await getSkillConfig(p);
     thresholdByProject.set(p, cfg?.prdValidationScoreThreshold ?? null);
+    validationEnabledByProject.set(p, !!cfg?.prdValidationSkillPath);
   }));
 
   const uniqueSettingsIds = [...new Set(rows.map(({ prd }) => prd.skillSettingsId).filter(Boolean))] as string[];
@@ -242,6 +244,7 @@ export async function listPrds(
       { prototypeStageEnabled, testCasesEnabled },
     ),
     validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+    prdValidationEnabled: validationEnabledByProject.get(prd.project) ?? false,
   }));
 }
 
@@ -357,28 +360,26 @@ export async function updatePrdBacklog(
     .where(eq(prds.id, id));
 }
 
-export async function submitForReview(
-  id: string,
-  requestingUserId: string,
+/**
+ * Inherit kickoff approver selections onto a PRD entering pending_review and
+ * create assignment rows. Used by both manual submit and auto-promotion after
+ * validation passes.
+ */
+async function applyKickoffApproversForReview(
+  prdId: string,
+  interviewId: string | null,
+  assignedBy: string,
   opts?: {
     prdApproverIds?: string[];
     designDocApproverIds?: string[];
     designPrototypeApproverIds?: string[];
     qaApproverIds?: string[];
   },
-): Promise<void> {
-  const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
-  if (!row) throw notFound('PRD not found');
-  const ownerId = await getPrdOwnerId(row.interviewId);
-  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author or owner can submit for review');
-  }
-  if (row.status !== 'draft' && row.status !== 'revision_requested') {
-    throw conflict(`Cannot submit PRD from status '${row.status}'`);
-  }
-  if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
-  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
-  let testCasesRequired = true;
+): Promise<{
+  designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
+  testCasesRequired: boolean;
+}> {
   let interviewWorkflow: {
     prdApproverIds: string[] | null;
     designDocApproverIds: string[] | null;
@@ -386,9 +387,10 @@ export async function submitForReview(
     testCaseApproverIds: string[] | null;
     testCasesEnabled: boolean | null;
   } | null = null;
-  if (row.interviewId) {
+  let testCasesRequired = true;
+  if (interviewId) {
     interviewWorkflow = await db.query.interviews.findFirst({
-      where: eq(interviews.id, row.interviewId),
+      where: eq(interviews.id, interviewId),
       columns: {
         prdApproverIds: true,
         designDocApproverIds: true,
@@ -398,20 +400,6 @@ export async function submitForReview(
       },
     }) ?? null;
     testCasesRequired = interviewWorkflow?.testCasesEnabled !== false;
-  }
-  const readiness = derivePrdReadiness(
-    {
-      status: row.status as PrdStatus,
-      content: row.content,
-      validationScore: row.validationScore,
-      validationScorecard: row.validationScorecard as ValidationScorecard | null,
-    },
-    await getTestCases(id),
-    skillConfig?.prdValidationScoreThreshold ?? undefined,
-    { testCasesRequired },
-  );
-  if (!readiness.readyForReviewActions) {
-    throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
   }
 
   let effectivePrdApproverIds = opts?.prdApproverIds;
@@ -434,6 +422,76 @@ export async function submitForReview(
     }
   }
 
+  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
+    await assignApprovers(prdId, 'prd', effectivePrdApproverIds, assignedBy);
+  }
+
+  if (testCasesRequired && effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
+    await assignApprovers(prdId, 'test_case', effectiveQaApproverIds, assignedBy);
+  }
+
+  return {
+    designDocApproverIds:
+      effectiveDdApproverIds && effectiveDdApproverIds.length > 0
+        ? effectiveDdApproverIds
+        : undefined,
+    designPrototypeApproverIds:
+      effectivePrototypeApproverIds && effectivePrototypeApproverIds.length > 0
+        ? effectivePrototypeApproverIds
+        : undefined,
+    testCasesRequired,
+  };
+}
+
+export async function submitForReview(
+  id: string,
+  requestingUserId: string,
+  opts?: {
+    prdApproverIds?: string[];
+    designDocApproverIds?: string[];
+    designPrototypeApproverIds?: string[];
+    qaApproverIds?: string[];
+  },
+): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, id) });
+  if (!row) throw notFound('PRD not found');
+  const ownerId = await getPrdOwnerId(row.interviewId);
+  if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author or owner can submit for review');
+  }
+  if (row.status !== 'draft' && row.status !== 'revision_requested') {
+    throw conflict(`Cannot submit PRD from status '${row.status}'`);
+  }
+  if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
+  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
+  let testCasesRequired = true;
+  if (row.interviewId) {
+    const interviewWorkflow = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    testCasesRequired = interviewWorkflow?.testCasesEnabled !== false;
+  }
+  const readiness = derivePrdReadiness(
+    {
+      status: row.status as PrdStatus,
+      content: row.content,
+      validationScore: row.validationScore,
+      validationScorecard: row.validationScorecard as ValidationScorecard | null,
+    },
+    await getTestCases(id),
+    skillConfig?.prdValidationScoreThreshold ?? undefined,
+    {
+      testCasesRequired,
+      prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    },
+  );
+  if (!readiness.readyForReviewActions) {
+    throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
+  }
+
+  const kickoff = await applyKickoffApproversForReview(id, row.interviewId, requestingUserId, opts);
+
   const updates: Partial<typeof prds.$inferInsert> = {
     status: 'pending_review',
     reviewerId: null,
@@ -441,23 +499,15 @@ export async function submitForReview(
     updatedAt: new Date().toISOString(),
   };
 
-  if (effectiveDdApproverIds && effectiveDdApproverIds.length > 0) {
-    updates.designDocApproverIds = effectiveDdApproverIds;
+  if (kickoff.designDocApproverIds) {
+    updates.designDocApproverIds = kickoff.designDocApproverIds;
   }
 
-  if (effectivePrototypeApproverIds && effectivePrototypeApproverIds.length > 0) {
-    updates.designPrototypeApproverIds = effectivePrototypeApproverIds;
+  if (kickoff.designPrototypeApproverIds) {
+    updates.designPrototypeApproverIds = kickoff.designPrototypeApproverIds;
   }
 
   await db.update(prds).set(updates).where(eq(prds.id, id));
-
-  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
-    await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
-  }
-
-  if (testCasesRequired && effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
-    await assignApprovers(id, 'test_case', effectiveQaApproverIds, requestingUserId);
-  }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
@@ -521,7 +571,10 @@ export async function reviewPrd(
     },
     await getTestCases(id),
     reviewSkillConfig?.prdValidationScoreThreshold ?? undefined,
-    { testCasesRequired: reviewTestCasesRequired },
+    {
+      testCasesRequired: reviewTestCasesRequired,
+      prdValidationEnabled: !!reviewSkillConfig?.prdValidationSkillPath,
+    },
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
@@ -1512,6 +1565,9 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
     },
     updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+      const kickoff = newStatus === 'pending_review'
+        ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
+        : null;
       await db.update(prds)
         .set({
           validationScore: Math.round(scorecard.overall_score),
@@ -1519,6 +1575,12 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           validationPhase: scorecard.review_phase,
           validationReportMd: reportMd,
           status: newStatus,
+          ...(kickoff?.designDocApproverIds
+            ? { designDocApproverIds: kickoff.designDocApproverIds }
+            : {}),
+          ...(kickoff?.designPrototypeApproverIds
+            ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+            : {}),
           updatedAt: new Date().toISOString(),
         })
         .where(eq(prds.id, prd.id));
@@ -1599,6 +1661,9 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
   const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
   const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(scorecard);
   const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+  const kickoff = newStatus === 'pending_review'
+    ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
+    : null;
 
   await db.update(prds)
     .set({
@@ -1607,9 +1672,21 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
       validationPhase: scorecard.review_phase,
       validationReportMd: reportMd,
       status: newStatus,
+      ...(kickoff?.designDocApproverIds
+        ? { designDocApproverIds: kickoff.designDocApproverIds }
+        : {}),
+      ...(kickoff?.designPrototypeApproverIds
+        ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+        : {}),
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, prdId));
+
+  if (newStatus === 'pending_review') {
+    notifyApproversDocumentReady(prdId, 'prd').catch((err) =>
+      console.error(`[syncPrdValidationResult] Failed to notify approvers (prdId=${prdId})`, err),
+    );
+  }
 
   return { score: scorecard.overall_score, is_ready: scorecard.is_ready };
 }
@@ -1625,6 +1702,8 @@ export async function markPrdValidationReady(prdId: string, requestingUserId: st
     (err as any).status = 409;
     throw err;
   }
+
+  await applyKickoffApproversForReview(prdId, row.interviewId, requestingUserId);
 
   await db.update(prds)
     .set({ status: 'pending_review', updatedAt: new Date().toISOString() })

@@ -106,9 +106,12 @@ export function derivePrdReadiness(
   prd: ReadinessPrd,
   testCase: TestCaseSummary | null | undefined,
   scoreThreshold?: number,
-  options?: { testCasesRequired?: boolean },
+  options?: { testCasesRequired?: boolean; prdValidationEnabled?: boolean },
 ): PrdReadiness {
   const testCasesRequired = options?.testCasesRequired !== false;
+  // Default false: only skip the validation gate when the project has no
+  // validation skill. Callers must pass true when PRD validation is configured.
+  const prdValidationEnabled = options?.prdValidationEnabled === true;
   const hasContentSignal = Object.prototype.hasOwnProperty.call(prd, 'content');
   const prdGenerated =
     prd.status !== 'generating' && (!hasContentSignal || !!prd.content);
@@ -186,6 +189,8 @@ export function derivePrdReadiness(
                 : 'Waiting for test-case generation.',
       };
 
+  const artifactsReadyForValidation =
+    prdGenerated && (!testCasesRequired || testCasesReadyForValidation);
   const validationStage: PrdReadinessStage = {
     id: 'validation',
     label:
@@ -199,8 +204,8 @@ export function derivePrdReadiness(
             : 'Validation failed'
           : validation === 'validating'
             ? 'Validating test cases'
-            : validation === 'not_available' && testCasesReadyForValidation
-              ? 'Validation unavailable'
+            : validation === 'not_available' && !prdValidationEnabled
+              ? 'Validation not configured'
               : 'Validation pending',
     status:
       validation === 'passed'
@@ -211,9 +216,11 @@ export function derivePrdReadiness(
             ? 'current'
             : validation === 'pending'
               ? 'current'
-              : validation === 'not_available' && testCasesReadyForValidation
-                ? 'blocked'
-                : 'pending',
+              : validation === 'not_available' && prdValidationEnabled && artifactsReadyForValidation
+                ? 'current'
+                : validation === 'not_available' && !prdValidationEnabled
+                  ? 'complete'
+                  : 'pending',
     detail:
       validation === 'passed'
         ? prdSpecValidation === 'passed'
@@ -229,11 +236,19 @@ export function derivePrdReadiness(
             ? 'Validation is running.'
             : validation === 'pending'
               ? 'Validation is queued.'
-              : testCasesReadyForValidation
-                ? 'Validation is not available yet.'
-                : testCaseStatus === 'ready' && testCaseCoverageHasFailures
-                  ? 'Resolve coverage gaps before validation.'
-                  : 'Waiting for generated test cases.',
+              : validation === 'not_available' && prdValidationEnabled
+                ? artifactsReadyForValidation
+                  ? 'Run PRD validation before review.'
+                  : testCaseStatus === 'ready' && testCaseCoverageHasFailures
+                    ? 'Resolve coverage gaps before validation.'
+                    : 'Waiting for generated test cases.'
+                : validation === 'not_available' && !prdValidationEnabled
+                  ? 'PRD validation is not configured for this project.'
+                  : testCasesReadyForValidation
+                    ? 'Validation is not available yet.'
+                    : testCaseStatus === 'ready' && testCaseCoverageHasFailures
+                      ? 'Resolve coverage gaps before validation.'
+                      : 'Waiting for generated test cases.',
   };
 
   const readyStage: PrdReadinessStage = {
@@ -246,8 +261,9 @@ export function derivePrdReadiness(
     ? prdGenerated &&
       testCaseStatus === 'ready' &&
       !testCaseCoverageHasFailures &&
-      validation === 'passed'
-    : prdGenerated && (validation === 'passed' || validation === 'not_available');
+      (validation === 'passed' || (validation === 'not_available' && !prdValidationEnabled))
+    : prdGenerated &&
+      (validation === 'passed' || (validation === 'not_available' && !prdValidationEnabled));
 
   if (prd.status === 'approved' && qaGatesPassed) {
     readyStage.label = 'Ready for review';
@@ -372,29 +388,34 @@ export function derivePrdReadiness(
   }
 
   if (validation !== 'passed') {
-    const validationUnavailable = validation === 'not_available';
-    if (validationUnavailable) {
-      // Validation hasn't been run yet (feature not yet configured/available).
-      // Don't block review — surface as informational and let the user proceed.
+    // Validation not configured for this project — skip the gate and allow review.
+    if (validation === 'not_available' && !prdValidationEnabled) {
       readyStage.label = 'Ready for review';
       readyStage.status = 'complete';
       return {
         state: 'validation_unavailable',
         label: 'Ready for review',
-        description: 'Test cases generated. Validation is not configured — you can proceed to review.',
+        description: testCasesRequired
+          ? 'Test cases generated. Validation is not configured — you can proceed to review.'
+          : 'PRD is ready. Validation is not configured — you can proceed to review.',
         severity: 'success',
         readyForReviewActions: true,
         stages: [prdStage, testCaseStage, validationStage, readyStage],
         qaFailures,
       };
     }
+    // Validation is configured (or otherwise expected) but has not completed yet.
     return {
       state: 'validation_pending',
       label: 'Validation pending',
-      description: 'Test cases are generated, but validation must complete before review.',
+      description: prdValidationEnabled
+        ? 'PRD validation must complete before review.'
+        : 'Test cases are generated, but validation must complete before review.',
       severity: 'warning',
       readyForReviewActions: false,
-      blockingReason: 'Validate generated test cases before review.',
+      blockingReason: prdValidationEnabled
+        ? 'Run PRD validation before review.'
+        : 'Validate generated test cases before review.',
       stages: [prdStage, testCaseStage, validationStage, readyStage],
       qaFailures,
     };

@@ -62,6 +62,8 @@ export interface PrdSummary {
   prototypeStageEnabled?: boolean;
   /** Resolved from the interview snapshot; when false, PRD review is not blocked on test cases. */
   testCasesRequired?: boolean;
+  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
+  prdValidationEnabled?: boolean;
 }
 
 export interface Prd extends PrdSummary {
@@ -78,8 +80,6 @@ export interface Prd extends PrdSummary {
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: PrdValidationBaseline | null;
-  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
-  prdValidationEnabled?: boolean;
   /** Set while a single-comment Apex fix is in progress or awaiting review. */
   fixCommentId?: string | null;
 }

@@ -6,6 +6,7 @@ import {
   designDocs,
   adrs,
   appUsers,
+  interviews,
 } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { getApproverUserIdsForProject, getApproverPoolForProject, getApproversForDocumentByProject } from './projectSettingsService';
@@ -397,12 +398,27 @@ export async function propagateDesignDocApprovers(
   assignedBy: string,
 ): Promise<void> {
   const rows = await db
-    .select({ designDocApproverIds: prds.designDocApproverIds })
+    .select({
+      designDocApproverIds: prds.designDocApproverIds,
+      interviewId: prds.interviewId,
+    })
     .from(prds)
     .where(eq(prds.id, prdId))
     .limit(1);
 
-  const approverIds = rows[0]?.designDocApproverIds;
+  let approverIds = rows[0]?.designDocApproverIds ?? null;
+
+  // Fall back to kickoff interview selections when the PRD row was never stamped
+  // (same inheritance path used by design-doc submitForReview).
+  if ((!approverIds || approverIds.length === 0) && rows[0]?.interviewId) {
+    const interviewRows = await db
+      .select({ designDocApproverIds: interviews.designDocApproverIds })
+      .from(interviews)
+      .where(eq(interviews.id, rows[0].interviewId))
+      .limit(1);
+    approverIds = interviewRows[0]?.designDocApproverIds ?? null;
+  }
+
   if (approverIds && approverIds.length > 0) {
     await assignApprovers(designDocId, 'design_doc', approverIds, assignedBy);
   }

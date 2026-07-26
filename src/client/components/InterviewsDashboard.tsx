@@ -213,6 +213,7 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
   const navigate = useNavigate();
   const readiness = derivePrdReadiness(prd, prd.latestTestCase, prd.validationScoreThreshold ?? undefined, {
     testCasesRequired: prd.testCasesRequired !== false,
+    prdValidationEnabled: prd.prdValidationEnabled === true,
   });
   const coverage = prd.latestTestCase?.coverageSummary;
   return (

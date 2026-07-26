@@ -524,16 +524,45 @@ describe('propagateDesignDocApprovers', () => {
     }));
   });
 
-  it('does nothing when designDocApproverIds is null', async () => {
-    mockDb.select.mockReturnValue(makeLimitSelectChain([{ designDocApproverIds: null }]));
+  it('does nothing when designDocApproverIds is null and there is no interview fallback', async () => {
+    mockDb.select.mockReturnValue(makeLimitSelectChain([{ designDocApproverIds: null, interviewId: null }]));
 
     await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
 
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
-  it('does nothing when designDocApproverIds is empty', async () => {
-    mockDb.select.mockReturnValue(makeLimitSelectChain([{ designDocApproverIds: [] }]));
+  it('does nothing when designDocApproverIds is empty and there is no interview fallback', async () => {
+    mockDb.select.mockReturnValue(makeLimitSelectChain([{ designDocApproverIds: [], interviewId: null }]));
+
+    await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('falls back to interview designDocApproverIds when the PRD row has none', async () => {
+    mockDb.select
+      .mockReturnValueOnce(makeLimitSelectChain([{ designDocApproverIds: null, interviewId: 'interview-1' }]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ designDocApproverIds: ['a1'] }]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ project: 'proj-alpha' }]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ title: 'Test Doc' }]))
+      .mockReturnValueOnce(makeAssignmentSelectChain([]));
+
+    mockGetApproversForDocument.mockResolvedValue([{ userId: 'a1', displayName: 'Alice' }]);
+
+    const onConflictMock = jest.fn().mockResolvedValue(undefined);
+    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
+
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when both PRD and interview designDocApproverIds are empty', async () => {
+    mockDb.select
+      .mockReturnValueOnce(makeLimitSelectChain([{ designDocApproverIds: [], interviewId: 'interview-1' }]))
+      .mockReturnValueOnce(makeLimitSelectChain([{ designDocApproverIds: [] }]));
 
     await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
 

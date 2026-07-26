@@ -387,6 +387,7 @@ export const PrdReviewView: React.FC = () => {
   const readiness = prd
     ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
         testCasesRequired,
+        prdValidationEnabled: prd.prdValidationEnabled === true,
       })
     : null;
 
@@ -765,11 +766,6 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, ownerApprovePrd, navigate, prototypeStageEnabled]);
 
-  const handleOwnerRevision = useCallback(async () => {
-    if (!id) return;
-    await ownerApprovePrd.mutateAsync({ status: 'revision_requested', comment: 'Revision requested by owner' });
-  }, [id, ownerApprovePrd]);
-
   const handleAddComment = useCallback(
     (sectionKey: ReviewSectionKey, selector: TextSelector) => {
       setPendingSelector({ sectionKey, selector });
@@ -1074,6 +1070,30 @@ export const PrdReviewView: React.FC = () => {
     return (backlog.epics ?? []).some((e) => !e.adoWorkItemId);
   }, [prd?.backlogJson]);
 
+  // When all readiness gates pass on a draft, promote to review automatically —
+  // authors should not need a separate "Submit for Review" click.
+  const autoSubmittedPrdRef = useRef<string | null>(null);
+  const canAutoSubmitDraft =
+    !!prd &&
+    !!id &&
+    !!readiness?.readyForReviewActions &&
+    prd.status === 'draft' &&
+    can('interviews:manage') &&
+    (prd.authorId === userId || prd.ownerId === userId || isAdmin);
+
+  useEffect(() => {
+    if (!canAutoSubmitDraft || !id) {
+      if (prd?.status === 'pending_review' || prd?.status === 'approved') {
+        autoSubmittedPrdRef.current = null;
+      }
+      return;
+    }
+    if (submitPrd.isPending) return;
+    if (autoSubmittedPrdRef.current === id) return;
+    autoSubmittedPrdRef.current = id;
+    void handleSubmit();
+  }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
@@ -1140,9 +1160,9 @@ export const PrdReviewView: React.FC = () => {
   const canCancelValidationAction = canManage && prd.status === 'validating';
   const canManageDraftReviewAction =
     canManage && (isAuthor || isOwner || isAdmin);
+  // Drafts auto-submit when readiness clears — only revision_requested needs a manual resubmit.
   const canSubmitForReviewAction =
-    canManageDraftReviewAction &&
-    (prd.status === 'draft' || prd.status === 'revision_requested');
+    canManageDraftReviewAction && prd.status === 'revision_requested';
   const canWithdrawAction =
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
@@ -1560,14 +1580,6 @@ export const PrdReviewView: React.FC = () => {
                   type="button"
                 >
                   Approve as Owner
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => void handleOwnerRevision()}
-                  disabled={ownerApprovePrd.isPending}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>

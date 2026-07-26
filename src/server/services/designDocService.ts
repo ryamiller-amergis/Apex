@@ -154,6 +154,15 @@ export async function createDesignDoc(opts: {
     })
     .returning({ id: designDocs.id });
 
+  try {
+    await propagateDesignDocApprovers(opts.prdId, row.id, opts.userId);
+  } catch (err) {
+    console.error(
+      `[designDoc] propagateDesignDocApprovers failed on create (prdId=${opts.prdId}, docId=${row.id})`,
+      err,
+    );
+  }
+
   return { designDocId: row.id };
 }
 
