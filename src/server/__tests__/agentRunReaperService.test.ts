@@ -356,7 +356,9 @@ describe('isThreadRunAlive', () => {
     ).resolves.toBe(true);
   });
 
-  it('returns false when progress has timed out', async () => {
+  it('returns true when progress has timed out but the worker heartbeat is still fresh', async () => {
+    // progress_timeout is a reaper concern; hydrate/recover must not treat a
+    // still-heartbeating run (e.g. long interview thinking) as dead.
     mockFindMany.mockResolvedValue([
       {
         id: 'run-1',
@@ -372,7 +374,7 @@ describe('isThreadRunAlive', () => {
 
     await expect(
       isThreadRunAlive('thread-1', { now: () => now, config }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
   });
 
   it('returns false when the only run is worker_lost', async () => {
