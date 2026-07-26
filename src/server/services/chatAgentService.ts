@@ -1261,6 +1261,7 @@ function isMeaningfulProgressEvent(event: SseEvent): boolean {
   return event.type === 'token'
     || event.type === 'message'
     || event.type === 'phase'
+    || event.type === 'thinking'
     || event.type === 'tool_call'
     || event.type === 'tool_status';
 }
@@ -1270,7 +1271,8 @@ async function persistMeaningfulProgress(
   envelope: AgentRunEventEnvelope,
 ): Promise<void> {
   if (envelope.event.type === 'cancel' || !isMeaningfulProgressEvent(envelope.event)) return;
-  if (envelope.event.type === 'token') {
+  // Tokens and extended thinking can fire continuously; throttle DB writes.
+  if (envelope.event.type === 'token' || envelope.event.type === 'thinking') {
     const nowMs = Date.parse(envelope.timestamp);
     const previous = lastTokenProgressWriteAt.get(runId) ?? 0;
     if (nowMs - previous < 5_000) return;
@@ -2590,6 +2592,18 @@ export async function sendMessage(
                   type: 'thinking',
                   text: 'Analyzing',
                 });
+              } else {
+                // Extended model thinking can run for many minutes without tokens or
+                // tools. Keep progressAt fresh so the reaper's progress_timeout does
+                // not kill a healthy interview/ADR turn (heartbeat alone is not enough).
+                // sequence is unused for progress-only writes — do not burn run-event ids.
+                void persistMeaningfulProgress(agentRunId!, createRunEventEnvelope({
+                  threadId,
+                  runId: agentRunId!,
+                  sequence: 0,
+                  event: { type: 'thinking', text: 'Analyzing' },
+                  phase: 'analysis',
+                }));
               }
               await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
