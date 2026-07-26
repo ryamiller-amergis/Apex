@@ -307,6 +307,10 @@ const NewInterviewCompose: React.FC = () => {
     ? skills.find((s) => s.path === resolvedSkillPath)
     : skills.find((s) => s.name === 'grill-with-docs');
 
+  const prototypeStageEnabled =
+    selectedSkillOption?.wantsDesignPrototype ?? (skillConfig?.prototypeStageEnabled !== false);
+  const testCasesEnabled = selectedSkillOption?.wantsTestCases ?? true;
+
   const {
     attachments,
     attachmentError,
@@ -365,11 +369,11 @@ const NewInterviewCompose: React.FC = () => {
   }, [input]);
 
   useEffect(() => {
-    const newDefault = skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
+    const newDefault = selectedSkillOption?.model ?? skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
     const prevDefault = prevEffectiveDefaultRef.current;
     prevEffectiveDefaultRef.current = newDefault;
     setModel((current) => current === prevDefault ? newDefault : current);
-  }, [skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSkillOption?.model, skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -418,6 +422,8 @@ const NewInterviewCompose: React.FC = () => {
         designDocApproverIds: selections.designDocApproverIds,
         designPrototypeApproverIds: selections.designPrototypeApproverIds,
         testCaseApproverIds: selections.testCaseApproverIds,
+        prototypeStageEnabled,
+        testCasesEnabled,
       });
       trackEvent('interview.started', {
         interviewId: result.interviewId,
@@ -456,7 +462,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -683,6 +689,8 @@ const NewInterviewCompose: React.FC = () => {
       {showOwnerModal && (
         <SectionOwnerModal
           project={selectedProject}
+          prototypeStageEnabled={prototypeStageEnabled}
+          testCasesEnabled={testCasesEnabled}
           onConfirm={(selections) => {
             setShowOwnerModal(false);
             void handleCreateInterview(selections);

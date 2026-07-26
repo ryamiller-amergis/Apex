@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, useReducer } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useReducer, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -33,7 +33,7 @@ import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
-import { AnnotationLayer } from './AnnotationLayer';
+import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
@@ -58,7 +58,6 @@ import {
   useReopenComment as useReopenReviewComment,
   useDeleteComment,
 } from '../hooks/useReviewComments';
-import { normalizeMermaidBlocks } from '../utils/mermaidMarkdown';
 import { MarkdownWithMermaid, MermaidDiagram } from './MarkdownWithMermaid';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
@@ -994,7 +993,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
-  const markdownComponents: Components = {
+  const markdownComponents: Components = useMemo(() => ({
     h1({ children, ...props }) {
       return <h1 id={slugify(nodeToText(children))} {...props}>{children}</h1>;
     },
@@ -1056,7 +1055,7 @@ export const DesignDocReviewView: React.FC = () => {
       }
       return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
     },
-  };
+  }), []);
 
   // Per-tab edit state
   const [editingTab, setEditingTab] = useState<TabId | null>(null);
@@ -1072,6 +1071,8 @@ export const DesignDocReviewView: React.FC = () => {
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
 
   // ── 3-zone workspace layout state (outline rail + center + pinned pane) ──────
   const [pinnedTab, setPinnedTab] = useState<TabId | null>(null);
@@ -1093,6 +1094,8 @@ export const DesignDocReviewView: React.FC = () => {
   const splitDragStartXRef = useRef(0);
   const splitDragStartPercentRef = useRef(DEFAULT_SPLIT_PERCENT);
   const tabContentSplitRef = useRef<HTMLDivElement>(null);
+  // Restore React-owned text before this render's commit (tab/split remounts).
+  unwrapCommentMarks(tabContentSplitRef.current);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
@@ -1365,6 +1368,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Selecting a tab brings it to the center pane; if it was pinned, unpin it so
   // the same section never shows in both places at once.
   const selectTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setActiveTab(tab);
     setPinnedTab((prev) => (prev === tab ? null : prev));
   }, []);
@@ -1372,6 +1376,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Pinning a tab sends it to the right-hand reference pane. If the pinned tab
   // is currently active in the center, move the center to another available tab.
   const handlePinTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setPinnedTab((prev) => (prev === tab ? null : tab));
     setActiveTab((cur) => {
       if (cur !== tab) return cur;
@@ -1415,6 +1420,7 @@ export const DesignDocReviewView: React.FC = () => {
   }, [isDraggingPinned]);
 
   const handleSplitTab = useCallback((tab: Exclude<TabId, 'validation'>) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setSplitTab((prev) => (prev === tab ? null : tab));
     // If the chosen tab is currently active in center, swap center to the other content tab
     setActiveTab((cur) => {
@@ -1623,20 +1629,44 @@ export const DesignDocReviewView: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [id, doc?.fixBaseline, fixFlow.phase, qc]);
 
+  useEffect(() => {
+    if (!actionMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (actionMenuRef.current?.contains(event.target as Node)) return;
+      setActionMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActionMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [actionMenuOpen]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
-  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
+  const validationThreshold = doc.validationScoreThreshold ?? 90;
+  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < validationThreshold;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
   const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
   const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
   const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
-  const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
-  const canUseAssistant = (isReviewer || isOwner || isAdmin) &&
+  const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
+  const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
@@ -1662,10 +1692,26 @@ export const DesignDocReviewView: React.FC = () => {
     return null;
   })();
   const isBulkCommentFixing = bulkCommentFixRunning || fixDesignDocWithAi.isPending;
-  const canWriteAssistant = canEdit || canPerformReview || isOwner;
+  const canWriteAssistant = canEdit || canPerformReview || isOwner || isAuthor;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
+  const canManageAuthorActions = canManage && (isAuthor || isOwner || isAdmin);
+  const canRunValidationAction =
+    canManageAuthorActions &&
+    hasAnyContent &&
+    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+  const canWithdrawAction = canManageAuthorActions && doc.status === 'pending_review';
+  const canShowApproversAction = doc.status === 'pending_review';
+  const canDeleteDocAction = canManageAuthorActions;
+  const canShowHeaderActionMenu =
+    canRunValidationAction ||
+    canWithdrawAction ||
+    canShowApproversAction ||
+    canDeleteDocAction;
+  const approverDisplayNames = assignments.map(
+    (a) => a.approverDisplayName ?? a.approverUserId,
+  );
 
   const showCommentLayer =
     (doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested') &&
@@ -1766,13 +1812,29 @@ export const DesignDocReviewView: React.FC = () => {
     if (!content) {
       return <div className={styles.emptyPreview}>No content yet.</div>;
     }
-    return (
+    const preview = (
       <div className={styles.preview}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-          {normalizeMermaidBlocks(content)}
-        </ReactMarkdown>
+        <MarkdownWithMermaid content={content} components={markdownComponents} />
       </div>
     );
+    // Split/pinned panes must support the same select-to-comment flow as the
+    // active tab; without AnnotationLayer, selection in those panes is ignored.
+    const sectionKey = tabToSectionKey[tab];
+    if (showCommentLayer && sectionKey) {
+      const sectionComments = reviewComments.filter((c) => c.sectionKey === sectionKey);
+      return (
+        <AnnotationLayer
+          sectionKey={sectionKey}
+          comments={sectionComments}
+          activeCommentId={activeCommentId}
+          onAddComment={handleAddComment}
+          onCommentClick={handleCommentClick}
+        >
+          {preview}
+        </AnnotationLayer>
+      );
+    }
+    return preview;
   };
 
   return (
@@ -1789,7 +1851,7 @@ export const DesignDocReviewView: React.FC = () => {
                 {statusLabel(doc.status)}
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
-                <span className={`${styles.validationBadge} ${doc.validationScore >= 90 ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
+                <span className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
                   {doc.validationScore}% validated
                 </span>
               )}
@@ -1880,78 +1942,45 @@ export const DesignDocReviewView: React.FC = () => {
             </button>
           )}
 
-          {canManage && (isAuthor || isAdmin) && (
-            <>
-              {canUseAssistant && <span className={styles.actionDivider} />}
-              {hasAnyContent &&
-                (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void createValidationThread.mutateAsync(doc.id)}
-                  disabled={createValidationThread.isPending}
-                  type="button"
-                  title={doc.validationThreadId ? 'Re-run the validation agent with the latest content' : 'Run the validation agent against this design doc'}
-                >
-                  {createValidationThread.isPending ? 'Starting…' : doc.validationThreadId ? 'Re-run Validation' : 'Run Validation'}
-                </button>
-              )}
-              {doc.status === 'validating' && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void cancelValidation.mutateAsync(doc.id)}
-                  disabled={cancelValidation.isPending}
-                  type="button"
-                  title="Stop validation and return to draft"
-                >
-                  {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
-                </button>
-              )}
-              {(doc.status === 'draft' || doc.status === 'revision_requested') && (
-                <button
-                  className={styles.actionBtnPrimary}
-                  onClick={handleSubmit}
-                  disabled={submitDoc.isPending || !hasAnyContent}
-                  type="button"
-                >
-                  Submit for Review
-                </button>
-              )}
-              {doc.status === 'validating' && doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore >= 90 && (
-                <button
-                  className={styles.actionBtnPrimary}
-                  onClick={() => void handleMarkValidationReady()}
-                  disabled={markValidationReady.isPending}
-                  type="button"
-                >
-                  {markValidationReady.isPending ? 'Submitting…' : 'Submit for Review (Score ≥ 90%)'}
-                </button>
-              )}
-              {doc.status === 'pending_review' && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void handleWithdraw()}
-                  disabled={withdrawDoc.isPending}
-                  type="button"
-                >
-                  Withdraw
-                </button>
-              )}
+          {canManageAuthorActions && doc.status === 'validating' && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => void cancelValidation.mutateAsync(doc.id)}
+              disabled={cancelValidation.isPending}
+              type="button"
+              title="Stop validation and return to draft"
+            >
+              {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
+            </button>
+          )}
+
+          {canManageAuthorActions && (doc.status === 'draft' || doc.status === 'revision_requested') && (
+            <button
+              className={styles.actionBtnPrimary}
+              onClick={handleSubmit}
+              disabled={submitDoc.isPending || !hasAnyContent}
+              type="button"
+            >
+              Submit for Review
+            </button>
+          )}
+
+          {canManageAuthorActions &&
+            doc.status === 'validating' &&
+            doc.validationScore !== null &&
+            doc.validationScore !== undefined &&
+            doc.validationScore >= validationThreshold && (
               <button
-                className={styles.btnDeleteDoc}
-                onClick={() => setShowDeleteModal(true)}
-                disabled={deleteDoc.isPending}
-                title="Delete Design Doc"
+                className={styles.actionBtnPrimary}
+                onClick={() => void handleMarkValidationReady()}
+                disabled={markValidationReady.isPending}
                 type="button"
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="2 4 4 4 14 4" />
-                  <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
-                  <path d="M6.5 7v4M9.5 7v4" />
-                  <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
-                </svg>
+                {markValidationReady.isPending
+                  ? 'Submitting…'
+                  : `Submit for Review (Score ≥ ${validationThreshold}%)`}
               </button>
-            </>
-          )}
+            )}
 
           {isReviewer && doc.status === 'pending_review' && (
             <>
@@ -1967,7 +1996,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
                           : undefined
                   }
                   type="button"
@@ -1994,25 +2023,144 @@ export const DesignDocReviewView: React.FC = () => {
             </>
           )}
 
-          {doc.status === 'pending_review' && (
-            <>
-              <span className={styles.actionDivider} />
+          {canShowHeaderActionMenu && (
+            <div className={styles.actionMenu} ref={actionMenuRef}>
               <button
-                className={styles.actionBtn}
-                onClick={() => setShowReassignModal(true)}
+                className={`${styles.actionBtn} ${actionMenuOpen ? styles.actionBtnActive : ''}`}
+                onClick={() => setActionMenuOpen((open) => !open)}
                 type="button"
-                title={assignments.length > 0
-                  ? `Approvers: ${assignments.map(a => a.approverDisplayName ?? a.approverUserId).join(', ')}`
-                  : 'Assign approvers'}
+                aria-haspopup="menu"
+                aria-expanded={actionMenuOpen}
+                aria-label="More actions"
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="6" cy="5" r="2.5" />
-                  <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
-                  <path d="M12 5.5l2 2 2-2" />
+                More
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6l4 4 4-4" />
                 </svg>
-                {assignments.length > 0 ? `${assignments.length} Approver${assignments.length > 1 ? 's' : ''}` : 'Approvers'}
               </button>
-            </>
+
+              {actionMenuOpen && (
+                <div
+                  className={styles.actionMenuPanel}
+                  role="menu"
+                  aria-label="More design doc actions"
+                >
+                  {canRunValidationAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void createValidationThread.mutateAsync(doc.id);
+                      }}
+                      disabled={createValidationThread.isPending}
+                      type="button"
+                      role="menuitem"
+                      title={
+                        doc.validationThreadId
+                          ? 'Re-run the validation agent with the latest content'
+                          : 'Run the validation agent against this design doc'
+                      }
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" />
+                          <path d="M5 8l2 2 4-4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>
+                        {createValidationThread.isPending
+                          ? 'Starting…'
+                          : doc.validationThreadId
+                            ? 'Re-run Validation'
+                            : 'Run Validation'}
+                      </span>
+                    </button>
+                  )}
+
+                  {canWithdrawAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void handleWithdraw();
+                      }}
+                      disabled={withdrawDoc.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M4 8h8" />
+                          <path d="M7 5L4 8l3 3" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Withdraw</span>
+                    </button>
+                  )}
+
+                  {canShowApproversAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowReassignModal(true);
+                      }}
+                      type="button"
+                      role="menuitem"
+                      title={
+                        approverDisplayNames.length > 0
+                          ? `Approvers: ${approverDisplayNames.join(', ')}`
+                          : 'Assign approvers'
+                      }
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="6" cy="5" r="2.5" />
+                          <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
+                          <path d="M12 5.5l2 2 2-2" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>
+                        {approverDisplayNames.length > 0
+                          ? `${approverDisplayNames.length} Approver${approverDisplayNames.length > 1 ? 's' : ''}`
+                          : 'Approvers'}
+                      </span>
+                    </button>
+                  )}
+
+                  {canDeleteDocAction && (
+                    <button
+                      className={`${styles.actionMenuItem} ${styles.actionMenuItemDanger}`}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowDeleteModal(true);
+                      }}
+                      disabled={deleteDoc.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <polyline points="2 4 4 4 14 4" />
+                          <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                          <path d="M6.5 7v4M9.5 7v4" />
+                          <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Delete Design Doc</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -2127,7 +2275,7 @@ export const DesignDocReviewView: React.FC = () => {
                 <div className={styles.failureBannerSummary}>
                   {pendingGapCount > 0
                     ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
-                    : 'The validation score is below the 90% threshold required for submission.'}
+                    : `The validation score is below the ${validationThreshold}% threshold required for submission.`}
                 </div>
                 <div className={styles.failureBannerActions}>
                   <button
@@ -2346,6 +2494,8 @@ export const DesignDocReviewView: React.FC = () => {
                               activeCommentId={activeCommentId}
                               currentUserId={userId ?? ''}
                               documentAuthorUserId={doc.authorId}
+                              documentOwnerUserId={doc.ownerId}
+                              isAssignedApprover={isAssignedApprover}
                               onCommentClick={handleCommentClick}
                               onReply={(commentId, body) => void handleCommentReply(commentId, body)}
                               onResolve={(commentId) => resolveComment.mutate(commentId)}
@@ -2376,7 +2526,10 @@ export const DesignDocReviewView: React.FC = () => {
                             <span className={styles.centerSplitRightTitle}>{tabLabel[splitTab]}</span>
                             <button
                               className={styles.centerSplitRightClose}
-                              onClick={() => setSplitTab(null)}
+                              onClick={() => {
+                                unwrapCommentMarks(tabContentSplitRef.current);
+                                setSplitTab(null);
+                              }}
                               type="button"
                               title="Close split view"
                               aria-label="Close split view"

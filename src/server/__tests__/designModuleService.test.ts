@@ -2,20 +2,45 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-jest.mock('../db/drizzle', () => ({ db: {} }));
+const mockFindFirst = jest.fn();
+
+jest.mock('../db/drizzle', () => ({
+  db: {
+    query: {
+      designModules: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
+      chatThreads: { findFirst: jest.fn() },
+    },
+  },
+}));
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn(),
 }));
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   isThreadIdle: jest.fn(),
-  sendMessage: jest.fn(),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn(),
 }));
 
-import { computeFingerprint } from '../services/designModuleService';
+import { getDefaultModel } from '../services/appSettingsService';
+import { createThread } from '../services/chatAgentService';
+import { resolveSkillConfig } from '../services/projectSettingsService';
+import {
+  computeFingerprint,
+  DEFAULT_DESIGN_MODULE_SKILL_PATH,
+  regenerateModule,
+  resolveGlobFiles,
+} from '../services/designModuleService';
+
+const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<
+  typeof resolveSkillConfig
+>;
+const mockedCreateThread = createThread as jest.MockedFunction<typeof createThread>;
+const mockedGetDefaultModel = getDefaultModel as jest.MockedFunction<
+  typeof getDefaultModel
+>;
 
 describe('designModuleService source fingerprinting', () => {
   let root: string;
@@ -23,6 +48,9 @@ describe('designModuleService source fingerprinting', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'design-module-'));
     fs.mkdirSync(path.join(root, 'src', 'services'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src', 'client', 'components'), {
+      recursive: true,
+    });
     fs.writeFileSync(
       path.join(root, 'src', 'services', 'alpha.ts'),
       'export const alpha = 1;\n'
@@ -30,6 +58,24 @@ describe('designModuleService source fingerprinting', () => {
     fs.writeFileSync(
       path.join(root, 'src', 'services', 'beta.ts'),
       'export const beta = 2;\n'
+    );
+    fs.writeFileSync(
+      path.join(root, 'src', 'client', 'components', 'LoadTestView.tsx'),
+      'export const LoadTestView = () => null;\n'
+    );
+    fs.mkdirSync(path.join(root, 'src', 'client', 'components', '__tests__'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(
+        root,
+        'src',
+        'client',
+        'components',
+        '__tests__',
+        'LoadTestView.test.tsx'
+      ),
+      'test("x", () => {});\n'
     );
   });
 
@@ -69,6 +115,49 @@ describe('designModuleService source fingerprinting', () => {
     expect(() => computeFingerprint(['../secret.txt'], root)).toThrow(
       'stay within the repository'
     );
+  });
+
+  it('resolveGlobFiles returns per-pattern matches without hashing', () => {
+    const matches = resolveGlobFiles(
+      ['src/services/*.ts', 'src/missing/*.ts'],
+      root
+    );
+    expect(matches).toEqual([
+      {
+        pattern: 'src/services/*.ts',
+        files: ['src/services/alpha.ts', 'src/services/beta.ts'],
+      },
+      { pattern: 'src/missing/*.ts', files: [] },
+    ]);
+  });
+
+  it('resolveGlobFiles expands too-broad ** patterns across nested dirs', () => {
+    const matches = resolveGlobFiles(
+      ['src/client/components/**/LoadTest*.tsx'],
+      root
+    );
+    expect(matches[0].files).toEqual([
+      'src/client/components/__tests__/LoadTestView.test.tsx',
+      'src/client/components/LoadTestView.tsx',
+    ]);
+  });
+});
+
+describe('design module scoping skill contract', () => {
+  const skillPath = path.join(
+    process.cwd(),
+    '.cursor',
+    'skills',
+    'design-module-scoping',
+    'SKILL.md'
+  );
+
+  it('requires autonomous JSON output at the module-scoping path', () => {
+    const skill = fs.readFileSync(skillPath, 'utf8');
+    expect(skill).toContain('.ai-pilot/output/module-scoping.json');
+    expect(skill).toContain('"confidence"');
+    expect(skill).toContain('Prefer narrow, explicit globs');
+    expect(skill).toContain('Do not ask the user any questions');
   });
 });
 
@@ -190,5 +279,111 @@ describe('seeded design module documentation', () => {
     expect(migration).toContain('Staging slot with new package');
     expect(migration).toContain('Inverse swap rollback');
     expect(migration).toContain('deployment_outcomes');
+  });
+});
+
+describe('regenerateModule skill settings', () => {
+  const moduleRow = {
+    id: 'mod-1',
+    slug: 'rbac',
+    label: 'RBAC',
+    description: 'Access control',
+    iconKey: 'rbac',
+    sourceGlobs: ['src/server/services/rbacService.ts'],
+    sourceFingerprint: 'old',
+    sourceCommit: null,
+    content: null,
+    sortOrder: 0,
+    lastGeneratedAt: null,
+    generatedByModel: null,
+    scopingThreadId: null,
+    createdBy: 'user-1',
+    updatedBy: 'user-1',
+    createdAt: '2026-07-15T00:00:00.000Z',
+    updatedAt: '2026-07-15T00:00:00.000Z',
+  };
+
+  const intervals: ReturnType<typeof setInterval>[] = [];
+  const realSetInterval = global.setInterval;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindFirst.mockResolvedValue(moduleRow);
+    mockedGetDefaultModel.mockResolvedValue('global-default');
+    mockedCreateThread.mockResolvedValue({
+      id: 'thread-1',
+      userId: 'user-1',
+      kickoff: {} as any,
+      messages: [],
+      status: 'idle',
+      workspaceDir: '/tmp/ws',
+      flagged: false,
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+    });
+    jest.spyOn(global, 'setInterval').mockImplementation((fn, _ms) => {
+      const id = realSetInterval(fn, 60_000);
+      intervals.push(id);
+      return id;
+    });
+  });
+
+  afterEach(() => {
+    intervals.splice(0).forEach((id) => clearInterval(id));
+    jest.restoreAllMocks();
+  });
+
+  it('uses designModuleSkillPath and designModuleModel from project settings', async () => {
+    mockedResolveSkillConfig.mockResolvedValue({
+      skillRepo: 'org/repo',
+      skillBranch: 'main',
+      skillProvider: 'github',
+      designModuleSkillPath: '.cursor/skills/custom-module-doc/SKILL.md',
+      designModuleModel: 'claude-opus-4',
+      designDocModel: 'should-not-use',
+      defaultModel: 'also-not',
+    } as any);
+
+    await regenerateModule('rbac', {
+      project: 'Apex',
+      actorId: 'user-1',
+      force: true,
+    });
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        skillPath: '.cursor/skills/custom-module-doc/SKILL.md',
+        model: 'claude-opus-4',
+      }),
+      expect.objectContaining({ skipAutoKickoff: true })
+    );
+  });
+
+  it('falls back to the built-in skill path and designDocModel when unset', async () => {
+    mockedResolveSkillConfig.mockResolvedValue({
+      skillRepo: 'org/repo',
+      skillBranch: 'main',
+      skillProvider: 'github',
+      designModuleSkillPath: null,
+      designModuleModel: null,
+      designDocModel: 'claude-sonnet-4',
+      defaultModel: 'global-ish',
+    } as any);
+
+    await regenerateModule('rbac', {
+      project: 'Apex',
+      actorId: 'user-1',
+      force: true,
+    });
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        skillPath: DEFAULT_DESIGN_MODULE_SKILL_PATH,
+        model: 'claude-sonnet-4',
+      }),
+      expect.any(Object)
+    );
   });
 });

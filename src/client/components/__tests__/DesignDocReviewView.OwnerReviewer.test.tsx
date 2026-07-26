@@ -89,6 +89,7 @@ jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
 jest.mock('../ApproverSelectModal', () => ({ ApproverSelectModal: () => null }));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  unwrapCommentMarks: jest.fn(),
 }));
 jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../FixValidationPanel', () => ({

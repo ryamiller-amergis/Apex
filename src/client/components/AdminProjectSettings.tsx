@@ -248,43 +248,374 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({ title, hint, expand
   </div>
 );
 
-// ── Skill field descriptions ───────────────────────────────────────────────────
+// ── Pipeline stage definitions (skill + model co-located) ─────────────────────
 
-const SKILL_FIELDS = [
-  { key: 'interviewSkillPath' as const, label: 'Interview Skill', desc: 'Guides the stakeholder interview process', emptyLabel: 'None (use default)' },
-  { key: 'prdSkillPath' as const, label: 'PRD Skill', desc: 'Generates the product requirements document', emptyLabel: 'None (use default)' },
-  { key: 'adrInterviewSkillPath' as const, label: 'ADR Interview Skill', desc: 'Guides repository-grounded architecture decision interviews', emptyLabel: 'None (use adr-interview default)' },
-  { key: 'adrFinalizeSkillPath' as const, label: 'ADR Finalize Skill', desc: 'Generates the final MADR document', emptyLabel: 'None (use adr-finalize default)' },
-  { key: 'adrAssistantSkillPath' as const, label: 'ADR Assistant Skill', desc: 'Guides repository-grounded refinement of proposed ADRs', emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)' },
-  { key: 'designDocSkillPath' as const, label: 'Design Doc Skill', desc: 'Produces the technical design document', emptyLabel: 'None (use default)' },
-  { key: 'designDocAssistantSkillPath' as const, label: 'Design Doc Assistant Skill', desc: 'Provides AI assistance during design doc editing', emptyLabel: 'None (use default model, no skill)' },
-  { key: 'testCaseSkillPath' as const, label: 'Test Case Skill', desc: 'Generates QA test cases after PRD generation', emptyLabel: 'None (skip test-case generation)' },
-  { key: 'designDocValidationSkillPath' as const, label: 'Design Doc Validation Skill', desc: 'Validates completed design documents', emptyLabel: 'None (skip validation phase)' },
-  { key: 'prdValidationSkillPath' as const, label: 'PRD Validation Skill', desc: 'Validates PRD spec after all artifacts are ready', emptyLabel: 'None (skip PRD validation)' },
-  { key: 'developmentSkillPath' as const, label: 'Development Skill', desc: 'Guides the AI coding agent during development sessions', emptyLabel: 'None (use default behavior)' },
-  { key: 'standupSkillPath' as const, label: 'Standup Skill', desc: 'Custom standup procedure for participant conversations', emptyLabel: 'None (use built-in default)' },
-  { key: 'featureRequestSkillPath' as const, label: 'Feature Request Analysis Skill', desc: 'Analyzes feature requests for feasibility and impact', emptyLabel: 'None (use default)' },
-  { key: 'technicalSkillPath' as const, label: 'Technical Analysis Skill', desc: 'Analyzes technical backlog items for approach and engineering risk', emptyLabel: 'None (analysis unavailable)' },
-  { key: 'issueSkillPath' as const, label: 'Issue Analysis Skill', desc: 'Analyzes reported issues for impact, severity, and urgency', emptyLabel: 'None (analysis unavailable)' },
-  { key: 'loadTestGenerationSkillPath' as const, label: 'Load Test Generation Skill', desc: 'Generates k6 load-test scripts and suggested thresholds from a requirement', emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)' },
-] as const;
+type SkillPathKey =
+  | 'interviewSkillPath'
+  | 'prdSkillPath'
+  | 'adrInterviewSkillPath'
+  | 'adrFinalizeSkillPath'
+  | 'adrAssistantSkillPath'
+  | 'designDocSkillPath'
+  | 'designDocAssistantSkillPath'
+  | 'testCaseSkillPath'
+  | 'designDocValidationSkillPath'
+  | 'prdValidationSkillPath'
+  | 'developmentSkillPath'
+  | 'standupSkillPath'
+  | 'featureRequestSkillPath'
+  | 'technicalSkillPath'
+  | 'issueSkillPath'
+  | 'loadTestGenerationSkillPath'
+  | 'designModuleSkillPath';
 
-const MODEL_FIELDS = [
-  { key: 'interviewModel' as const, label: 'Interview Model' },
-  { key: 'prdModel' as const, label: 'PRD Model' },
-  { key: 'adrModel' as const, label: 'ADR Model' },
-  { key: 'designDocModel' as const, label: 'Design Doc Model' },
-  { key: 'designDocAssistantModel' as const, label: 'Design Doc Assistant Model' },
-  { key: 'testCaseModel' as const, label: 'Test Case Model' },
-  { key: 'designDocValidationModel' as const, label: 'Design Doc Validation Model' },
-  { key: 'prdValidationModel' as const, label: 'PRD Validation Model' },
-  { key: 'developmentModel' as const, label: 'Development Model' },
-  { key: 'standupModel' as const, label: 'Standup Model' },
-  { key: 'featureRequestModel' as const, label: 'Feature Request Analysis Model' },
-  { key: 'technicalModel' as const, label: 'Technical Analysis Model' },
-  { key: 'issueModel' as const, label: 'Issue Analysis Model' },
-  { key: 'loadTestGenerationModel' as const, label: 'Load Test Generation Model' },
-] as const;
+type ModelKey =
+  | 'interviewModel'
+  | 'prdModel'
+  | 'adrModel'
+  | 'designDocModel'
+  | 'designDocAssistantModel'
+  | 'testCaseModel'
+  | 'designDocValidationModel'
+  | 'prdValidationModel'
+  | 'developmentModel'
+  | 'standupModel'
+  | 'featureRequestModel'
+  | 'technicalModel'
+  | 'issueModel'
+  | 'loadTestGenerationModel'
+  | 'designModuleModel';
+
+interface PipelineStageDef {
+  id: string;
+  label: string;
+  desc: string;
+  skillKey: SkillPathKey;
+  emptyLabel: string;
+  /** When set, stage card shows a model override next to the skill. */
+  modelKey?: ModelKey;
+  optional?: boolean;
+  /** Nest the interview skill-options editor under this stage. */
+  interviewOptions?: boolean;
+  /** Nest the PRD validation score threshold under this stage. */
+  prdValidationThreshold?: boolean;
+  /** Nest the design-doc validation score threshold under this stage. */
+  designDocValidationThreshold?: boolean;
+}
+
+const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
+  {
+    id: 'interview',
+    label: 'Interview',
+    desc: 'Guides the stakeholder interview process',
+    skillKey: 'interviewSkillPath',
+    emptyLabel: 'None (use default)',
+    modelKey: 'interviewModel',
+    interviewOptions: true,
+  },
+  {
+    id: 'prd',
+    label: 'PRD',
+    desc: 'Generates the product requirements document',
+    skillKey: 'prdSkillPath',
+    emptyLabel: 'None (use default)',
+    modelKey: 'prdModel',
+  },
+  {
+    id: 'prd-validation',
+    label: 'PRD Validation',
+    desc: 'Validates PRD spec after all artifacts are ready',
+    skillKey: 'prdValidationSkillPath',
+    emptyLabel: 'None (skip PRD validation)',
+    modelKey: 'prdValidationModel',
+    optional: true,
+    prdValidationThreshold: true,
+  },
+  {
+    id: 'design-doc',
+    label: 'Design Doc',
+    desc: 'Produces the technical design document',
+    skillKey: 'designDocSkillPath',
+    emptyLabel: 'None (use default)',
+    modelKey: 'designDocModel',
+  },
+  {
+    id: 'design-assistant',
+    label: 'Design Assistant',
+    desc: 'Provides AI assistance during design doc editing',
+    skillKey: 'designDocAssistantSkillPath',
+    emptyLabel: 'None (use default model, no skill)',
+    modelKey: 'designDocAssistantModel',
+    optional: true,
+  },
+  {
+    id: 'design-validation',
+    label: 'Design Validation',
+    desc: 'Validates completed design documents',
+    skillKey: 'designDocValidationSkillPath',
+    emptyLabel: 'None (skip validation phase)',
+    modelKey: 'designDocValidationModel',
+    optional: true,
+    designDocValidationThreshold: true,
+  },
+  {
+    id: 'test-cases',
+    label: 'Test Cases',
+    desc: 'Generates QA test cases after PRD generation',
+    skillKey: 'testCaseSkillPath',
+    emptyLabel: 'None (skip test-case generation)',
+    modelKey: 'testCaseModel',
+    optional: true,
+  },
+  {
+    id: 'development',
+    label: 'Development',
+    desc: 'Guides the AI coding agent during development sessions',
+    skillKey: 'developmentSkillPath',
+    emptyLabel: 'None (use default behavior)',
+    modelKey: 'developmentModel',
+    optional: true,
+  },
+];
+
+const ADR_PIPELINE_STAGES: PipelineStageDef[] = [
+  {
+    id: 'adr-interview',
+    label: 'ADR Interview',
+    desc: 'Guides repository-grounded architecture decision interviews',
+    skillKey: 'adrInterviewSkillPath',
+    emptyLabel: 'None (use adr-interview default)',
+  },
+  {
+    id: 'adr-finalize',
+    label: 'ADR Finalize',
+    desc: 'Generates the final MADR document',
+    skillKey: 'adrFinalizeSkillPath',
+    emptyLabel: 'None (use adr-finalize default)',
+  },
+  {
+    id: 'adr-assistant',
+    label: 'ADR Assistant',
+    desc: 'Guides repository-grounded refinement of proposed ADRs',
+    skillKey: 'adrAssistantSkillPath',
+    emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)',
+    optional: true,
+  },
+];
+
+const SIDECAR_STAGES: PipelineStageDef[] = [
+  {
+    id: 'standup',
+    label: 'Standup',
+    desc: 'Custom standup procedure for participant conversations',
+    skillKey: 'standupSkillPath',
+    emptyLabel: 'None (use built-in default)',
+    modelKey: 'standupModel',
+  },
+  {
+    id: 'feature-request',
+    label: 'Feature Request Analysis',
+    desc: 'Analyzes feature requests for feasibility and impact',
+    skillKey: 'featureRequestSkillPath',
+    emptyLabel: 'None (use default)',
+    modelKey: 'featureRequestModel',
+  },
+  {
+    id: 'technical',
+    label: 'Technical Analysis',
+    desc: 'Analyzes technical backlog items for approach and engineering risk',
+    skillKey: 'technicalSkillPath',
+    emptyLabel: 'None (analysis unavailable)',
+    modelKey: 'technicalModel',
+  },
+  {
+    id: 'issue',
+    label: 'Issue Analysis',
+    desc: 'Analyzes reported issues for impact, severity, and urgency',
+    skillKey: 'issueSkillPath',
+    emptyLabel: 'None (analysis unavailable)',
+    modelKey: 'issueModel',
+  },
+  {
+    id: 'load-test',
+    label: 'Load Test Generation',
+    desc: 'Generates k6 load-test scripts and suggested thresholds from a requirement',
+    skillKey: 'loadTestGenerationSkillPath',
+    emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)',
+    modelKey: 'loadTestGenerationModel',
+  },
+  {
+    id: 'design-module',
+    label: 'Design Module',
+    desc: 'Generates Architecture Explorer module documents from curated source globs',
+    skillKey: 'designModuleSkillPath',
+    emptyLabel: 'Default (.cursor/skills/design-module-doc/SKILL.md)',
+    modelKey: 'designModuleModel',
+  },
+];
+
+function countConfiguredStages(
+  stages: PipelineStageDef[],
+  edit: Record<SkillPathKey, string>,
+): number {
+  return stages.filter((s) => Boolean(edit[s.skillKey])).length;
+}
+
+function skillDisplayName(
+  path: string,
+  skillList: { path: string; name: string }[],
+): string {
+  if (!path) return 'None';
+  return skillList.find((s) => s.path === path)?.name ?? path;
+}
+
+// ── Pipeline flow strip ───────────────────────────────────────────────────────
+
+interface PipelineFlowProps {
+  stages: PipelineStageDef[];
+}
+
+const PipelineFlow: React.FC<PipelineFlowProps> = ({ stages }) => {
+  const core = stages.filter((s) => !s.optional);
+  return (
+    <div className={styles.pipelineFlow} aria-hidden="true">
+      {core.map((stage, index) => (
+        <React.Fragment key={stage.id}>
+          <span className={styles.pipelineFlowStep}>{stage.label}</span>
+          {index < core.length - 1 && <span className={styles.pipelineFlowArrow}>→</span>}
+        </React.Fragment>
+      ))}
+      {stages.some((s) => s.optional) && (
+        <span className={styles.pipelineFlowHint}>+ optional stages below</span>
+      )}
+    </div>
+  );
+};
+
+interface InterviewOptionsEditorProps {
+  options: InterviewSkillOption[];
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  disabled: boolean;
+  skillsDisabled: boolean;
+  onChange: (options: InterviewSkillOption[]) => void;
+}
+
+const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
+  options,
+  skillList,
+  availableModels,
+  disabled,
+  skillsDisabled,
+  onChange,
+}) => (
+  <div className={styles.interviewOptions}>
+    <div className={styles.interviewOptionsHeader}>
+      <div>
+        <div className={styles.interviewOptionsTitle}>Interview skill options</div>
+        <span className={styles.skillDescription}>
+          Define the interview skills available to users when starting an interview.
+        </span>
+      </div>
+      <button
+        type="button"
+        className={styles.btnAction}
+        onClick={() => onChange([...options, { path: '', friendlyName: '' }])}
+        disabled={disabled || skillsDisabled}
+      >
+        + Add option
+      </button>
+    </div>
+    {options.map((opt, idx) => (
+      <div key={idx} className={styles.interviewOptionBlock}>
+        <div className={styles.interviewOptionRow}>
+          <select
+            className={styles.select}
+            value={opt.path}
+            onChange={(e) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], path: e.target.value };
+              onChange(next);
+            }}
+            disabled={disabled || skillsDisabled}
+          >
+            <option value="">— select a skill —</option>
+            {skillList.map((s) => (
+              <option key={s.id} value={s.path}>{s.name}</option>
+            ))}
+          </select>
+          <input
+            className={styles.input}
+            placeholder="Friendly name (shown to users)"
+            value={opt.friendlyName}
+            onChange={(e) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], friendlyName: e.target.value };
+              onChange(next);
+            }}
+            disabled={disabled}
+          />
+          <button
+            type="button"
+            className={`${styles.btnAction} ${styles.btnActionDanger}`}
+            onClick={() => onChange(options.filter((_, i) => i !== idx))}
+            disabled={disabled}
+            title="Remove"
+          >
+            Remove
+          </button>
+        </div>
+        <div className={styles.interviewOptionRow}>
+          <select
+            className={styles.select}
+            value={opt.model ?? ''}
+            onChange={(e) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], model: e.target.value || null };
+              onChange(next);
+            }}
+            disabled={disabled}
+          >
+            <option value="">Model: use project default</option>
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.interviewOptionFlags}>
+          <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
+            <input
+              id={`iso-proto-${idx}`}
+              type="checkbox"
+              checked={opt.wantsDesignPrototype !== false}
+              onChange={(e) => {
+                const next = [...options];
+                next[idx] = { ...next[idx], wantsDesignPrototype: e.target.checked };
+                onChange(next);
+              }}
+              disabled={disabled}
+            />
+            Generate design prototype
+          </label>
+          <label className={styles.interviewOptionFlag} htmlFor={`iso-tc-${idx}`}>
+            <input
+              id={`iso-tc-${idx}`}
+              type="checkbox"
+              checked={opt.wantsTestCases !== false}
+              onChange={(e) => {
+                const next = [...options];
+                next[idx] = { ...next[idx], wantsTestCases: e.target.checked };
+                onChange(next);
+              }}
+              disabled={disabled}
+            />
+            Generate test cases
+          </label>
+        </div>
+      </div>
+    ))}
+  </div>
+);
 
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
 
@@ -583,6 +914,7 @@ interface EditState {
   technicalSkillPath: string;
   issueSkillPath: string;
   loadTestGenerationSkillPath: string;
+  designModuleSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -598,6 +930,7 @@ interface EditState {
   technicalModel: string;
   issueModel: string;
   loadTestGenerationModel: string;
+  designModuleModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -609,6 +942,7 @@ interface EditState {
   designPlanBedrockModelId: string;
   designPlanBedrockMaxTokens: number;
   prdValidationScoreThreshold: number;
+  designDocValidationScoreThreshold: number;
   uiLabBedrockModelId: string;
   uiLabBedrockMaxTokens: number;
   uiLabBedrockTimeoutMs: number;
@@ -636,12 +970,12 @@ const emptyEdit = (): EditState => ({
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
-  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '',
+  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
-  technicalModel: '', issueModel: '', loadTestGenerationModel: '',
+  technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -653,6 +987,7 @@ const emptyEdit = (): EditState => ({
   designPlanBedrockModelId: '',
   designPlanBedrockMaxTokens: 4000,
   prdValidationScoreThreshold: 90,
+  designDocValidationScoreThreshold: 90,
   uiLabBedrockModelId: '',
   uiLabBedrockMaxTokens: 16000,
   uiLabBedrockTimeoutMs: 600000,
@@ -664,6 +999,179 @@ const emptyEdit = (): EditState => ({
   interviewWebResearchEnabled: false, interviewWebMcp: null, prototypeEngine: 'bedrock',
   prototypeDesignSystemPath: '', screenInventoryPath: '', prototypeWebReferencesEnabled: false,
 });
+
+// ── Pipeline stage card ───────────────────────────────────────────────────────
+
+interface PipelineStageCardProps {
+  stage: PipelineStageDef;
+  edit: EditState;
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  expanded: boolean;
+  onToggle: () => void;
+  onEditChange: (patch: Partial<EditState>) => void;
+  disabled: boolean;
+  skillsDisabled: boolean;
+  modelsDisabled: boolean;
+}
+
+const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
+  stage,
+  edit,
+  skillList,
+  availableModels,
+  expanded,
+  onToggle,
+  onEditChange,
+  disabled,
+  skillsDisabled,
+  modelsDisabled,
+}) => {
+  const skillValue = edit[stage.skillKey];
+  const modelValue = stage.modelKey ? edit[stage.modelKey] : '';
+  const defaultModelLabel = edit.defaultModel
+    ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
+    : 'system default (composer-2)';
+
+  return (
+    <div className={styles.stageCard}>
+      <button
+        type="button"
+        className={styles.stageCardHeader}
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <svg
+          className={`${styles.stageCardChevron} ${expanded ? styles.stageCardChevronOpen : ''}`}
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="4 2 8 6 4 10" />
+        </svg>
+        <span className={styles.stageCardTitle}>
+          {stage.label}
+          {stage.optional ? <span className={styles.stageCardOptional}>optional</span> : null}
+        </span>
+        <span className={styles.stageCardHint}>
+          {skillDisplayName(skillValue, skillList)}
+        </span>
+      </button>
+      {expanded && (
+        <div className={styles.stageCardBody}>
+          <p className={styles.skillDescription}>{stage.desc}</p>
+          {!stage.interviewOptions && (
+            <div className={stage.modelKey ? styles.stageFieldGrid : styles.stageFieldSingle}>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor={`ps-${stage.skillKey}`}>Skill</label>
+                <select
+                  id={`ps-${stage.skillKey}`}
+                  className={styles.select}
+                  value={skillValue}
+                  onChange={(e) => onEditChange({ [stage.skillKey]: e.target.value })}
+                  disabled={disabled || skillsDisabled}
+                >
+                  <option value="">{stage.emptyLabel}</option>
+                  {skillList.map((s) => (
+                    <option key={s.id} value={s.path}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+              {stage.modelKey && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor={`ps-${stage.modelKey}`}>Model override</label>
+                  <select
+                    id={`ps-${stage.modelKey}`}
+                    className={styles.select}
+                    value={modelValue}
+                    onChange={(e) => onEditChange({ [stage.modelKey!]: e.target.value })}
+                    disabled={disabled || modelsDisabled}
+                  >
+                    <option value="">Use project default</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                  {!modelValue && (
+                    <span className={styles.modelDefault}>Using: {defaultModelLabel}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {stage.interviewOptions && (
+            <InterviewOptionsEditor
+              options={edit.interviewSkillOptions}
+              skillList={skillList}
+              availableModels={availableModels}
+              disabled={disabled}
+              skillsDisabled={skillsDisabled}
+              onChange={(options) => onEditChange({ interviewSkillOptions: options })}
+            />
+          )}
+          {stage.prdValidationThreshold && (
+            <div className={styles.field} style={{ marginTop: '12px' }}>
+              <label className={styles.label} htmlFor="ps-validation-threshold">
+                Pass threshold (%)
+              </label>
+              <span className={styles.skillDescription}>
+                Minimum validation score required for a PRD to pass the readiness gate. Defaults to 90%.
+              </span>
+              <select
+                id="ps-validation-threshold"
+                className={styles.select}
+                value={String(edit.prdValidationScoreThreshold)}
+                onChange={(e) => onEditChange({ prdValidationScoreThreshold: Number(e.target.value) })}
+                disabled={disabled}
+              >
+                <option value="50">50%</option>
+                <option value="60">60%</option>
+                <option value="70">70%</option>
+                <option value="75">75%</option>
+                <option value="80">80%</option>
+                <option value="85">85%</option>
+                <option value="90">90% (default)</option>
+                <option value="95">95%</option>
+                <option value="100">100%</option>
+              </select>
+            </div>
+          )}
+          {stage.designDocValidationThreshold && (
+            <div className={styles.field} style={{ marginTop: '12px' }}>
+              <label className={styles.label} htmlFor="ps-dd-validation-threshold">
+                Pass threshold (%)
+              </label>
+              <span className={styles.skillDescription}>
+                Minimum validation score required for a design doc to pass the readiness gate. Defaults to 90%.
+              </span>
+              <select
+                id="ps-dd-validation-threshold"
+                className={styles.select}
+                value={String(edit.designDocValidationScoreThreshold)}
+                onChange={(e) => onEditChange({ designDocValidationScoreThreshold: Number(e.target.value) })}
+                disabled={disabled}
+              >
+                <option value="50">50%</option>
+                <option value="60">60%</option>
+                <option value="70">70%</option>
+                <option value="75">75%</option>
+                <option value="80">80%</option>
+                <option value="85">85%</option>
+                <option value="90">90% (default)</option>
+                <option value="95">95%</option>
+                <option value="100">100%</option>
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   selectedProject = '',
@@ -687,13 +1195,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   // Accordion expanded state
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     repo: true,
-    skills: false,
-    models: false,
+    featurePipeline: true,
+    adrPipeline: false,
+    sidecarSkills: false,
     bedrockReview: false,
     approvers: false,
     pills: false,
     mcpPills: false,
   });
+
+  // Optional pipeline stages start collapsed; core stages start open
+  const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({});
 
   // Approver local state
   const [designDocApproverIds, setDesignDocApproverIds] = useState<string[]>([]);
@@ -773,10 +1285,36 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const isStageExpanded = (stage: PipelineStageDef): boolean =>
+    expandedStages[stage.id] ?? !stage.optional;
+
+  const toggleStage = (stageId: string, stage: PipelineStageDef) => {
+    setExpandedStages((prev) => ({
+      ...prev,
+      [stageId]: !(prev[stageId] ?? !stage.optional),
+    }));
+  };
+
+  const patchEdit = (patch: Partial<EditState>) => {
+    setEdit((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  const defaultExpandedSections = {
+    repo: true,
+    featurePipeline: true,
+    adrPipeline: false,
+    sidecarSkills: false,
+    bedrockReview: false,
+    approvers: false,
+    pills: false,
+    mcpPills: false,
+  };
+
   const handleAddNew = () => {
     setEdit({ ...emptyEdit(), project: selectedProject });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, bedrockReview: false, approvers: false, pills: false, mcpPills: false });
+    setExpandedSections(defaultExpandedSections);
+    setExpandedStages({});
   };
 
   const handleEditRow = (config: ProjectSkillConfig) => {
@@ -805,6 +1343,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       technicalSkillPath: config.technicalSkillPath ?? '',
       issueSkillPath: config.issueSkillPath ?? '',
       loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
+      designModuleSkillPath: config.designModuleSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -820,6 +1359,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       technicalModel: config.technicalModel ?? '',
       issueModel: config.issueModel ?? '',
       loadTestGenerationModel: config.loadTestGenerationModel ?? '',
+      designModuleModel: config.designModuleModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -831,6 +1371,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designPlanBedrockModelId: config.designPlanBedrockModelId ?? '',
       designPlanBedrockMaxTokens: config.designPlanBedrockMaxTokens ?? 4000,
       prdValidationScoreThreshold: config.prdValidationScoreThreshold ?? 90,
+      designDocValidationScoreThreshold: config.designDocValidationScoreThreshold ?? 90,
       uiLabBedrockModelId: config.uiLabBedrockModelId ?? '',
       uiLabBedrockMaxTokens: config.uiLabBedrockMaxTokens ?? 16000,
       uiLabBedrockTimeoutMs: config.uiLabBedrockTimeoutMs ?? 600000,
@@ -851,7 +1392,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       isNew: false,
     });
     setFormError(null);
-    setExpandedSections({ repo: true, skills: false, models: false, approvers: false, pills: false, mcpPills: false });
+    setExpandedSections(defaultExpandedSections);
+    setExpandedStages({});
   };
 
   const handleRepoChange = (repoName: string) => {
@@ -897,6 +1439,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         technicalSkillPath: edit.technicalSkillPath || null,
         issueSkillPath: edit.issueSkillPath || null,
         loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
+        designModuleSkillPath: edit.designModuleSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -912,6 +1455,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         technicalModel: edit.technicalModel || null,
         issueModel: edit.issueModel || null,
         loadTestGenerationModel: edit.loadTestGenerationModel || null,
+        designModuleModel: edit.designModuleModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
@@ -923,6 +1467,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designPlanBedrockModelId: edit.designPlanBedrockModelId || null,
         designPlanBedrockMaxTokens: edit.designPlanBedrockMaxTokens || null,
         prdValidationScoreThreshold: edit.prdValidationScoreThreshold !== 90 ? edit.prdValidationScoreThreshold : null,
+        designDocValidationScoreThreshold: edit.designDocValidationScoreThreshold !== 90 ? edit.designDocValidationScoreThreshold : null,
           uiLabBedrockModelId: edit.uiLabBedrockModelId || null,
           uiLabBedrockMaxTokens: edit.uiLabBedrockMaxTokens || null,
           uiLabBedrockTimeoutMs: edit.uiLabBedrockTimeoutMs || null,
@@ -1169,21 +1714,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
 
               <div className={styles.field} style={{ marginTop: '12px' }}>
-                <label className={styles.label} htmlFor="ps-prototypeStageEnabled">
-                  <input
-                    id="ps-prototypeStageEnabled"
-                    type="checkbox"
-                    checked={edit.prototypeStageEnabled}
-                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeStageEnabled: e.target.checked } : prev)}
-                    disabled={upsert.isPending}
-                    style={{ marginRight: '6px' }}
-                  />
-                  Enable Design Prototype stage
-                </label>
-                <span className={styles.skillDescription}>When off, the workflow becomes Interview → PRD → Design Doc (skips prototype generation)</span>
-              </div>
-
-              <div className={styles.field} style={{ marginTop: '12px' }}>
                 <label className={styles.label} htmlFor="ps-prototypeEngine">Prototype Engine</label>
                 <select
                   id="ps-prototypeEngine"
@@ -1222,106 +1752,121 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 2: Process Skills */}
+            {/* Section 2: Document Pipeline — Feature */}
             <AccordionSection
-              title="Process Skills"
-              hint={edit.skillRepo ? `${skillList.length} available` : undefined}
-              expanded={expandedSections.skills}
-              onToggle={() => toggleSection('skills')}
+              title="Document Pipeline — Feature"
+              hint={`${countConfiguredStages(FEATURE_PIPELINE_STAGES, edit)}/${FEATURE_PIPELINE_STAGES.length} configured${edit.skillRepo ? ` · ${skillList.length} skills available` : ''}`}
+              expanded={expandedSections.featurePipeline}
+              onToggle={() => toggleSection('featurePipeline')}
             >
               <p className={styles.accordionHelp}>
-                Assign skills from the selected repo to each stage of the document pipeline.
+                Assign skill and model for each stage of the feature document flow.
               </p>
-
-              {/* Interview Skill Options — repeatable list editor */}
-              <div className={styles.field} style={{ marginBottom: '16px' }}>
-                <label className={styles.label}>Interview Skill Options</label>
-                <span className={styles.skillDescription} style={{ marginBottom: '8px', display: 'block' }}>
-                  Configure one or more interview skills that users can choose from when starting an interview. Falls back to the single Interview Skill below if empty.
-                </span>
-                {edit.interviewSkillOptions.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
-                    {edit.interviewSkillOptions.map((opt, idx) => (
-                      <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <select
-                          className={styles.select}
-                          style={{ flex: 1 }}
-                          value={opt.path}
-                          onChange={(e) => {
-                            const options = [...edit.interviewSkillOptions];
-                            options[idx] = { ...options[idx], path: e.target.value };
-                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
-                          }}
-                          disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                        >
-                          <option value="">— select a skill —</option>
-                          {skillList.map((s) => (
-                            <option key={s.id} value={s.path}>{s.name}</option>
-                          ))}
-                        </select>
-                        <input
-                          className={styles.input}
-                          style={{ flex: 1 }}
-                          placeholder="Friendly name (shown to users)"
-                          value={opt.friendlyName}
-                          onChange={(e) => {
-                            const options = [...edit.interviewSkillOptions];
-                            options[idx] = { ...options[idx], friendlyName: e.target.value };
-                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
-                          }}
-                          disabled={upsert.isPending}
-                        />
-                        <button
-                          type="button"
-                          className={`${styles.btnAction} ${styles.btnActionDanger}`}
-                          onClick={() => {
-                            const options = edit.interviewSkillOptions.filter((_, i) => i !== idx);
-                            setEdit((prev) => prev ? { ...prev, interviewSkillOptions: options } : prev);
-                          }}
-                          disabled={upsert.isPending}
-                          title="Remove"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className={styles.btnAction}
-                  onClick={() => {
-                    setEdit((prev) => prev ? { ...prev, interviewSkillOptions: [...prev.interviewSkillOptions, { path: '', friendlyName: '' }] } : prev);
-                  }}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                >
-                  + Add Interview Skill Option
-                </button>
-              </div>
-
-              <div className={styles.formGrid}>
-                {SKILL_FIELDS.map((sf) => (
-                  <div key={sf.key} className={styles.field}>
-                    <label className={styles.label} htmlFor={`ps-${sf.key}`}>{sf.label}</label>
-                    <select
-                      id={`ps-${sf.key}`}
-                      className={styles.select}
-                      value={edit[sf.key]}
-                      onChange={(e) => setEdit((prev) => prev ? { ...prev, [sf.key]: e.target.value } : prev)}
-                      disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                    >
-                      <option value="">{sf.emptyLabel}</option>
-                      {skillList.map((s) => (
-                        <option key={s.id} value={s.path}>{s.name}</option>
-                      ))}
-                    </select>
-                    <span className={styles.skillDescription}>{sf.desc}</span>
-                  </div>
+              <PipelineFlow stages={FEATURE_PIPELINE_STAGES} />
+              <div className={styles.stageList}>
+                {FEATURE_PIPELINE_STAGES.map((stage) => (
+                  <PipelineStageCard
+                    key={stage.id}
+                    stage={stage}
+                    edit={edit}
+                    skillList={skillList}
+                    availableModels={availableModels}
+                    expanded={isStageExpanded(stage)}
+                    onToggle={() => toggleStage(stage.id, stage)}
+                    onEditChange={patchEdit}
+                    disabled={upsert.isPending}
+                    skillsDisabled={isLoadingSkills || !edit.skillRepo}
+                    modelsDisabled={isLoadingModels}
+                  />
                 ))}
               </div>
             </AccordionSection>
 
-            {/* Section 3: Prototype Design System (Bedrock) */}
+            {/* Section 3: Document Pipeline — ADR */}
+            <AccordionSection
+              title="Document Pipeline — ADR"
+              hint={`${countConfiguredStages(ADR_PIPELINE_STAGES, edit)}/${ADR_PIPELINE_STAGES.length} configured`}
+              expanded={expandedSections.adrPipeline}
+              onToggle={() => toggleSection('adrPipeline')}
+            >
+              <p className={styles.accordionHelp}>
+                Separate architecture decision flow — not mixed into the feature pipeline.
+                ADR stages share one model override.
+              </p>
+              <PipelineFlow stages={ADR_PIPELINE_STAGES} />
+              <div className={styles.sharedModelRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-adrModel">ADR model override</label>
+                  <select
+                    id="ps-adrModel"
+                    className={styles.select}
+                    value={edit.adrModel}
+                    onChange={(e) => patchEdit({ adrModel: e.target.value })}
+                    disabled={upsert.isPending || isLoadingModels}
+                  >
+                    <option value="">Use project default</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                  {!edit.adrModel && (
+                    <span className={styles.modelDefault}>
+                      Using: {edit.defaultModel
+                        ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
+                        : 'system default (composer-2)'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className={styles.stageList}>
+                {ADR_PIPELINE_STAGES.map((stage) => (
+                  <PipelineStageCard
+                    key={stage.id}
+                    stage={stage}
+                    edit={edit}
+                    skillList={skillList}
+                    availableModels={availableModels}
+                    expanded={isStageExpanded(stage)}
+                    onToggle={() => toggleStage(stage.id, stage)}
+                    onEditChange={patchEdit}
+                    disabled={upsert.isPending}
+                    skillsDisabled={isLoadingSkills || !edit.skillRepo}
+                    modelsDisabled={isLoadingModels}
+                  />
+                ))}
+              </div>
+            </AccordionSection>
+
+            {/* Section 4: Sidecar Skills */}
+            <AccordionSection
+              title="Sidecar Skills"
+              hint={`${countConfiguredStages(SIDECAR_STAGES, edit)}/${SIDECAR_STAGES.length} configured`}
+              expanded={expandedSections.sidecarSkills}
+              onToggle={() => toggleSection('sidecarSkills')}
+            >
+              <p className={styles.accordionHelp}>
+                Independent tools that are not stages in the document pipeline.
+              </p>
+              <div className={styles.stageList}>
+                {SIDECAR_STAGES.map((stage) => (
+                  <PipelineStageCard
+                    key={stage.id}
+                    stage={stage}
+                    edit={edit}
+                    skillList={skillList}
+                    availableModels={availableModels}
+                    expanded={isStageExpanded(stage)}
+                    onToggle={() => toggleStage(stage.id, stage)}
+                    onEditChange={patchEdit}
+                    disabled={upsert.isPending}
+                    skillsDisabled={isLoadingSkills || !edit.skillRepo}
+                    modelsDisabled={isLoadingModels}
+                  />
+                ))}
+              </div>
+            </AccordionSection>
+
+            {/* Section 5: Prototype Design System (Bedrock) */}
             <AccordionSection
               title="Prototype Design System"
               expanded={expandedSections.bedrockReview}
@@ -1385,44 +1930,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
             </AccordionSection>
 
-            {/* Section 4: Model Overrides */}
-            <AccordionSection
-              title="Model Overrides"
-              expanded={expandedSections.models}
-              onToggle={() => toggleSection('models')}
-            >
-              <p className={styles.accordionHelp}>
-                Override the AI model for specific pipeline stages. Unset fields use the project default model.
-              </p>
-              <div className={styles.formGrid}>
-                {MODEL_FIELDS.map((mf) => (
-                  <div key={mf.key} className={styles.field}>
-                    <label className={styles.label} htmlFor={`ps-${mf.key}`}>{mf.label}</label>
-                    <select
-                      id={`ps-${mf.key}`}
-                      className={styles.select}
-                      value={edit[mf.key]}
-                      onChange={(e) => setEdit((prev) => prev ? { ...prev, [mf.key]: e.target.value } : prev)}
-                      disabled={upsert.isPending || isLoadingModels}
-                    >
-                      <option value="">Use project default</option>
-                      {availableModels.map((m) => (
-                        <option key={m.id} value={m.id}>{m.displayName}</option>
-                      ))}
-                    </select>
-                    {!edit[mf.key] && (
-                      <span className={styles.modelDefault}>
-                        Using: {edit.defaultModel
-                          ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
-                          : 'system default (composer-2)'}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </AccordionSection>
-
-            {/* Section 4: Apex Bedrock Models */}
+            {/* Section 6: Apex Bedrock Models */}
             <AccordionSection
               title="Apex Bedrock Models"
               hint={
@@ -1612,34 +2120,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
                     <option value="64000">64 000</option>
-                  </select>
-                </div>
-              </div>
-
-              <p className={styles.label} style={{ marginBottom: 6, marginTop: 16, fontWeight: 600 }}>PRD Validation Score Threshold</p>
-              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
-                Minimum validation score (%) required for a PRD to pass the readiness gate.
-                Defaults to 90% if not set.
-              </p>
-              <div className={styles.fieldRow}>
-                <div className={styles.field}>
-                  <label className={styles.label} htmlFor="ps-validation-threshold">Pass Threshold (%)</label>
-                  <select
-                    id="ps-validation-threshold"
-                    className={styles.select}
-                    value={String(edit.prdValidationScoreThreshold)}
-                    onChange={(e) => setEdit((prev) => prev ? { ...prev, prdValidationScoreThreshold: Number(e.target.value) } : prev)}
-                    disabled={upsert.isPending}
-                  >
-                    <option value="50">50%</option>
-                    <option value="60">60%</option>
-                    <option value="70">70%</option>
-                    <option value="75">75%</option>
-                    <option value="80">80%</option>
-                    <option value="85">85%</option>
-                    <option value="90">90% (default)</option>
-                    <option value="95">95%</option>
-                    <option value="100">100%</option>
                   </select>
                 </div>
               </div>

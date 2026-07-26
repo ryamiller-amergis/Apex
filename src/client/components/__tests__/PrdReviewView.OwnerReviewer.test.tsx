@@ -8,7 +8,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PrdReviewView } from '../PrdReviewView';
@@ -226,7 +226,7 @@ describe('Owner display in header', () => {
 });
 
 describe('Submit for review', () => {
-  it('uses the reviewer selections already captured on the source interview', () => {
+  it('auto-submits with kickoff reviewers when readiness is complete — no Submit button', async () => {
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage',
       userId: 'user-author',
@@ -241,6 +241,13 @@ describe('Submit for review', () => {
           prdId: 'prd-1',
           chatThreadId: null,
           status: 'ready',
+          coverageSummary: {
+            totalCases: 10,
+            pbisCovered: 1,
+            acCovered: '4/4',
+            brCovered: '4/4',
+            gaps: 0,
+          },
           validationStatus: 'not_available',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
@@ -261,15 +268,56 @@ describe('Submit for review', () => {
     });
 
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /Submit for Review/i }));
 
-    expect(mockSubmitPrdMutateAsync).toHaveBeenCalledWith({
-      prdId: 'prd-1',
-      prdApproverIds: ['prd-reviewer'],
-      designDocApproverIds: ['design-doc-reviewer'],
-      designPrototypeApproverIds: ['prototype-reviewer'],
-      qaApproverIds: ['qa-reviewer'],
+    expect(screen.queryByRole('button', { name: /Submit for Review/i })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockSubmitPrdMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        prdApproverIds: ['prd-reviewer'],
+        designDocApproverIds: ['design-doc-reviewer'],
+        designPrototypeApproverIds: ['prototype-reviewer'],
+        qaApproverIds: ['qa-reviewer'],
+      });
     });
+  });
+
+  it('does not show Submit for Review while validation is still pending', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        prdValidationEnabled: true,
+        backlogJson: { epics: [] },
+        latestTestCase: {
+          id: 'test-case-1',
+          prdId: 'prd-1',
+          chatThreadId: null,
+          status: 'ready',
+          coverageSummary: {
+            totalCases: 10,
+            pbisCovered: 1,
+            acCovered: '4/4',
+            brCovered: '4/4',
+            gaps: 0,
+          },
+          validationStatus: 'not_available',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: /Submit for Review/i })).not.toBeInTheDocument();
+    expect(mockSubmitPrdMutateAsync).not.toHaveBeenCalled();
   });
 });
 

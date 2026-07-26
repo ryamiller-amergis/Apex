@@ -1,0 +1,22 @@
+.panel {
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  opacity: 0.85;
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.body {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-weight: 400;
+}

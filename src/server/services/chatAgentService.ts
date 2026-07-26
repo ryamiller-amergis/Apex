@@ -341,8 +341,15 @@ function buildMcpServers(
     return servers;
   }
 
-  // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
-  if (kickoff.skillProvider !== 'github') {
+  // ADO-backed projects use ado-skills MCP for repo browse + skill load.
+  // GitHub-backed projects pre-fetch skills server-side, but still need
+  // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
+  // (e.g. Design Module scoping against the connected skill repo).
+  if (kickoff.skillProvider === 'github') {
+    servers['github-repo'] = {
+      url: `http://localhost:${port}/mcp/github-repo`,
+    };
+  } else {
     servers['ado-skills'] = { url: adoSkillsUrl };
   }
 
@@ -868,17 +875,36 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
     isGitHub
-      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the GitHub repo.`
+      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, source code, etc.) are NOT on the local filesystem — they live in the GitHub repo and must be fetched via the \`github-repo\` MCP server. Do not search the local filesystem for them.`
       : `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
     ``,
   ];
 
   if (isGitHub) {
+    const slashIdx = kickoff.repo.indexOf('/');
+    const ghOrg =
+      slashIdx > 0
+        ? kickoff.repo.slice(0, slashIdx)
+        : process.env.GITHUB_ORG || '';
+    const ghRepo =
+      slashIdx > 0 ? kickoff.repo.slice(slashIdx + 1) : kickoff.repo;
     parts.push(
+      `# MCP tools (github-repo server)`,
+      `- \`search_repo_code\` — search code by keyword in the connected GitHub repo`,
+      `- \`list_repo_dir\`    — browse directory structure`,
+      `- \`get_skill_file\`   — read any file from the repo`,
+      `- \`list_skills\`      — list SKILL.md files`,
+      ``,
+      `# Repo coordinates (pass these to MCP tools)`,
+      `  org:    "${ghOrg || '(omit — server uses GITHUB_ORG)'}"`,
+      `  repo:   "${ghRepo}"`,
+      `  branch: "${branch}"`,
+      ``,
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
       `The skill content has been pre-loaded below. Follow its instructions exactly and completely.`,
+      `When the skill requires exploring or verifying repository files, use the github-repo MCP tools with the coordinates above.`,
     );
   } else {
     parts.push(
@@ -2195,23 +2221,58 @@ export async function sendMessage(
   if (isFirstTurn) {
     let initialPrompt = buildInitialPrompt(state.thread.kickoff);
 
-    // For GitHub-backed projects with a skill path, pre-fetch the skill content
-    // and inject it directly into the system prompt (no MCP round-trip needed)
-    if (state.thread.kickoff.skillProvider === 'github' && state.thread.kickoff.skillPath) {
-      try {
-        const { getSkillFile } = await import('./skillCatalogFacade');
-        const resolvedSkillBranch = state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch;
-        const skillContent = await getSkillFile(
-          state.thread.kickoff.project,
-          state.thread.kickoff.repo,
-          state.thread.kickoff.skillPath,
-          resolvedSkillBranch,
-          'github',
-        );
-        initialPrompt += `\n\n# Pre-loaded skill content (${state.thread.kickoff.skillPath})\n\n${skillContent}`;
-      } catch (err) {
-        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
-        initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub: ${(err as Error).message}. Inform the user.`;
+    // For projects with a skill path, pre-fetch the skill content and inject it
+    // into the system prompt. GitHub skills are fetched from the remote; if that
+    // fails (or provider is ADO), fall back to the local Apex checkout so new
+    // platform skills work before they are published to the connected repo.
+    if (state.thread.kickoff.skillPath) {
+      const skillPathNorm = state.thread.kickoff.skillPath.replace(/^\//, '');
+      let skillContent: string | null = null;
+      let skillSource: 'github' | 'local' | null = null;
+
+      if (state.thread.kickoff.skillProvider === 'github') {
+        try {
+          const { getSkillFile } = await import('./skillCatalogFacade');
+          const resolvedSkillBranch =
+            state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch;
+          skillContent = await getSkillFile(
+            state.thread.kickoff.project,
+            state.thread.kickoff.repo,
+            state.thread.kickoff.skillPath,
+            resolvedSkillBranch,
+            'github',
+          );
+          skillSource = 'github';
+        } catch (err) {
+          console.error(
+            '[chat] Failed to pre-fetch GitHub skill:',
+            (err as Error).message,
+          );
+        }
+      }
+
+      if (!skillContent) {
+        const localPath = path.join(process.cwd(), skillPathNorm);
+        if (fs.existsSync(localPath)) {
+          try {
+            skillContent = fs.readFileSync(localPath, 'utf8');
+            skillSource = 'local';
+            console.log('[chat] Using local skill fallback:', skillPathNorm);
+          } catch (err) {
+            console.error(
+              '[chat] Failed to read local skill fallback:',
+              (err as Error).message,
+            );
+          }
+        }
+      }
+
+      if (skillContent) {
+        initialPrompt += `\n\n# Pre-loaded skill content (${skillPathNorm}${skillSource === 'local' ? ', local fallback' : ''})\n\n${skillContent}`;
+        initialPrompt +=
+          '\n\nThe skill content above is already loaded. Do not call `get_skill` for this path — execute it now.';
+      } else if (state.thread.kickoff.skillProvider === 'github') {
+        initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub or the local checkout. Inform the user that the skill file is missing.`;
       }
     }
 

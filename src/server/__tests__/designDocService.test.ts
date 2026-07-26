@@ -138,12 +138,14 @@ const {
   isAssignedApprover: mockIsAssignedApprover,
   isApprovalComplete: mockIsApprovalComplete,
   notifyApproversDocumentReady: mockNotifyApproversDocumentReady,
+  propagateDesignDocApprovers: mockPropagateDesignDocApprovers,
 } = jest.requireMock('../services/documentApprovalService') as {
   assignApprovers: jest.Mock;
   recordApproverResponse: jest.Mock;
   isAssignedApprover: jest.Mock;
   isApprovalComplete: jest.Mock;
   notifyApproversDocumentReady: jest.Mock;
+  propagateDesignDocApprovers: jest.Mock;
 };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -200,6 +202,38 @@ describe('createDesignDoc', () => {
         assumptionsContent: '',
       }),
     );
+  });
+
+  it('auto-assigns design doc reviewers from the parent PRD on create', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createDesignDoc({
+      prdId: 'prd-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-abc',
+      title: 'My Design Doc',
+    });
+
+    expect(mockPropagateDesignDocApprovers).toHaveBeenCalledWith('prd-1', 'doc-new', 'user-1');
+  });
+
+  it('still returns the designDocId when reviewer propagation fails', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-new' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockPropagateDesignDocApprovers.mockRejectedValueOnce(new Error('assign failed'));
+
+    await expect(
+      createDesignDoc({
+        prdId: 'prd-1',
+        project: 'proj-alpha',
+        userId: 'user-1',
+        chatThreadId: 'thread-abc',
+      }),
+    ).resolves.toEqual({ designDocId: 'doc-new' });
   });
 
   it('defaults title to "Untitled Design Doc" when not supplied', async () => {
@@ -383,7 +417,7 @@ describe('updateDesignDocContent', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(updateDesignDocContent('doc-1', 'user-other', { designContent: 'x' })).rejects.toMatchObject({
-      message: 'Only the author can edit design doc content',
+      message: 'Only the author or owner can edit design doc content',
     });
   });
 
@@ -476,8 +510,21 @@ describe('submitForReview', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(submitForReview('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can submit for review',
+      message: 'Only the author or owner can submit for review',
     });
+  });
+
+  it('allows the interview design-doc owner to submit', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'draft', authorId: 'user-author' }));
+    mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
+    mockDb.query.interviews.findFirst.mockResolvedValue({ designDocOwnerId: 'user-owner' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('doc-1', 'user-owner');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
   });
 
   it('calls assignApprovers when approverIds provided', async () => {
@@ -528,7 +575,7 @@ describe('withdrawFromReview', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'pending_review' }));
 
     await expect(withdrawFromReview('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can withdraw from review',
+      message: 'Only the author or owner can withdraw from review',
     });
   });
 });
@@ -663,7 +710,7 @@ describe('deleteDesignDoc', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(deleteDesignDoc('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can delete this design doc',
+      message: 'Only the author or owner can delete this design doc',
     });
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
@@ -870,7 +917,7 @@ describe('markValidationReady', () => {
     );
 
     await expect(markValidationReady('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can mark validation as ready',
+      message: 'Only the author or owner can mark validation as ready',
       status: 403,
     });
   });
@@ -913,6 +960,23 @@ describe('markValidationReady', () => {
 
 describe('reviewDesignDoc (approve with validation gate)', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('throws 409 when validation is configured and score is below the project threshold', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', authorId: 'user-author', validationScore: 60 }),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      designDocValidationSkillPath: '/skills/validate.md',
+      designDocValidationScoreThreshold: 80,
+    });
+
+    await expect(
+      reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('Validation score must be >= 80'),
+      status: 409,
+    });
+  });
 
   it('throws 409 when validation is configured and score is below 90', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(

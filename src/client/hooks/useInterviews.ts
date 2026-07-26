@@ -397,6 +397,8 @@ export function useCreateInterview() {
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
       testCaseApproverIds?: string[];
+      prototypeStageEnabled?: boolean;
+      testCasesEnabled?: boolean;
     }
   >({
     mutationFn: (body) =>

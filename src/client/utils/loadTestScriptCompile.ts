@@ -56,10 +56,22 @@ function parseHeaders(headersText?: string): Record<string, string> | undefined 
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
+/**
+ * Ensure relative flow paths join cleanly with TARGET_URL.
+ * Absolute http(s) URLs are left unchanged. Relative paths always get a
+ * leading `/` so `https://host` + `api/health` cannot become `…netapi/health`.
+ */
+export function normalizeFlowStepPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
 export function toFlowSteps(steps: GuidedFormStep[]): FlowStep[] {
   return steps.map((step, index) => ({
     method: step.method.trim().toUpperCase(),
-    path: step.path.trim(),
+    path: normalizeFlowStepPath(step.path),
     headers: parseHeaders(step.headersText),
     body: step.body?.trim() ? step.body : undefined,
     extractions: step.extractions?.filter((e) => e.name.trim() && e.expression.trim()),
@@ -109,12 +121,18 @@ function compileExtractionLines(step: FlowStep, responseVar: string): string[] {
   return lines;
 }
 
+/** k6 template expr: strip trailing slash on TARGET_URL, then append normalized path. */
+function compileTargetRelativeUrlExpr(path: string): string {
+  const normalized = normalizeFlowStepPath(path);
+  return `\`\${String(__ENV.TARGET_URL || '').replace(/\\/+$/, '')}${escapeForTemplate(normalized)}\``;
+}
+
 function compileStepRequest(step: FlowStep, index: number): string {
   const tag = step.tag || `step_${index + 1}`;
   const method = step.method.toLowerCase();
-  const pathExpr = step.path.startsWith('http')
+  const pathExpr = /^https?:\/\//i.test(step.path)
     ? `\`${escapeForTemplate(step.path)}\``
-    : `\`\${__ENV.TARGET_URL}${escapeForTemplate(step.path)}\``;
+    : compileTargetRelativeUrlExpr(step.path);
   const paramsParts = [`tags: { name: '${escapeForTemplate(tag)}' }`];
   if (step.headers) {
     paramsParts.push(`headers: ${JSON.stringify(step.headers)}`);

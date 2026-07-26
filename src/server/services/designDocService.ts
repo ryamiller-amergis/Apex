@@ -21,6 +21,43 @@ import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
+const DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD = 90;
+
+async function resolveDesignDocValidationThreshold(
+  project: string,
+  settingsId?: string | null,
+): Promise<number> {
+  const skillConfig = await resolveSkillConfig({ project, settingsId: settingsId ?? undefined });
+  return skillConfig?.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+}
+
+/** Interview-scoped design-doc owner (kickoff), when set and distinct from author. */
+async function getInterviewDesignDocOwnerId(prdId: string | null | undefined): Promise<string | null> {
+  if (!prdId) return null;
+  const prd = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { interviewId: true },
+  });
+  if (!prd?.interviewId) return null;
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.id, prd.interviewId),
+    columns: { designDocOwnerId: true },
+  });
+  return interview?.designDocOwnerId ?? null;
+}
+
+async function assertAuthorOrOwnerOrAdmin(
+  row: { authorId: string; prdId: string | null },
+  requestingUserId: string,
+  action: string,
+): Promise<void> {
+  if (row.authorId === requestingUserId) return;
+  if (await isAdminUser(requestingUserId)) return;
+  const ownerId = await getInterviewDesignDocOwnerId(row.prdId);
+  if (ownerId && ownerId === requestingUserId) return;
+  throw forbidden(`Only the author or owner can ${action}`);
+}
+
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
     const row = await db.query.chatThreads.findFirst({
@@ -144,6 +181,15 @@ export async function createDesignDoc(opts: {
     })
     .returning({ id: designDocs.id });
 
+  try {
+    await propagateDesignDocApprovers(opts.prdId, row.id, opts.userId);
+  } catch (err) {
+    console.error(
+      `[designDoc] propagateDesignDocApprovers failed on create (prdId=${opts.prdId}, docId=${row.id})`,
+      err,
+    );
+  }
+
   return { designDocId: row.id };
 }
 
@@ -204,9 +250,13 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
 
   if (rows.length === 0) return null;
   const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
-  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
+  const [skillSettingsName, validationScoreThreshold] = await Promise.all([
+    getSkillSettingsName(row.skillSettingsId),
+    resolveDesignDocValidationThreshold(row.project, row.skillSettingsId),
+  ]);
   return {
     ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName, skillSettingsName),
+    validationScoreThreshold,
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -224,9 +274,7 @@ export async function updateDesignDocContent(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can edit design doc content');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'edit design doc content');
   if (row.status === 'approved' || row.status === 'reviewer_approved') throw conflict('Approved design docs cannot be edited');
 
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -255,9 +303,7 @@ export async function submitForReview(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can submit for review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'submit for review');
   if (row.status !== 'draft' && row.status !== 'pending_review' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit design doc from status '${row.status}'`);
   }
@@ -302,9 +348,7 @@ export async function submitForReview(
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can withdraw from review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'withdraw from review');
   if (row.status !== 'pending_review') throw conflict(`Cannot withdraw design doc from status '${row.status}'`);
 
   await db
@@ -339,8 +383,9 @@ export async function reviewDesignDoc(
 
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
   if (skillConfig?.designDocValidationSkillPath && !admin) {
-    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
-      const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+    const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < threshold) {
+      const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
       (err as any).status = 409;
       throw err;
     }
@@ -980,9 +1025,7 @@ export async function startSingleFeatureDesignDocWatcher(
 export async function deleteDesignDoc(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can delete this design doc');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'delete this design doc');
   stopDocWatcher(id);
   stopValidationWatcher(id);
   await db.delete(designDocs).where(eq(designDocs.id, id));
@@ -1280,9 +1323,7 @@ export async function syncValidationResult(
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can cancel validation');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'cancel validation');
   if (row.status !== 'validating') throw conflict(`Cannot cancel validation from status '${row.status}'`);
 
 
@@ -1304,12 +1345,11 @@ export async function cancelValidation(id: string, requestingUserId: string): Pr
 export async function markValidationReady(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can mark validation as ready');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'mark validation as ready');
   if (row.status !== 'validating') throw conflict(`Cannot mark ready from status '${row.status}'`);
-  if (!row.validationScore || row.validationScore < 90) {
-    const err = new Error(`Validation score must be >= 90. Current: ${row.validationScore ?? 'not scored'}`);
+  const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
+  if (!row.validationScore || row.validationScore < threshold) {
+    const err = new Error(`Validation score must be >= ${threshold}. Current: ${row.validationScore ?? 'not scored'}`);
     (err as any).status = 409;
     throw err;
   }
@@ -1500,12 +1540,13 @@ export async function triggerFixValidation(
   const sectionsToUpdate = Object.keys(gapsBySection);
   const pendingGaps = Object.values(gapsBySection).flat();
 
-  const scoreDeficit = 90 - scorecard.overall_score;
+  const threshold = await resolveDesignDocValidationThreshold(doc.project, doc.skillSettingsId);
+  const scoreDeficit = Math.max(0, threshold - scorecard.overall_score);
 
   const prompt = [
     '# Fix Validation Gaps',
     '',
-    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥90%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
+    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥${threshold}%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
     '',
     '## ⚠️ MOST IMPORTANT INSTRUCTION — YOU MUST CALL THE TOOL',
     '',
@@ -1518,7 +1559,7 @@ export async function triggerFixValidation(
     '',
     '## How Scoring Works',
     '',
-    'Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above 90%, every gap currently scored 1 or 2 must reach a 3.',
+    `Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above ${threshold}%, every gap currently scored 1 or 2 must reach a 3.`,
     '',
     '**What it takes to earn a 3:** The "what a 3 looks like" description for each gap is the EXACT rubric the validator uses. You must write content that directly and completely satisfies that description — not just acknowledge it, but provide the actual details, plans, tables, or specifications it calls for.',
     '',

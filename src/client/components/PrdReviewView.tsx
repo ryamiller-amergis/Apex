@@ -382,7 +382,14 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
+  const prototypeStageEnabled = prd?.prototypeStageEnabled !== false;
+  const testCasesRequired = prd?.testCasesRequired !== false;
+  const readiness = prd
+    ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
+        testCasesRequired,
+        prdValidationEnabled: prd.prdValidationEnabled === true,
+      })
+    : null;
 
   const updateContent = useUpdatePrdContent();
   const updateBacklog = useUpdatePrdBacklog();
@@ -609,10 +616,10 @@ export const PrdReviewView: React.FC = () => {
       const hasRealDocs = relatedDesignDocs && relatedDesignDocs.length > 0;
       groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle(designDocReviewerRows.length), rows: designDocReviewerRows });
     }
-    if (designPrototypeReviewerRows.length > 0) {
+    if (prototypeStageEnabled && designPrototypeReviewerRows.length > 0) {
       groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle(designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
     }
-    if (qaReviewerRows.length > 0) {
+    if (testCasesRequired && qaReviewerRows.length > 0) {
       groups.push({ label: 'QA Review', subtitle: buildSubtitle(qaReviewerRows.length), rows: qaReviewerRows });
     }
 
@@ -627,7 +634,7 @@ export const PrdReviewView: React.FC = () => {
     }
 
     return groups;
-  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs]);
+  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs, testCasesRequired, prototypeStageEnabled]);
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -741,10 +748,10 @@ export const PrdReviewView: React.FC = () => {
       prdId: id,
       action: 'approve',
     });
-    if (result?.approved) {
+    if (result?.approved && prototypeStageEnabled) {
       navigate(`/backlog/design-plan/${id}`);
     }
-  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate]);
+  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate, prototypeStageEnabled]);
 
   const handleQaApprove = useCallback(async () => {
     if (!id) return;
@@ -754,13 +761,10 @@ export const PrdReviewView: React.FC = () => {
   const handleOwnerApprove = useCallback(async () => {
     if (!id) return;
     await ownerApprovePrd.mutateAsync({ status: 'approved' });
-    navigate(`/backlog/design-plan/${id}`);
-  }, [id, ownerApprovePrd, navigate]);
-
-  const handleOwnerRevision = useCallback(async () => {
-    if (!id) return;
-    await ownerApprovePrd.mutateAsync({ status: 'revision_requested', comment: 'Revision requested by owner' });
-  }, [id, ownerApprovePrd]);
+    if (prototypeStageEnabled) {
+      navigate(`/backlog/design-plan/${id}`);
+    }
+  }, [id, ownerApprovePrd, navigate, prototypeStageEnabled]);
 
   const handleAddComment = useCallback(
     (sectionKey: ReviewSectionKey, selector: TextSelector) => {
@@ -1066,6 +1070,30 @@ export const PrdReviewView: React.FC = () => {
     return (backlog.epics ?? []).some((e) => !e.adoWorkItemId);
   }, [prd?.backlogJson]);
 
+  // When all readiness gates pass on a draft, promote to review automatically —
+  // authors should not need a separate "Submit for Review" click.
+  const autoSubmittedPrdRef = useRef<string | null>(null);
+  const canAutoSubmitDraft =
+    !!prd &&
+    !!id &&
+    !!readiness?.readyForReviewActions &&
+    prd.status === 'draft' &&
+    can('interviews:manage') &&
+    (prd.authorId === userId || prd.ownerId === userId || isAdmin);
+
+  useEffect(() => {
+    if (!canAutoSubmitDraft || !id) {
+      if (prd?.status === 'pending_review' || prd?.status === 'approved') {
+        autoSubmittedPrdRef.current = null;
+      }
+      return;
+    }
+    if (submitPrd.isPending) return;
+    if (autoSubmittedPrdRef.current === id) return;
+    autoSubmittedPrdRef.current = id;
+    void handleSubmit();
+  }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
@@ -1110,12 +1138,14 @@ export const PrdReviewView: React.FC = () => {
   const canShowApprovalsAction = approvalChecklistGroups.length > 0;
   const canShowAssistantAction = prd.status !== 'approved';
   const canGenerateTestCasesAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     !!prd.content &&
     (readiness.state === 'test_cases_pending' ||
       readiness.state === 'test_case_generation_failed');
   const canRecalculateTestCaseCoverageAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     readiness.state === 'coverage_gaps';
@@ -1126,13 +1156,13 @@ export const PrdReviewView: React.FC = () => {
     prd.status !== 'validating' &&
     !!prd.content &&
     !!prd.backlogJson &&
-    prd.latestTestCase?.status === 'ready';
+    (!testCasesRequired || prd.latestTestCase?.status === 'ready');
   const canCancelValidationAction = canManage && prd.status === 'validating';
   const canManageDraftReviewAction =
     canManage && (isAuthor || isOwner || isAdmin);
+  // Drafts auto-submit when readiness clears — only revision_requested needs a manual resubmit.
   const canSubmitForReviewAction =
-    canManageDraftReviewAction &&
-    (prd.status === 'draft' || prd.status === 'revision_requested');
+    canManageDraftReviewAction && prd.status === 'revision_requested';
   const canWithdrawAction =
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
@@ -1272,7 +1302,10 @@ export const PrdReviewView: React.FC = () => {
                 {statusLabel(prd.status)}
               </span>
               {prd.prdValidationEnabled && (() => {
-                const hasAllArtifacts = !!prd.content && !!prd.backlogJson && prd.latestTestCase?.status === 'ready';
+                const hasAllArtifacts =
+                  !!prd.content &&
+                  !!prd.backlogJson &&
+                  (!testCasesRequired || prd.latestTestCase?.status === 'ready');
                 if (prd.status === 'validating') {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeRunning}`}>
@@ -1514,6 +1547,7 @@ export const PrdReviewView: React.FC = () => {
             )}
 
           {canReview &&
+            testCasesRequired &&
             isAssignedQaApprover &&
             !hasAlreadyApprovedQa &&
             prd.status === 'pending_review' && (
@@ -1546,14 +1580,6 @@ export const PrdReviewView: React.FC = () => {
                   type="button"
                 >
                   Approve as Owner
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => void handleOwnerRevision()}
-                  disabled={ownerApprovePrd.isPending}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>
@@ -1819,11 +1845,11 @@ export const PrdReviewView: React.FC = () => {
 
       <PrdReadinessPanel
         readiness={readiness}
-        coverage={latestTestCase?.coverageSummary ?? null}
+        coverage={testCasesRequired ? (latestTestCase?.coverageSummary ?? null) : null}
       />
 
       <div className={styles.bannerRow}>
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && designPlanResponse?.plan && (
+        {prototypeStageEnabled && prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {designPlanResponse.plan.status === 'generating'
@@ -1842,7 +1868,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length > 0 && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {relatedPrototypes.length === 1
@@ -1861,7 +1887,7 @@ export const PrdReviewView: React.FC = () => {
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               No design prototypes exist for this PRD. Generate them to continue the design flow.
@@ -2220,8 +2246,8 @@ export const PrdReviewView: React.FC = () => {
                       >
                         <BacklogViewer
                           data={prd.backlogJson}
-                          testCasesJson={testCaseRecord?.testCasesJson}
-                          testCaseStatus={latestTestCase?.status}
+                          testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                          testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                           editable={canEditContent}
                           routeOptions={routeOptions}
                           onSaveBacklog={(updatedData) => {
@@ -2236,8 +2262,8 @@ export const PrdReviewView: React.FC = () => {
                     ) : (
                       <BacklogViewer
                         data={prd.backlogJson}
-                        testCasesJson={testCaseRecord?.testCasesJson}
-                        testCaseStatus={latestTestCase?.status}
+                        testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                        testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                         editable={canEditContent}
                         routeOptions={routeOptions}
                         onSaveBacklog={(updatedData) => {

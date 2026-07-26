@@ -45,6 +45,8 @@ describe('derivePrdReadiness', () => {
         validationStatus: 'not_available',
         validationSummary: { status: 'not_available' },
       }),
+      undefined,
+      { prdValidationEnabled: true },
     );
 
     expect(readiness).toEqual(
@@ -70,7 +72,7 @@ describe('derivePrdReadiness', () => {
     );
   });
 
-  it('does not block review for informational caveats when AC/BR coverage is complete', () => {
+  it('blocks review when validation is configured but has not run yet', () => {
     const readiness = derivePrdReadiness(
       generatedPrd,
       makeTestCase({
@@ -84,19 +86,42 @@ describe('derivePrdReadiness', () => {
         validationStatus: 'not_available',
         validationSummary: { status: 'not_available' },
       }),
+      undefined,
+      { prdValidationEnabled: true },
     );
 
-    expect(readiness.state).toBe('validation_unavailable');
-    expect(readiness.readyForReviewActions).toBe(true);
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'validation_pending',
+        label: 'Validation pending',
+        readyForReviewActions: false,
+        blockingReason: 'Run PRD validation before review.',
+      }),
+    );
+    expect(getStage(readiness, 'validation')).toEqual(
+      expect.objectContaining({
+        label: 'Validation pending',
+        status: 'current',
+        detail: 'Run PRD validation before review.',
+      }),
+    );
+    expect(getStage(readiness, 'ready')).toEqual(
+      expect.objectContaining({
+        label: 'Review locked',
+        status: 'pending',
+      }),
+    );
   });
 
-  it('allows review when validation is not available but coverage is complete', () => {
+  it('allows review when validation is not configured and coverage is complete', () => {
     const readiness = derivePrdReadiness(
       generatedPrd,
       makeTestCase({
         validationStatus: 'not_available',
         validationSummary: { status: 'not_available' },
       }),
+      undefined,
+      { prdValidationEnabled: false },
     );
 
     expect(readiness).toEqual(
@@ -112,6 +137,12 @@ describe('derivePrdReadiness', () => {
         detail: '10 cases, 4/4 AC, 4/4 BR',
       }),
     );
+    expect(getStage(readiness, 'validation')).toEqual(
+      expect.objectContaining({
+        label: 'Validation not configured',
+        status: 'complete',
+      }),
+    );
     expect(getStage(readiness, 'ready')).toEqual(
       expect.objectContaining({
         label: 'Ready for review',
@@ -121,7 +152,9 @@ describe('derivePrdReadiness', () => {
   });
 
   it('marks ready for review when generation, coverage, and validation all pass', () => {
-    const readiness = derivePrdReadiness(generatedPrd, makeTestCase());
+    const readiness = derivePrdReadiness(generatedPrd, makeTestCase(), undefined, {
+      prdValidationEnabled: true,
+    });
 
     expect(readiness).toEqual(
       expect.objectContaining({
@@ -159,6 +192,8 @@ describe('derivePrdReadiness', () => {
         validationStatus: 'not_available',
         validationSummary: { status: 'not_available' },
       }),
+      undefined,
+      { prdValidationEnabled: true },
     );
 
     expect(readiness).toEqual(
@@ -191,6 +226,8 @@ describe('derivePrdReadiness', () => {
         validationStatus: 'not_available',
         validationSummary: { status: 'not_available' },
       }),
+      undefined,
+      { prdValidationEnabled: true },
     );
 
     expect(readiness).toEqual(
@@ -221,6 +258,8 @@ describe('derivePrdReadiness', () => {
           failures: ['A generated test case has no expected result.'],
         },
       }),
+      undefined,
+      { prdValidationEnabled: true },
     );
 
     expect(readiness).toEqual(
@@ -236,6 +275,49 @@ describe('derivePrdReadiness', () => {
     );
     expect(getStage(readiness, 'validation')).toEqual(
       expect.objectContaining({ label: 'Validation failed', status: 'blocked' }),
+    );
+  });
+
+  it('does not block on missing test cases when testCasesRequired is false and validation is not configured', () => {
+    const readiness = derivePrdReadiness(generatedPrd, null, undefined, {
+      testCasesRequired: false,
+      prdValidationEnabled: false,
+    });
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'validation_unavailable',
+        readyForReviewActions: true,
+      }),
+    );
+    expect(getStage(readiness, 'test_cases')).toEqual(
+      expect.objectContaining({
+        label: 'Test cases not required',
+        status: 'complete',
+      }),
+    );
+  });
+
+  it('blocks review when test cases are not required but PRD validation is configured and has not run', () => {
+    const readiness = derivePrdReadiness(generatedPrd, null, undefined, {
+      testCasesRequired: false,
+      prdValidationEnabled: true,
+    });
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'validation_pending',
+        label: 'Validation pending',
+        readyForReviewActions: false,
+        blockingReason: 'Run PRD validation before review.',
+      }),
+    );
+    expect(getStage(readiness, 'validation')).toEqual(
+      expect.objectContaining({
+        label: 'Validation pending',
+        status: 'current',
+        detail: 'Run PRD validation before review.',
+      }),
     );
   });
 });

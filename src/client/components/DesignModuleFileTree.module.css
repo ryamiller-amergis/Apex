@@ -1,0 +1,44 @@
+.tree {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  color: var(--text-secondary);
+}
+
+.folderName {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.fileName {
+  color: var(--text-secondary);
+}
+
+.testFile .fileName {
+  color: var(--error-color);
+}
+
+.glyph {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.count {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+  padding: 8px 0;
+}

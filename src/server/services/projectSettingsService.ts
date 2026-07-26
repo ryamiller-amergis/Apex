@@ -109,6 +109,7 @@ export interface UpsertSkillConfigOptions {
   issueSkillPath?: string | null;
   issueModel?: string | null;
   prdValidationScoreThreshold?: number | null;
+  designDocValidationScoreThreshold?: number | null;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
   uiLabBedrockTimeoutMs?: number | null;
@@ -120,6 +121,8 @@ export interface UpsertSkillConfigOptions {
   calendarAssistantModel?: string | null;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  designModuleSkillPath?: string | null;
+  designModuleModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
@@ -185,6 +188,7 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     issueSkillPath: opts.issueSkillPath ?? null,
     issueModel: opts.issueModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
+    designDocValidationScoreThreshold: opts.designDocValidationScoreThreshold ?? null,
     uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
     uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,
     uiLabBedrockTimeoutMs: opts.uiLabBedrockTimeoutMs ?? null,
@@ -196,6 +200,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     calendarAssistantModel: opts.calendarAssistantModel ?? null,
     loadTestGenerationSkillPath: opts.loadTestGenerationSkillPath ?? null,
     loadTestGenerationModel: opts.loadTestGenerationModel ?? null,
+    designModuleSkillPath: opts.designModuleSkillPath ?? null,
+    designModuleModel: opts.designModuleModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,

@@ -18,6 +18,7 @@ import {
 } from '../../shared/types/designModule';
 
 const DESIGN_MODULE_SKILL_PATH = '.cursor/skills/design-module-doc/SKILL.md';
+export const DEFAULT_DESIGN_MODULE_SKILL_PATH = DESIGN_MODULE_SKILL_PATH;
 const OUTPUT_FILE = 'design-module.md';
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 720;
@@ -97,7 +98,7 @@ function validateInput(
   }
 }
 
-function globToRegExp(glob: string): RegExp {
+export function globToRegExp(glob: string): RegExp {
   const normalized = normalizeRelativePath(glob);
   let pattern = '^';
   for (let index = 0; index < normalized.length; index += 1) {
@@ -121,7 +122,7 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${pattern}$`);
 }
 
-function walkRepository(root: string): string[] {
+export function walkRepository(root: string): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
     let entries: fs.Dirent[];
@@ -140,6 +141,28 @@ function walkRepository(root: string): string[] {
   };
   visit(root);
   return files;
+}
+
+/**
+ * Lightweight per-pattern file match for live scoping preview (no content hash).
+ * Validates globs the same way as fingerprinting.
+ */
+export function resolveGlobFiles(
+  sourceGlobs: string[],
+  repositoryRoot = process.cwd()
+): { pattern: string; files: string[] }[] {
+  validateSourceGlobs(sourceGlobs);
+  const allFiles = walkRepository(repositoryRoot);
+  return sourceGlobs.map((glob) => {
+    const pattern = normalizeRelativePath(glob.trim());
+    const matcher = globToRegExp(pattern);
+    return {
+      pattern,
+      files: allFiles
+        .filter((file) => matcher.test(file))
+        .sort((a, b) => a.localeCompare(b)),
+    };
+  });
 }
 
 export function computeFingerprint(
@@ -202,6 +225,7 @@ function toSummary(module: DesignModule): DesignModuleSummary {
     content: _content,
     sourceFingerprint: _sourceFingerprint,
     sourceCommit: _sourceCommit,
+    scopingThreadId: _scopingThreadId,
     createdBy: _createdBy,
     updatedBy: _updatedBy,
     ...summary
@@ -213,7 +237,7 @@ export async function listModules(): Promise<DesignModuleSummary[]> {
   const rows = await db
     .select()
     .from(designModules)
-    .orderBy(asc(designModules.sortOrder), asc(designModules.label));
+    .orderBy(asc(designModules.label));
   return rows.map((row) => toSummary(withStaleness(row)));
 }
 
@@ -243,6 +267,7 @@ export async function createModule(
         ),
         sourceFingerprint: fingerprint.fingerprint,
         sourceCommit: getSourceCommit(),
+        scopingThreadId: input.scopingThreadId?.trim() || null,
         sortOrder: input.sortOrder ?? 0,
         createdBy: actorId,
         updatedBy: actorId,
@@ -275,6 +300,9 @@ export async function updateModule(
     patch.sourceGlobs = input.sourceGlobs.map((glob) =>
       normalizeRelativePath(glob.trim())
     );
+  }
+  if (input.scopingThreadId !== undefined) {
+    patch.scopingThreadId = input.scopingThreadId?.trim() || null;
   }
   if (input.sortOrder !== undefined) patch.sortOrder = input.sortOrder;
 
@@ -392,7 +420,10 @@ export async function regenerateModule(
 
   const fingerprint = computeFingerprint(row.sourceGlobs);
   const sourceCommit = getSourceCommit();
+  const skillPath =
+    skillConfig.designModuleSkillPath?.trim() || DESIGN_MODULE_SKILL_PATH;
   const model =
+    skillConfig.designModuleModel ??
     skillConfig.designDocModel ??
     skillConfig.defaultModel ??
     (await getDefaultModel());
@@ -413,7 +444,7 @@ export async function regenerateModule(
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider,
-      skillPath: DESIGN_MODULE_SKILL_PATH,
+      skillPath,
       freeformContext,
       model,
     },

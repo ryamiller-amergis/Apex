@@ -98,7 +98,7 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds } = req.body as {
+    const { project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled } = req.body as {
       project: string;
       repo: string;
       title?: string;
@@ -113,6 +113,8 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
       testCaseApproverIds?: string[];
+      prototypeStageEnabled?: boolean;
+      testCasesEnabled?: boolean;
     };
 
     if (!project || !repo || !chatThreadId) {
@@ -120,7 +122,7 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       return;
     }
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
@@ -331,8 +333,12 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
 
     if (approved) {
       const prd = await getPrd(req.params.prdId);
-      const skillConfig = prd ? await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }) : null;
-      if (skillConfig?.prototypeStageEnabled !== false) {
+      let prototypeEnabled = prd?.prototypeStageEnabled;
+      if (prototypeEnabled === undefined && prd) {
+        const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+        prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
+      }
+      if (prototypeEnabled !== false) {
         generateDesignPlan(req.params.prdId).catch(err => {
           console.error('[interviews] Design plan generation failed:', err);
         });
@@ -2155,7 +2161,20 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
       }).where(eq(prdsTable.id, prdId));
 
       const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
-      if (skillConfig?.prototypeStageEnabled !== false) {
+      let prototypeEnabled: boolean | undefined;
+      if (prd.interviewId) {
+        const interviewRows = await db.select({
+          prototypeStageEnabled: interviewsTable.prototypeStageEnabled,
+        })
+          .from(interviewsTable)
+          .where(eq(interviewsTable.id, prd.interviewId))
+          .limit(1);
+        prototypeEnabled = interviewRows[0]?.prototypeStageEnabled;
+      }
+      if (prototypeEnabled === undefined) {
+        prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
+      }
+      if (prototypeEnabled) {
         generateDesignPlan(prdId).catch(err => {
           console.error('[owner-approve] Design plan generation failed:', err);
         });

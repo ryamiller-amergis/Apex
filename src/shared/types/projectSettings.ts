@@ -67,6 +67,12 @@ export interface QuickSkillPill {
 export interface InterviewSkillOption {
   path: string;
   friendlyName: string;
+  /** Model override for this interview skill; null/undefined uses project default. */
+  model?: string | null;
+  /** When unset, falls back to project-level prototypeStageEnabled. */
+  wantsDesignPrototype?: boolean;
+  /** When unset, defaults to true (test cases are generated). */
+  wantsTestCases?: boolean;
 }
 
 export interface ProjectSkillConfig {
@@ -111,6 +117,8 @@ export interface ProjectSkillConfig {
   designPlanBedrockModelId?: string | null;
   designPlanBedrockMaxTokens?: number | null;
   prdValidationScoreThreshold?: number | null;
+  /** Minimum design-doc validation score (%) to pass the readiness gate. Defaults to 90. */
+  designDocValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
   standupSkillPath?: string | null;
@@ -162,6 +170,10 @@ export interface ProjectSkillConfig {
   calendarAssistantModel?: string | null;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  /** Skill used to generate Design Module architecture documents. */
+  designModuleSkillPath?: string | null;
+  /** Model override for Design Module architecture document generation. */
+  designModuleModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -205,6 +217,8 @@ export interface UpsertProjectSkillConfigRequest {
   designPlanBedrockModelId?: string | null;
   designPlanBedrockMaxTokens?: number | null;
   prdValidationScoreThreshold?: number | null;
+  /** Minimum design-doc validation score (%) to pass the readiness gate. Defaults to 90. */
+  designDocValidationScoreThreshold?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
   standupSkillPath?: string | null;
@@ -237,6 +251,8 @@ export interface UpsertProjectSkillConfigRequest {
   calendarAssistantModel?: string | null;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  designModuleSkillPath?: string | null;
+  designModuleModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -323,6 +339,8 @@ export interface ProjectSkillConfigResponse {
   approvalMode?: ApprovalMode;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  designModuleSkillPath?: string | null;
+  designModuleModel?: string | null;
 }
 
 /** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */
