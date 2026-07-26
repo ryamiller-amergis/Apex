@@ -16,9 +16,10 @@ import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { DEFAULT_MODEL_ID } from '../config/models';
-import type { ChatMessage, ChatThread } from '../../shared/types/chat';
+import type { ChatMessage, ChatThread, SelectChatThreadOptions } from '../../shared/types/chat';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import { useContextEstimate } from '../hooks/useContextEstimate';
+import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import { BrandLogo } from './BrandLogo';
 import { ReadAloudButton } from './ReadAloudButton';
 import styles from './AgentHome.module.css';
@@ -380,16 +381,25 @@ function MessageBubble({
   onRetry,
   isRunning,
   questionOffset,
+  highlighted,
 }: {
   msg: ChatMessage;
   onSend: (text: string) => void;
   onRetry?: () => void;
   isRunning: boolean;
   questionOffset: number;
+  highlighted?: boolean;
 }) {
+  const highlightClass = highlighted ? styles.messageHighlighted : '';
+  const highlightTestId = highlighted ? 'chat-message-highlighted' : undefined;
+
   if (msg.role === 'tool') {
     return (
-      <div className={styles.toolMsg}>
+      <div
+        data-message-id={msg.id}
+        data-testid={highlightTestId}
+        className={`${styles.toolMsg} ${highlightClass}`.trim()}
+      >
         <ToolIcon />
         <span>{msg.text}</span>
       </div>
@@ -399,7 +409,11 @@ function MessageBubble({
     const isError = msg.text.startsWith('Error:');
     if (isError && onRetry) {
       return (
-        <div className={styles.systemErrorMsg}>
+        <div
+          data-message-id={msg.id}
+          data-testid={highlightTestId}
+          className={`${styles.systemErrorMsg} ${highlightClass}`.trim()}
+        >
           <span className={styles.systemErrorText}>{msg.text}</span>
           <button className={styles.retryBtn} onClick={onRetry} disabled={isRunning} type="button">
             ↺ Try again
@@ -407,11 +421,23 @@ function MessageBubble({
         </div>
       );
     }
-    return <div className={styles.systemMsg}>{msg.text}</div>;
+    return (
+      <div
+        data-message-id={msg.id}
+        data-testid={highlightTestId}
+        className={`${styles.systemMsg} ${highlightClass}`.trim()}
+      >
+        {msg.text}
+      </div>
+    );
   }
   if (msg.role === 'user') {
     return (
-      <div className={styles.userRow}>
+      <div
+        data-message-id={msg.id}
+        data-testid={highlightTestId}
+        className={`${styles.userRow} ${highlightClass}`.trim()}
+      >
         <div className={styles.userBubble}>
           <div className={styles.bubbleActions}>
             <MessageCopyButton text={msg.text} label="Copy your message" inverted />
@@ -430,7 +456,15 @@ function MessageBubble({
       </div>
     );
   }
-  return <AgentMessage msg={msg} onSend={onSend} isRunning={isRunning} questionOffset={questionOffset} />;
+  return (
+    <div
+      data-message-id={msg.id}
+      data-testid={highlightTestId}
+      className={highlightClass || undefined}
+    >
+      <AgentMessage msg={msg} onSend={onSend} isRunning={isRunning} questionOffset={questionOffset} />
+    </div>
+  );
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -447,6 +481,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   );
   const [showHistory, setShowHistory] = useState(false);
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
+  const [focusMessageId, setFocusMessageId] = useState<string | undefined>();
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const [isSending, setIsSending] = useState(false);
@@ -515,6 +550,9 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
 
+  const visibleMessageIds = visibleMessages.map((m) => m.id);
+  const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
+
   const hasPrd = prdReady;
 
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
@@ -557,8 +595,12 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     }
   }, [selectedProject, sessionStorageKey]);
 
-  // Scroll messages to bottom
+  // Scroll messages to bottom — skip while jump-to-match is pending/active so
+  // we do not yank the viewport away from the matched message.
+  const skipScrollToEndRef = useRef(false);
+  skipScrollToEndRef.current = Boolean(focusMessageId || highlightedMessageId);
   useEffect(() => {
+    if (skipScrollToEndRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [visibleMessages.length, streamingText]);
 
@@ -870,7 +912,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -916,6 +958,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     }
     setSeedMessages([]);
     setThreadId(null);
+    setFocusMessageId(undefined);
     setInput('');
     setSpeechError(null);
     setSkillPickerOpen(false);
@@ -930,7 +973,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     prdAutoOpenedRef.current = false;
   }, [isRunning, isSending, clearAttachments, isListening]);
 
-  const handleSelectThread = useCallback(async (id: string) => {
+  const handleSelectThread = useCallback(async (id: string, options?: SelectChatThreadOptions) => {
     try {
       const resp = await fetch(`/api/chat/threads/${id}`, { credentials: 'include' });
       if (!resp.ok) return;
@@ -938,6 +981,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       setSeedMessages(thread.messages ?? []);
       setInitialPrdReady(thread.prdReady ?? false);
       setThreadId(id);
+      setFocusMessageId(options?.focusMessageId);
       setShowHistory(false);
       setShowPrdPreview(false);
     } catch {
@@ -1003,6 +1047,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           onKeyDown={handleKeyDown}
           rows={isCompose ? 3 : 1}
           disabled={isSending || needsSkillSelection}
+          // Compose mode focuses the prompt so users can type immediately after load.
+          // eslint-disable-next-line jsx-a11y/no-autofocus -- intentional compose UX
           autoFocus={isCompose && !needsSkillSelection}
         />
         {attachments.length > 0 && (
@@ -1266,6 +1312,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                     onRetry={lastUserText ? () => doSend(lastUserText) : undefined}
                     isRunning={isRunning}
                     questionOffset={offset}
+                    highlighted={highlightedMessageId === msg.id}
                   />
                 );
               });

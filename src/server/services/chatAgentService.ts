@@ -25,6 +25,7 @@ import {
   upsertThread as pgUpsertThread,
   insertMessage as pgInsertMessage,
   listThreadsByUser as pgListThreadsByUser,
+  searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
   deleteThread as pgDeleteThread,
 } from './chatThreadRepository';
@@ -36,7 +37,7 @@ import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import type { ChatThreadSummary } from '../../shared/types/chat';
+import type { ChatThreadSearchResult, ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import {
@@ -981,7 +982,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const hasApexPath = !!(kickoff as any).prdId; // Apex PRD-sourced session
+  const hasApexPath = !!(kickoff as ChatThreadKickoff & { prdId?: string }).prdId; // Apex PRD-sourced session
   const parts: string[] = [
     `# Development workspace`,
     `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo. The feature branch has already been created and checked out — you are on it now.`,
@@ -1376,7 +1377,7 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
  * Used by closeThread to avoid deleting the chat_threads row when an
  * ON DELETE CASCADE FK would silently destroy the parent document.
  */
-async function threadBacksDocument(threadId: string): Promise<string | null> {
+async function _threadBacksDocument(threadId: string): Promise<string | null> {
   const adrRow = await db.query.adrs.findFirst({
     where: eq(adrs.chatThreadId, threadId),
     columns: { id: true },
@@ -1622,6 +1623,19 @@ export async function listThreadSummaries(
   return pgListThreadsByUser(userId, opts);
 }
 
+export async function searchThreadSummaries(
+  userId: string,
+  opts: {
+    term: string;
+    limit?: number;
+    offset?: number;
+    project?: string;
+    flaggedOnly?: boolean;
+  },
+): Promise<ChatThreadSearchResult[]> {
+  return pgSearchThreads(userId, opts);
+}
+
 export function listThreads(userId: string): ChatThread[] {
   return Array.from(threads.values())
     .map((s) => s.thread)
@@ -1662,17 +1676,47 @@ export function isFatalRunError(resultText: string): boolean {
   return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(lower);
 }
 
+function getErrorStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const record = err as { statusCode?: unknown; status?: unknown };
+  if (typeof record.statusCode === 'number') return record.statusCode;
+  if (typeof record.status === 'number') return record.status;
+  return undefined;
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== 'object') return undefined;
+  return (err as { cause?: unknown }).cause;
+}
+
+function getErrorRetryable(err: unknown): unknown {
+  if (!err || typeof err !== 'object') return undefined;
+  return (err as { isRetryable?: unknown }).isRetryable;
+}
+
+function getRunId(run: unknown): string | undefined {
+  if (!run || typeof run !== 'object') return undefined;
+  const id = (run as { id?: unknown }).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
 /** Detect transient SDK / network errors worth retrying. */
 export function isTransientSdkError(err: unknown): boolean {
   if (err instanceof Error && err.message.includes('already has active run')) return false;
 
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return false;
-  if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
-  if (statusCode === 429 || (statusCode >= 500 && statusCode < 600)) return true;
+  if (statusCode !== undefined && statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
+  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500 && statusCode < 600)) return true;
 
   if (err instanceof Error) {
-    const code = (err as any).code;
+    const code = getErrorCode(err);
     if (typeof code === 'string' && /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNREFUSED)$/.test(code)) {
       return true;
     }
@@ -1693,7 +1737,7 @@ export function isRecoverableSdkError(err: unknown): boolean {
  * Unlike `isFatalRunError` which checks run result text, this checks thrown exceptions.
  */
 export function isFatalSdkError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return true;
 
   if (err instanceof Error) {
@@ -1716,7 +1760,7 @@ export function classifyError(err: unknown): ErrorTier {
 }
 
 export function isRateLimitError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 429) return true;
   if (err instanceof Error) {
     return /rate.?limit|too many requests/i.test(err.message);
@@ -1737,7 +1781,7 @@ export function mapErrorCode(tier: ErrorTier, err: unknown): SseErrorCode {
 }
 
 export function isAuthError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return true;
   if (err instanceof Error) {
     return /\b(auth(entication|orization)?|unauthorized|forbidden)\b/i.test(err.message);
@@ -1751,8 +1795,8 @@ function logAgentError(threadId: string, err: unknown): void {
       name: err.name,
       message: err.message,
       stack: err.stack,
-      cause: (err as any).cause,
-      retryable: (err as any).isRetryable,
+      cause: getErrorCause(err),
+      retryable: getErrorRetryable(err),
     });
     trackAgentError(threadId, err);
     return;
@@ -2137,7 +2181,7 @@ export async function sendMessage(
     const project = state.thread.kickoff?.project;
     if (project) {
       const cfg = await resolveSkillConfig({ project });
-      const envRef = (cfg as any)?.cursorApiKeyEnvRef as string | null | undefined;
+      const envRef = (cfg as (typeof cfg & { cursorApiKeyEnvRef?: string | null }))?.cursorApiKeyEnvRef;
       if (envRef) {
         const match = envRef.match(/^\$\{([^}]+)\}$/);
         const resolved = match ? (process.env[match[1]] ?? '') : envRef;
@@ -2354,7 +2398,7 @@ export async function sendMessage(
 
     // Persist agent + run IDs immediately before streaming
     state.thread.cursorAgentId = agent.agentId ?? state.thread.cursorAgentId;
-    state.thread.activeRunId = (run as any).id;
+    state.thread.activeRunId = getRunId(run);
     persistThread(state.thread);
 
     // ── Insert agent_runs record as 'queued', then atomically claim it ──────
@@ -2509,8 +2553,9 @@ export async function sendMessage(
                 }
               }
             } else if (event.type === 'thinking') {
+              const thinkingEvent = event as { type: 'thinking'; thinking_duration_ms?: number };
               const firstFragment = thinkingPhase.observe({
-                durationMs: (event as any).thinking_duration_ms,
+                durationMs: thinkingEvent.thinking_duration_ms,
               });
               if (firstFragment) {
                 void publishRunEvent(state, agentRunId!, {
@@ -2521,19 +2566,28 @@ export async function sendMessage(
               await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
               await flushThinkingPhase();
-              const tc = event as any;
+              const tc = event as {
+                type: 'tool_call';
+                name?: string;
+                call_id?: string;
+                status?: 'running' | 'completed' | 'error' | string;
+                args?: unknown;
+                result?: unknown;
+              };
+              const toolStatus: 'running' | 'completed' | 'error' =
+                tc.status === 'completed' || tc.status === 'error' ? tc.status : 'running';
               logMyWork('run.tool_status', {
                 runId: agentRunId,
                 toolName: tc.name ?? 'unknown',
                 toolCallId: tc.call_id ?? null,
-                toolStatus: tc.status ?? 'running',
+                toolStatus,
                 phase: inferToolPhase(tc.name ?? '', tc.args),
-              }, tc.status === 'error' ? 'warn' : 'info');
+              }, toolStatus === 'error' ? 'warn' : 'info');
               await publishRunEvent(state, agentRunId!, {
                 type: 'tool_status',
                 toolName: tc.name ?? '',
                 callId: tc.call_id ?? '',
-                status: tc.status ?? 'running',
+                status: toolStatus,
                 args: summarizeToolInput(tc.args),
                 result: summarizeToolResult(tc.result),
               }, { phase: inferToolPhase(tc.name ?? '', tc.args) });
@@ -2559,7 +2613,7 @@ export async function sendMessage(
                 sdkRetryOpts,
               );
               currentRun = await state.agent.send(prompt);
-              state.thread.activeRunId = (currentRun as any).id;
+              state.thread.activeRunId = getRunId(currentRun);
               continue;
             }
           }
@@ -2592,7 +2646,7 @@ export async function sendMessage(
               sdkRetryOpts,
             );
             currentRun = await state.agent.send(prompt);
-            state.thread.activeRunId = (currentRun as any).id;
+            state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
         }
@@ -2717,9 +2771,14 @@ export async function sendMessage(
     clearRunEventSequence(agentRunId!);
     lastTokenProgressWriteAt.delete(agentRunId!);
     state.thread.activeRunId = undefined;
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Handle cross-worker cancellation without treating it as an error
-    if (err?._cancelled) {
+    const cancelled =
+      !!err &&
+      typeof err === 'object' &&
+      '_cancelled' in err &&
+      Boolean((err as { _cancelled?: unknown })._cancelled);
+    if (cancelled) {
       if (state.agent) {
         await state.agent[Symbol.asyncDispose]().catch(() => {});
         state.agent = null;
@@ -2892,7 +2951,20 @@ export async function cancelRun(threadId: string): Promise<void> {
   // If this IS the owner worker, cancel the SDK run directly
   if (state.agent) {
     try {
-      const run = await (Agent as any).getRun(activeRunId, { runtime: 'local', cwd: state.thread.workspaceDir });
+      type AgentRunHandle = {
+        supports: (capability: string) => boolean;
+        cancel: () => Promise<void>;
+      };
+      type AgentWithGetRun = typeof Agent & {
+        getRun: (
+          id: string,
+          opts: { runtime: 'local'; cwd: string },
+        ) => Promise<AgentRunHandle>;
+      };
+      const run = await (Agent as AgentWithGetRun).getRun(activeRunId, {
+        runtime: 'local',
+        cwd: state.thread.workspaceDir,
+      });
       if (run.supports('cancel')) await run.cancel();
     } catch {
       // Best-effort cancel
