@@ -14,6 +14,9 @@ jest.mock('../../hooks/useChatThreads', () => ({
   useFlagThread: () => ({ mutate: mockFlagMutate, isPending: false }),
 }));
 
+// Relative timestamps so date-group assertions stay stable across calendar days.
+// Use "now" for lastActivityAt so local midnight boundaries never mis-bucket the thread.
+const nowMs = Date.now();
 const baseThread: ChatThreadSummary = {
   id: 'thread-1',
   userId: 'user-1',
@@ -21,8 +24,8 @@ const baseThread: ChatThreadSummary = {
   status: 'idle',
   kickoff: { project: 'Apex', repo: 'AI-Pilot' },
   flagged: false,
-  createdAt: '2026-07-25T10:00:00.000Z',
-  lastActivityAt: '2026-07-25T12:00:00.000Z',
+  createdAt: new Date(nowMs - 60 * 60 * 1000).toISOString(),
+  lastActivityAt: new Date(nowMs).toISOString(),
 };
 
 const searchHit: ChatThreadSearchResult = {
@@ -31,7 +34,7 @@ const searchHit: ChatThreadSearchResult = {
     messageId: 'msg-1',
     role: 'user',
     snippet: 'We should revisit the design tokens for the sidebar.',
-    matchedAt: '2026-07-25T11:30:00.000Z',
+    matchedAt: new Date(nowMs - 90 * 60 * 1000).toISOString(),
   },
   titleOnly: false,
 };
@@ -181,6 +184,7 @@ describe('PBI-002 ThreadHistorySidebar search', () => {
 
     expect(screen.queryByTestId('history-search-empty')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-search-results')).not.toBeInTheDocument();
+    expect(document.querySelector('.date-group-header')).toBeInTheDocument();
     expect(screen.getByText('Today')).toBeInTheDocument();
   });
 
