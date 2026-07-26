@@ -69,7 +69,7 @@ jest.mock('../../hooks/useChatStream', () => ({
   })),
 }));
 
-const mockUseReviewComments = jest.fn(() => ({ data: [] as unknown[] }));
+const mockUseReviewComments = jest.fn();
 
 jest.mock('../../hooks/useReviewComments', () => ({
   useReviewComments: (...args: unknown[]) => mockUseReviewComments(...args),
