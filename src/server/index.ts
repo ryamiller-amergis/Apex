@@ -120,7 +120,11 @@ const FileStore = createFileStore(session);
 const sessionStore = new FileStore({
   path: sessionsDir,
   ttl: 86400,
-  retries: 0,
+  // Azure Files + concurrent requests during login can briefly miss a just-written
+  // session file; retries:0 caused express-session to create an empty session for
+  // the same connect.sid and wipe the authenticated passport user (deployed-smoke
+  // then sent a valid cookie but /auth/status returned authenticated:false).
+  retries: 5,
 });
 console.log(`[session] Using file store at ${sessionsDir}`);
 

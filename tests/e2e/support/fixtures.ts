@@ -14,6 +14,7 @@ import { test as base, request as requestLib } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import { devLogin } from './auth';
 import { SeedApi } from '../data/seed';
+import { ensureDeployedServerSession, isDeployedAuthMode } from './sso-login';
 
 export type Persona = 'developer' | 'ba' | 'manager' | 'product-owner' | 'qa' | 'ui-ux';
 
@@ -45,16 +46,16 @@ type E2EFixtures = {
 export const test = base.extend<E2EFixtures>({
   loginAsPersona: async ({ page }, use) => {
     await use(async (persona: Persona) => {
-      // In deployed authenticated mode the browser context is already signed in
-      // as the SSO test account — either via the programmatic SSO `setup` project
-      // (E2E_TEST_USER/E2E_TEST_PASSWORD present) or an optional pre-captured
-      // storageState (E2E_STORAGE_STATE). /auth/dev-login is gated off on those
-      // NODE_ENV=production deployments and would 404, so skip it and reuse the
-      // existing session.
-      if (
-        process.env.E2E_STORAGE_STATE ||
-        (process.env.E2E_TEST_USER && process.env.E2E_TEST_PASSWORD)
-      ) {
+      // In deployed authenticated mode the browser context starts from the
+      // programmatic-SSO storageState (or optional E2E_STORAGE_STATE). /auth/dev-login
+      // is gated off on NODE_ENV=production deployments, so we never call it there.
+      //
+      // The saved connect.sid can still be stale (FileStore miss after recycle /
+      // concurrent write) while the cookie is present — /auth/status then returns
+      // authenticated:false and every smoke lands on the login card. Detect that
+      // and re-run Entra SSO into this context, refreshing deployed.json.
+      if (isDeployedAuthMode()) {
+        await ensureDeployedServerSession(page);
         return;
       }
       await devLogin(page, persona);
