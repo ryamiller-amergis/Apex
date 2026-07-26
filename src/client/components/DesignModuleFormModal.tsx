@@ -66,7 +66,10 @@ interface DesignModuleFormModalProps {
   project: string;
   module?: DesignModule | null;
   onClose: () => void;
-  onSaved: (slug: string) => void;
+  onSaved: (
+    slug: string,
+    meta?: { generationStarted?: boolean; generationError?: string }
+  ) => void;
 }
 
 function confidenceClass(confidence: DesignModuleScopingConfidence): string {
@@ -115,6 +118,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
   const [proposals, setProposals] = useState<ProposedGlob[]>([]);
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [refineInput, setRefineInput] = useState('');
+  const [searchHints, setSearchHints] = useState('');
   const [previewFiles, setPreviewFiles] = useState<string[]>([]);
   const [scopingThreadId, setScopingThreadId] = useState<string | null>(
     module?.scopingThreadId ?? null
@@ -169,6 +173,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
     setProposals([]);
     setChat([]);
     setRefineInput('');
+    setSearchHints('');
     setPreviewFiles([]);
     setScopingThreadId(module?.scopingThreadId ?? null);
     appliedResultRef.current = null;
@@ -251,11 +256,12 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
 
   const handleSuggest = () => {
     const values = getValues();
+    // Fresh suggest — do not resume a prior thread (avoids wiping a good proposal).
     void scoping.start({
       moduleSlug: module?.slug ?? (values.slug.trim() || undefined),
-      threadId: scopingThreadId ?? undefined,
       name: values.label,
       description: values.description,
+      searchHints: searchHints.trim() || undefined,
       currentGlobs: includedPatterns,
     });
   };
@@ -274,6 +280,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
       threadId: scopingThreadId ?? undefined,
       name: values.label,
       description: values.description,
+      searchHints: searchHints.trim() || undefined,
       currentGlobs: includedPatterns,
       instruction: text,
     });
@@ -299,10 +306,23 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
       sourceGlobs,
       scopingThreadId: scopingThreadId,
     };
-    const saved = module
-      ? await updateModule.mutateAsync({ slug: module.slug, input })
-      : await createModule.mutateAsync(input);
-    onSaved(saved.slug);
+    if (module) {
+      const saved = await updateModule.mutateAsync({
+        slug: module.slug,
+        input,
+      });
+      onSaved(saved.slug);
+      return;
+    }
+
+    const saved = await createModule.mutateAsync({
+      ...input,
+      project,
+    });
+    onSaved(saved.slug, {
+      generationStarted: saved.generation?.started === true,
+      generationError: saved.generation?.error,
+    });
   });
 
   return (
@@ -335,9 +355,16 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
         </header>
 
         <form className={styles.form} onSubmit={onSubmit}>
-          <label className={styles.nameField}>
-            Name
-            <input {...register('label')} autoFocus placeholder="e.g. Load Testing" />
+          <div className={styles.nameField}>
+            <label htmlFor="design-module-name">
+              Name
+              <input
+                id="design-module-name"
+                {...register('label')}
+                autoFocus
+                placeholder="e.g. Load Testing"
+              />
+            </label>
             {errors.label && (
               <span className={styles.error}>{errors.label.message}</span>
             )}
@@ -361,10 +388,14 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
             {errors.slug && (
               <span className={styles.error}>{errors.slug.message}</span>
             )}
-          </label>
+          </div>
           <label>
             Description
-            <textarea {...register('description')} rows={3} />
+            <textarea
+              {...register('description')}
+              rows={2}
+              placeholder="What this module covers for architecture docs"
+            />
           </label>
           <label>
             Icon
@@ -379,6 +410,27 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
 
           <fieldset className={styles.scopeFieldset}>
             <legend>Source scope</legend>
+            <p className={styles.scopeIntro}>
+              Tell AI what to hunt for in the connected repo, then suggest a file set.
+            </p>
+
+            {hasConnectedRepo && (
+              <label className={styles.searchHintsField} htmlFor="design-module-search-hints">
+                What should AI look for?
+                <textarea
+                  id="design-module-search-hints"
+                  data-testid="design-module-search-hints"
+                  rows={3}
+                  value={searchHints}
+                  onChange={(event) => setSearchHints(event.target.value)}
+                  disabled={scoping.isScoping}
+                  placeholder="e.g. LoadTest* components and hooks, load-test migrations, k6 runner under runners/, exclude e2e specs"
+                />
+                <span className={styles.fieldHint}>
+                  Optional. Naming patterns, folders, terms to include or skip — used only for this suggest/refine pass.
+                </span>
+              </label>
+            )}
 
             {!hasConnectedRepo ? (
               <DesignModuleScopingUnavailable />

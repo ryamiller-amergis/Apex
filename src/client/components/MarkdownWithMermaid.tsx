@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import mermaid from 'mermaid';
@@ -95,7 +95,11 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [themeRevision, setThemeRevision] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const [zoom, setZoom] = useState(1);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const titleId = useId();
   const renderChart = normalizeMermaidChart(chart);
 
   useEffect(() => {
@@ -142,6 +146,36 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     };
   }, [renderChart, themeRevision]);
 
+  useEffect(() => {
+    if (!expanded) {
+      setZoom(1);
+      return;
+    }
+    closeRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpanded(false);
+      if (event.key === '+' || event.key === '=') {
+        event.preventDefault();
+        setZoom((value) => Math.min(3, Number((value + 0.25).toFixed(2))));
+      }
+      if (event.key === '-' || event.key === '_') {
+        event.preventDefault();
+        setZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))));
+      }
+      if (event.key === '0') {
+        event.preventDefault();
+        setZoom(1);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [expanded]);
+
   if (error) {
     return (
       <div ref={containerRef} className={styles.error}>
@@ -157,12 +191,119 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
         Rendering diagram…
       </div>
     );
+
   return (
-    <div
-      ref={containerRef}
-      className={styles.diagram}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <>
+      <div ref={containerRef} className={styles.diagramWrap}>
+        <div
+          className={styles.diagram}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+        <button
+          type="button"
+          className={styles.expandButton}
+          onClick={() => setExpanded(true)}
+          aria-label="Expand diagram"
+          title="Expand diagram"
+          data-testid="mermaid-expand"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+          Expand
+        </button>
+      </div>
+
+      {expanded && (
+        <div
+          className={styles.lightbox}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          data-testid="mermaid-lightbox"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setExpanded(false);
+          }}
+        >
+          <div className={styles.lightboxCard}>
+            <header className={styles.lightboxHeader}>
+              <h2 id={titleId} className={styles.lightboxTitle}>
+                Diagram
+              </h2>
+              <div className={styles.lightboxControls}>
+                <button
+                  type="button"
+                  className={styles.zoomButton}
+                  onClick={() =>
+                    setZoom((value) =>
+                      Math.max(0.5, Number((value - 0.25).toFixed(2)))
+                    )
+                  }
+                  aria-label="Zoom out"
+                  title="Zoom out (−)"
+                >
+                  −
+                </button>
+                <span className={styles.zoomLabel} aria-live="polite">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  className={styles.zoomButton}
+                  onClick={() =>
+                    setZoom((value) =>
+                      Math.min(3, Number((value + 0.25).toFixed(2)))
+                    )
+                  }
+                  aria-label="Zoom in"
+                  title="Zoom in (+)"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  className={styles.zoomButton}
+                  onClick={() => setZoom(1)}
+                  aria-label="Reset zoom"
+                  title="Reset zoom (0)"
+                >
+                  Reset
+                </button>
+                <button
+                  ref={closeRef}
+                  type="button"
+                  className={styles.closeButton}
+                  onClick={() => setExpanded(false)}
+                  aria-label="Close diagram"
+                >
+                  Close
+                </button>
+              </div>
+            </header>
+            <div className={styles.lightboxBody}>
+              <div
+                className={styles.lightboxDiagram}
+                style={{ transform: `scale(${zoom})` }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 

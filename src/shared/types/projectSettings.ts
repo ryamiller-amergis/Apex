@@ -170,6 +170,10 @@ export interface ProjectSkillConfig {
   calendarAssistantModel?: string | null;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  /** Skill used to generate Design Module architecture documents. */
+  designModuleSkillPath?: string | null;
+  /** Model override for Design Module architecture document generation. */
+  designModuleModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -247,6 +251,8 @@ export interface UpsertProjectSkillConfigRequest {
   calendarAssistantModel?: string | null;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  designModuleSkillPath?: string | null;
+  designModuleModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -333,6 +339,8 @@ export interface ProjectSkillConfigResponse {
   approvalMode?: ApprovalMode;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
+  designModuleSkillPath?: string | null;
+  designModuleModel?: string | null;
 }
 
 /** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */

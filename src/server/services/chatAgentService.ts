@@ -341,8 +341,15 @@ function buildMcpServers(
     return servers;
   }
 
-  // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
-  if (kickoff.skillProvider !== 'github') {
+  // ADO-backed projects use ado-skills MCP for repo browse + skill load.
+  // GitHub-backed projects pre-fetch skills server-side, but still need
+  // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
+  // (e.g. Design Module scoping against the connected skill repo).
+  if (kickoff.skillProvider === 'github') {
+    servers['github-repo'] = {
+      url: `http://localhost:${port}/mcp/github-repo`,
+    };
+  } else {
     servers['ado-skills'] = { url: adoSkillsUrl };
   }
 
@@ -868,17 +875,36 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
     isGitHub
-      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the GitHub repo.`
+      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, source code, etc.) are NOT on the local filesystem — they live in the GitHub repo and must be fetched via the \`github-repo\` MCP server. Do not search the local filesystem for them.`
       : `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
     ``,
   ];
 
   if (isGitHub) {
+    const slashIdx = kickoff.repo.indexOf('/');
+    const ghOrg =
+      slashIdx > 0
+        ? kickoff.repo.slice(0, slashIdx)
+        : process.env.GITHUB_ORG || '';
+    const ghRepo =
+      slashIdx > 0 ? kickoff.repo.slice(slashIdx + 1) : kickoff.repo;
     parts.push(
+      `# MCP tools (github-repo server)`,
+      `- \`search_repo_code\` — search code by keyword in the connected GitHub repo`,
+      `- \`list_repo_dir\`    — browse directory structure`,
+      `- \`get_skill_file\`   — read any file from the repo`,
+      `- \`list_skills\`      — list SKILL.md files`,
+      ``,
+      `# Repo coordinates (pass these to MCP tools)`,
+      `  org:    "${ghOrg || '(omit — server uses GITHUB_ORG)'}"`,
+      `  repo:   "${ghRepo}"`,
+      `  branch: "${branch}"`,
+      ``,
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
       `The skill content has been pre-loaded below. Follow its instructions exactly and completely.`,
+      `When the skill requires exploring or verifying repository files, use the github-repo MCP tools with the coordinates above.`,
     );
   } else {
     parts.push(

@@ -202,4 +202,63 @@ describe('DesignModuleFormModal AI scoping', () => {
       'Saves as load-testing'
     );
   });
+
+  it('shows search hints when a skill repo is connected', () => {
+    renderModal();
+    expect(screen.getByTestId('design-module-search-hints')).toBeInTheDocument();
+    expect(screen.getByLabelText(/What should AI look for/i)).toBeInTheDocument();
+  });
+
+  it('hides search hints when no skill repo is connected', () => {
+    mockConnected = false;
+    renderModal();
+    expect(
+      screen.queryByTestId('design-module-search-hints')
+    ).not.toBeInTheDocument();
+  });
+
+  it('passes searchHints on Suggest files with AI', async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(screen.getByLabelText('Name'), 'Load Testing');
+    await user.type(
+      screen.getByTestId('design-module-search-hints'),
+      'LoadTest* hooks; exclude e2e specs'
+    );
+    await user.click(screen.getByTestId('design-module-suggest-ai'));
+
+    expect(mockStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Load Testing',
+        searchHints: 'LoadTest* hooks; exclude e2e specs',
+      })
+    );
+    expect(mockStart.mock.calls[0][0].threadId).toBeUndefined();
+    expect(mockStart.mock.calls[0][0].instruction).toBeUndefined();
+  });
+
+  it('passes searchHints with refine instruction', async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(screen.getByLabelText('Name'), 'Load Testing');
+    await user.type(
+      screen.getByTestId('design-module-search-hints'),
+      'prefer runners/load-test-k6'
+    );
+    await user.type(
+      screen.getByTestId('design-module-refine-input'),
+      'Add the k6 runner'
+    );
+    await user.click(screen.getByTestId('design-module-refine-send'));
+
+    expect(mockStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Load Testing',
+        searchHints: 'prefer runners/load-test-k6',
+        instruction: 'Add the k6 runner',
+      })
+    );
+  });
 });

@@ -46,9 +46,16 @@ export interface CreateDesignModuleInput {
   sortOrder?: number;
   /** Persist an AI scoping thread started before the module was saved. */
   scopingThreadId?: string | null;
+  /**
+   * When set on create, the server auto-starts architecture doc generation
+   * for this project. Not persisted on the module row.
+   */
+  project?: string;
 }
 
-export type UpdateDesignModuleInput = Partial<CreateDesignModuleInput>;
+export type UpdateDesignModuleInput = Partial<
+  Omit<CreateDesignModuleInput, 'project'>
+>;
 
 export interface RegenerateDesignModuleInput {
   project: string;
@@ -59,4 +66,9 @@ export interface RegenerateDesignModuleResult {
   started: boolean;
   reason?: 'not-stale';
   threadId?: string;
+  error?: string;
+}
+
+export interface CreateDesignModuleResult extends DesignModule {
+  generation?: RegenerateDesignModuleResult;
 }

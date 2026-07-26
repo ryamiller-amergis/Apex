@@ -81,6 +81,60 @@ describe('design module routes', () => {
       .send(body);
     expect(response.status).toBe(201);
     expect(service.createModule).toHaveBeenCalledWith(body, 'user-1');
+    expect(service.regenerateModule).not.toHaveBeenCalled();
+  });
+
+  it('auto-starts generation when create includes a project', async () => {
+    service.createModule.mockResolvedValue({
+      slug: 'rbac',
+      label: 'RBAC',
+      hasContent: false,
+    });
+    service.regenerateModule.mockResolvedValue({
+      started: true,
+      threadId: 'thread-gen-1',
+    });
+    const body = {
+      slug: 'rbac',
+      label: 'RBAC',
+      description: 'Access control',
+      iconKey: 'rbac',
+      sourceGlobs: ['src/server/services/rbacService.ts'],
+      project: 'Apex',
+    };
+    const response = await request(buildApp())
+      .post('/api/design-modules')
+      .send(body);
+    expect(response.status).toBe(201);
+    expect(service.createModule).toHaveBeenCalledWith(body, 'user-1');
+    expect(service.regenerateModule).toHaveBeenCalledWith('rbac', {
+      project: 'Apex',
+      force: true,
+      actorId: 'user-1',
+    });
+    expect(response.body.generation).toEqual({
+      started: true,
+      threadId: 'thread-gen-1',
+    });
+  });
+
+  it('still creates the module when auto-generation fails to start', async () => {
+    service.createModule.mockResolvedValue({ slug: 'rbac', label: 'RBAC' });
+    service.regenerateModule.mockRejectedValue(new Error('No skill config'));
+    const response = await request(buildApp())
+      .post('/api/design-modules')
+      .send({
+        slug: 'rbac',
+        label: 'RBAC',
+        iconKey: 'rbac',
+        sourceGlobs: ['src/server/services/rbacService.ts'],
+        project: 'Apex',
+      });
+    expect(response.status).toBe(201);
+    expect(response.body.generation).toEqual({
+      started: false,
+      error: 'No skill config',
+    });
   });
 
   it('requires a project before regeneration', async () => {

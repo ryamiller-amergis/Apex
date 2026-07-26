@@ -33,10 +33,28 @@ const CONFIDENCE_VALUES = new Set<DesignModuleScopingConfidence>([
 const cancelledThreads = new Set<string>();
 
 /**
+ * Threads whose kickoff/refine sendMessage is still in flight.
+ * createThread leaves status as `idle` until sendMessage flips it to
+ * `running`, and the client polls immediately — without this guard that
+ * window is mis-reported as "completed without a proposal".
+ */
+const scopingInFlight = new Set<string>();
+
+function trackScopingSend(
+  threadId: string,
+  send: Promise<unknown>
+): void {
+  scopingInFlight.add(threadId);
+  void send.finally(() => {
+    scopingInFlight.delete(threadId);
+  });
+}
+/**
  * Platform skill lives in the Apex checkout. Remote skill repos often do not
  * have it yet (GitHub pre-fetch 404s and the agent exits without writing
  * output). Embed the local skill text so scoping works before the skill is
- * published to the connected repo.
+ * published to the connected repo. Repo *file discovery* still happens via MCP
+ * against the project's configured skillRepo/branch — not the local disk.
  */
 export function loadLocalScopingSkill(
   repositoryRoot = process.cwd()
@@ -56,15 +74,23 @@ export function loadLocalScopingSkill(
 
 function buildModuleContext(
   projectId: string,
-  input: DesignModuleScopingRequest
+  input: DesignModuleScopingRequest,
+  repoMeta: { repo: string; branch: string; skillProvider: string }
 ): string {
   const lines = [
     `Project: ${projectId}`,
+    `Connected repo: ${repoMeta.repo}`,
+    `Branch: ${repoMeta.branch}`,
+    `Provider: ${repoMeta.skillProvider}`,
     `Module name: ${input.name.trim()}`,
     `Description: ${(input.description ?? '').trim() || '(none)'}`,
   ];
   if (input.moduleSlug?.trim()) {
     lines.push(`Module slug: ${input.moduleSlug.trim()}`);
+  }
+  if (input.searchHints?.trim()) {
+    lines.push('', 'Search hints (what to look for in the connected repo):');
+    lines.push(input.searchHints.trim());
   }
   if (input.currentGlobs?.length) {
     lines.push('', 'Current globs:');
@@ -77,6 +103,8 @@ function buildModuleContext(
   }
   lines.push(
     '',
+    'Explore the connected repository with MCP tools (search_repo_code, list_repo_dir, get_skill_file).',
+    'Do NOT invent paths — verify against the connected repo.',
     'Write proposed source globs to .ai-pilot/output/module-scoping.json using the Write tool.'
   );
   return lines.join('\n');
@@ -84,19 +112,20 @@ function buildModuleContext(
 
 function buildFreeformContext(
   projectId: string,
-  input: DesignModuleScopingRequest
+  input: DesignModuleScopingRequest,
+  repoMeta: { repo: string; branch: string; skillProvider: string }
 ): string {
   return [
     '# Design Module Scoping skill — follow exactly',
     loadLocalScopingSkill(),
     '',
     '# Module to scope',
-    buildModuleContext(projectId, input),
+    buildModuleContext(projectId, input, repoMeta),
   ].join('\n');
 }
 
 const SCOPING_KICKOFF_MESSAGE =
-  'Execute the Design Module Scoping skill embedded in `.ai-pilot/kickoff-context.md`. Explore the repository with MCP tools as needed, then write `.ai-pilot/output/module-scoping.json` with the Write tool. Do not ask questions.';
+  'Execute the Design Module Scoping skill in `.ai-pilot/kickoff-context.md`. Use MCP tools to search/list the connected project repository and branch listed there, then write `.ai-pilot/output/module-scoping.json` with the Write tool. Do not ask questions.';
 
 async function persistThreadOnModule(
   moduleSlug: string | undefined,
@@ -118,9 +147,14 @@ async function persistThreadOnModule(
     .where(eq(designModules.slug, slug));
 }
 
+/**
+ * Only resume for refine turns. A fresh "Suggest" always starts a new thread so
+ * a failed re-run cannot wipe a prior successful proposal mid-poll.
+ */
 async function resolveResumeThreadId(
   input: DesignModuleScopingRequest
 ): Promise<string | null> {
+  if (!input.instruction?.trim()) return null;
   if (input.threadId?.trim()) return input.threadId.trim();
   const slug = input.moduleSlug?.trim();
   if (!slug) return null;
@@ -157,19 +191,21 @@ export async function startScoping(
     );
   }
 
+  const repoMeta = {
+    repo: skillConfig.skillRepo,
+    branch: skillConfig.skillBranch ?? 'main',
+    skillProvider: skillConfig.skillProvider ?? 'ado',
+  };
+
   const resumeThreadId = await resolveResumeThreadId(input);
 
   if (resumeThreadId) {
     await loadThreadForUser(resumeThreadId, userId);
     cancelledThreads.delete(resumeThreadId);
 
-    // Refresh kickoff context with the local skill + latest module inputs.
-    updateThreadKickoffContext(
-      resumeThreadId,
-      buildFreeformContext(projectId, input)
-    );
+    const freeformContext = buildFreeformContext(projectId, input, repoMeta);
+    updateThreadKickoffContext(resumeThreadId, freeformContext);
 
-    // Clear prior output so polling waits for the latest pass.
     const row = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, resumeThreadId),
       columns: { workspaceDir: true },
@@ -181,7 +217,6 @@ export async function startScoping(
       } catch {
         // Best-effort; stale output is still validated on poll.
       }
-      // Also rewrite kickoff-context.md on disk when the workspace still exists.
       try {
         const kickoffPath = path.join(
           row.workspaceDir,
@@ -189,32 +224,29 @@ export async function startScoping(
           'kickoff-context.md'
         );
         fs.mkdirSync(path.dirname(kickoffPath), { recursive: true });
-        fs.writeFileSync(
-          kickoffPath,
-          buildFreeformContext(projectId, input),
-          'utf-8'
-        );
+        fs.writeFileSync(kickoffPath, freeformContext, 'utf-8');
       } catch {
-        // Best-effort; in-memory kickoff update still applies on next turn prompt.
+        // Best-effort; in-memory kickoff update still applies on next turn.
       }
     }
 
     const message = [
-      input.instruction?.trim()
-        ? 'Refine the Design Module source scope using the skill in kickoff-context.md.'
-        : 'Propose Design Module source globs for this module using the skill in kickoff-context.md.',
+      'Refine the Design Module source scope using the skill in kickoff-context.md.',
       '',
-      buildModuleContext(projectId, input),
+      buildModuleContext(projectId, input, repoMeta),
       '',
       'Rewrite `.ai-pilot/output/module-scoping.json` with the updated proposal using the Write tool. Do not ask questions.',
     ].join('\n');
 
-    void sendMessage(resumeThreadId, message).catch((err: Error) => {
-      console.error(
-        `[designModuleScoping] sendMessage failed for ${resumeThreadId}:`,
-        err.message
-      );
-    });
+    trackScopingSend(
+      resumeThreadId,
+      sendMessage(resumeThreadId, message).catch((err: Error) => {
+        console.error(
+          `[designModuleScoping] sendMessage failed for ${resumeThreadId}:`,
+          err.message
+        );
+      })
+    );
 
     await persistThreadOnModule(input.moduleSlug, resumeThreadId);
     return { threadId: resumeThreadId };
@@ -224,11 +256,8 @@ export async function startScoping(
     skillConfig.designDocModel ??
     skillConfig.defaultModel ??
     (await getDefaultModel());
-  const freeformContext = buildFreeformContext(projectId, input);
+  const freeformContext = buildFreeformContext(projectId, input, repoMeta);
 
-  // skillPath keeps the skill-oriented system prompt. The skill body is also
-  // embedded in freeformContext, and chatAgentService falls back to the local
-  // Apex checkout when the connected repo does not have the skill yet (404).
   const thread = await createChatThread(
     userId,
     {
@@ -246,14 +275,17 @@ export async function startScoping(
   );
 
   cancelledThreads.delete(thread.id);
-  void sendMessage(thread.id, SCOPING_KICKOFF_MESSAGE, undefined, [], {
-    hidden: true,
-  }).catch((err: Error) => {
-    console.error(
-      `[designModuleScoping] kickoff sendMessage failed for ${thread.id}:`,
-      err.message
-    );
-  });
+  trackScopingSend(
+    thread.id,
+    sendMessage(thread.id, SCOPING_KICKOFF_MESSAGE, undefined, [], {
+      hidden: true,
+    }).catch((err: Error) => {
+      console.error(
+        `[designModuleScoping] kickoff sendMessage failed for ${thread.id}:`,
+        err.message
+      );
+    })
+  );
 
   await persistThreadOnModule(input.moduleSlug, thread.id);
   return { threadId: thread.id };
@@ -375,13 +407,15 @@ export async function getScopingResult(
 
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
-    if (isThreadIdle(threadId)) {
-      return {
-        status: 'failed',
-        error: 'Agent completed without producing a scoping proposal.',
-      };
+    // Kickoff is fire-and-forget; status stays idle until sendMessage starts.
+    // Treat that gap (and the whole in-flight run) as pending, not failure.
+    if (scopingInFlight.has(threadId) || !isThreadIdle(threadId)) {
+      return { status: 'pending' };
     }
-    return { status: 'pending' };
+    return {
+      status: 'failed',
+      error: 'Agent completed without producing a scoping proposal.',
+    };
   }
 
   try {
@@ -400,6 +434,7 @@ export async function cancelScoping(
 ): Promise<DesignModuleScopingResultResponse> {
   await loadThreadForUser(threadId, userId);
   await cancelChatRun(threadId);
+  scopingInFlight.delete(threadId);
   cancelledThreads.add(threadId);
   return { status: 'cancelled' };
 }

@@ -18,6 +18,7 @@ import {
 } from '../../shared/types/designModule';
 
 const DESIGN_MODULE_SKILL_PATH = '.cursor/skills/design-module-doc/SKILL.md';
+export const DEFAULT_DESIGN_MODULE_SKILL_PATH = DESIGN_MODULE_SKILL_PATH;
 const OUTPUT_FILE = 'design-module.md';
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 720;
@@ -236,7 +237,7 @@ export async function listModules(): Promise<DesignModuleSummary[]> {
   const rows = await db
     .select()
     .from(designModules)
-    .orderBy(asc(designModules.sortOrder), asc(designModules.label));
+    .orderBy(asc(designModules.label));
   return rows.map((row) => toSummary(withStaleness(row)));
 }
 
@@ -419,7 +420,10 @@ export async function regenerateModule(
 
   const fingerprint = computeFingerprint(row.sourceGlobs);
   const sourceCommit = getSourceCommit();
+  const skillPath =
+    skillConfig.designModuleSkillPath?.trim() || DESIGN_MODULE_SKILL_PATH;
   const model =
+    skillConfig.designModuleModel ??
     skillConfig.designDocModel ??
     skillConfig.defaultModel ??
     (await getDefaultModel());
@@ -440,7 +444,7 @@ export async function regenerateModule(
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider,
-      skillPath: DESIGN_MODULE_SKILL_PATH,
+      skillPath,
       freeformContext,
       model,
     },

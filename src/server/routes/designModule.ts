@@ -161,11 +161,32 @@ router.post(
   requirePermission('design-module:manage'),
   async (req, res, next) => {
     try {
-      const created = await createModule(
-        req.body as CreateDesignModuleInput,
-        getUserId(req)
-      );
-      return res.status(201).json(created);
+      const body = req.body as CreateDesignModuleInput;
+      const project =
+        typeof body.project === 'string' ? body.project.trim() : '';
+      const created = await createModule(body, getUserId(req));
+
+      if (!project) {
+        return res.status(201).json(created);
+      }
+
+      try {
+        const generation = await regenerateModule(created.slug, {
+          project,
+          force: true,
+          actorId: getUserId(req),
+        });
+        return res.status(201).json({ ...created, generation });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Generation failed to start';
+        return res.status(201).json({
+          ...created,
+          generation: { started: false, error: message },
+        });
+      }
     } catch (error) {
       next(error);
     }

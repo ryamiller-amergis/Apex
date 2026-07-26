@@ -52,8 +52,8 @@ jest.mock('../../hooks/useDesignModules', () => ({
       hasContent: true,
       isStale: true,
       sourceAvailable: true,
-      lastGeneratedAt: null,
-      generatedByModel: null,
+      lastGeneratedAt: '2026-07-15T12:00:00.000Z',
+      generatedByModel: 'claude-sonnet-4',
       createdBy: 'user-1',
       updatedBy: 'user-1',
       scopingThreadId: null,
@@ -91,6 +91,26 @@ jest.mock('../MarkdownWithMermaid', () => ({
   ),
 }));
 
+jest.mock('../DesignModuleFormModal', () => ({
+  DesignModuleFormModal: ({
+    onSaved,
+  }: {
+    onSaved: (
+      slug: string,
+      meta?: { generationStarted?: boolean; generationError?: string }
+    ) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onSaved('new-module', { generationStarted: true })
+      }
+    >
+      Save Mock Module
+    </button>
+  ),
+}));
+
 describe('DesignModuleView', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
@@ -104,6 +124,8 @@ describe('DesignModuleView', () => {
     expect(
       screen.getByRole('button', { name: 'Add Module' })
     ).toBeInTheDocument();
+    expect(screen.getByText(/Last generated/)).toBeInTheDocument();
+    expect(screen.getByText(/claude-sonnet-4/)).toBeInTheDocument();
   });
 
   it('starts cost-guarded regeneration for the active project', async () => {
@@ -127,5 +149,29 @@ describe('DesignModuleView', () => {
         input: { project: 'Apex', force: true },
       })
     );
+  });
+
+  it('shows generation-in-progress after creating a module', async () => {
+    render(<DesignModuleView selectedProject="Apex" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Module' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Mock Module' }));
+    expect(
+      await screen.findByText(/Generation started/)
+    ).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('opens a custom delete confirmation modal instead of window.confirm', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockImplementation(() => {
+      throw new Error('window.confirm must not be called');
+    });
+    render(<DesignModuleView selectedProject="Apex" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(
+      await screen.findByRole('dialog', { name: /Delete architecture module/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/“RBAC”/)).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

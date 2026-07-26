@@ -108,8 +108,9 @@ function fakeThread(id: string, workspaceDir: string) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
+  mockedSendMessage.mockResolvedValue(undefined as never);
   mockedGetDefaultModel.mockResolvedValue('claude-sonnet-4');
   mockedDb.query.designModules.findFirst.mockResolvedValue(null);
   mockFs.existsSync.mockImplementation((p) =>
@@ -123,6 +124,9 @@ beforeEach(() => {
   });
   mockFs.mkdirSync.mockReturnValue(undefined as never);
   mockFs.writeFileSync.mockReturnValue(undefined as never);
+  // Drain prior trackScopingSend().finally() handlers so in-flight set is clean.
+  await Promise.resolve();
+  await Promise.resolve();
 });
 
 describe('parseScopingResult', () => {
@@ -223,6 +227,9 @@ describe('startScoping', () => {
     expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain(
       'Design Module Scoping skill'
     );
+    expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain(
+      'Connected repo: org/repo'
+    );
     expect(mockedSendMessage).toHaveBeenCalledWith(
       THREAD_ID,
       expect.stringContaining('module-scoping.json'),
@@ -230,6 +237,56 @@ describe('startScoping', () => {
       [],
       expect.objectContaining({ hidden: true })
     );
+  });
+
+  it('includes searchHints in freeform kickoff context', async () => {
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
+
+    await startScoping(
+      PROJECT_ID,
+      {
+        ...REQUEST,
+        searchHints: 'LoadTest* components; exclude e2e specs',
+      },
+      USER_ID
+    );
+
+    const freeform = mockedCreateThread.mock.calls[0][1].freeformContext as string;
+    expect(freeform).toContain('Search hints (what to look for in the connected repo):');
+    expect(freeform).toContain('LoadTest* components; exclude e2e specs');
+  });
+
+  it('omits searchHints section when hints are blank', async () => {
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
+
+    await startScoping(
+      PROJECT_ID,
+      { ...REQUEST, searchHints: '   ' },
+      USER_ID
+    );
+
+    const freeform = mockedCreateThread.mock.calls[0][1].freeformContext as string;
+    expect(freeform).not.toContain('Search hints (what to look for in the connected repo):');
+  });
+
+  it('does not resume on a fresh suggest even when a prior thread exists', async () => {
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(fakeThread('thread-new', '/tmp/ws2'));
+    mockedDb.query.designModules.findFirst.mockResolvedValue({
+      scopingThreadId: THREAD_ID,
+    });
+
+    const result = await startScoping(
+      PROJECT_ID,
+      { ...REQUEST, moduleSlug: 'load-testing', threadId: THREAD_ID },
+      USER_ID
+    );
+
+    expect(result).toEqual({ threadId: 'thread-new' });
+    expect(mockedCreateThread).toHaveBeenCalled();
+    expect(mockedUpdateKickoff).not.toHaveBeenCalled();
   });
 
   it('resumes an existing thread via sendMessage', async () => {
@@ -312,6 +369,40 @@ describe('getScopingResult / cancelScoping', () => {
     });
     mockFs.existsSync.mockReturnValue(false);
     mockedIsThreadIdle.mockReturnValue(true);
+
+    await expect(getScopingResult(THREAD_ID, USER_ID)).resolves.toEqual({
+      status: 'failed',
+      error: 'Agent completed without producing a scoping proposal.',
+    });
+  });
+
+  it('stays pending while kickoff is in flight even if thread looks idle', async () => {
+    let resolveSend!: () => void;
+    mockedSendMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveSend = resolve;
+      }) as never
+    );
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
+
+    await startScoping(PROJECT_ID, REQUEST, USER_ID);
+
+    mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+      userId: USER_ID,
+      workspaceDir: '/tmp/ws',
+      status: 'idle',
+    });
+    mockFs.existsSync.mockReturnValue(false);
+    mockedIsThreadIdle.mockReturnValue(true);
+
+    await expect(getScopingResult(THREAD_ID, USER_ID)).resolves.toEqual({
+      status: 'pending',
+    });
+
+    resolveSend();
+    await Promise.resolve();
+    await Promise.resolve();
 
     await expect(getScopingResult(THREAD_ID, USER_ID)).resolves.toEqual({
       status: 'failed',

@@ -266,7 +266,8 @@ type SkillPathKey =
   | 'featureRequestSkillPath'
   | 'technicalSkillPath'
   | 'issueSkillPath'
-  | 'loadTestGenerationSkillPath';
+  | 'loadTestGenerationSkillPath'
+  | 'designModuleSkillPath';
 
 type ModelKey =
   | 'interviewModel'
@@ -282,7 +283,8 @@ type ModelKey =
   | 'featureRequestModel'
   | 'technicalModel'
   | 'issueModel'
-  | 'loadTestGenerationModel';
+  | 'loadTestGenerationModel'
+  | 'designModuleModel';
 
 interface PipelineStageDef {
   id: string;
@@ -441,6 +443,14 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'loadTestGenerationSkillPath',
     emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)',
     modelKey: 'loadTestGenerationModel',
+  },
+  {
+    id: 'design-module',
+    label: 'Design Module',
+    desc: 'Generates Architecture Explorer module documents from curated source globs',
+    skillKey: 'designModuleSkillPath',
+    emptyLabel: 'Default (.cursor/skills/design-module-doc/SKILL.md)',
+    modelKey: 'designModuleModel',
   },
 ];
 
@@ -904,6 +914,7 @@ interface EditState {
   technicalSkillPath: string;
   issueSkillPath: string;
   loadTestGenerationSkillPath: string;
+  designModuleSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -919,6 +930,7 @@ interface EditState {
   technicalModel: string;
   issueModel: string;
   loadTestGenerationModel: string;
+  designModuleModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -958,12 +970,12 @@ const emptyEdit = (): EditState => ({
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
-  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '',
+  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
-  technicalModel: '', issueModel: '', loadTestGenerationModel: '',
+  technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -1331,6 +1343,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       technicalSkillPath: config.technicalSkillPath ?? '',
       issueSkillPath: config.issueSkillPath ?? '',
       loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
+      designModuleSkillPath: config.designModuleSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -1346,6 +1359,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       technicalModel: config.technicalModel ?? '',
       issueModel: config.issueModel ?? '',
       loadTestGenerationModel: config.loadTestGenerationModel ?? '',
+      designModuleModel: config.designModuleModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -1425,6 +1439,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         technicalSkillPath: edit.technicalSkillPath || null,
         issueSkillPath: edit.issueSkillPath || null,
         loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
+        designModuleSkillPath: edit.designModuleSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -1440,6 +1455,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         technicalModel: edit.technicalModel || null,
         issueModel: edit.issueModel || null,
         loadTestGenerationModel: edit.loadTestGenerationModel || null,
+        designModuleModel: edit.designModuleModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

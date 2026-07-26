@@ -633,6 +633,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   calendarAssistantModel: text('calendar_assistant_model'),
   loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
   loadTestGenerationModel: text('load_test_generation_model'),
+  designModuleSkillPath: text('design_module_skill_path'),
+  designModuleModel: text('design_module_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({

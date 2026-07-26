@@ -127,6 +127,18 @@
   gap: 12px;
 }
 
+.scopeIntro {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.searchHintsField {
+  display: grid;
+  gap: 6px;
+}
+
 .form legend {
   padding: 0 4px;
 }

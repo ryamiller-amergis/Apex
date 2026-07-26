@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateDesignModuleInput,
+  CreateDesignModuleResult,
   DesignModule,
   DesignModuleSummary,
   RegenerateDesignModuleInput,
@@ -43,7 +44,7 @@ export function useDesignModule(slug: string | null) {
 
 export function useCreateDesignModule() {
   const queryClient = useQueryClient();
-  return useMutation<DesignModule, Error, CreateDesignModuleInput>({
+  return useMutation<CreateDesignModuleResult, Error, CreateDesignModuleInput>({
     mutationFn: (body) =>
       apiFetch('/api/design-modules', {
         method: 'POST',
@@ -51,7 +52,39 @@ export function useCreateDesignModule() {
         body: JSON.stringify(body),
       }),
     onSuccess: (module) => {
-      queryClient.setQueryData(designModuleKey(module.slug), module);
+      const { generation: _generation, ...stored } = module;
+      queryClient.setQueryData(designModuleKey(module.slug), stored);
+      queryClient.setQueryData<DesignModuleSummary[]>(
+        designModuleKey(),
+        (existing) => {
+          const summary: DesignModuleSummary = {
+            id: stored.id,
+            slug: stored.slug,
+            label: stored.label,
+            description: stored.description,
+            iconKey: stored.iconKey,
+            sourceGlobs: stored.sourceGlobs,
+            sortOrder: stored.sortOrder,
+            hasContent: stored.hasContent,
+            isStale: stored.isStale,
+            sourceAvailable: stored.sourceAvailable,
+            lastGeneratedAt: stored.lastGeneratedAt,
+            generatedByModel: stored.generatedByModel,
+            createdAt: stored.createdAt,
+            updatedAt: stored.updatedAt,
+          };
+          const next = !existing
+            ? [summary]
+            : existing.some((item) => item.slug === summary.slug)
+              ? existing.map((item) =>
+                  item.slug === summary.slug ? summary : item
+                )
+              : [...existing, summary];
+          return [...next].sort((a, b) =>
+            a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+          );
+        }
+      );
       queryClient.invalidateQueries({ queryKey: designModuleKey() });
     },
   });

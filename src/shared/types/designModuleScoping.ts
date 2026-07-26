@@ -13,6 +13,11 @@ export interface DesignModuleScopingRequest {
   threadId?: string;
   name: string;
   description?: string | null;
+  /**
+   * Extra guidance for what AI should search for in the connected repo
+   * (paths, naming conventions, include/exclude hints). Not persisted on the module.
+   */
+  searchHints?: string | null;
   /** Current included globs (manual + prior AI proposals). */
   currentGlobs?: string[];
   /** Refine instruction; when set with an existing thread, resumes via sendMessage. */

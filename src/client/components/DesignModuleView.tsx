@@ -7,6 +7,7 @@ import {
   useDesignModules,
   useRegenerateDesignModule,
 } from '../hooks/useDesignModules';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DesignModuleFormModal } from './DesignModuleFormModal';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import styles from './DesignModuleView.module.css';
@@ -22,16 +23,26 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null);
   const [forceRegeneration, setForceRegeneration] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingGenerationSlug, setPendingGenerationSlug] = useState<
+    string | null
+  >(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const modulesQuery = useDesignModules();
   const moduleQuery = useDesignModule(selectedSlug);
   const regenerate = useRegenerateDesignModule();
   const deleteModule = useDeleteDesignModule();
   const { can } = useAppShell();
 
-  const modules = modulesQuery.data ?? [];
+  const modules = [...(modulesQuery.data ?? [])].sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+  );
   const activeModule = moduleQuery.data ?? null;
   const canManage = can('design-module:manage');
   const canRegenerate = can('design-module:regenerate');
+  const isGenerating =
+    Boolean(pendingGenerationSlug) &&
+    activeModule?.slug === pendingGenerationSlug &&
+    !activeModule.hasContent;
 
   useEffect(() => {
     if (!selectedSlug && modules.length > 0) setSelectedSlug(modules[0].slug);
@@ -40,37 +51,60 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
       modules.length > 0 &&
       !modules.some((module) => module.slug === selectedSlug)
     ) {
+      // Keep the new slug selected while the list query catches up after create.
+      if (selectedSlug === pendingGenerationSlug) return;
       setSelectedSlug(modules[0].slug);
     }
-  }, [modules, selectedSlug]);
+  }, [modules, selectedSlug, pendingGenerationSlug]);
 
   useEffect(() => {
     setForceRegeneration(false);
-    setNotice(null);
   }, [selectedSlug]);
+
+  useEffect(() => {
+    if (
+      pendingGenerationSlug &&
+      activeModule?.slug === pendingGenerationSlug &&
+      activeModule.hasContent
+    ) {
+      setPendingGenerationSlug(null);
+      setNotice('Architecture document is ready.');
+    }
+  }, [activeModule, pendingGenerationSlug]);
 
   const handleRegenerate = async (): Promise<void> => {
     if (!activeModule) return;
     setNotice(null);
-    const result = await regenerate.mutateAsync({
-      slug: activeModule.slug,
-      input: { project: selectedProject, force: forceRegeneration },
-    });
-    setNotice(
-      result.started
-        ? 'Generation started. This page will refresh when the architecture document is ready.'
-        : 'The source has not changed, so no AI generation was started.'
-    );
+    setPendingGenerationSlug(activeModule.slug);
+    try {
+      const result = await regenerate.mutateAsync({
+        slug: activeModule.slug,
+        input: { project: selectedProject, force: forceRegeneration },
+      });
+      if (!result.started) {
+        setPendingGenerationSlug(null);
+        setNotice(
+          'The source has not changed, so no AI generation was started.'
+        );
+        return;
+      }
+      setNotice(
+        'Generation started. This page will refresh when the architecture document is ready.'
+      );
+    } catch {
+      setPendingGenerationSlug(null);
+    }
   };
 
   const handleDelete = async (): Promise<void> => {
     if (!activeModule) return;
-    const confirmed = window.confirm(
-      `Delete the "${activeModule.label}" architecture module?`
-    );
-    if (!confirmed) return;
-    await deleteModule.mutateAsync(activeModule.slug);
-    setSelectedSlug(null);
+    try {
+      await deleteModule.mutateAsync(activeModule.slug);
+      setShowDeleteConfirm(false);
+      setSelectedSlug(null);
+    } catch {
+      // Error surface via deleteModule.error
+    }
   };
 
   return (
@@ -109,7 +143,10 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   key={module.slug}
                   type="button"
                   className={`${styles.moduleButton} ${selectedSlug === module.slug ? styles.active : ''}`}
-                  onClick={() => setSelectedSlug(module.slug)}
+                  onClick={() => {
+                    setNotice(null);
+                    setSelectedSlug(module.slug);
+                  }}
                 >
                   <span className={styles.moduleIcon}>
                     <Icon size={22} />
@@ -157,6 +194,9 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   {activeModule.lastGeneratedAt
                     ? `Last generated ${new Date(activeModule.lastGeneratedAt).toLocaleString()}`
                     : 'Curated architecture document'}
+                  {activeModule.lastGeneratedAt &&
+                    activeModule.generatedByModel &&
+                    ` · ${activeModule.generatedByModel}`}
                   {!activeModule.sourceAvailable &&
                     ' · Local source unavailable'}
                 </div>
@@ -174,7 +214,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                     <button
                       type="button"
                       className={styles.danger}
-                      onClick={handleDelete}
+                      onClick={() => setShowDeleteConfirm(true)}
                       disabled={deleteModule.isPending}
                     >
                       Delete
@@ -212,10 +252,11 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   onClick={handleRegenerate}
                   disabled={
                     regenerate.isPending ||
+                    isGenerating ||
                     (!activeModule.isStale && !forceRegeneration)
                   }
                 >
-                  {regenerate.isPending
+                  {regenerate.isPending || isGenerating
                     ? 'Starting…'
                     : activeModule.hasContent
                       ? 'Regenerate'
@@ -239,8 +280,9 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                 <div className={styles.emptyDocument}>
                   <h3>No architecture content yet</h3>
                   <p>
-                    Generate this module from its curated source scope to create
-                    the first document.
+                    {isGenerating
+                      ? 'Generation is in progress. This page will refresh when the architecture document is ready.'
+                      : 'Generate this module from its curated source scope to create the first document.'}
                   </p>
                 </div>
               )}
@@ -254,9 +296,35 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
           project={selectedProject}
           module={formMode === 'edit' ? activeModule : null}
           onClose={() => setFormMode(null)}
-          onSaved={(slug) => {
+          onSaved={(slug, meta) => {
             setSelectedSlug(slug);
             setFormMode(null);
+            if (meta?.generationStarted) {
+              setPendingGenerationSlug(slug);
+              setNotice(
+                'Generation started. This page will refresh when the architecture document is ready.'
+              );
+              return;
+            }
+            if (meta?.generationError) {
+              setPendingGenerationSlug(null);
+              setNotice(
+                `Module saved, but generation failed to start: ${meta.generationError}`
+              );
+            }
+          }}
+        />
+      )}
+
+      {showDeleteConfirm && activeModule && (
+        <ConfirmDeleteModal
+          title="Delete architecture module"
+          itemName={activeModule.label}
+          description="Are you sure you want to delete the architecture module"
+          isPending={deleteModule.isPending}
+          onCancel={() => setShowDeleteConfirm(false)}
+          onConfirm={() => {
+            void handleDelete();
           }}
         />
       )}
