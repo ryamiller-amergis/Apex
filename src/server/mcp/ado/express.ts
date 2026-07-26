@@ -2,6 +2,7 @@ import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createAdoMcpServer } from './server';
 import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
+import { handleMcpPost } from '../mcpRequestLog';
 
 /**
  * Mount the ADO MCP server as a Streamable HTTP transport on the given Express app.
@@ -27,10 +28,13 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
     const server = createAdoMcpServer();
 
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[mcp/ado] Request error:', err.message);
+      await handleMcpPost('mcp/ado', req.body, async () => {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[mcp/ado] Request error:', message);
       if (!res.headersSent) {
         res.status(500).json({ error: 'MCP server error' });
       }

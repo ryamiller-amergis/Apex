@@ -30,7 +30,7 @@ import {
   deleteThread as pgDeleteThread,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -1151,6 +1151,7 @@ function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
     return event.health === 'worker_lost'
       || event.health === 'hard_timeout'
       || event.health === 'never_claimed'
+      || event.health === 'progress_timeout'
       ? 'failed'
       : 'running';
   }
@@ -1167,7 +1168,17 @@ function inferRunEventDetail(event: SseEvent): string | undefined {
   let detail: string | undefined;
   if (event.type === 'phase') detail = event.detail;
   else if (event.type === 'health') detail = event.detail;
-  else if (event.type === 'tool_call' || event.type === 'tool_status') detail = `${event.toolName} ${event.type === 'tool_status' ? event.status : 'started'}`;
+  else if (event.type === 'tool_call' || event.type === 'tool_status') {
+    const nestedSource = event.type === 'tool_status' ? event.args : event.input;
+    const nestedName = nestedSource
+      && typeof nestedSource === 'object'
+      && !Array.isArray(nestedSource)
+      && typeof (nestedSource as Record<string, unknown>).toolName === 'string'
+      ? String((nestedSource as Record<string, unknown>).toolName)
+      : undefined;
+    const label = nestedName ? `${event.toolName}:${nestedName}` : event.toolName;
+    detail = `${label} ${event.type === 'tool_status' ? event.status : 'started'}`;
+  }
   else if (event.type === 'error') detail = event.error;
   else if (event.type === 'retrying') detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
   else if (event.type === 'done') detail = 'Run completed';
@@ -1179,7 +1190,18 @@ function summarizeToolInput(input: unknown): unknown {
   if (input === null || input === undefined) return undefined;
   if (Array.isArray(input)) return { itemCount: input.length };
   if (typeof input === 'object') {
-    return { keys: Object.keys(input as Record<string, unknown>).slice(0, 20) };
+    const obj = input as Record<string, unknown>;
+    // Cursor SDK MCP wrapper — keep identity fields so hung tools are diagnosable.
+    if (typeof obj.toolName === 'string' || typeof obj.providerIdentifier === 'string') {
+      return {
+        ...(typeof obj.providerIdentifier === 'string'
+          ? { providerIdentifier: obj.providerIdentifier.slice(0, 120) }
+          : {}),
+        ...(typeof obj.toolName === 'string' ? { toolName: obj.toolName.slice(0, 120) } : {}),
+        args: summarizeToolInput(obj.args),
+      };
+    }
+    return { keys: Object.keys(obj).slice(0, 20) };
   }
   return { type: typeof input };
 }
@@ -2476,14 +2498,9 @@ export async function sendMessage(
         .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
         .returning({ status: agentRuns.status });
       if (!runRow) {
-        const cancelledRow = await db.query.agentRuns.findFirst({
-          where: eq(agentRuns.id, runId),
-          columns: { status: true },
-        });
-        if (cancelledRow?.status === 'cancelled') {
-          console.log(`[chat] Run ${runId} cancelled by another worker, aborting stream`);
-          throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
-        }
+        // Run was cancelled/failed/completed elsewhere (user Stop, reaper, etc.)
+        console.log(`[chat] Run ${runId} no longer running, aborting stream`);
+        throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
       }
     };
 
@@ -2924,8 +2941,29 @@ export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
 
-  const activeRunId = state.thread.activeRunId;
-  if (!activeRunId) return;
+  let activeRunId = state.thread.activeRunId;
+  if (!activeRunId) {
+    // Recovery/desync may have cleared active_run_id while agent_runs is still live.
+    const latest = await db.query.agentRuns.findFirst({
+      where: and(
+        eq(agentRuns.threadId, threadId),
+        inArray(agentRuns.status, ['queued', 'running']),
+      ),
+      orderBy: [desc(agentRuns.createdAt)],
+      columns: { id: true },
+    });
+    activeRunId = latest?.id;
+  }
+  if (!activeRunId) {
+    if (state.thread.status === 'running' || state.thread.activeRunId) {
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      broadcast(state, { type: 'done' });
+      persistThread(state.thread);
+    }
+    return;
+  }
   const myWorkContext = state.isDevSession
     ? await getMyWorkSessionContext(threadId).catch(() => null)
     : null;

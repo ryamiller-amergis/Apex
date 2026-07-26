@@ -1,6 +1,7 @@
 import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createGitHubMcpServer } from './server';
+import { handleMcpPost } from '../mcpRequestLog';
 
 /**
  * Mount the GitHub MCP server as a Streamable HTTP transport on the given Express app.
@@ -15,10 +16,13 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
     const server = createGitHubMcpServer();
 
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[mcp/github] Request error:', err.message);
+      await handleMcpPost('mcp/github', req.body, async () => {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[mcp/github] Request error:', message);
       if (!res.headersSent) {
         res.status(500).json({ error: 'MCP server error' });
       }
