@@ -7,11 +7,29 @@
 import {
   compileGuidedFormToK6,
   needsConfirmBeforeRegenerate,
+  normalizeFlowStepPath,
 } from '../loadTestScriptCompile';
 import {
   loadTestBuilderFormSchema,
   looksLikePlaintextSecret,
 } from '../loadTestBuilderSchema';
+
+describe('normalizeFlowStepPath', () => {
+  it('adds a leading slash to relative paths', () => {
+    expect(normalizeFlowStepPath('api/health')).toBe('/api/health');
+    expect(normalizeFlowStepPath('/api/health')).toBe('/api/health');
+    expect(normalizeFlowStepPath('  api/health/db  ')).toBe('/api/health/db');
+  });
+
+  it('leaves absolute http(s) URLs unchanged', () => {
+    expect(normalizeFlowStepPath('https://example.com/health')).toBe(
+      'https://example.com/health',
+    );
+    expect(normalizeFlowStepPath('http://localhost:3000/x')).toBe(
+      'http://localhost:3000/x',
+    );
+  });
+});
 
 describe('compileGuidedFormToK6 (VT-01, TBI-006 DoD-2, PBI-007 AC-0)', () => {
   it('compiles multi-step flow with JSONPath extraction into sequential requests', () => {
@@ -38,8 +56,12 @@ describe('compileGuidedFormToK6 (VT-01, TBI-006 DoD-2, PBI-007 AC-0)', () => {
       ],
     });
 
-    expect(result.script).toContain("http.post(`${__ENV.TARGET_URL}/api/login`");
-    expect(result.script).toContain("http.get(`${__ENV.TARGET_URL}/api/orders`");
+    expect(result.script).toContain(
+      "http.post(`${String(__ENV.TARGET_URL || '').replace(/\\/+$/, '')}/api/login`",
+    );
+    expect(result.script).toContain(
+      "http.get(`${String(__ENV.TARGET_URL || '').replace(/\\/+$/, '')}/api/orders`",
+    );
     expect(result.script).toContain("vars['token']");
     expect(result.script).toContain("json('$.accessToken')");
     expect(result.script).toContain("tags: { name: 'login' }");
@@ -48,6 +70,21 @@ describe('compileGuidedFormToK6 (VT-01, TBI-006 DoD-2, PBI-007 AC-0)', () => {
     expect(result.loadProfile).toEqual({ vus: 25, durationMinutes: 10, rpsCap: 100 });
     expect(result.clientThresholds).toHaveLength(2);
     expect(result.flowSteps).toHaveLength(2);
+  });
+
+  it('normalizes paths missing a leading slash so TARGET_URL join cannot glue host+path', () => {
+    const result = compileGuidedFormToK6({
+      flowType: 'single',
+      steps: [{ method: 'GET', path: 'api/health', tag: 'step_1' }],
+      loadProfile: { vus: 1, durationMinutes: 1 },
+      clientThresholds: [{ metric: 'http_req_failed', expression: 'rate<0.01' }],
+    });
+
+    expect(result.flowSteps[0]?.path).toBe('/api/health');
+    expect(result.script).toContain(
+      "http.get(`${String(__ENV.TARGET_URL || '').replace(/\\/+$/, '')}/api/health`",
+    );
+    expect(result.script).not.toContain('${__ENV.TARGET_URL}api/health');
   });
 
   it('rejects empty steps', () => {

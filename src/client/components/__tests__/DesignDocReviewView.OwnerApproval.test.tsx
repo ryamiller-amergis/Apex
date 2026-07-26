@@ -69,15 +69,16 @@ jest.mock('../../hooks/useChatStream', () => ({
   })),
 }));
 
+const mockUseReviewComments = jest.fn(() => ({ data: [] as unknown[] }));
+
 jest.mock('../../hooks/useReviewComments', () => ({
-  useReviewComments: jest.fn(() => ({ data: [] })),
+  useReviewComments: (...args: unknown[]) => mockUseReviewComments(...args),
   useUnresolvedCommentCount: jest.fn(() => ({ data: { count: 0 } })),
   useCreateComment: jest.fn(() => ({ mutateAsync: jest.fn() })),
   useResolveComment: jest.fn(() => ({ mutate: jest.fn() })),
   useReopenComment: jest.fn(() => ({ mutate: jest.fn() })),
   useDeleteComment: jest.fn(() => ({ mutate: jest.fn() })),
 }));
-
 jest.mock('react-markdown', () => ({
   __esModule: true,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -88,8 +89,8 @@ jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
 jest.mock('../ApproverSelectModal', () => ({ ApproverSelectModal: () => null }));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  unwrapCommentMarks: jest.fn(),
 }));
-jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../FixValidationPanel', () => ({
   FixValidationPanel: () => null,
   FixingProgressView: () => null,
@@ -136,6 +137,7 @@ function renderView() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockUseReviewComments.mockReturnValue({ data: [] });
   mockUseDesignDoc.mockReturnValue({ data: baseDoc, isLoading: false, isError: false });
   mockUseDesignDocOwnerApprove.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
   mockUseAppShell.mockReturnValue({
@@ -305,6 +307,55 @@ describe('More actions menu in DesignDocReviewView', () => {
     expect(screen.getByRole('menuitem', { name: 'Re-run Validation' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Withdraw' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '1 Approver' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Design Doc' })).toBeInTheDocument();
+  });
+});
+
+describe('Design-doc owner (non-author) capabilities', () => {
+  it('lets the owner edit, submit, and resolve comments during revision_requested', () => {
+    mockUseReviewComments.mockReturnValue({
+      data: [{
+        id: 'comment-1',
+        documentId: 'doc-1',
+        documentType: 'design_doc',
+        sectionKey: 'design',
+        authorUserId: 'user-reviewer',
+        authorDisplayName: 'Carol Reviewer',
+        body: 'Please clarify the owning layer',
+        selector: { exact: 'Content', prefix: '', suffix: '', start: 0, end: 7 },
+        status: 'open',
+        createdAt: '2026-01-04T00:00:00Z',
+        updatedAt: '2026-01-04T00:00:00Z',
+        replies: [],
+      }],
+    });
+
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: {
+        ...baseDoc,
+        status: 'revision_requested',
+        reviewerId: null,
+        reviewerName: null,
+        reviewedAt: null,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit for Review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask Apex' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
     expect(screen.getByRole('menuitem', { name: 'Delete Design Doc' })).toBeInTheDocument();
   });
 });

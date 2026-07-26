@@ -31,6 +31,33 @@ async function resolveDesignDocValidationThreshold(
   return skillConfig?.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
 }
 
+/** Interview-scoped design-doc owner (kickoff), when set and distinct from author. */
+async function getInterviewDesignDocOwnerId(prdId: string | null | undefined): Promise<string | null> {
+  if (!prdId) return null;
+  const prd = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { interviewId: true },
+  });
+  if (!prd?.interviewId) return null;
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.id, prd.interviewId),
+    columns: { designDocOwnerId: true },
+  });
+  return interview?.designDocOwnerId ?? null;
+}
+
+async function assertAuthorOrOwnerOrAdmin(
+  row: { authorId: string; prdId: string | null },
+  requestingUserId: string,
+  action: string,
+): Promise<void> {
+  if (row.authorId === requestingUserId) return;
+  if (await isAdminUser(requestingUserId)) return;
+  const ownerId = await getInterviewDesignDocOwnerId(row.prdId);
+  if (ownerId && ownerId === requestingUserId) return;
+  throw forbidden(`Only the author or owner can ${action}`);
+}
+
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
     const row = await db.query.chatThreads.findFirst({
@@ -247,9 +274,7 @@ export async function updateDesignDocContent(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can edit design doc content');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'edit design doc content');
   if (row.status === 'approved' || row.status === 'reviewer_approved') throw conflict('Approved design docs cannot be edited');
 
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -278,9 +303,7 @@ export async function submitForReview(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can submit for review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'submit for review');
   if (row.status !== 'draft' && row.status !== 'pending_review' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit design doc from status '${row.status}'`);
   }
@@ -325,9 +348,7 @@ export async function submitForReview(
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can withdraw from review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'withdraw from review');
   if (row.status !== 'pending_review') throw conflict(`Cannot withdraw design doc from status '${row.status}'`);
 
   await db
@@ -1004,9 +1025,7 @@ export async function startSingleFeatureDesignDocWatcher(
 export async function deleteDesignDoc(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can delete this design doc');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'delete this design doc');
   stopDocWatcher(id);
   stopValidationWatcher(id);
   await db.delete(designDocs).where(eq(designDocs.id, id));
@@ -1304,9 +1323,7 @@ export async function syncValidationResult(
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can cancel validation');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'cancel validation');
   if (row.status !== 'validating') throw conflict(`Cannot cancel validation from status '${row.status}'`);
 
 
@@ -1328,9 +1345,7 @@ export async function cancelValidation(id: string, requestingUserId: string): Pr
 export async function markValidationReady(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can mark validation as ready');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'mark validation as ready');
   if (row.status !== 'validating') throw conflict(`Cannot mark ready from status '${row.status}'`);
   const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
   if (!row.validationScore || row.validationScore < threshold) {

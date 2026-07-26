@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { ReviewCommentWithReplies, ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './AnnotationLayer.module.css';
 
@@ -208,6 +208,28 @@ function createRangeFromOffsets(
   }
 }
 
+/**
+ * Restore React-owned text nodes by removing annotation <mark> wrappers.
+ * Must run before React reconciles children — otherwise commit throws
+ * HierarchyRequestError ("insertBefore… is not a child of this node").
+ */
+export function unwrapCommentMarks(root: ParentNode | null | undefined): void {
+  if (!root || typeof (root as ParentNode).querySelectorAll !== 'function') return;
+  const marks = Array.from(root.querySelectorAll('mark[data-comment-id]'));
+  // Deepest first so nested unwrap (rare) stays valid.
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const mark = marks[i] as HTMLElement;
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    try {
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      if (mark.parentNode === parent) parent.removeChild(mark);
+    } catch {
+      // Detached or mid-reconcile — abandon.
+    }
+  }
+}
+
 export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   sectionKey,
   comments,
@@ -228,27 +250,28 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   activeCommentIdRef.current = activeCommentId;
   onCommentClickRef.current = onCommentClick;
 
-  const clearHighlights = useCallback(() => {
-    for (const el of highlightElementsRef.current) {
-      const parent = el.parentNode;
-      if (parent) {
-        while (el.firstChild) parent.insertBefore(el.firstChild, el);
-        parent.removeChild(el);
-      }
-    }
-    highlightElementsRef.current = [];
-  }, []);
+  // CRITICAL: React commits children *before* layout-effect cleanup. If <mark>
+  // wrappers still own text nodes when tab/markdown remounts, commit throws
+  // HierarchyRequestError. Unwrap during render (previous DOM still mounted),
+  // then re-apply in useLayoutEffect after every commit.
+  unwrapCommentMarks(containerRef.current);
+  highlightElementsRef.current = [];
 
   // Derive a stable fingerprint of only the data that affects highlights so
-  // the expensive DOM teardown/rebuild only runs when it actually needs to.
+  // MutationObserver can track the active comment set.
   const highlightFingerprint = useMemo(
     () => comments.map((c) => `${c.id}:${c.selector.start}:${c.selector.end}:${c.status}:${c.selector.exact}`).join('|'),
     [comments],
   );
 
+  const clearHighlights = useCallback(() => {
+    unwrapCommentMarks(containerRef.current);
+    highlightElementsRef.current = [];
+  }, []);
+
   const applyHighlights = useCallback(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || !container.isConnected) return;
 
     applyingHighlightsRef.current = true;
     clearHighlights();
@@ -284,31 +307,36 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
           range.surroundContents(mark);
           highlightElementsRef.current.push(mark);
         } catch {
-          const fragments = extractTextNodes(range, container);
-          for (const frag of fragments) {
-            const fragMark = document.createElement('mark');
-            fragMark.className = mark.className;
-            fragMark.dataset.commentId = comment.id;
-            fragMark.addEventListener('click', (e) => {
-              e.stopPropagation();
-              clickHandler(comment.id);
-            });
-            frag.parentNode?.insertBefore(fragMark, frag);
-            fragMark.appendChild(frag);
-            highlightElementsRef.current.push(fragMark);
+          try {
+            const fragments = extractTextNodes(range, container);
+            for (const frag of fragments) {
+              const parent = frag.parentNode;
+              if (!parent || !frag.isConnected || frag.parentNode !== parent) continue;
+              const fragMark = document.createElement('mark');
+              fragMark.className = mark.className;
+              fragMark.dataset.commentId = comment.id;
+              fragMark.addEventListener('click', (e) => {
+                e.stopPropagation();
+                clickHandler(comment.id);
+              });
+              parent.insertBefore(fragMark, frag);
+              fragMark.appendChild(frag);
+              highlightElementsRef.current.push(fragMark);
+            }
+          } catch {
+            // Range became invalid mid-apply (React remount) — skip this comment.
           }
         }
       }
     }
 
-    // Release the mutation guard after the browser processes our mark DOM edits.
     queueMicrotask(() => {
       applyingHighlightsRef.current = false;
     });
 
     if (currentActiveId) {
       const activeMark = highlightElementsRef.current.find(
-        (el) => el.dataset.commentId === currentActiveId,
+        (el) => el.dataset.commentId === currentActiveId && el.isConnected,
       );
       if (activeMark) {
         let ancestor: HTMLElement | null = activeMark.parentElement;
@@ -318,38 +346,40 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
           }
           ancestor = ancestor.parentElement;
         }
-        // Double rAF: first lets React process the state updates and re-render,
-        // second ensures the browser has laid out the now-visible sections.
         requestAnimationFrame(() =>
-          requestAnimationFrame(() =>
-            activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' }),
-          ),
+          requestAnimationFrame(() => {
+            if (activeMark.isConnected) {
+              activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }),
         );
       }
     }
   }, [clearHighlights]);
 
-  // Re-anchor when comment data changes, and again whenever React (or Mermaid)
-  // replaces document DOM under this container — otherwise marks are wiped and
-  // never restored (common on Design Doc scrollspy / markdown re-renders).
+  // Always re-apply after commit — render-time unwrap clears marks every render.
+  useLayoutEffect(() => {
+    applyHighlights();
+  });
+
+  // Restore highlights when React/Mermaid replaces subtree DOM without
+  // re-rendering this layer (e.g. async mermaid SVG swap).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    applyHighlights();
-
+    let cancelled = false;
     let debounceTimer: number | null = null;
+
     const observer = new MutationObserver(() => {
-      if (applyingHighlightsRef.current) return;
-      // React/Mermaid remounts detach our <mark> nodes. Only then re-apply.
-      // (0 surviving === 0 tracked also covers "nothing anchored" — avoid a retry loop.)
+      if (cancelled || applyingHighlightsRef.current) return;
       const surviving = highlightElementsRef.current.filter((el) => container.contains(el));
       if (surviving.length === highlightElementsRef.current.length) return;
 
       if (debounceTimer !== null) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout(() => {
         debounceTimer = null;
-        applyHighlights();
+        if (!cancelled && container.isConnected) applyHighlights();
       }, 40);
     });
 
@@ -360,11 +390,11 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
     });
 
     return () => {
+      cancelled = true;
       observer.disconnect();
       if (debounceTimer !== null) window.clearTimeout(debounceTimer);
-      clearHighlights();
     };
-  }, [highlightFingerprint, activeCommentId, applyHighlights, clearHighlights]);
+  }, [highlightFingerprint, applyHighlights]);
 
   const handleMouseUp = useCallback(() => {
     if (readOnly) {

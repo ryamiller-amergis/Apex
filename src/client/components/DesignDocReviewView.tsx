@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, useReducer } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useReducer, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -33,7 +33,7 @@ import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview
 import { useChatStream } from '../hooks/useChatStream';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
-import { AnnotationLayer } from './AnnotationLayer';
+import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
@@ -993,7 +993,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
-  const markdownComponents: Components = {
+  const markdownComponents: Components = useMemo(() => ({
     h1({ children, ...props }) {
       return <h1 id={slugify(nodeToText(children))} {...props}>{children}</h1>;
     },
@@ -1055,7 +1055,7 @@ export const DesignDocReviewView: React.FC = () => {
       }
       return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
     },
-  };
+  }), []);
 
   // Per-tab edit state
   const [editingTab, setEditingTab] = useState<TabId | null>(null);
@@ -1094,6 +1094,8 @@ export const DesignDocReviewView: React.FC = () => {
   const splitDragStartXRef = useRef(0);
   const splitDragStartPercentRef = useRef(DEFAULT_SPLIT_PERCENT);
   const tabContentSplitRef = useRef<HTMLDivElement>(null);
+  // Restore React-owned text before this render's commit (tab/split remounts).
+  unwrapCommentMarks(tabContentSplitRef.current);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
@@ -1366,6 +1368,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Selecting a tab brings it to the center pane; if it was pinned, unpin it so
   // the same section never shows in both places at once.
   const selectTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setActiveTab(tab);
     setPinnedTab((prev) => (prev === tab ? null : prev));
   }, []);
@@ -1373,6 +1376,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Pinning a tab sends it to the right-hand reference pane. If the pinned tab
   // is currently active in the center, move the center to another available tab.
   const handlePinTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setPinnedTab((prev) => (prev === tab ? null : tab));
     setActiveTab((cur) => {
       if (cur !== tab) return cur;
@@ -1416,6 +1420,7 @@ export const DesignDocReviewView: React.FC = () => {
   }, [isDraggingPinned]);
 
   const handleSplitTab = useCallback((tab: Exclude<TabId, 'validation'>) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setSplitTab((prev) => (prev === tab ? null : tab));
     // If the chosen tab is currently active in center, swap center to the other content tab
     setActiveTab((cur) => {
@@ -1660,8 +1665,8 @@ export const DesignDocReviewView: React.FC = () => {
   const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
   const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
   const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
-  const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
-  const canUseAssistant = (isReviewer || isOwner || isAdmin) &&
+  const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
+  const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
@@ -1687,11 +1692,11 @@ export const DesignDocReviewView: React.FC = () => {
     return null;
   })();
   const isBulkCommentFixing = bulkCommentFixRunning || fixDesignDocWithAi.isPending;
-  const canWriteAssistant = canEdit || canPerformReview || isOwner;
+  const canWriteAssistant = canEdit || canPerformReview || isOwner || isAuthor;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
-  const canManageAuthorActions = canManage && (isAuthor || isAdmin);
+  const canManageAuthorActions = canManage && (isAuthor || isOwner || isAdmin);
   const canRunValidationAction =
     canManageAuthorActions &&
     hasAnyContent &&
@@ -2489,6 +2494,8 @@ export const DesignDocReviewView: React.FC = () => {
                               activeCommentId={activeCommentId}
                               currentUserId={userId ?? ''}
                               documentAuthorUserId={doc.authorId}
+                              documentOwnerUserId={doc.ownerId}
+                              isAssignedApprover={isAssignedApprover}
                               onCommentClick={handleCommentClick}
                               onReply={(commentId, body) => void handleCommentReply(commentId, body)}
                               onResolve={(commentId) => resolveComment.mutate(commentId)}
@@ -2519,7 +2526,10 @@ export const DesignDocReviewView: React.FC = () => {
                             <span className={styles.centerSplitRightTitle}>{tabLabel[splitTab]}</span>
                             <button
                               className={styles.centerSplitRightClose}
-                              onClick={() => setSplitTab(null)}
+                              onClick={() => {
+                                unwrapCommentMarks(tabContentSplitRef.current);
+                                setSplitTab(null);
+                              }}
                               type="button"
                               title="Close split view"
                               aria-label="Close split view"

@@ -76,6 +76,23 @@ async function getDocumentOwnerIds(
   documentId: string,
   documentType: ReviewDocumentType,
 ): Promise<string[]> {
+  if (documentType === 'design_doc') {
+    const rows = await db
+      .select({
+        authorId: designDocs.authorId,
+        designDocOwnerId: interviews.designDocOwnerId,
+      })
+      .from(designDocs)
+      .leftJoin(prds, eq(designDocs.prdId, prds.id))
+      .leftJoin(interviews, eq(prds.interviewId, interviews.id))
+      .where(eq(designDocs.id, documentId))
+      .limit(1);
+    if (!rows[0]) throw notFound('Design doc not found');
+    const { authorId, designDocOwnerId } = rows[0];
+    if (designDocOwnerId && designDocOwnerId !== authorId) return [authorId, designDocOwnerId];
+    return [authorId];
+  }
+
   const authorId = await getDocumentAuthorId(documentId, documentType);
   if (documentType !== 'prd') return [authorId];
 

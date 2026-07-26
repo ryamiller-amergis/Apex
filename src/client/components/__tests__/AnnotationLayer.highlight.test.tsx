@@ -133,4 +133,65 @@ describe('AnnotationLayer highlights', () => {
       expect(document.querySelector('mark[data-comment-id="c-remount"]')?.textContent).toBe(exact);
     });
   });
+
+  it('does not throw insertBefore when React remounts while marks exist (tab/split switch)', async () => {
+    const exact = 'switch phrase';
+    const comment = makeComment({
+      id: 'c-switch',
+      exact,
+      start: `Hello ${exact} world`.indexOf(exact),
+    });
+
+    function Harness() {
+      const [tab, setTab] = useState<'design' | 'assumptions'>('design');
+      return (
+        <>
+          <button type="button" onClick={() => setTab('assumptions')}>
+            Assumptions
+          </button>
+          <button type="button" onClick={() => setTab('design')}>
+            Design
+          </button>
+          {tab === 'design' ? (
+            <AnnotationLayer
+              sectionKey="design"
+              comments={[comment]}
+              activeCommentId={null}
+              onAddComment={jest.fn()}
+              onCommentClick={jest.fn()}
+            >
+              <p>{`Hello ${exact} world`}</p>
+            </AnnotationLayer>
+          ) : (
+            <AnnotationLayer
+              sectionKey="assumptions"
+              comments={[]}
+              activeCommentId={null}
+              onAddComment={jest.fn()}
+              onCommentClick={jest.fn()}
+            >
+              <p>Assumptions body</p>
+            </AnnotationLayer>
+          )}
+        </>
+      );
+    }
+
+    render(<Harness />);
+
+    await waitFor(() => {
+      expect(document.querySelector('mark[data-comment-id="c-switch"]')).not.toBeNull();
+    });
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Assumptions' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Design' }).click();
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('mark[data-comment-id="c-switch"]')).not.toBeNull();
+    });
+  });
 });

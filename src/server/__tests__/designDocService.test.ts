@@ -417,7 +417,7 @@ describe('updateDesignDocContent', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(updateDesignDocContent('doc-1', 'user-other', { designContent: 'x' })).rejects.toMatchObject({
-      message: 'Only the author can edit design doc content',
+      message: 'Only the author or owner can edit design doc content',
     });
   });
 
@@ -510,8 +510,21 @@ describe('submitForReview', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(submitForReview('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can submit for review',
+      message: 'Only the author or owner can submit for review',
     });
+  });
+
+  it('allows the interview design-doc owner to submit', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'draft', authorId: 'user-author' }));
+    mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
+    mockDb.query.interviews.findFirst.mockResolvedValue({ designDocOwnerId: 'user-owner' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('doc-1', 'user-owner');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
   });
 
   it('calls assignApprovers when approverIds provided', async () => {
@@ -562,7 +575,7 @@ describe('withdrawFromReview', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'pending_review' }));
 
     await expect(withdrawFromReview('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can withdraw from review',
+      message: 'Only the author or owner can withdraw from review',
     });
   });
 });
@@ -697,7 +710,7 @@ describe('deleteDesignDoc', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow());
 
     await expect(deleteDesignDoc('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can delete this design doc',
+      message: 'Only the author or owner can delete this design doc',
     });
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
@@ -904,7 +917,7 @@ describe('markValidationReady', () => {
     );
 
     await expect(markValidationReady('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can mark validation as ready',
+      message: 'Only the author or owner can mark validation as ready',
       status: 403,
     });
   });
