@@ -186,4 +186,57 @@ router.post('/refresh', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ── Foundation skill release consumer endpoints (authenticated, read-only) ────
+
+import { getLatestPublishedRelease, listReleases } from '../services/foundationSkillReleaseService';
+import { getRepoStatus } from '../services/foundationSkillCompatibilityService';
+
+/**
+ * GET /api/skills/foundation-releases
+ * List all published foundation skill releases (teams use this to check for updates).
+ */
+router.get('/foundation-releases', async (_req: Request, res: Response) => {
+  try {
+    const releases = (await listReleases()).filter(r => r.status === 'published');
+    res.json({ releases });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to list foundation releases' });
+  }
+});
+
+/**
+ * GET /api/skills/foundation-releases/latest
+ * Get the latest published release.
+ */
+router.get('/foundation-releases/latest', async (_req: Request, res: Response) => {
+  try {
+    const release = await getLatestPublishedRelease();
+    res.json({ release: release ?? null });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to get latest foundation release' });
+  }
+});
+
+/**
+ * GET /api/skills/foundation-status?provider=ado&project=X&repo=Y&branch=main
+ * Get the last-observed install status for a repo (from cache — no live scan).
+ */
+router.get('/foundation-status', async (req: Request, res: Response) => {
+  const { provider, project, repo, branch } = req.query as Record<string, string | undefined>;
+  if (!project || !repo) {
+    return res.status(400).json({ error: 'project and repo are required' });
+  }
+  try {
+    const status = await getRepoStatus(
+      (provider === 'github' ? 'github' : 'ado'),
+      project,
+      repo,
+      branch ?? 'main',
+    );
+    res.json({ status: status ?? null });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to get foundation status' });
+  }
+});
+
 export default router;

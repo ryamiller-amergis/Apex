@@ -24,11 +24,15 @@ import {
 } from '../services/pendingAssignmentService';
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
+import foundationSkillsAdminRouter from './foundationSkillsAdmin';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
 
 router.use(requireSuperAdmin);
+
+// ── Foundation Skills (Platform Admin only — guard inherited from above) ───────
+router.use('/foundation-skills', foundationSkillsAdminRouter);
 
 router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
   try {
