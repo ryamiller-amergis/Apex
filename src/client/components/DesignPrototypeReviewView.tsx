@@ -369,7 +369,7 @@ const DesignPrototypeReviewView: React.FC = () => {
   }
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} data-testid="prototype-review">
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
@@ -397,7 +397,10 @@ const DesignPrototypeReviewView: React.FC = () => {
         </div>
         <div className={styles.headerRight}>
           {(pendingRegeneration || selectedProto?.status === 'regenerating' || selectedProto?.status === 'generating') ? (
-            <span className={`${styles.badge} ${styles.badgeGenerating}`}>
+            <span
+              className={`${styles.badge} ${styles.badgeGenerating}`}
+              data-testid="prototype-status-badge"
+            >
               <span className={styles.headerSpinner} />{' '}
               {selectedProto?.status === 'generating' && !pendingRegeneration ? 'Generating…' : 'Regenerating…'}
             </span>
@@ -429,6 +432,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     onClick={handleRegenerate}
                     disabled={isBusy || !feedback.trim()}
                     title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
+                    data-testid="prototype-regenerate-btn"
                   >
                     Regenerate
                   </button>
@@ -440,6 +444,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     className={`${styles.btnSecondary} ${styles.btnRevision}`}
                     onClick={() => setShowRevisionModal(true)}
                     disabled={isBusy}
+                    data-testid="prototype-request-changes-btn"
                   >
                     Request Changes
                   </button>
@@ -447,6 +452,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     className={`${styles.btnPrimary} ${styles.btnApprove}`}
                     onClick={handleApprove}
                     disabled={isBusy}
+                    data-testid="prototype-approve-btn"
                   >
                     Approve
                   </button>
@@ -458,6 +464,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     className={`${styles.btnPrimary} ${styles.btnApprove}`}
                     onClick={handleOwnerApprove}
                     disabled={ownerApproveProto.isPending}
+                    data-testid="prototype-approve-owner-btn"
                   >
                     Approve as Owner
                   </button>
@@ -471,13 +478,19 @@ const DesignPrototypeReviewView: React.FC = () => {
                 </>
               )}
               {selectedProto?.status === 'reviewer_approved' && !isDesignPrototypeOwner && !isAdmin && (
-                <span className={`${styles.badge} ${styles.badgePendingReview}`}>
+                <span
+                  className={`${styles.badge} ${styles.badgePendingReview}`}
+                  data-testid="prototype-status-badge"
+                >
                   Awaiting Owner Approval
                 </span>
               )}
               {selectedProto?.status === 'approved' && (
                 <>
-                  <span className={`${styles.badge} ${styles.badgeApproved}`}>
+                  <span
+                    className={`${styles.badge} ${styles.badgeApproved}`}
+                    data-testid="prototype-status-badge"
+                  >
                     Approved
                   </span>
                   {isAdmin && (

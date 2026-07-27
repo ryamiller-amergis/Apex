@@ -18,17 +18,39 @@ export class PrdReviewPage {
   /** Wait until the PRD document content is visible. */
   async waitForReady(): Promise<void> {
     await dismissOverlays(this.page);
-    // The PRD view renders either the PRD content or a loading state.
-    await this.page.waitForSelector('h1, [data-testid="prd-content"], [data-testid="prd-review"]', {
+    await this.page.waitForSelector('[data-testid="prd-review"]', {
       timeout: 15_000,
     });
   }
 
+  root() {
+    return this.page.getByTestId('prd-review');
+  }
+
+  statusBadge() {
+    return this.page.getByTestId('prd-status-badge');
+  }
+
+  readinessPanel() {
+    return this.page.getByTestId('prd-readiness-panel');
+  }
+
   // ── Approval buttons ──────────────────────────────────────────────────────
 
-  /** The Approve button used by a reviewer to give their sign-off. */
   approveButton() {
-    return this.page.getByRole('button', { name: /^approve$/i });
+    return this.page.getByTestId('approve-prd-btn');
+  }
+
+  approveQaButton() {
+    return this.page.getByTestId('approve-qa-btn');
+  }
+
+  approveOwnerButton() {
+    return this.page.getByTestId('approve-owner-btn');
+  }
+
+  submitReviewButton() {
+    return this.page.getByTestId('submit-review-btn');
   }
 
   /** The Request Revision button. */
@@ -36,38 +58,45 @@ export class PrdReviewPage {
     return this.page.getByRole('button', { name: /request.{0,8}revision/i });
   }
 
+  tab(name: 'preview' | 'backlog' | 'validation') {
+    return this.page.getByTestId(`prd-tab-${name}`);
+  }
+
   /** Returns true when the Approve button is enabled (no open comments). */
   async isApproveEnabled(): Promise<boolean> {
     const btn = this.approveButton();
-    const disabled = await btn.getAttribute('disabled');
-    return disabled === null;
+    return btn.isEnabled();
   }
 
   /** Click Approve and wait for the status to update. */
   async clickApprove(): Promise<void> {
     await this.approveButton().click();
-    // If a confirmation dialog appears, confirm it.
     const confirm = this.page.getByRole('button', { name: /confirm|yes|submit/i });
     if (await confirm.isVisible({ timeout: 1_500 }).catch(() => false)) {
       await confirm.click();
     }
   }
 
+  async clickApproveOwner(): Promise<void> {
+    await this.approveOwnerButton().click();
+  }
+
+  async clickApproveQa(): Promise<void> {
+    await this.approveQaButton().click();
+  }
+
   // ── Status badge ──────────────────────────────────────────────────────────
 
   /** Returns the text of the status badge (e.g. "Pending Review", "Approved"). */
   async getStatusText(): Promise<string> {
-    const badge = this.page
-      .getByText(/pending.review|approved|draft|rejected/i)
-      .first();
-    return (await badge.textContent()) ?? '';
+    return ((await this.statusBadge().textContent()) ?? '').trim();
   }
 
   // ── Review comments panel ─────────────────────────────────────────────────
 
   /** Returns the number of visible open review comment threads. */
   async getOpenCommentCount(): Promise<number> {
-    const comments = this.page.locator('[data-testid^="comment-"][data-status="open"]');
+    const comments = this.page.locator('[data-testid^="comment-thread-"][data-status="open"]');
     return comments.count();
   }
 
@@ -76,17 +105,14 @@ export class PrdReviewPage {
    * Assumes the comment sidebar is open.
    */
   async resolveFirstOpenComment(): Promise<void> {
-    const resolveBtn = this.page
-      .getByRole('button', { name: /resolve/i })
-      .first();
+    const resolveBtn = this.page.getByTestId('comment-resolve-btn').first();
     await resolveBtn.click();
   }
 
   /** Open the review comments sidebar if it is not already open. */
   async openCommentsSidebar(): Promise<void> {
-    const sidebar = this.page.getByRole('complementary', { name: /comments/i });
-    if (!(await sidebar.isVisible().catch(() => false))) {
-      await this.page.getByRole('button', { name: /comments/i }).first().click();
-    }
+    const sidebar = this.page.getByTestId('comment-sidebar');
+    if (await sidebar.isVisible().catch(() => false)) return;
+    await this.page.getByRole('button', { name: /comments/i }).first().click();
   }
 }

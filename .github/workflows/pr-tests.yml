@@ -169,6 +169,58 @@ jobs:
           path: playwright-results/
           retention-days: 7
 
+  e2e-interview-flow:
+    needs: [detect-changes, test]
+    if: needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aipilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d aipilot_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run interview-flow E2E tests
+        env:
+          CI: true
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          SESSION_SECRET: e2e-ci-secret-not-for-production
+          VITE_TEAMS: 'false'
+        run: npm run test:e2e:interview-flow
+
+      - name: Upload Playwright results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-interview-flow-results
+          path: playwright-results/
+          retention-days: 7
+
   migrate-check:
     needs: detect-changes
     if: needs.detect-changes.outputs.migrations == 'true'
@@ -210,7 +262,7 @@ jobs:
         run: node scripts/ci/validate-migrations.mjs
 
   deploy-dev:
-    needs: [test, integration-test, e2e-smoke, detect-changes, migrate-check]
+    needs: [test, integration-test, e2e-smoke, e2e-interview-flow, detect-changes, migrate-check]
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
     # PRs should still deploy to dev.
@@ -220,6 +272,7 @@ jobs:
       needs.test.result == 'success' &&
       needs.integration-test.result == 'success' &&
       needs.e2e-smoke.result == 'success' &&
+      needs.e2e-interview-flow.result == 'success' &&
       (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
     runs-on: ubuntu-latest
     environment: dev

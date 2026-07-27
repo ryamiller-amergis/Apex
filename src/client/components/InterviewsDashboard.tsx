@@ -166,7 +166,11 @@ interface InterviewCardProps {
 const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, onDelete }) => {
   const navigate = useNavigate();
   return (
-    <div className={styles.card} onClick={() => navigate(`/backlog/interview/${interview.id}`)}>
+    <div
+      className={styles.card}
+      data-testid="interview-card"
+      onClick={() => navigate(`/backlog/interview/${interview.id}`)}
+    >
       <div className={styles.cardHeader}>
         <h3 className={styles.cardTitle}>{interview.title}</h3>
         {canDelete && (
@@ -680,7 +684,7 @@ export const InterviewsDashboard: React.FC = () => {
   };
 
   return (
-    <div className={styles.dashboard}>
+    <div className={styles.dashboard} data-testid="interviews-dashboard">
       <div className={styles.header}>
         <h1 className={styles.heading}>Interviews & PRDs</h1>
         {canManage && (
@@ -690,6 +694,7 @@ export const InterviewsDashboard: React.FC = () => {
               onClick={() => navigate('/backlog/interview/new')}
               type="button"
               disabled={!canStartInterview}
+              data-testid="start-interview-btn"
             >
               + Start New Interview
             </button>
@@ -702,6 +707,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'interviews' ? styles.active : ''}`}
           onClick={() => setActiveTab('interviews')}
           type="button"
+          data-testid="tab-interviews"
         >
           Interviews ({interviews.length})
         </button>
@@ -709,6 +715,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'prds' ? styles.active : ''}`}
           onClick={() => setActiveTab('prds')}
           type="button"
+          data-testid="tab-prds"
         >
           PRDs ({prds.length})
         </button>
@@ -717,6 +724,7 @@ export const InterviewsDashboard: React.FC = () => {
             className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
             onClick={() => setActiveTab('design-prototypes')}
             type="button"
+            data-testid="tab-design-prototypes"
           >
             Design Prototypes ({prototypes.length})
           </button>
@@ -725,6 +733,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'design-docs' ? styles.active : ''}`}
           onClick={() => setActiveTab('design-docs')}
           type="button"
+          data-testid="tab-design-docs"
         >
           Design Docs ({designDocs.length})
         </button>
