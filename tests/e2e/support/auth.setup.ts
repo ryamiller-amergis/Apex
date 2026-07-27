@@ -20,26 +20,21 @@
  * run will time out. See tests/e2e/README.md → Environments.
  *
  * ── Tenant-specific selectors ──────────────────────────────────────────────────
- * The Entra login page markup varies slightly per tenant and over time. The
- * selectors below use the well-known Entra element ids (`#i0116`, `#i0118`,
- * `#idSIButton9`) with generic-type fallbacks (`input[type=email]`,
- * `input[type=password]`). If Amergis's tenant customises the login page these
- * MAY NEED PER-TENANT ADJUSTMENT — update the locators here and nowhere else.
+ * The Entra login page markup varies slightly per tenant and over time. Selectors
+ * live in `sso-login.ts` (well-known Entra ids `#i0116`, `#i0118`, `#idSIButton9`
+ * with generic fallbacks). If Amergis's tenant customises the login page, update
+ * the locators there and nowhere else.
  */
-import { test as setup, expect } from '@playwright/test';
-import path from 'path';
-import fs from 'fs';
+import { test as setup } from '@playwright/test';
+import {
+  assertStorageStateAuthenticates,
+  hasDeployedSsoCreds,
+  performEntraSsoLogin,
+  saveDeployedStorageState,
+} from './sso-login';
 
-// Ephemeral session file, produced fresh each run. Must match the storageState
-// path consumed by the `deployed-smoke` project in playwright.config.ts.
-// __dirname === tests/e2e/support, so .auth lives one level up (tests/e2e/.auth).
-const authFile = path.resolve(__dirname, '..', '.auth', 'deployed.json');
-
-setup('authenticate via Azure AD SSO', async ({ page }) => {
-  const email = process.env.E2E_TEST_USER;
-  const password = process.env.E2E_TEST_PASSWORD;
-
-  if (!email || !password) {
+setup('authenticate via Azure AD SSO', async ({ page, browser }) => {
+  if (!hasDeployedSsoCreds()) {
     throw new Error(
       '[E2E setup] E2E_TEST_USER and E2E_TEST_PASSWORD must be set to run the ' +
         'deployed SSO setup project. These are the dedicated Azure AD test account ' +
@@ -50,55 +45,28 @@ setup('authenticate via Azure AD SSO', async ({ page }) => {
   // Interactive redirects to Entra and back can be slow — be generous.
   setup.setTimeout(180_000);
 
-  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+  let lastVerifyError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await performEntraSsoLogin(page);
+    await saveDeployedStorageState(page.context());
 
-  // 1. Load the app and kick off the real Amergis SSO redirect.
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await page
-    .getByRole('button', { name: /sign in with amergis sso/i })
-    .click({ timeout: 30_000 });
-
-  // 2. Entra: email / "Enter your email" step.
-  //    `#i0116` is the canonical Entra email field; `input[type=email]` is the
-  //    generic fallback. Adjust per-tenant if the login page is customised.
-  const emailInput = page.locator('#i0116, input[type=email]').first();
-  await emailInput.waitFor({ state: 'visible', timeout: 60_000 });
-  await emailInput.fill(email);
-  // `#idSIButton9` is the shared Entra "Next" / "Sign in" / "Yes" primary button.
-  await page.locator('#idSIButton9, input[type=submit]').first().click();
-
-  // 3. Entra: password step.
-  const passwordInput = page.locator('#i0118, input[type=password]').first();
-  await passwordInput.waitFor({ state: 'visible', timeout: 60_000 });
-  await passwordInput.fill(password);
-  await page.locator('#idSIButton9, input[type=submit]').first().click();
-
-  // 4. "Stay signed in?" (KMSI) prompt — optional; may be disabled per tenant.
-  //    Click "Yes" (`#idSIButton9`) if it appears; otherwise continue. This is a
-  //    best-effort step and must never fail the login.
-  try {
-    const staySignedIn = page.locator('#idSIButton9');
-    await staySignedIn.waitFor({ state: 'visible', timeout: 15_000 });
-    await staySignedIn.click();
-  } catch {
-    // No KMSI prompt shown — nothing to do.
+    // Confirm a *fresh* context can authenticate with the saved blob. Catches the
+    // failure mode where the setup page looked logged-in but the FileStore session
+    // was already empty/missing (connect.sid sent → /auth/status authenticated:false).
+    try {
+      await assertStorageStateAuthenticates(browser);
+      lastVerifyError = undefined;
+      break;
+    } catch (err) {
+      lastVerifyError = err;
+      console.warn(
+        `[E2E setup] storageState verification failed on attempt ${attempt}/2 — retrying Entra login.`,
+      );
+      await page.context().clearCookies();
+    }
   }
 
-  // 5. Wait for the redirect back to the app in an authenticated state. The app
-  //    shell renders either the project selector or the sidebar/home once the
-  //    server session is established. We assert on a stable authenticated
-  //    landmark rather than a URL so the check is resilient to routing.
-  await page.waitForURL((url) => !/login\.microsoftonline\.com|login\.live\.com/.test(url.host), {
-    timeout: 60_000,
-  });
-  await expect(
-    page
-      .getByText(/select a project to start planning/i)
-      .or(page.getByTestId('nav-item-calendar'))
-      .first(),
-  ).toBeVisible({ timeout: 60_000 });
-
-  // 6. Persist the authenticated session for the deployed-smoke project.
-  await page.context().storageState({ path: authFile });
-  console.log(`[E2E setup] Saved programmatic SSO session to ${authFile}`);
+  if (lastVerifyError) {
+    throw lastVerifyError;
+  }
 });

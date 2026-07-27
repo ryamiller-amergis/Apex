@@ -45,6 +45,7 @@ test.describe('Calendar and work items @smoke', () => {
   });
 
   test('navigating directly to /calendar works @deployed-smoke', async ({ page, loginAsPersona }) => {
+    test.setTimeout(120_000);
     await stubAdoProjects(page);
     await stubAdoWorkItems(page);
     await loginAsPersona('developer');
