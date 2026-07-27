@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
-import { getUserId } from '../utils/requestUser';
+import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -10,7 +10,7 @@ import { db } from '../db/drizzle';
 import { eq, and, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
 import { getComments } from '../services/reviewCommentService';
-import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
   deleteInterview,
@@ -42,7 +42,11 @@ import {
   markPrdValidationReady,
   triggerFixPrdValidation,
   acceptFixPrdValidation,
+  triggerFixCoverageGaps,
+  acceptFixCoverageGaps,
+  overridePrdReadiness,
   revertPrdSection,
+  dismissPrdFixSession,
   applyProposedPrdChanges,
 } from '../services/prdService';
 import {
@@ -62,6 +66,7 @@ import {
   withdrawFromReview as withdrawDesignDocFromReview,
   autoStartValidation,
   markValidationReady,
+  overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
@@ -660,7 +665,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         '- To add a REAL QA test case (with steps) for a backlog item: call `add_test_case` with `pbiId`, a `title`, an ordered `steps` array, and all applicable `acceptanceCriteriaIndex` and `businessRules` traceability. Use this whenever the user asks you to add or write a test case — do NOT just bump a count via `update_prd`.',
         '- Always pass `threadId: "' + threadId + '"` and `prdId: "' + req.params.prdId + '"` when calling the tool.',
         '',
-        'After you call `update_prd`, the changes will appear as a proposed diff that the PRD owner can review and accept or reject.',
+        'After you call `update_prd`, the changes will appear as a proposed draft that the PRD owner reviews section by section (approve / reject / ask AI to change).',
         'This is the expected workflow — propose changes via the tool, then the owner reviews them.',
         '',
         '## PRD Content',
@@ -760,6 +765,144 @@ router.post('/prds/:prdId/apply-proposed', requirePermission('interviews:manage'
 
     res.json({ ok: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/apply-proposed-selective — promote a client-merged selective result
+// from the section-by-section review wizard.
+router.post('/prds/:prdId/apply-proposed-selective', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prdId = req.params.prdId;
+    const body = req.body as { content?: string; backlogJson?: unknown };
+
+    const prd = await getPrd(prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    if (prd.proposedContent == null && prd.proposedBacklogJson == null) {
+      res.status(400).json({ error: 'No proposed changes to apply' });
+      return;
+    }
+
+    await applyProposedPrdChanges(prdId, {
+      resolvedBy: userId,
+      mergedContent: body.content,
+      mergedBacklogJson: body.backlogJson,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/regenerate-proposed-section — revise one change region with reviewer feedback.
+// When a Fix-with-Apex session is active (fixBaseline set), writes to live content/backlog.
+// Otherwise writes to proposed_* columns.
+router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const prdId = req.params.prdId;
+    const body = req.body as {
+      section: 'content' | 'backlog';
+      oldText?: string;
+      newText?: string;
+      feedback?: string;
+      itemPath?: string;
+    };
+
+    if (body.section !== 'content' && body.section !== 'backlog') {
+      res.status(400).json({ error: 'section must be "content" or "backlog"' });
+      return;
+    }
+    if (!body.feedback || !String(body.feedback).trim()) {
+      res.status(400).json({ error: 'feedback is required' });
+      return;
+    }
+
+    const prd = await getPrd(prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+
+    const projectConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+    const bedrockModelId = projectConfig?.prdReviewBedrockModelId ?? null;
+    const bedrockMaxTokens = projectConfig?.prdReviewBedrockMaxTokens ?? null;
+    const fixMode = !!prd.fixBaseline;
+
+    if (body.section === 'content') {
+      const sourceContent = fixMode ? (prd.content ?? '') : prd.proposedContent;
+      if (sourceContent == null || (!fixMode && prd.proposedContent == null)) {
+        res.status(400).json({ error: 'No PRD content available to regenerate' });
+        return;
+      }
+      const revised = await regeneratePrdContentRegionWithBedrock(
+        sourceContent,
+        body.oldText ?? '',
+        body.newText ?? '',
+        String(body.feedback).trim(),
+        bedrockModelId,
+        bedrockMaxTokens,
+      );
+      await db
+        .update(prdsTable)
+        .set(
+          (fixMode
+            ? { content: revised, updatedAt: new Date().toISOString() }
+            : { proposedContent: revised, updatedAt: new Date().toISOString() }) as any,
+        )
+        .where(eq(prdsTable.id, prdId));
+      const updated = await getPrd(prdId);
+      res.json({
+        proposedContent: fixMode ? (updated?.content ?? revised) : (updated?.proposedContent ?? revised),
+        proposedBacklogJson: fixMode
+          ? (updated?.backlogJson ?? null)
+          : (updated?.proposedBacklogJson ?? null),
+      });
+      return;
+    }
+
+    const sourceBacklog = fixMode ? prd.backlogJson : prd.proposedBacklogJson;
+    if (sourceBacklog == null) {
+      res.status(400).json({ error: 'No backlog available to regenerate' });
+      return;
+    }
+    const revisedBacklog = await regeneratePrdBacklogItemWithBedrock(
+      sourceBacklog,
+      body.itemPath ?? '',
+      body.oldText ?? '',
+      body.newText ?? '',
+      String(body.feedback).trim(),
+      bedrockModelId,
+      bedrockMaxTokens,
+    );
+    if (revisedBacklog == null) {
+      res.status(422).json({ error: 'Model returned invalid backlog JSON' });
+      return;
+    }
+    await db
+      .update(prdsTable)
+      .set(
+        (fixMode
+          ? { backlogJson: revisedBacklog as any, updatedAt: new Date().toISOString() }
+          : { proposedBacklogJson: revisedBacklog as any, updatedAt: new Date().toISOString() }) as any,
+      )
+      .where(eq(prdsTable.id, prdId));
+    const updated = await getPrd(prdId);
+    res.json({
+      proposedContent: fixMode ? (updated?.content ?? null) : (updated?.proposedContent ?? null),
+      proposedBacklogJson: fixMode
+        ? (updated?.backlogJson ?? revisedBacklog)
+        : (updated?.proposedBacklogJson ?? revisedBacklog),
+    });
+  } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -1055,11 +1198,55 @@ router.post('/prds/:prdId/fix-validation/accept', requirePermission('interviews:
   }
 });
 
+// POST /prds/:prdId/fix-coverage — trigger AI fix for PRD coverage gaps
+router.post('/prds/:prdId/fix-coverage', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const result = await triggerFixCoverageGaps(req.params.prdId, userId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-coverage/accept — accept coverage fix + recalculate coverage
+router.post('/prds/:prdId/fix-coverage/accept', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await acceptFixCoverageGaps(req.params.prdId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/override-readiness — authorize proceeding despite unresolved gaps
+router.post('/prds/:prdId/override-readiness', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const override = await overridePrdReadiness(req.params.prdId, userId, reason, getDisplayName(req));
+    res.json({ override });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /prds/:prdId/revert-section — revert to baseline
 router.patch('/prds/:prdId/revert-section', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     await revertPrdSection(req.params.prdId, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/fix-session/dismiss — clear fixBaseline, keep current content, no re-validate
+router.post('/prds/:prdId/fix-session/dismiss', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await dismissPrdFixSession(req.params.prdId, userId);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -1366,8 +1553,18 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       `thread_id: ${threadId}`,
       `status: ${doc.status}`,
       '',
-      '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
-      '> Pass the doc_id and thread_id values above when calling the tool.',
+      '## IMPORTANT: How to Apply Changes',
+      '',
+      'When the user asks you to edit, add, update, refine, or change ANYTHING in the design doc,',
+      'you MUST call the `update_design_doc` MCP tool to save your changes. Do NOT just describe changes in chat.',
+      '',
+      '- To update Design: call `update_design_doc` with section="design" and the full revised markdown.',
+      '- To update Tech Spec: call `update_design_doc` with section="tech-spec" and the full revised markdown.',
+      '- To update Assumptions: call `update_design_doc` with section="assumptions" and the full revised markdown.',
+      `- Always pass threadId: "${threadId}" and docId: "${req.params.id}" when calling the tool.`,
+      '',
+      'After you call `update_design_doc`, the changes appear as a proposed draft the owner reviews section by section (approve / reject / ask AI to change).',
+      'This is the expected workflow — propose changes via the tool, then the owner reviews them.',
       '',
       ...(prd ? [
         '## Source PRD',
@@ -1548,6 +1745,18 @@ router.post('/design-docs/:id/validation/mark-ready', requirePermission('intervi
     const userId = getUserId(req);
     await markValidationReady(req.params.id, userId);
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/override-validation — authorize proceeding despite a low validation score
+router.post('/design-docs/:id/override-validation', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const override = await overrideDesignDocValidation(req.params.id, userId, reason, getDisplayName(req));
+    res.json({ override });
   } catch (err) {
     next(err);
   }
@@ -1956,6 +2165,161 @@ router.post('/design-docs/:id/apply-proposed', requirePermission('interviews:man
 
     res.json({ ok: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/apply-proposed-selective — promote client-merged selective sections.
+router.post('/design-docs/:id/apply-proposed-selective', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const docId = req.params.id;
+    const body = req.body as {
+      designContent?: string;
+      techSpecContent?: string;
+      assumptionsContent?: string;
+    };
+
+    const doc = await getDesignDoc(docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    if (
+      doc.proposedDesignContent == null
+      && doc.proposedTechSpecContent == null
+      && doc.proposedAssumptionsContent == null
+    ) {
+      res.status(400).json({ error: 'No proposed changes to apply' });
+      return;
+    }
+
+    const docRow = await db.query.designDocs.findFirst({
+      where: eq(designDocsTable.id, docId),
+      columns: { fixCommentId: true },
+    });
+    const fixCommentId = docRow?.fixCommentId ?? null;
+
+    const now = new Date().toISOString();
+    await db
+      .update(designDocsTable)
+      .set({
+        designContent: body.designContent ?? doc.designContent,
+        techSpecContent: body.techSpecContent ?? doc.techSpecContent,
+        assumptionsContent: body.assumptionsContent ?? doc.assumptionsContent,
+        proposedDesignContent: null,
+        proposedTechSpecContent: null,
+        proposedAssumptionsContent: null,
+        fixCommentId: null,
+        updatedAt: now,
+      } as any)
+      .where(eq(designDocsTable.id, docId));
+
+    if (fixCommentId) {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.id, fixCommentId),
+            eq(reviewCommentsTable.documentId, docId),
+            eq(reviewCommentsTable.documentType, 'design_doc'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    } else {
+      await db
+        .update(reviewCommentsTable)
+        .set({ status: 'resolved', resolvedBy: userId, resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(reviewCommentsTable.documentId, docId),
+            eq(reviewCommentsTable.documentType, 'design_doc'),
+            eq(reviewCommentsTable.status, 'open'),
+          ),
+        );
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/regenerate-proposed-section — revise one proposed section region.
+router.post('/design-docs/:id/regenerate-proposed-section', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const docId = req.params.id;
+    const body = req.body as {
+      section?: 'design' | 'tech_spec' | 'assumptions';
+      oldText?: string;
+      newText?: string;
+      feedback?: string;
+    };
+
+    if (body.section !== 'design' && body.section !== 'tech_spec' && body.section !== 'assumptions') {
+      res.status(400).json({ error: 'section must be "design", "tech_spec", or "assumptions"' });
+      return;
+    }
+    if (!body.feedback || !String(body.feedback).trim()) {
+      res.status(400).json({ error: 'feedback is required' });
+      return;
+    }
+
+    const doc = await getDesignDoc(docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+
+    const label =
+      body.section === 'design' ? 'Design' : body.section === 'tech_spec' ? 'Tech Spec' : 'Assumptions';
+    const proposedField =
+      body.section === 'design'
+        ? doc.proposedDesignContent
+        : body.section === 'tech_spec'
+          ? doc.proposedTechSpecContent
+          : doc.proposedAssumptionsContent;
+    if (proposedField == null) {
+      res.status(400).json({ error: `No proposed ${label} content to regenerate` });
+      return;
+    }
+
+    const projectConfig = await resolveSkillConfig({
+      project: doc.project,
+      settingsId: doc.skillSettingsId ?? undefined,
+    });
+    const revised = await regenerateMarkdownRegionWithBedrock(
+      label,
+      proposedField,
+      body.oldText ?? '',
+      body.newText ?? '',
+      String(body.feedback).trim(),
+      projectConfig?.prdReviewBedrockModelId ?? null,
+      projectConfig?.prdReviewBedrockMaxTokens ?? null,
+    );
+
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (body.section === 'design') updates.proposedDesignContent = revised;
+    else if (body.section === 'tech_spec') updates.proposedTechSpecContent = revised;
+    else updates.proposedAssumptionsContent = revised;
+
+    await db
+      .update(designDocsTable)
+      .set(updates as any)
+      .where(eq(designDocsTable.id, docId));
+
+    const updated = await getDesignDoc(docId);
+    res.json({
+      proposedDesignContent: updated?.proposedDesignContent ?? null,
+      proposedTechSpecContent: updated?.proposedTechSpecContent ?? null,
+      proposedAssumptionsContent: updated?.proposedAssumptionsContent ?? null,
+    });
+  } catch (err) {
+    if (err instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });

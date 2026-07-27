@@ -174,6 +174,7 @@ import {
   triggerFixPrdValidation,
   acceptFixPrdValidation,
   revertPrdSection,
+  dismissPrdFixSession,
   createPrdAdoWorkItems,
 } from '../services/prdService';
 
@@ -1397,6 +1398,25 @@ describe('PRD validation lifecycle', () => {
     expect(adapter.buildValidationContext({})).toContain('must **NOT** have `userTypes`');
   });
 
+  it('skips auto-start validation while a Fix-with-Apex session has fixBaseline set', async () => {
+    mockPrdSelectForGetPrd({
+      fixBaseline: {
+        content: '# Baseline',
+        backlogJson: { items: [] },
+        capturedAt: '2026-01-01T00:00:00Z',
+      },
+    });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+    });
+
+    await autoStartPrdValidation('prd-1');
+
+    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
+  });
+
   it('cancels validation and resets status to draft', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(
       makePrdRow({ status: 'validating', validationThreadId: 'validation-thread-1' }),
@@ -1442,6 +1462,50 @@ describe('PRD validation lifecycle', () => {
     );
   });
 
+  it('does not overwrite validationScore while a Fix-with-Apex fixBaseline is set', async () => {
+    mockPrdSelectForGetPrd({
+      status: 'draft',
+      validationThreadId: 'validation-thread-1',
+      validationScore: 71,
+      validationScorecard: {
+        slug: 'feature-prd',
+        generated_at: '2026-01-01T00:00:00Z',
+        review_phase: 'final',
+        overall_score: 71,
+        ready_threshold: 90,
+        is_ready: false,
+        verdict: 'needs_work',
+        files: [],
+      },
+      fixBaseline: {
+        content: '# Baseline',
+        backlogJson: { items: [] },
+        capturedAt: '2026-01-01T00:00:00Z',
+      },
+    });
+    mockReadOutputValidationScorecard.mockReturnValue(
+      JSON.stringify({
+        slug: 'feature-prd',
+        generated_at: '2026-01-01T00:00:00Z',
+        review_phase: 'final',
+        overall_score: 88,
+        ready_threshold: 90,
+        is_ready: false,
+        verdict: 'needs_work',
+        files: [],
+      }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const result = await syncPrdValidationResult('prd-1');
+
+    expect(result).toEqual({ score: 71, is_ready: false });
+    expect(setMock).not.toHaveBeenCalled();
+    expect(mockReadOutputValidationScorecard).not.toHaveBeenCalled();
+  });
+
   it('marks validation ready only when the stored score meets threshold', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ validationScore: 91 }));
     const whereMock = jest.fn().mockResolvedValue(undefined);
@@ -1485,6 +1549,8 @@ describe('PRD validation lifecycle', () => {
           backlogJson: { items: [] },
           fixThreadId: 'thread-fix',
         }),
+        proposedContent: null,
+        proposedBacklogJson: null,
       }),
     );
     expect(mockSendMessage).toHaveBeenCalledWith(
@@ -1527,7 +1593,39 @@ describe('PRD validation lifecycle', () => {
         content: '# Baseline PRD',
         backlogJson: { items: [{ id: 'pbi-1' }] },
         fixBaseline: null,
+        proposedContent: null,
+        proposedBacklogJson: null,
       }),
+    );
+  });
+
+  it('dismisses a fix session by clearing fixBaseline without restoring content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(
+      makePrdRow({
+        content: '# Live edits',
+        backlogJson: { items: [{ id: 'live' }] },
+        fixBaseline: {
+          content: '# Baseline PRD',
+          backlogJson: { items: [{ id: 'pbi-1' }] },
+          capturedAt: '2026-01-01T00:00:00Z',
+        },
+      }),
+    );
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await dismissPrdFixSession('prd-1', 'user-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fixBaseline: null,
+        proposedContent: null,
+        proposedBacklogJson: null,
+      }),
+    );
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: '# Baseline PRD' }),
     );
   });
 });

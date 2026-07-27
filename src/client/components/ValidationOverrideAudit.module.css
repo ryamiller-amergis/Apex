@@ -1,0 +1,63 @@
+.audit {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry {
+  font-size: 0.8125rem;
+}
+
+.meta {
+  color: var(--text-primary);
+  font-weight: 500;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.who {
+  color: var(--text-primary);
+}
+
+.sep {
+  color: var(--text-muted);
+}
+
+.when {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.summary {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.reason {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}

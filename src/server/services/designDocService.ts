@@ -7,7 +7,8 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
-import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -296,6 +297,36 @@ export async function updateDesignDocContent(
   await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
 }
 
+/**
+ * Stage assistant / review-fix edits as proposed_* drafts for owner accept/reject.
+ * Does not modify live design/tech/assumptions content.
+ */
+export async function stageDesignDocProposedContent(
+  id: string,
+  requestingUserId: string,
+  opts: { designContent?: string; techSpecContent?: string; assumptionsContent?: string },
+): Promise<void> {
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
+  if (!row) throw notFound('Design doc not found');
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'propose design doc content');
+  if (row.status === 'approved' || row.status === 'reviewer_approved') {
+    throw conflict('Approved design docs cannot be edited');
+  }
+
+  const updates: Partial<typeof designDocs.$inferInsert> = {
+    updatedAt: new Date().toISOString(),
+    fixCommentId: null,
+  };
+
+  if (opts.designContent !== undefined) updates.proposedDesignContent = opts.designContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.proposedTechSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
+  if (opts.assumptionsContent !== undefined) updates.proposedAssumptionsContent = opts.assumptionsContent;
+
+  await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
+}
+
 export async function submitForReview(
   id: string,
   requestingUserId: string,
@@ -382,9 +413,14 @@ export async function reviewDesignDoc(
   const admin = await isAdminUser(reviewerId);
 
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
-  if (skillConfig?.designDocValidationSkillPath && !admin) {
+  if (skillConfig?.designDocValidationSkillPath) {
     const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
-    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < threshold) {
+    const scoreOk =
+      row.validationScore !== null &&
+      row.validationScore !== undefined &&
+      row.validationScore >= threshold;
+    const hasOverride = !!(row.validationOverride as DesignDocValidationOverride | null);
+    if (!scoreOk && !hasOverride) {
       const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
       (err as any).status = 409;
       throw err;
@@ -1057,6 +1093,7 @@ function rowToSummary(
     validationReportMd: row.validationReportMd ?? null,
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as ContentSnapshot | null) ?? null,
+    validationOverride: (row.validationOverride as DesignDocValidationOverride | null) ?? null,
     authorId: row.authorId,
     authorName: authorName ?? undefined,
     ownerId: effectiveOwnerId,
@@ -1361,6 +1398,82 @@ export async function markValidationReady(id: string, requestingUserId: string):
   notifyApproversDocumentReady(id, 'design_doc').catch((err) =>
     console.error(`[markValidationReady] Failed to notify approvers (docId=${id})`, err),
   );
+}
+
+/**
+ * Record an authorized validation-score override so review can proceed below threshold.
+ * Appends to an audit history of who / when / why.
+ */
+export async function overrideDesignDocValidation(
+  id: string,
+  userId: string,
+  reason: string,
+  userDisplayName?: string,
+): Promise<DesignDocValidationOverride> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    const err = new Error('A reason is required to override validation');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
+  if (!row) throw notFound('Design doc not found');
+
+  if (
+    row.status !== 'draft' &&
+    row.status !== 'pending_review' &&
+    row.status !== 'revision_requested' &&
+    row.status !== 'validating'
+  ) {
+    throw conflict(`Cannot override validation from status '${row.status}'`);
+  }
+
+  const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
+  const score = row.validationScore ?? null;
+  if (score !== null && score >= threshold) {
+    throw conflict('Validation score already meets the threshold; no override is needed');
+  }
+
+  const at = new Date().toISOString();
+  const trimmedName = userDisplayName?.trim();
+  const summary =
+    score === null
+      ? `Overrode missing validation score (threshold ${threshold}%)`
+      : `Overrode validation score ${score}% (threshold ${threshold}%)`;
+  const prior = (row.validationOverride as DesignDocValidationOverride | null) ?? null;
+  const history = buildOverrideHistory(
+    prior,
+    {
+      reason: trimmed,
+      userId,
+      ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+      at,
+      summary,
+    },
+    prior
+      ? prior.validationScore === null
+        ? `Overrode missing validation score (threshold ${prior.validationThreshold}%)`
+        : `Overrode validation score ${prior.validationScore}% (threshold ${prior.validationThreshold}%)`
+      : summary,
+  );
+
+  const override: DesignDocValidationOverride = {
+    reason: trimmed,
+    userId,
+    ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+    at,
+    validationScore: score,
+    validationThreshold: threshold,
+    history,
+  };
+
+  await db
+    .update(designDocs)
+    .set({ validationOverride: override, updatedAt: at })
+    .where(eq(designDocs.id, id));
+
+  return override;
 }
 
 // ── Fix Validation Flow ───────────────────────────────────────────────────────

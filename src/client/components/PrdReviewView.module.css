@@ -1136,6 +1136,35 @@
   gap: 0;
 }
 
+.readinessActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.readinessOverrideNote {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.readinessOverrideMeta {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.readinessOverrideReason {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
 .readinessToggle {
   display: flex;
   align-items: center;

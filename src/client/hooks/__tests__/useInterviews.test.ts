@@ -36,6 +36,9 @@ import {
   useMarkPrdValidationReady,
   useFixPrdValidation,
   useAcceptFixPrdValidation,
+  useFixPrdCoverage,
+  useAcceptFixPrdCoverage,
+  useOverridePrdReadiness,
   useRevertPrdSection,
   useGenerateTestCases,
   useRecalculateTestCaseCoverage,
@@ -845,6 +848,59 @@ describe('PRD validation hooks', () => {
     expect(global.fetch).toHaveBeenLastCalledWith(
       '/api/interviews/prds/prd-1/fix-validation/accept',
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs to start and accept PRD coverage fixes', async () => {
+    mockFetchOk({ threadId: 'cov-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result: fixResult } = renderHook(() => useFixPrdCoverage(), { wrapper });
+
+    await act(async () => {
+      fixResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(fixResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/fix-coverage',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    mockFetchOk({ ok: true });
+    const { result: acceptResult } = renderHook(() => useAcceptFixPrdCoverage(), { wrapper });
+
+    await act(async () => {
+      acceptResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(acceptResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      '/api/interviews/prds/prd-1/fix-coverage/accept',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs a readiness override with a reason', async () => {
+    mockFetchOk({ override: { reason: 'ship it', states: ['coverage_gaps'] } });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useOverridePrdReadiness(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({ prdId: 'prd-1', reason: 'ship it' });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/override-readiness',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ reason: 'ship it' }),
+      }),
     );
   });
 

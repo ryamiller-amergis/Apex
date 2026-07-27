@@ -4,6 +4,7 @@ import type {
   TestCaseSummary,
   TestCaseValidationStatus,
 } from '../types/interview';
+import type { ValidationOverrideAuditEntry } from './validationOverride';
 
 export type PrdReadinessState =
   | 'prd_generating'
@@ -12,6 +13,7 @@ export type PrdReadinessState =
   | 'test_case_generation_failed'
   | 'coverage_gaps'
   | 'test_cases_validating'
+  | 'prd_validating'
   | 'validation_pending'
   | 'validation_unavailable'
   | 'validation_failed'
@@ -38,6 +40,19 @@ export interface PrdReadiness {
   blockingReason?: string;
   stages: PrdReadinessStage[];
   qaFailures: string[];
+  /** True when a blocking gap state was overridden via readiness_override. */
+  overridden?: boolean;
+}
+
+export interface PrdReadinessOverride {
+  reason: string;
+  userId: string;
+  /** Display name captured at override time for durable audit UI. */
+  userDisplayName?: string;
+  at: string;
+  states: PrdReadinessState[];
+  /** Full audit trail including the current override (newest last). */
+  history?: ValidationOverrideAuditEntry[];
 }
 
 type ReadinessPrd = {
@@ -106,12 +121,31 @@ export function derivePrdReadiness(
   prd: ReadinessPrd,
   testCase: TestCaseSummary | null | undefined,
   scoreThreshold?: number,
-  options?: { testCasesRequired?: boolean; prdValidationEnabled?: boolean },
+  options?: {
+    testCasesRequired?: boolean;
+    prdValidationEnabled?: boolean;
+    overriddenStates?: PrdReadinessState[];
+  },
 ): PrdReadiness {
   const testCasesRequired = options?.testCasesRequired !== false;
   // Default false: only skip the validation gate when the project has no
   // validation skill. Callers must pass true when PRD validation is configured.
   const prdValidationEnabled = options?.prdValidationEnabled === true;
+  const overriddenStates = options?.overriddenStates ?? [];
+
+  const applyOverride = (result: PrdReadiness): PrdReadiness => {
+    if (result.readyForReviewActions) return result;
+    if (!overriddenStates.includes(result.state)) return result;
+    return {
+      ...result,
+      readyForReviewActions: true,
+      severity: 'warning',
+      label: 'Proceeding with unresolved gaps',
+      description: `${result.description} An authorized override allows review to proceed despite unresolved gaps.`,
+      blockingReason: undefined,
+      overridden: true,
+    };
+  };
   const hasContentSignal = Object.prototype.hasOwnProperty.call(prd, 'content');
   const prdGenerated =
     prd.status !== 'generating' && (!hasContentSignal || !!prd.content);
@@ -268,7 +302,7 @@ export function derivePrdReadiness(
   if (prd.status === 'approved' && qaGatesPassed) {
     readyStage.label = 'Ready for review';
     readyStage.status = 'complete';
-    return {
+    return applyOverride({
       state: 'approved',
       label: 'Approved',
       description: 'Human review is complete.',
@@ -276,11 +310,11 @@ export function derivePrdReadiness(
       readyForReviewActions: true,
       stages: [prdStage, testCaseStage, validationStage, readyStage],
       qaFailures,
-    };
+    });
   }
 
   if (!prdGenerated) {
-    return {
+    return applyOverride({
       state: 'prd_generating',
       label: 'Generating PRD',
       description: 'The PRD must finish generating before QA can run.',
@@ -289,12 +323,32 @@ export function derivePrdReadiness(
       blockingReason: 'PRD generation must finish before review.',
       stages: [prdStage, testCaseStage, validationStage, readyStage],
       qaFailures,
+    });
+  }
+
+  // Prefer live validating status over a stale failed scorecard left from a prior run.
+  if (prd.status === 'validating') {
+    const validatingStage: PrdReadinessStage = {
+      ...validationStage,
+      label: 'Validating PRD',
+      status: 'current',
+      detail: 'PRD validation is running.',
     };
+    return applyOverride({
+      state: 'prd_validating',
+      label: 'Validating PRD',
+      description: 'PRD validation is in progress. Results will update when the run finishes.',
+      severity: 'info',
+      readyForReviewActions: false,
+      blockingReason: 'PRD validation must finish before review.',
+      stages: [prdStage, testCaseStage, validatingStage, readyStage],
+      qaFailures: [],
+    });
   }
 
   if (testCasesRequired) {
     if (!testCase) {
-      return {
+      return applyOverride({
         state: 'test_cases_pending',
         label: 'Waiting on test cases',
         description: 'Test-case generation is required before PRD review.',
@@ -303,11 +357,11 @@ export function derivePrdReadiness(
         blockingReason: 'Generate PRD test cases before submitting for review.',
         stages: [prdStage, testCaseStage, validationStage, readyStage],
         qaFailures,
-      };
+      });
     }
 
     if (testCase.status === 'generating') {
-      return {
+      return applyOverride({
         state: 'test_cases_generating',
         label: 'Generating test cases',
         description: 'The PRD is viewable while QA test cases are generated.',
@@ -316,7 +370,7 @@ export function derivePrdReadiness(
         blockingReason: 'Test-case generation must finish before review.',
         stages: [prdStage, testCaseStage, validationStage, readyStage],
         qaFailures,
-      };
+      });
     }
 
     if (testCase.status === 'failed' || coverageHasFailures(testCase.coverageSummary)) {
@@ -326,7 +380,7 @@ export function derivePrdReadiness(
         testCase.status === 'failed'
           ? 'Regenerate test cases before review.'
           : 'Coverage gaps block review.';
-      return {
+      return applyOverride({
         state: testCase.status === 'failed' ? 'test_case_generation_failed' : 'coverage_gaps',
         label: testCase.status === 'failed' ? 'Test-case generation failed' : 'Coverage gaps remain',
         description: testCase.status === 'failed'
@@ -344,11 +398,11 @@ export function derivePrdReadiness(
             : hasCoverageFailures
               ? ['Coverage gaps remain.']
               : ['Test-case generation did not complete.'],
-      };
+      });
     }
 
     if (validation === 'validating') {
-      return {
+      return applyOverride({
         state: 'test_cases_validating',
         label: 'Validating test cases',
         description: 'Test-case validation must complete before review.',
@@ -357,7 +411,7 @@ export function derivePrdReadiness(
         blockingReason: 'Test-case validation must finish before review.',
         stages: [prdStage, testCaseStage, validationStage, readyStage],
         qaFailures,
-      };
+      });
     }
   }
 
@@ -366,7 +420,7 @@ export function derivePrdReadiness(
     readyStage.detail = prdSpecValidation === 'failed'
       ? 'PRD validation gaps block review.'
       : 'Validation failures block review.';
-    return {
+    return applyOverride({
       state: 'validation_failed',
       label: prdSpecValidation === 'failed' ? 'PRD validation gaps' : 'Validation failed',
       description: prdSpecValidation === 'failed'
@@ -384,7 +438,7 @@ export function derivePrdReadiness(
           : prdSpecValidation === 'failed'
             ? ['PRD validation did not meet the ready threshold.']
             : ['Test-case validation failed.'],
-    };
+    });
   }
 
   if (validation !== 'passed') {
@@ -392,7 +446,7 @@ export function derivePrdReadiness(
     if (validation === 'not_available' && !prdValidationEnabled) {
       readyStage.label = 'Ready for review';
       readyStage.status = 'complete';
-      return {
+      return applyOverride({
         state: 'validation_unavailable',
         label: 'Ready for review',
         description: testCasesRequired
@@ -402,10 +456,10 @@ export function derivePrdReadiness(
         readyForReviewActions: true,
         stages: [prdStage, testCaseStage, validationStage, readyStage],
         qaFailures,
-      };
+      });
     }
     // Validation is configured (or otherwise expected) but has not completed yet.
-    return {
+    return applyOverride({
       state: 'validation_pending',
       label: 'Validation pending',
       description: prdValidationEnabled
@@ -418,12 +472,12 @@ export function derivePrdReadiness(
         : 'Validate generated test cases before review.',
       stages: [prdStage, testCaseStage, validationStage, readyStage],
       qaFailures,
-    };
+    });
   }
 
   readyStage.label = 'Ready for review';
   readyStage.status = 'complete';
-  return {
+  return applyOverride({
     state: 'ready_for_review',
     label: 'Ready for review',
     description: 'PRD generation, test-case generation, and validation are complete.',
@@ -431,5 +485,5 @@ export function derivePrdReadiness(
     readyForReviewActions: true,
     stages: [prdStage, testCaseStage, validationStage, readyStage],
     qaFailures,
-  };
+  });
 }

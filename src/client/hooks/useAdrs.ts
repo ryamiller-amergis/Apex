@@ -108,6 +108,43 @@ export function useApplyProposedAdr(id: string) {
   });
 }
 
+export function useApplyProposedAdrSelective(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { content: string }>({
+    mutationFn: (body) =>
+      apiFetch(`/api/adr/${id}/apply-proposed-selective`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adr', id] });
+      void queryClient.invalidateQueries({ queryKey: ['adrs'] });
+      void queryClient.invalidateQueries({ queryKey: ['adr-comments', id] });
+      void queryClient.invalidateQueries({ queryKey: ['review-comments', 'adr', id] });
+    },
+  });
+}
+
+export function useRegenerateProposedAdrSection(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { proposedContent?: string | null },
+    Error,
+    { oldText: string; newText: string; feedback: string }
+  >({
+    mutationFn: (body) =>
+      apiFetch(`/api/adr/${id}/regenerate-proposed-section`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adr', id] });
+    },
+  });
+}
+
 export function useRejectProposedAdr(id: string) {
   const queryClient = useQueryClient();
   return useMutation<void, Error>({

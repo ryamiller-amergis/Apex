@@ -11,6 +11,19 @@
   overflow: hidden;
 }
 
+.sidebarEmbedded {
+  width: 100%;
+  border-left: none;
+  background: transparent;
+}
+
+.embeddedActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px 0;
+  flex-shrink: 0;
+}
+
 .header {
   display: flex;
   align-items: center;

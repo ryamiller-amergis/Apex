@@ -538,6 +538,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         adrId={adr.id}
         currentContent={adr.content}
         proposedContent={adr.proposedContent}
+        fixCommentId={adr.fixCommentId}
       />
       {adr.content && (
         <div className={styles.adrReviewLayout}>

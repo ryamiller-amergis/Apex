@@ -22,7 +22,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
-import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
@@ -404,6 +404,7 @@ export const prds = pgTable('prds', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
+  readinessOverride: jsonb('readiness_override').$type<PrdReadinessOverride>(),
   skillSettingsId: uuid('skill_settings_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -437,6 +438,7 @@ export const designDocs = pgTable('design_docs', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<ContentSnapshot>(),
+  validationOverride: jsonb('validation_override').$type<DesignDocValidationOverride>(),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   model: text('model'),

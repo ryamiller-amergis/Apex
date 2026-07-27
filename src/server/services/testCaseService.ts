@@ -460,6 +460,78 @@ function syncEmbeddedCoverageSummary(
   if ('br_covered' in embedded) embedded.br_covered = summary.brCovered;
 }
 
+export interface UncoveredCoverageItem {
+  kind: 'acceptance_criteria' | 'business_rule';
+  pbiId?: string;
+  index?: number;
+  id?: string;
+  text?: string;
+}
+
+/** Returns uncovered AC/BR entries from a test-cases JSON coverageMatrix. */
+export function extractUncoveredCoverageItems(
+  testCasesJson: unknown
+): UncoveredCoverageItem[] {
+  const root = asRecord(testCasesJson);
+  if (!root) return [];
+  const matrix =
+    asRecord(root.coverageMatrix) ?? asRecord(root.coverage_matrix);
+  if (!matrix) return [];
+
+  const items: UncoveredCoverageItem[] = [];
+
+  const acceptanceCriteria = Array.isArray(matrix.acceptanceCriteria)
+    ? matrix.acceptanceCriteria
+    : Array.isArray(matrix.acceptance_criteria)
+      ? matrix.acceptance_criteria
+      : [];
+  for (const item of acceptanceCriteria) {
+    const record = asRecord(item);
+    if (!record || record.covered === true) continue;
+    items.push({
+      kind: 'acceptance_criteria',
+      pbiId: stringFrom(record.pbiId) ?? stringFrom(record.pbi_id) ?? undefined,
+      index: numberFrom(record.index) ?? undefined,
+      text:
+        stringFrom(record.text) ??
+        stringFrom(record.description) ??
+        stringFrom(record.criterion) ??
+        undefined,
+    });
+  }
+
+  const businessRules = Array.isArray(matrix.businessRules)
+    ? matrix.businessRules
+    : Array.isArray(matrix.business_rules)
+      ? matrix.business_rules
+      : [];
+  for (const item of businessRules) {
+    const record = asRecord(item);
+    if (!record || record.covered === true) continue;
+    items.push({
+      kind: 'business_rule',
+      id: stringFrom(record.id) ?? undefined,
+      pbiId: stringFrom(record.pbiId) ?? stringFrom(record.pbi_id) ?? undefined,
+      text:
+        stringFrom(record.text) ??
+        stringFrom(record.description) ??
+        stringFrom(record.rule) ??
+        undefined,
+    });
+  }
+
+  return items;
+}
+
+/** Returns uncovered AC/BR entries from the latest test-case coverageMatrix for a PRD. */
+export async function getUncoveredCoverageItems(
+  prdId: string
+): Promise<UncoveredCoverageItem[]> {
+  const existing = await getTestCases(prdId);
+  if (!existing?.testCasesJson) return [];
+  return extractUncoveredCoverageItems(existing.testCasesJson);
+}
+
 function cloneJson(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
