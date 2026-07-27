@@ -4,7 +4,7 @@
  * post-processing on the already-generated HTML.
  */
 
-import tokenCatalog from '../../server/assets/maxview-colors.json';
+import maxviewTokenCatalog from '../../server/assets/maxview-colors.json';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -31,14 +31,16 @@ interface CatalogEntry {
 
 type CatalogGroup = Record<string, CatalogEntry>;
 
+export type TokenCatalog = Record<string, CatalogGroup | { $meta?: unknown }>;
+
 function normaliseColor(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
-function buildTokenMap(): Map<string, { token: string; usage: string; group: string }> {
+function buildTokenMap(
+  catalog: TokenCatalog,
+): Map<string, { token: string; usage: string; group: string }> {
   const map = new Map<string, { token: string; usage: string; group: string }>();
-  const catalog = tokenCatalog as Record<string, CatalogGroup | { $meta?: unknown }>;
-
   for (const [group, entries] of Object.entries(catalog)) {
     if (group === '$meta') continue;
     for (const [key, entry] of Object.entries(entries as CatalogGroup)) {
@@ -54,7 +56,19 @@ function buildTokenMap(): Map<string, { token: string; usage: string; group: str
   return map;
 }
 
-const TOKEN_MAP = buildTokenMap();
+/** Default token map (MaxView) — used when no project-specific catalog is supplied. */
+const MAXVIEW_TOKEN_MAP = buildTokenMap(maxviewTokenCatalog as TokenCatalog);
+
+/**
+ * Return the token map for the given catalog JSON, or the MaxView default.
+ * Pass `projectCatalog` when auditing output for a project other than MaxView.
+ */
+export function getTokenMap(
+  projectCatalog?: TokenCatalog | null,
+): Map<string, { token: string; usage: string; group: string }> {
+  if (!projectCatalog) return MAXVIEW_TOKEN_MAP;
+  return buildTokenMap(projectCatalog);
+}
 
 // ── Extract colors from HTML ───────────────────────────────────────────────
 
@@ -91,13 +105,25 @@ function expandShortHex(hex: string): string {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-export function auditPrototypeColors(html: string): DesignTokenMatch[] {
-  const raw = extractRawColors(html);
+/**
+ * Audit the colors used in a generated HTML prototype against the active
+ * project's token catalog.
+ *
+ * @param html             The generated HTML string.
+ * @param projectCatalog   Optional project-specific catalog (e.g. apex-colors.json).
+ *                         When omitted the MaxView catalog is used — backward compatible.
+ */
+export function auditPrototypeColors(
+  html: string,
+  projectCatalog?: TokenCatalog | null,
+): DesignTokenMatch[] {
+  const raw      = extractRawColors(html);
+  const tokenMap = getTokenMap(projectCatalog);
   const results: DesignTokenMatch[] = [];
 
   for (const [norm, count] of raw) {
     const expanded = norm.startsWith('#') ? expandShortHex(norm) : norm;
-    const match = TOKEN_MAP.get(norm) ?? TOKEN_MAP.get(expanded);
+    const match = tokenMap.get(norm) ?? tokenMap.get(expanded);
 
     results.push({
       value: norm,

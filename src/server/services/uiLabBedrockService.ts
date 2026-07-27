@@ -1,9 +1,9 @@
 import path from 'path';
-import fs from 'fs';
+import fs, { readFileSync, existsSync } from 'fs';
 import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { retryWithBackoff } from '../utils/retry';
 import { getDesignSystemCatalog, getScreenInventory } from './designSystemService';
-import { getMaxviewColorTokens } from './designTokensService';
+import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
 
@@ -46,6 +46,33 @@ const DEFAULT_UI_LAB_TIMEOUT_MS = (() => {
 
 const SKILL_PATH = path.join(process.cwd(), '.cursor', 'skills', 'ui-lab', 'SKILL.md');
 
+const APEX_COMPONENT_INDEX_PATH = path.join(
+  __dirname, '..', 'assets', 'apex-component-index.md',
+);
+
+/**
+ * The APEX project name as configured in the environment.
+ * Defaults to 'Apex' which matches the virtual project used throughout the app.
+ */
+function apexProjectName(): string {
+  return (process.env.APEX_PROJECT_NAME ?? 'Apex').trim();
+}
+
+/** True when the request is being made in the context of the APEX project itself. */
+function isApexProject(project?: string): boolean {
+  if (!project) return false;
+  return project.trim().toLowerCase() === apexProjectName().toLowerCase();
+}
+
+function loadApexComponentIndex(): string {
+  try {
+    if (existsSync(APEX_COMPONENT_INDEX_PATH)) {
+      return readFileSync(APEX_COMPONENT_INDEX_PATH, 'utf-8').trim();
+    }
+  } catch { /* non-fatal */ }
+  return '';
+}
+
 function isThrottleError(err: unknown): boolean {
   const e = err as { name?: string; statusCode?: number; $metadata?: { httpStatusCode?: number } } | undefined;
   if (!e) return false;
@@ -78,53 +105,71 @@ function buildCatalogSection(): string {
 async function buildContextSection(
   targetRoute?: string | null,
   featureText?: string,
+  project?: string,
 ): Promise<string> {
   const parts: string[] = [];
+  const forApex = isApexProject(project);
 
   const skillMarkdown = loadLocalSkill();
   if (skillMarkdown.trim()) {
     parts.push(`## UI Lab Design System Standards\n\n${skillMarkdown.trim()}`);
   }
 
-  try {
-    const colorTokens = getMaxviewColorTokens();
-    if (colorTokens.trim()) {
-      parts.push(`## MaxView Color Tokens\n\n${colorTokens.trim()}`);
+  if (forApex) {
+    // ── APEX project: use APEX design tokens + component index ──────────────
+    try {
+      const colorTokens = getApexColorTokens();
+      if (colorTokens.trim()) {
+        parts.push(`## APEX Color Tokens\n\n${colorTokens.trim()}`);
+      }
+    } catch { /* non-fatal */ }
+
+    const componentIndex = loadApexComponentIndex();
+    if (componentIndex.trim()) {
+      parts.push(`## APEX Component Index\n\n${componentIndex.trim()}`);
     }
-  } catch {
-    // non-fatal — colors unavailable
-  }
-
-  try {
-    const catalog = await getDesignSystemCatalog();
-    const ctxParts: string[] = [];
-
-    if (catalog.uiKnowledgeBase?.trim()) {
-      ctxParts.push(`### Existing screens — detailed descriptions\n\n${catalog.uiKnowledgeBase.trim()}`);
-    }
-
-    if (catalog.routes?.length) {
-      ctxParts.push(`### Application routes\n\n${catalog.routes.join('\n')}`);
-    }
-
-    if (catalog.tokensCss?.trim()) {
-      ctxParts.push(`### CSS custom properties (design tokens)\n\n\`\`\`css\n${catalog.tokensCss.trim()}\n\`\`\``);
-    }
-
-    const compNames = (catalog.componentNames ?? []).slice(0, 50);
-    if (compNames.length) {
-      const compLines = compNames.map((name) => {
-        const desc = catalog.componentDescriptions?.[name];
-        return desc ? `- **${name}**: ${desc}` : `- ${name}`;
-      });
-      ctxParts.push(`### Available MaxView components\n\n${compLines.join('\n')}`);
+  } else {
+    // ── Default (MaxView and unconfigured): existing behavior unchanged ──────
+    try {
+      const colorTokens = getMaxviewColorTokens();
+      if (colorTokens.trim()) {
+        parts.push(`## MaxView Color Tokens\n\n${colorTokens.trim()}`);
+      }
+    } catch {
+      // non-fatal — colors unavailable
     }
 
-    if (ctxParts.length) {
-      parts.push(`## MaxView Design System Catalog\n\n${ctxParts.join('\n\n')}`);
+    try {
+      const catalog = await getDesignSystemCatalog();
+      const ctxParts: string[] = [];
+
+      if (catalog.uiKnowledgeBase?.trim()) {
+        ctxParts.push(`### Existing screens — detailed descriptions\n\n${catalog.uiKnowledgeBase.trim()}`);
+      }
+
+      if (catalog.routes?.length) {
+        ctxParts.push(`### Application routes\n\n${catalog.routes.join('\n')}`);
+      }
+
+      if (catalog.tokensCss?.trim()) {
+        ctxParts.push(`### CSS custom properties (design tokens)\n\n\`\`\`css\n${catalog.tokensCss.trim()}\n\`\`\``);
+      }
+
+      const compNames = (catalog.componentNames ?? []).slice(0, 50);
+      if (compNames.length) {
+        const compLines = compNames.map((name) => {
+          const desc = catalog.componentDescriptions?.[name];
+          return desc ? `- **${name}**: ${desc}` : `- ${name}`;
+        });
+        ctxParts.push(`### Available MaxView components\n\n${compLines.join('\n')}`);
+      }
+
+      if (ctxParts.length) {
+        parts.push(`## MaxView Design System Catalog\n\n${ctxParts.join('\n\n')}`);
+      }
+    } catch {
+      // non-fatal — catalog unavailable
     }
-  } catch {
-    // non-fatal — catalog unavailable
   }
 
   try {
@@ -184,12 +229,18 @@ function buildGenerationPrompt(
   contextSection: string,
   targetRoute?: string | null,
   figmaBase64?: string,
+  designSystemName?: string,
 ): string {
+  const dsName = designSystemName ?? 'MaxView';
   const routeClause = targetRoute
     ? `The UI should be designed for the route: \`${targetRoute}\`. Study the existing page context from the design system catalog and match the surrounding layout/navigation shell.`
     : 'This is a standalone new UI — design an appropriate layout and navigation shell.';
 
-  return `You are an expert UI/UX designer and front-end engineer specializing in the MaxView design system. Generate a complete, self-contained, interactive HTML prototype that exactly follows the MaxView design system tokens, spacing, typography, and component usage rules defined below.
+  const fontInstruction = dsName === 'APEX'
+    ? '- Use the system font stack defined by the APEX design system (no external font import required).'
+    : '- Use Roboto font: add `<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">` in <head>.';
+
+  return `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Generate a complete, self-contained, interactive HTML prototype that exactly follows the ${dsName} design system tokens, spacing, typography, and component usage rules defined below.
 
 ${contextSection}
 
@@ -206,9 +257,9 @@ ${routeClause}
 ## Critical output requirements
 
 ### 1. Design system fidelity
-- Use ONLY color values from the MaxView Color Tokens above — no invented hex values.
+- Use ONLY color values from the ${dsName} Color Tokens above — no invented hex values.
 - Use ONLY the spacing scale (multiples of 4px, base 8px grid).
-- Use Roboto font: add \`<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">\` in <head>.
+${fontInstruction}
 - Follow the component usage rules exactly (button variants, form patterns, elevation).
 
 ### 2. Four required UI states
@@ -263,7 +314,9 @@ function buildEditPrompt(
   selectedSelector?: string | null,
   selectedHtml?: string | null,
   contextSection?: string,
+  designSystemName?: string,
 ): string {
+  const dsName = designSystemName ?? 'MaxView';
   const scopeClause = selectedSelector && selectedHtml
     ? `Focus your changes on the element matching CSS selector \`${selectedSelector}\`:
 \`\`\`html
@@ -274,7 +327,7 @@ Only change this element and its children unless the instruction explicitly requ
 
   const ctx = contextSection ? `${contextSection}\n\n---\n\n` : '';
 
-  return `You are an expert UI/UX designer and front-end engineer specializing in the MaxView design system. Edit the provided HTML prototype according to the instruction below.
+  return `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Edit the provided HTML prototype according to the instruction below.
 
 ${ctx}## Instruction
 
@@ -294,7 +347,7 @@ ${currentHtml}
 
 ## Rules
 - Output the COMPLETE updated HTML — never omit any part.
-- Maintain design system fidelity: MaxView colors, spacing, typography.
+- Maintain design system fidelity: ${dsName} colors, spacing, typography.
 - Keep all four \`<!-- STATE:*:START/END -->\` comment markers intact.
 - Do NOT add external scripts or API calls.
 - Do NOT change unrelated parts of the UI.
@@ -485,8 +538,10 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
     // non-fatal
   }
 
-  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt);
-  const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64);
+  const forApex = isApexProject(opts.project);
+  const dsName  = forApex ? 'APEX' : 'MaxView';
+  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt, opts.project);
+  const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64, dsName);
 
   return invokeStreaming(
     prompt,
@@ -506,9 +561,12 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
   const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
 
+  const forApex = isApexProject(opts.project);
+  const dsName  = forApex ? 'APEX' : 'MaxView';
   const contextSection = await buildContextSection(
     opts.targetRoute,
     opts.featureText ?? undefined,
+    opts.project,
   );
   const prompt = buildEditPrompt(
     opts.instruction,
@@ -516,6 +574,7 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
     opts.selectedSelector,
     opts.selectedHtml,
     contextSection,
+    dsName,
   );
 
   return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken, undefined, opts.project, opts.userId);

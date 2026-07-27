@@ -1,57 +1,78 @@
 /**
  * Design Tokens Service
  *
- * Loads the canonical MaxView color palette from a bundled asset so the AI
- * design generators reference exact brand colors instead of inventing hex values.
+ * Loads color-token Markdown assets for prompt injection so AI design
+ * generators reference exact brand colors instead of inventing hex values.
  *
  * Source of truth:
- *   - src/server/assets/maxview-colors.md   (human-readable, fed to the prompt)
- *   - src/server/assets/maxview-colors.json (machine-readable companion)
+ *   - src/server/assets/maxview-colors.md  (MaxView — original)
+ *   - src/server/assets/apex-colors.md     (APEX — added in Wave 3)
  *
- * The Markdown file is used for the prompt because its token / value / usage
- * tables give Claude the clearest semantic guidance ("use error.main for errors").
+ * getColorTokens(mdPath) is the generic, project-scoped entry point.
+ * getMaxviewColorTokens() is a backward-compatible shim — unchanged behaviour.
  */
 
 import fs from 'fs';
 import path from 'path';
 
 const ASSETS_DIR = path.join(__dirname, '..', 'assets');
-const COLOR_TOKENS_MD = path.join(ASSETS_DIR, 'maxview-colors.md');
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // re-reads disk if the file was updated
+/** Canonical asset paths */
+export const MAXVIEW_COLOR_TOKENS_PATH = path.join(ASSETS_DIR, 'maxview-colors.md');
+export const APEX_COLOR_TOKENS_PATH    = path.join(ASSETS_DIR, 'apex-colors.md');
 
-let cachedTokens: string | null = null;
-let cacheLoadedAt = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Per-file cache so each project's tokens are cached independently
+const fileCache = new Map<string, { text: string; loadedAt: number }>();
 
 /**
- * Returns the MaxView color-token Markdown for prompt injection.
- * Returns an empty string if the asset is missing (non-fatal).
+ * Load the color-token Markdown at `mdPath` and return it for prompt injection.
+ * Results are cached per path with a 5-minute TTL.
+ * Returns an empty string (non-fatal) when the file is absent or unreadable.
  */
-export function getMaxviewColorTokens(): string {
+export function getColorTokens(mdPath: string): string {
   const now = Date.now();
-  if (cachedTokens !== null && now - cacheLoadedAt < CACHE_TTL_MS) {
-    return cachedTokens;
-  }
+  const cached = fileCache.get(mdPath);
+  if (cached && now - cached.loadedAt < CACHE_TTL_MS) return cached.text;
 
+  let text = '';
   try {
-    if (fs.existsSync(COLOR_TOKENS_MD)) {
-      cachedTokens = fs.readFileSync(COLOR_TOKENS_MD, 'utf-8').trim();
-      console.log(`[designTokensService] Loaded MaxView color tokens (${cachedTokens.length} chars)`);
+    if (fs.existsSync(mdPath)) {
+      text = fs.readFileSync(mdPath, 'utf-8').trim();
+      console.log(`[designTokensService] Loaded color tokens from ${path.basename(mdPath)} (${text.length} chars)`);
     } else {
-      cachedTokens = '';
-      console.warn(`[designTokensService] No color tokens found at ${COLOR_TOKENS_MD}`);
+      console.warn(`[designTokensService] No color tokens found at ${mdPath}`);
     }
   } catch (e: any) {
-    cachedTokens = '';
-    console.warn(`[designTokensService] Failed to read color tokens — ${e.message}`);
+    console.warn(`[designTokensService] Failed to read color tokens from ${mdPath} — ${e.message}`);
   }
 
-  cacheLoadedAt = now;
-  return cachedTokens;
+  fileCache.set(mdPath, { text, loadedAt: now });
+  return text;
 }
 
-/** Force a cache refresh on next call (useful after editing the asset or in tests). */
-export function invalidateDesignTokensCache(): void {
-  cachedTokens = null;
-  cacheLoadedAt = 0;
+/**
+ * Returns the MaxView color-token Markdown.
+ * Backward-compatible shim — existing callers are unaffected.
+ */
+export function getMaxviewColorTokens(): string {
+  return getColorTokens(MAXVIEW_COLOR_TOKENS_PATH);
+}
+
+/**
+ * Returns the APEX color-token Markdown.
+ * Used by the APEX-project UI Lab context.
+ */
+export function getApexColorTokens(): string {
+  return getColorTokens(APEX_COLOR_TOKENS_PATH);
+}
+
+/** Force a cache refresh on next call (useful in tests). */
+export function invalidateDesignTokensCache(mdPath?: string): void {
+  if (mdPath) {
+    fileCache.delete(mdPath);
+  } else {
+    fileCache.clear();
+  }
 }
