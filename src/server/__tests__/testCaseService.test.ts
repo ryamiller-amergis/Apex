@@ -192,6 +192,10 @@ describe('testCaseService', () => {
   });
 
   describe('triggerTestCaseGeneration', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     it('skips generation when the PRD project has no test-case skill configured', async () => {
       mockDb.query.prds.findFirst.mockResolvedValue({
         id: 'prd-1',
@@ -207,6 +211,7 @@ describe('testCaseService', () => {
     });
 
     it('creates a generation thread and writes kickoff files when a test-case skill is configured', async () => {
+      jest.useFakeTimers();
       const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-'));
       mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
       mockDb.query.prds.findFirst.mockResolvedValue({
@@ -250,6 +255,12 @@ describe('testCaseService', () => {
           [],
           { hidden: true },
         );
+
+        // Drain the watcher started by triggerTestCaseGeneration so it cannot
+        // keep polling after this test file moves on to other mocks.
+        mockDb.query.testCases.findFirst.mockResolvedValue(null);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
