@@ -309,6 +309,22 @@ describe('document assistant MCP wiring', () => {
     }))).toBe('design-doc');
   });
 
+  it('does not classify validation threads as document assistants', () => {
+    const kickoff = baseKickoff({
+      freeformContext: [
+        'document_operation: validation',
+        'prd_id: prd-1',
+        'thread_id: validation-thread',
+      ].join('\n'),
+    });
+
+    expect(resolveDocumentAssistantType(kickoff)).toBeUndefined();
+    expect(buildDocumentAssistantEditGuidance(kickoff)).toEqual([]);
+    expect(
+      buildMcpServers(kickoff, 'http://localhost:3001/mcp/ado-skills')['ado-skills'],
+    ).toBeUndefined();
+  });
+
   it('mounts both github-repo and ado-skills for GitHub ADR assistants', () => {
     const servers = buildMcpServers(
       baseKickoff({

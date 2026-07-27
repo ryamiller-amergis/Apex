@@ -17,6 +17,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 jest.mock('../services/prdService', () => ({
   startPrdWatcher: jest.fn(),
+  isPrdWatcherActive: jest.fn(),
   isPrdValidationWatcherActive: jest.fn(),
   rehydratePrdValidationWatcher: jest.fn(),
 }));

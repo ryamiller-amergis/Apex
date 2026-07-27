@@ -341,6 +341,7 @@ export function resolveDocumentAssistantType(
   }
   const ctx = kickoff.freeformContext;
   if (!ctx) return undefined;
+  if (/^document_operation:\s*validation\s*$/m.test(ctx)) return undefined;
   if (/^adr_id:\s*\S+/m.test(ctx)) return 'adr';
   if (/^prd_id:\s*\S+/m.test(ctx)) return 'prd';
   if (/^doc_id:\s*\S+/m.test(ctx)) return 'design-doc';

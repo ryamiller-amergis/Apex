@@ -68,7 +68,11 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
 
   const globalModel = await getDefaultModel();
   const model = adapter.getModel(skillConfig, globalModel);
-  const context = adapter.buildValidationContext(skillConfig);
+  const context = [
+    'document_operation: validation',
+    '',
+    adapter.buildValidationContext(skillConfig),
+  ].join('\n');
 
   // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts
   // so post-run sync can find the owning document when the run completes.

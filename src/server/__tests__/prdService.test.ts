@@ -169,6 +169,7 @@ import {
   deletePrd,
   syncPrdContent,
   startPrdWatcher,
+  isPrdWatcherActive,
   arePrdValidationArtifactsReady,
   autoStartPrdValidation,
   cancelPrdValidation,
@@ -1307,6 +1308,21 @@ describe('startPrdWatcher', () => {
     );
   });
 
+  it('tracks whether a generation watcher is already active', async () => {
+    mockReadOutputPrd.mockReturnValue(null);
+    mockReadOutputBacklog.mockReturnValue(null);
+
+    expect(isPrdWatcherActive('prd-active')).toBe(false);
+    startPrdWatcher('prd-active', 'thread-active');
+    expect(isPrdWatcherActive('prd-active')).toBe(true);
+
+    mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-active', status: 'draft' });
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(isPrdWatcherActive('prd-active')).toBe(false);
+  });
+
   it('stops when the PRD no longer exists (e.g. deleted on another instance)', async () => {
     mockReadOutputPrd.mockReturnValue('# Generated PRD');
     mockReadOutputBacklog.mockReturnValue({ epics: [] });
@@ -1444,7 +1460,7 @@ describe('PRD validation lifecycle', () => {
   });
 
   it('starts document validation only when a skill is configured and artifacts are ready', async () => {
-    mockPrdSelectForGetPrd();
+    mockPrdSelectForGetPrd({ validationThreadId: null, validationScorecard: null });
     mockGetSkillConfig.mockResolvedValue({
       skillRepo: 'org/skills',
       skillBranch: 'main',
@@ -1464,6 +1480,37 @@ describe('PRD validation lifecycle', () => {
     expect(adapter.buildValidationContext({})).toContain('## Backlog JSON');
     expect(adapter.buildValidationContext({})).toContain('TBIs');
     expect(adapter.buildValidationContext({})).toContain('must **NOT** have `userTypes`');
+  });
+
+  it('does not start another validation while the PRD is already validating', async () => {
+    mockPrdSelectForGetPrd({ status: 'validating' });
+
+    await autoStartPrdValidation('prd-1');
+
+    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
+  });
+
+  it('does not automatically restart validation after a previous attempt', async () => {
+    mockPrdSelectForGetPrd({ validationThreadId: 'previous-validation-thread' });
+
+    await autoStartPrdValidation('prd-1');
+
+    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit validation rerun after a previous attempt', async () => {
+    mockPrdSelectForGetPrd({ validationThreadId: 'previous-validation-thread' });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+    });
+    mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: { items: [] } });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+
+    await autoStartPrdValidation('prd-1', { force: true });
+
+    expect(mockAutoStartDocumentValidation).toHaveBeenCalledTimes(1);
   });
 
   it('skips auto-start validation while a Fix-with-Apex session has fixBaseline set', async () => {

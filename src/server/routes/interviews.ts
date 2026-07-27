@@ -1099,7 +1099,7 @@ router.post('/prds/:prdId/validation-thread', requirePermission('interviews:mana
     const prd = await getPrd(req.params.prdId);
     if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
 
-    await autoStartPrdValidation(req.params.prdId);
+    await autoStartPrdValidation(req.params.prdId, { force: true });
     const updated = await getPrd(req.params.prdId);
     res.json({ threadId: updated?.validationThreadId ?? null });
   } catch (err) {

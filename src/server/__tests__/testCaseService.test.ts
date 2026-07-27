@@ -23,6 +23,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         chatThreads: { findFirst: jest.fn() },
+        interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
         testCases: { findFirst: jest.fn() },
       },
@@ -194,6 +195,22 @@ describe('testCaseService', () => {
   describe('triggerTestCaseGeneration', () => {
     afterEach(() => {
       jest.useRealTimers();
+    });
+
+    it('skips generation when test cases are disabled for the interview', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        interviewId: 'interview-1',
+        project: 'proj-alpha',
+        title: 'Feature PRD',
+      });
+      mockDb.query.interviews.findFirst.mockResolvedValue({ testCasesEnabled: false });
+
+      await expect(triggerTestCaseGeneration('prd-1', 'source-thread')).resolves.toBe(false);
+
+      expect(mockDb.query.testCases.findFirst).not.toHaveBeenCalled();
+      expect(mockGetSkillConfig).not.toHaveBeenCalled();
+      expect(mockCreateThread).not.toHaveBeenCalled();
     });
 
     it('skips generation when the PRD project has no test-case skill configured', async () => {

@@ -142,7 +142,7 @@ export async function assignApprovers(
     );
   }
 
-  await db
+  const insertedAssignments = await db
     .insert(documentApproverAssignments)
     .values(
       approverUserIds.map((userId) => ({
@@ -152,11 +152,15 @@ export async function assignApprovers(
         assignedBy,
       })),
     )
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ approverUserId: documentApproverAssignments.approverUserId });
 
-  notifyAssignedApprovers(documentId, documentType, approverUserIds).catch((err) =>
-    console.error('Failed to send approver assignment notifications', err),
-  );
+  const newlyAssignedUserIds = insertedAssignments.map((row) => row.approverUserId);
+  try {
+    await notifyAssignedApprovers(documentId, documentType, newlyAssignedUserIds);
+  } catch (err) {
+    console.error('Failed to send approver assignment notifications', err);
+  }
 
   return getAssignments(documentId, documentType);
 }

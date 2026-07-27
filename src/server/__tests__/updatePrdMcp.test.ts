@@ -23,7 +23,10 @@ jest.mock('../db/drizzle', () => {
       update: jest.fn().mockImplementation(makeUpdateChain),
       query: {
         prds: {
-          findFirst: jest.fn().mockResolvedValue({ fixBaseline: null }),
+          findFirst: jest.fn().mockResolvedValue({
+            fixBaseline: null,
+            prdAssistantThreadId: 'thread-1',
+          }),
         },
       },
     },
@@ -72,7 +75,10 @@ describe('handleUpdatePrd', () => {
       set: jest.fn().mockReturnThis(),
       where: jest.fn().mockResolvedValue(undefined),
     }));
-    mockDb.query.prds.findFirst.mockResolvedValue({ fixBaseline: null });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      prdAssistantThreadId: 'thread-1',
+    });
   });
 
   it('returns error when thread not found', async () => {
@@ -133,9 +139,30 @@ describe('handleUpdatePrd', () => {
     );
   });
 
+  it('rejects validation and other non-assistant threads', async () => {
+    mockGetThread.mockResolvedValue({ id: 'validation-thread', userId: 'user-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      prdAssistantThreadId: 'assistant-thread',
+    });
+
+    const result = await handleUpdatePrd({
+      threadId: 'validation-thread',
+      prdId: 'prd-1',
+      section: 'content',
+      content: '# Validation should not stage this',
+    });
+
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Thread is not authorized to update this PRD',
+    });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
   it('writes live content (not proposed) when called from the active fix thread', async () => {
     mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
     mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'thread-1',
       fixBaseline: {
         content: '# old',
         capturedAt: '2026-01-01T00:00:00Z',
@@ -170,6 +197,7 @@ describe('handleUpdatePrd', () => {
   it('stages proposed content when fixBaseline exists but thread is the normal assistant', async () => {
     mockGetThread.mockResolvedValue({ id: 'assistant-thread', userId: 'user-1' });
     mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'assistant-thread',
       fixBaseline: {
         content: '# old',
         capturedAt: '2026-01-01T00:00:00Z',
@@ -198,6 +226,7 @@ describe('handleUpdatePrd', () => {
   it('writes live backlog (not proposed) when called from the active fix thread', async () => {
     mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
     mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'thread-1',
       fixBaseline: {
         content: '# old',
         capturedAt: '2026-01-01T00:00:00Z',
