@@ -49,6 +49,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -353,6 +354,8 @@ describe('Design-doc owner (non-author) capabilities', () => {
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit for Review' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Ask Apex' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Comments/i }));
     expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
