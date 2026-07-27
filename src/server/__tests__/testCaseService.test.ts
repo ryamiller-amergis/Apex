@@ -23,6 +23,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         chatThreads: { findFirst: jest.fn() },
+        interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
         testCases: { findFirst: jest.fn() },
       },
@@ -192,6 +193,26 @@ describe('testCaseService', () => {
   });
 
   describe('triggerTestCaseGeneration', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('skips generation when test cases are disabled for the interview', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        interviewId: 'interview-1',
+        project: 'proj-alpha',
+        title: 'Feature PRD',
+      });
+      mockDb.query.interviews.findFirst.mockResolvedValue({ testCasesEnabled: false });
+
+      await expect(triggerTestCaseGeneration('prd-1', 'source-thread')).resolves.toBe(false);
+
+      expect(mockDb.query.testCases.findFirst).not.toHaveBeenCalled();
+      expect(mockGetSkillConfig).not.toHaveBeenCalled();
+      expect(mockCreateThread).not.toHaveBeenCalled();
+    });
+
     it('skips generation when the PRD project has no test-case skill configured', async () => {
       mockDb.query.prds.findFirst.mockResolvedValue({
         id: 'prd-1',
@@ -207,6 +228,7 @@ describe('testCaseService', () => {
     });
 
     it('creates a generation thread and writes kickoff files when a test-case skill is configured', async () => {
+      jest.useFakeTimers();
       const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-'));
       mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
       mockDb.query.prds.findFirst.mockResolvedValue({
@@ -250,6 +272,12 @@ describe('testCaseService', () => {
           [],
           { hidden: true },
         );
+
+        // Drain the watcher started by triggerTestCaseGeneration so it cannot
+        // keep polling after this test file moves on to other mocks.
+        mockDb.query.testCases.findFirst.mockResolvedValue(null);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }

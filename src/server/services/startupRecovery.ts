@@ -4,7 +4,12 @@ import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
-import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
+import {
+  startPrdWatcher,
+  isPrdWatcherActive,
+  isPrdValidationWatcherActive,
+  rehydratePrdValidationWatcher,
+} from './prdService';
 import {
   startSingleFeatureDocWatcher,
   startValidationWatcher,
@@ -152,6 +157,7 @@ export async function recoverInFlightWork(): Promise<void> {
   });
   for (const prd of generatingPrds) {
     if (!prd.chatThreadId) continue;
+    if (isPrdWatcherActive(prd.id)) continue;
     const ok = await hydrateThread(prd.chatThreadId);
     if (ok) {
       startPrdWatcher(prd.id, prd.chatThreadId);

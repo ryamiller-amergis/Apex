@@ -17,6 +17,7 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:a11y": "playwright test --grep @a11y",
+    "test:e2e:interview-flow": "playwright test --grep @interview-flow",
     "test:e2e:deployed": "dotenv -e .env.e2e -- playwright test --project=deployed-smoke",
     "test:e2e:deployed:prod": "dotenv -e .env.e2e.prod -- playwright test --project=deployed-smoke --grep @prod-safe",
     "test:e2e:auth:capture": "ts-node -P tsconfig.e2e.json tests/e2e/support/capture-storage-state.ts",

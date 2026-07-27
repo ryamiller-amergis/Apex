@@ -1034,7 +1034,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
     : 'system default (composer-2)';
 
   return (
-    <div className={styles.stageCard}>
+    <div className={styles.stageCard} data-testid={`ps-stage-${stage.skillKey}`}>
       <button
         type="button"
         className={styles.stageCardHeader}
@@ -2246,7 +2246,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
-              <div className={styles.approvalModeSection}>
+              <div className={styles.approvalModeSection} data-testid="ps-approval-mode">
                 <p className={styles.approverSubTitle}>Approval Mode</p>
                 <div className={styles.approvalModeOptions}>
                   <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
@@ -2258,6 +2258,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
                       disabled={upsert.isPending}
                       className={styles.approvalModeRadio}
+                      data-testid="ps-approval-mode-any-one"
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>Any One</span>
@@ -2273,6 +2274,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
                       disabled={upsert.isPending}
                       className={styles.approvalModeRadio}
+                      data-testid="ps-approval-mode-all-required"
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>All Required</span>

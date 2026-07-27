@@ -8,7 +8,8 @@
 jest.mock('../db/drizzle', () => {
   const makeInsertChain = () => ({
     values: jest.fn().mockReturnThis(),
-    onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
+    onConflictDoNothing: jest.fn().mockReturnThis(),
+    returning: jest.fn().mockResolvedValue([]),
   });
 
   const makeUpdateChain = () => ({
@@ -123,6 +124,18 @@ function makeAssignmentRow(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
+function makeAssignmentInsertChain(insertedUserIds: string[]) {
+  const returningMock = jest.fn().mockResolvedValue(
+    insertedUserIds.map((approverUserId) => ({ approverUserId })),
+  );
+  const onConflictMock = jest.fn().mockReturnValue({ returning: returningMock });
+  const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
+  return {
+    chain: { values: valuesMock },
+    onConflictMock,
+  };
+}
+
 // ── getAssignments ──────────────────────────────────────────────────────────────
 
 describe('getAssignments', () => {
@@ -175,9 +188,8 @@ describe('assignApprovers', () => {
       { userId: 'approver-1', displayName: 'Alice Approver' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['approver-1']);
+    mockDb.insert.mockReturnValue(chain);
 
     const result = await assignApprovers('prd-1', 'prd', ['approver-1'], 'user-1');
 
@@ -207,9 +219,8 @@ describe('assignApprovers', () => {
       { userId: 'approver-2', displayName: 'Bob' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['approver-1', 'approver-2']);
+    mockDb.insert.mockReturnValue(chain);
 
     await assignApprovers('prd-1', 'prd', ['approver-1', 'approver-2'], 'user-1');
     await new Promise((r) => setTimeout(r, 10));
@@ -241,9 +252,8 @@ describe('assignApprovers', () => {
       { userId: 'approver-1', displayName: 'Alice' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['approver-1']);
+    mockDb.insert.mockReturnValue(chain);
 
     await assignApprovers('dd-1', 'design_doc', ['approver-1'], 'user-1');
     await new Promise((r) => setTimeout(r, 10));
@@ -276,9 +286,8 @@ describe('assignApprovers', () => {
       { userId: 'approver-1', displayName: 'Alice' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['approver-1']);
+    mockDb.insert.mockReturnValue(chain);
     mockCreateNotification.mockRejectedValue(new Error('notification service down'));
 
     const result = await assignApprovers('prd-1', 'prd', ['approver-1'], 'user-1');
@@ -289,20 +298,20 @@ describe('assignApprovers', () => {
   it('handles onConflictDoNothing gracefully', async () => {
     mockDb.select
       .mockReturnValueOnce(makeLimitSelectChain([{ project: 'proj-alpha' }]))
-      .mockReturnValueOnce(makeLimitSelectChain([{ title: 'Test PRD' }]))
       .mockReturnValueOnce(makeAssignmentSelectChain([]));
 
     mockGetApproversForDocument.mockResolvedValue([
       { userId: 'approver-1', displayName: 'Alice' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain, onConflictMock } = makeAssignmentInsertChain([]);
+    mockDb.insert.mockReturnValue(chain);
 
     await assignApprovers('prd-1', 'prd', ['approver-1'], 'user-1');
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(onConflictMock).toHaveBeenCalledTimes(1);
+    expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 });
 
@@ -481,9 +490,8 @@ describe('propagateDesignDocApprovers', () => {
 
     mockGetApproversForDocument.mockResolvedValue([{ userId: 'a1', displayName: 'Alice' }]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['a1']);
+    mockDb.insert.mockReturnValue(chain);
 
     await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
 
@@ -502,9 +510,8 @@ describe('propagateDesignDocApprovers', () => {
       { userId: 'a2', displayName: 'Bob' },
     ]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['a1', 'a2']);
+    mockDb.insert.mockReturnValue(chain);
 
     await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
     await new Promise((r) => setTimeout(r, 10));
@@ -550,9 +557,8 @@ describe('propagateDesignDocApprovers', () => {
 
     mockGetApproversForDocument.mockResolvedValue([{ userId: 'a1', displayName: 'Alice' }]);
 
-    const onConflictMock = jest.fn().mockResolvedValue(undefined);
-    const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
-    mockDb.insert.mockReturnValue({ values: valuesMock });
+    const { chain } = makeAssignmentInsertChain(['a1']);
+    mockDb.insert.mockReturnValue(chain);
 
     await propagateDesignDocApprovers('prd-1', 'dd-1', 'user-1');
 

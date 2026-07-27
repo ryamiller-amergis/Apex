@@ -311,6 +311,7 @@ const PrdReadinessPanel: React.FC<{
   return (
     <div
       className={`${styles.readinessBanner} ${readinessBannerClass(readiness.severity)} ${expanded ? '' : styles.readinessBannerCollapsed}`}
+      data-testid="prd-readiness-panel"
     >
       <button
         type="button"
@@ -1553,7 +1554,7 @@ export const PrdReviewView: React.FC = () => {
     ) : null;
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} data-testid="prd-review">
       <div className={styles.header}>
         <div className={styles.headerLeft}>
           <button
@@ -1568,6 +1569,7 @@ export const PrdReviewView: React.FC = () => {
               <h1 className={styles.title}>{prd.title}</h1>
               <span
                 className={`${styles.statusBadge} ${statusBadgeClass(prd.status)}`}
+                data-testid="prd-status-badge"
               >
                 {statusLabel(prd.status)}
               </span>
@@ -1782,6 +1784,7 @@ export const PrdReviewView: React.FC = () => {
                     : undefined
               }
               type="button"
+              data-testid="submit-review-btn"
             >
               Submit for Review
             </button>
@@ -1809,6 +1812,7 @@ export const PrdReviewView: React.FC = () => {
                           : undefined
                     }
                     type="button"
+                    data-testid="approve-prd-btn"
                   >
                     Approve PRD
                   </button>
@@ -1829,6 +1833,7 @@ export const PrdReviewView: React.FC = () => {
                     onClick={() => void handleQaApprove()}
                     disabled={reviewTestCases.isPending}
                     type="button"
+                    data-testid="approve-qa-btn"
                   >
                     Approve QA
                   </button>
@@ -1848,6 +1853,7 @@ export const PrdReviewView: React.FC = () => {
                     ? 'Reviewers must approve the PRD before owner approval'
                     : undefined}
                   type="button"
+                  data-testid="approve-owner-btn"
                 >
                   Approve as Owner
                 </button>
@@ -2569,6 +2575,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
               onClick={() => setActiveTab('preview')}
               type="button"
+              data-testid="prd-tab-preview"
             >
               Preview
             </button>
@@ -2576,6 +2583,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'backlog' ? styles.active : ''}`}
               onClick={() => setActiveTab('backlog')}
               type="button"
+              data-testid="prd-tab-backlog"
             >
               Backlog
             </button>
@@ -2584,6 +2592,7 @@ export const PrdReviewView: React.FC = () => {
                 className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
                 onClick={() => setActiveTab('validation')}
                 type="button"
+                data-testid="prd-tab-validation"
               >
                 Validation
               </button>

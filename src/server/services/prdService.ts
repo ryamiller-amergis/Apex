@@ -710,6 +710,10 @@ function stopPrdWatcher(prdId: string): void {
   }
 }
 
+export function isPrdWatcherActive(prdId: string): boolean {
+  return activePrdWatchers.has(prdId);
+}
+
 export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   stopPrdWatcher(prdId);
   let attempts = 0;
@@ -1522,7 +1526,7 @@ export async function applyProposedPrdChanges(
       `[prd] Skipping autoStartPrdValidation after apply-proposed — fix session active (prdId=${prdId})`,
     );
   } else {
-    void autoStartPrdValidation(prdId).catch((err) =>
+    void autoStartPrdValidation(prdId, { force: true }).catch((err) =>
       console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
     );
   }
@@ -1560,6 +1564,7 @@ export async function resolvePrdCommentWithApply(
 // ── PRD Validation ────────────────────────────────────────────────────────────
 
 const activePrdValidationWatchers = new Map<string, boolean>();
+const activePrdValidationStarts = new Set<string>();
 
 export async function arePrdValidationArtifactsReady(prdId: string): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
@@ -1709,27 +1714,43 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
   };
 }
 
-export async function autoStartPrdValidation(prdId: string): Promise<void> {
-  const prd = await getPrd(prdId);
-  if (!prd) return;
+export async function autoStartPrdValidation(
+  prdId: string,
+  options?: { force?: boolean },
+): Promise<void> {
+  if (activePrdValidationStarts.has(prdId)) return;
+  activePrdValidationStarts.add(prdId);
 
-  // Fix-with-Apex owns re-validation via acceptFixPrdValidation. Do not kick off
-  // a validation thread while the agent is still applying (or awaiting review of) edits.
-  if (prd.fixBaseline) {
-    console.log(
-      `[prd] Skipping autoStartPrdValidation — fix session active (prdId=${prdId})`,
-    );
-    return;
+  try {
+    const prd = await getPrd(prdId);
+    if (!prd || prd.status === 'validating') return;
+    if (!options?.force && prd.validationThreadId) {
+      console.log(
+        `[prd] Skipping automatic validation restart — validation was already attempted (prdId=${prdId})`,
+      );
+      return;
+    }
+
+    // Fix-with-Apex owns re-validation via acceptFixPrdValidation. Do not kick off
+    // a validation thread while the agent is still applying (or awaiting review of) edits.
+    if (prd.fixBaseline) {
+      console.log(
+        `[prd] Skipping autoStartPrdValidation — fix session active (prdId=${prdId})`,
+      );
+      return;
+    }
+
+    const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+    if (!skillConfig?.prdValidationSkillPath) return;
+
+    const ready = await arePrdValidationArtifactsReady(prdId);
+    if (!ready) return;
+
+    const adapter = createPrdValidationAdapter(prd);
+    await autoStartDocumentValidation(adapter);
+  } finally {
+    activePrdValidationStarts.delete(prdId);
   }
-
-  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
-  if (!skillConfig?.prdValidationSkillPath) return;
-
-  const ready = await arePrdValidationArtifactsReady(prdId);
-  if (!ready) return;
-
-  const adapter = createPrdValidationAdapter(prd);
-  await autoStartDocumentValidation(adapter);
 }
 
 export async function cancelPrdValidation(prdId: string, requestingUserId: string): Promise<void> {
@@ -1959,7 +1980,7 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
     console.error(`[prdFix] AI notification failed (prdId=${prdId}):`, err),
   );
 
-  await autoStartPrdValidation(prdId);
+  await autoStartPrdValidation(prdId, { force: true });
 }
 
 /**

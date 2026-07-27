@@ -67,7 +67,7 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
   const openCount = comments.filter((c) => c.status === 'open').length;
 
   return (
-    <div className={`${styles.sidebar}${embedded ? ` ${styles.sidebarEmbedded}` : ''}`}>
+    <div className={`${styles.sidebar}${embedded ? ` ${styles.sidebarEmbedded}` : ''}`} data-testid="comment-sidebar">
       {!embedded && (
         <div className={styles.header}>
           <span className={styles.headerTitle}>
@@ -85,6 +85,7 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
               disabled={isFixingWithAi}
               type="button"
               title="Ask AI to fix all open comments and show a diff for approval"
+              data-testid="fix-all-comments-btn"
             >
               {isFixingWithAi ? (
                 <>
@@ -114,6 +115,7 @@ export const ReviewCommentSidebar: React.FC<ReviewCommentSidebarProps> = ({
             disabled={isFixingWithAi}
             type="button"
             title="Ask AI to fix all open comments and show a diff for approval"
+            data-testid="fix-all-comments-btn"
           >
             {isFixingWithAi ? (
               <>
@@ -242,6 +244,8 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
       ref={cardRef}
       className={cardClassName}
       onClick={() => onCommentClick(comment.id)}
+      data-testid={`comment-thread-${comment.id}`}
+      data-status={comment.status}
     >
       {/* Quoted text */}
       <blockquote className={`${styles.quote}${isResolved ? ` ${styles.quoteResolved}` : ''}`}>
@@ -275,6 +279,7 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
             className={styles.actionButton}
             onClick={(e) => { e.stopPropagation(); onResolve(comment.id); }}
             type="button"
+            data-testid="comment-resolve-btn"
           >
             <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3.5 8.5 6.5 11.5 12.5 5.5" />
@@ -310,6 +315,8 @@ const ThreadCard: React.FC<ThreadCardProps> = ({
             disabled={fixingCommentId === comment.id}
             type="button"
             title="Fix this comment with Apex"
+            aria-label="Fix this comment with Apex"
+            data-testid="fix-single-comment-btn"
           >
             {fixingCommentId === comment.id ? (
               <svg className={styles.fixAiSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">

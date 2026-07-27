@@ -25,7 +25,7 @@ export class InterviewDashboardPage {
 
   /** The "Start New Interview" button (always rendered; enabled per RBAC + group). */
   startInterviewButton() {
-    return this.page.getByRole('button', { name: /start new interview/i });
+    return this.page.getByTestId('start-interview-btn');
   }
 
   /** Returns true if the "Start New Interview" button is visible. */
@@ -48,7 +48,19 @@ export class InterviewDashboardPage {
    * "Interviews (N)", "PRDs (N)", etc. — not ARIA tabs.
    */
   tabButton(tabName: 'Interviews' | 'PRDs' | 'Design Prototypes' | 'Design Docs') {
-    return this.page.getByRole('button', { name: new RegExp(`^${tabName}\\s*\\(`) });
+    const testId =
+      tabName === 'Interviews'
+        ? 'tab-interviews'
+        : tabName === 'PRDs'
+          ? 'tab-prds'
+          : tabName === 'Design Prototypes'
+            ? 'tab-design-prototypes'
+            : 'tab-design-docs';
+    return this.page.getByTestId(testId);
+  }
+
+  interviewCards() {
+    return this.page.getByTestId('interview-card');
   }
 
   /** Click the named section button. */

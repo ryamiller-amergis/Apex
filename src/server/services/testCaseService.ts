@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatThreads, prds, testCases } from '../db/schema';
+import { chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -678,6 +678,19 @@ export async function triggerTestCaseGeneration(
     where: eq(prds.id, prdId),
   });
   if (!prdRow) return false;
+
+  if (prdRow.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, prdRow.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    if (interview?.testCasesEnabled === false) {
+      console.log(
+        `[testCase] Skipping generation; test cases disabled for interview (prdId=${prdId})`
+      );
+      return false;
+    }
+  }
 
   const existingGenerating = await db.query.testCases.findFirst({
     where: and(eq(testCases.prdId, prdId), eq(testCases.status, 'generating')),

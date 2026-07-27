@@ -52,10 +52,22 @@ export async function handleUpdatePrd(params: {
     // even if a leftover fixBaseline row still exists on the PRD.
     const prdRow = await db.query.prds.findFirst({
       where: eq(prds.id, params.prdId),
-      columns: { fixBaseline: true },
+      columns: { fixBaseline: true, prdAssistantThreadId: true },
     });
+    if (!prdRow) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'PRD not found' }) }] };
+    }
     const baseline = (prdRow?.fixBaseline as PrdValidationBaseline | null) ?? null;
     const fixMode = isActiveFixThread(baseline, params.threadId);
+    const assistantMode = prdRow.prdAssistantThreadId === params.threadId;
+    if (!fixMode && !assistantMode) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ error: 'Thread is not authorized to update this PRD' }),
+        }],
+      };
+    }
 
     if (params.section === 'content') {
       await db

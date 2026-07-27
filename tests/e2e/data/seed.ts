@@ -26,6 +26,46 @@ async function patch<T>(request: APIRequestContext, path: string, data: unknown)
   return res.json() as Promise<T>;
 }
 
+export type PrdStatus =
+  | 'generating'
+  | 'draft'
+  | 'validating'
+  | 'pending_review'
+  | 'reviewer_approved'
+  | 'approved'
+  | 'revision_requested';
+
+export type DesignDocStatus =
+  | 'generating'
+  | 'generation_failed'
+  | 'validating'
+  | 'draft'
+  | 'pending_review'
+  | 'reviewer_approved'
+  | 'approved'
+  | 'revision_requested';
+
+export type DesignPrototypeStatus =
+  | 'generating'
+  | 'pending_review'
+  | 'reviewer_approved'
+  | 'approved'
+  | 'revision_requested'
+  | 'regenerating'
+  | 'generation_failed';
+
+export interface SeededInterview {
+  id: string;
+  title: string;
+  status: string;
+  authorId: string;
+  project: string;
+  chatThreadId: string;
+  prdOwnerId: string | null;
+  designDocOwnerId: string | null;
+  designPrototypeOwnerId: string | null;
+}
+
 export interface SeededPrd {
   id: string;
   title: string;
@@ -33,12 +73,34 @@ export interface SeededPrd {
   authorId: string;
   project: string;
   reviewerId: string | null;
+  interviewId: string | null;
+  validationScore: number | null;
+  testCase?: { id: string; status: string } | null;
+}
+
+export interface SeededDesignPrototype {
+  id: string;
+  prdId: string;
+  featureName: string;
+  status: string;
+  authorId: string;
+}
+
+export interface SeededDesignDoc {
+  id: string;
+  prdId: string;
+  title: string;
+  status: string;
+  authorId: string;
+  project: string;
+  validationScore: number | null;
 }
 
 export interface SeededComment {
   id: string;
   status: string;
   documentId: string;
+  documentType: string;
 }
 
 export interface SeededNotification {
@@ -46,6 +108,26 @@ export interface SeededNotification {
   userId: string;
   title: string;
   read: boolean;
+}
+
+export interface SeededApproverAssignment {
+  id: string;
+  documentId: string;
+  documentType: string;
+  approverUserId: string;
+  status: string;
+}
+
+export interface SeededProjectSettings {
+  id: string;
+  project: string;
+  friendlyName: string;
+  approvalMode: string;
+  prototypeStageEnabled: boolean;
+  prdValidationScoreThreshold: number | null;
+  designDocValidationScoreThreshold: number | null;
+  prdValidationSkillPath: string | null;
+  designDocValidationSkillPath: string | null;
 }
 
 export const SeedApi = {
@@ -57,9 +139,34 @@ export const SeedApi = {
     await post(request, '/reset');
   },
 
+  async seedInterview(
+    request: APIRequestContext,
+    opts: {
+      authorId: string;
+      project: string;
+      title: string;
+      status?: 'in_progress' | 'complete' | 'archived';
+      repo?: string;
+      prdOwnerId?: string;
+      designDocOwnerId?: string;
+      designPrototypeOwnerId?: string;
+      testCaseOwnerId?: string;
+      prdApproverIds?: string[];
+      designDocApproverIds?: string[];
+      designPrototypeApproverIds?: string[];
+      testCaseApproverIds?: string[];
+      prototypeStageEnabled?: boolean;
+      testCasesEnabled?: boolean;
+      skillSettingsId?: string;
+    },
+  ): Promise<SeededInterview> {
+    return post<SeededInterview>(request, '/seed/interview', opts);
+  },
+
   /**
-   * Create a PRD suitable for testing approval flows.
+   * Create a PRD suitable for testing approval / validation flows.
    * Automatically prefixes the title with "[E2E]".
+   * Pass `withReadyTestCases: true` to satisfy the PRD readiness gate.
    */
   async seedPrd(
     request: APIRequestContext,
@@ -67,8 +174,18 @@ export const SeedApi = {
       authorId: string;
       project: string;
       title: string;
-      status?: 'draft' | 'pending_review' | 'approved' | 'rejected';
+      status?: PrdStatus | 'rejected';
       reviewerId?: string;
+      interviewId?: string;
+      content?: string;
+      backlogJson?: unknown;
+      validationScore?: number | null;
+      validationScorecard?: unknown;
+      validationPhase?: string | null;
+      readinessOverride?: unknown;
+      withReadyTestCases?: boolean;
+      designDocApproverIds?: string[];
+      designPrototypeApproverIds?: string[];
     },
   ): Promise<SeededPrd> {
     return post<SeededPrd>(request, '/seed/prd', opts);
@@ -78,9 +195,77 @@ export const SeedApi = {
   async updatePrd(
     request: APIRequestContext,
     prdId: string,
-    patch_: { status?: string; reviewerId?: string; reviewedAt?: string; reviewComment?: string },
+    patch_: {
+      status?: string;
+      reviewerId?: string;
+      reviewedAt?: string;
+      reviewComment?: string;
+      validationScore?: number | null;
+      validationScorecard?: unknown;
+      validationPhase?: string | null;
+      readinessOverride?: unknown;
+      proposedContent?: string | null;
+    },
   ): Promise<SeededPrd> {
     return patch<SeededPrd>(request, `/seed/prd/${prdId}`, patch_);
+  },
+
+  async seedDesignPrototype(
+    request: APIRequestContext,
+    opts: {
+      prdId: string;
+      authorId: string;
+      featureName?: string;
+      featureIndex?: number;
+      status?: DesignPrototypeStatus;
+      mockHtml?: string;
+      reviewerId?: string;
+    },
+  ): Promise<SeededDesignPrototype> {
+    return post<SeededDesignPrototype>(request, '/seed/design-prototype', opts);
+  },
+
+  async seedDesignDoc(
+    request: APIRequestContext,
+    opts: {
+      prdId: string;
+      authorId: string;
+      project: string;
+      title: string;
+      status?: DesignDocStatus;
+      designPrototypeId?: string;
+      featureIndex?: number;
+      validationScore?: number | null;
+      validationScorecard?: unknown;
+      validationPhase?: string | null;
+      validationOverride?: unknown;
+      designContent?: string;
+      techSpecContent?: string;
+      assumptionsContent?: string;
+      reviewerId?: string;
+      proposedDesignContent?: string | null;
+    },
+  ): Promise<SeededDesignDoc> {
+    return post<SeededDesignDoc>(request, '/seed/design-doc', opts);
+  },
+
+  /**
+   * Add a review comment to any document type.
+   * Prefer this over seedPrdComment for new specs.
+   */
+  async seedReviewComment(
+    request: APIRequestContext,
+    opts: {
+      documentId: string;
+      documentType: 'prd' | 'design_doc' | 'design_prototype';
+      authorUserId: string;
+      body: string;
+      status?: 'open' | 'resolved';
+      sectionKey?: string;
+      selectorExact?: string;
+    },
+  ): Promise<SeededComment> {
+    return post<SeededComment>(request, '/seed/review-comment', opts);
   },
 
   /**
@@ -97,6 +282,48 @@ export const SeedApi = {
     },
   ): Promise<SeededComment> {
     return post<SeededComment>(request, '/seed/prd-comment', opts);
+  },
+
+  async seedApproverAssignments(
+    request: APIRequestContext,
+    opts: {
+      documentId: string;
+      documentType: 'prd' | 'design_doc' | 'design_prototype' | 'test_case';
+      approverUserIds: string[];
+      assignedBy: string;
+      status?: 'pending' | 'approved' | 'rejected';
+    },
+  ): Promise<SeededApproverAssignment[]> {
+    return post<SeededApproverAssignment[]>(request, '/seed/approver-assignments', opts);
+  },
+
+  async seedProjectSettings(
+    request: APIRequestContext,
+    opts: {
+      project: string;
+      friendlyName?: string;
+      skillRepo?: string;
+      skillBranch?: string;
+      isDefault?: boolean;
+      approvalMode?: 'any_one' | 'all_required';
+      prototypeStageEnabled?: boolean;
+      prdValidationSkillPath?: string | null;
+      designDocValidationSkillPath?: string | null;
+      prdValidationScoreThreshold?: number | null;
+      designDocValidationScoreThreshold?: number | null;
+      interviewSkillPath?: string | null;
+      prdSkillPath?: string | null;
+      designDocSkillPath?: string | null;
+      designPrototypeSkillPath?: string | null;
+      testCaseSkillPath?: string | null;
+      updatedBy?: string;
+      designDocApprovers?: string[];
+      prdApprovers?: string[];
+      designPrototypeApprovers?: string[];
+      testCaseApprovers?: string[];
+    },
+  ): Promise<SeededProjectSettings> {
+    return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
   },
 
   /**

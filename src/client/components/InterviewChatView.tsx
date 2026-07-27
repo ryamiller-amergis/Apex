@@ -1006,7 +1006,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   {interview.title}
                 </h1>
               )}
-              <span className={`${styles.badge} ${badgeClass(interview.status)}`}>
+              <span
+                className={`${styles.badge} ${badgeClass(interview.status)}`}
+                data-testid="interview-status-badge"
+              >
                 {badgeLabel(interview.status)}
               </span>
             </div>
@@ -1022,19 +1025,19 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               )}
             </div>
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
-              <div className={styles.ownerChips}>
+              <div className={styles.ownerChips} data-testid="interview-owner-chips">
                 {interview.prdOwnerName && (
-                  <span className={styles.ownerChip}>
+                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prd">
                     PRD: {interview.prdOwnerName}
                   </span>
                 )}
                 {interview.designDocOwnerName && (
-                  <span className={styles.ownerChip}>
+                  <span className={styles.ownerChip} data-testid="interview-owner-chip-design-doc">
                     Design Doc: {interview.designDocOwnerName}
                   </span>
                 )}
                 {interview.designPrototypeOwnerName && (
-                  <span className={styles.ownerChip}>
+                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prototype">
                     Design Prototype: {interview.designPrototypeOwnerName}
                   </span>
                 )}
@@ -1075,6 +1078,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Mark this interview as complete"
+                  data-testid="complete-interview-btn"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 8l3.5 3.5L13 4" />
@@ -1089,6 +1093,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'Cannot reopen — a PRD has already been generated' : 'Reopen this interview'}
+                  data-testid="reopen-interview-btn"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M13 3v4H9" />
@@ -1104,6 +1109,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Archive this interview"
+                  data-testid="archive-interview-btn"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="2" y="5" width="12" height="9" rx="1" />
@@ -1120,6 +1126,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'A PRD has already been generated for this interview' : 'Generate a PRD from this interview'}
+                  data-testid="generate-prd-btn"
                 >
                   {startChat.isPending || createPrd.isPending ? (
                     <>
