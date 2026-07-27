@@ -39,6 +39,8 @@ export interface SkillDetail extends SkillEntry {
 export interface SupportingFile {
   path: string;
   name: string;
+  /** True when this entry was added from the skill's apex-skill.json `managedFoundationFiles` list. */
+  isFoundationDep?: boolean;
 }
 
 export interface WikiInfo {

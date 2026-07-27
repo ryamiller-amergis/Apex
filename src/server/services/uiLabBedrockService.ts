@@ -1,5 +1,7 @@
+import { resolveLocalSkillBundle, resolveRemoteSkillBundle, logBundleDiagnostics } from './foundationSkillResolverService';
 import path from 'path';
-import fs, { readFileSync, existsSync } from 'fs';
+import fs from 'fs';
+const { existsSync, readFileSync } = fs;
 import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { retryWithBackoff } from '../utils/retry';
 import { getDesignSystemCatalog, getScreenInventory } from './designSystemService';
@@ -83,11 +85,35 @@ function isThrottleError(err: unknown): boolean {
 }
 
 function loadLocalSkill(): string {
+  // Pure local APEX adapter fallback (used when no uiLabSkillPath is configured)
   try {
     return fs.readFileSync(SKILL_PATH, 'utf-8');
   } catch {
     return '';
   }
+}
+
+async function loadUiLabSkillContent(
+  uiLabSkillPath?: string | null,
+  skillRepo?: string | null,
+  skillBranch?: string | null,
+  skillProvider?: 'ado' | 'github' | null,
+  project?: string | null,
+): Promise<string> {
+  if (uiLabSkillPath && skillRepo) {
+    const bundle = await resolveRemoteSkillBundle(
+      uiLabSkillPath,
+      'ui-lab',
+      { skillProvider: skillProvider ?? 'ado', skillRepo, skillBranch: skillBranch ?? 'main', project },
+      loadLocalSkill(),
+    );
+    logBundleDiagnostics('ui-lab (remote)', bundle);
+    return bundle.content;
+  }
+  // No configured path — use resolver with local APEX adapter as fallback
+  const bundle = resolveLocalSkillBundle('ui-lab', loadLocalSkill());
+  logBundleDiagnostics('ui-lab (local)', bundle);
+  return bundle.content;
 }
 
 function buildCatalogSection(): string {
@@ -106,11 +132,15 @@ async function buildContextSection(
   targetRoute?: string | null,
   featureText?: string,
   project?: string,
+  uiLabSkillPath?: string | null,
+  skillRepo?: string | null,
+  skillBranch?: string | null,
+  skillProvider?: 'ado' | 'github' | null,
 ): Promise<string> {
   const parts: string[] = [];
   const forApex = isApexProject(project);
 
-  const skillMarkdown = loadLocalSkill();
+  const skillMarkdown = await loadUiLabSkillContent(uiLabSkillPath, skillRepo, skillBranch, skillProvider, project);
   if (skillMarkdown.trim()) {
     parts.push(`## UI Lab Design System Standards\n\n${skillMarkdown.trim()}`);
   }
@@ -365,6 +395,12 @@ export interface UiLabGenerateOptions {
   onToken: (chunk: string) => void;
   project?: string;
   userId?: string;
+  /** Repo-relative path to a custom UI Lab SKILL.md (from project settings). */
+  uiLabSkillPath?: string | null;
+  /** Required when uiLabSkillPath is set — the skill repo to fetch from. */
+  skillRepo?: string | null;
+  skillBranch?: string | null;
+  skillProvider?: 'ado' | 'github' | null;
 }
 
 export interface UiLabEditOptions {
@@ -381,6 +417,11 @@ export interface UiLabEditOptions {
   onToken: (chunk: string) => void;
   project?: string;
   userId?: string;
+  /** Repo-relative path to a custom UI Lab SKILL.md (from project settings). */
+  uiLabSkillPath?: string | null;
+  skillRepo?: string | null;
+  skillBranch?: string | null;
+  skillProvider?: 'ado' | 'github' | null;
 }
 
 async function invokeStreaming(
@@ -540,7 +581,7 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
 
   const forApex = isApexProject(opts.project);
   const dsName  = forApex ? 'APEX' : 'MaxView';
-  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt, opts.project);
+  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt, opts.project, opts.uiLabSkillPath, opts.skillRepo, opts.skillBranch, opts.skillProvider);
   const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64, dsName);
 
   return invokeStreaming(
@@ -567,6 +608,10 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
     opts.targetRoute,
     opts.featureText ?? undefined,
     opts.project,
+    opts.uiLabSkillPath,
+    opts.skillRepo,
+    opts.skillBranch,
+    opts.skillProvider,
   );
   const prompt = buildEditPrompt(
     opts.instruction,

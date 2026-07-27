@@ -142,6 +142,10 @@ export async function runGeneration(
       onToken,
       project: design.project,
       userId,
+      uiLabSkillPath: skillConfig?.uiLabSkillPath ?? undefined,
+      skillRepo: skillConfig?.skillRepo ?? undefined,
+      skillBranch: skillConfig?.skillBranch ?? undefined,
+      skillProvider: skillConfig?.skillProvider ?? undefined,
     });
 
     const html = sanitizeMockHtml(extractHtml(rawHtml));
@@ -221,6 +225,10 @@ export async function runRegeneration(
       onToken,
       project: design.project,
       userId,
+      uiLabSkillPath: skillConfig?.uiLabSkillPath ?? undefined,
+      skillRepo: skillConfig?.skillRepo ?? undefined,
+      skillBranch: skillConfig?.skillBranch ?? undefined,
+      skillProvider: skillConfig?.skillProvider ?? undefined,
     });
 
     const html = sanitizeMockHtml(extractHtml(rawHtml));
