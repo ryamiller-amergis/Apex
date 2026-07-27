@@ -95,7 +95,17 @@ jest.mock('../services/teamsBotService', () => ({
 
 // ── Imports ───────────────────────────────────────────────────────────────────
 
-import { createThread, closeThread, permanentlyDeleteThread, markAsInterviewThread } from '../services/chatAgentService';
+import {
+  createThread,
+  closeThread,
+  permanentlyDeleteThread,
+  markAsInterviewThread,
+  buildMcpServers,
+  buildDocumentAssistantEditGuidance,
+  isDocumentAssistant,
+  resolveDocumentAssistantType,
+} from '../services/chatAgentService';
+import type { ChatThreadKickoff } from '../../shared/types/chat';
 
 const {
   deleteThread: mockPgDeleteThread,
@@ -265,5 +275,126 @@ describe('markAsInterviewThread', () => {
 
   it('is a no-op for a thread ID not present in memory', () => {
     expect(() => markAsInterviewThread('ghost-thread')).not.toThrow();
+  });
+});
+
+function baseKickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKickoff {
+  return {
+    project: 'Apex',
+    repo: 'org/AI-Pilot',
+    branch: 'main',
+    skillProvider: 'github',
+    ...overrides,
+  };
+}
+
+describe('document assistant MCP wiring', () => {
+  it('identifies ADR / PRD / design-doc assistant types', () => {
+    expect(isDocumentAssistant('adr')).toBe(true);
+    expect(isDocumentAssistant('prd')).toBe(true);
+    expect(isDocumentAssistant('design-doc')).toBe(true);
+    expect(isDocumentAssistant('calendar-work-item')).toBe(false);
+    expect(isDocumentAssistant(undefined)).toBe(false);
+  });
+
+  it('infers document assistant type from freeform context markers', () => {
+    expect(resolveDocumentAssistantType(baseKickoff({
+      freeformContext: '# ADR Assistant Context\nadr_id: adr-1\nthread_id: t-1',
+    }))).toBe('adr');
+    expect(resolveDocumentAssistantType(baseKickoff({
+      freeformContext: 'prd_id: prd-1\nthread_id: t-1',
+    }))).toBe('prd');
+    expect(resolveDocumentAssistantType(baseKickoff({
+      freeformContext: 'doc_id: doc-1\nthread_id: t-1',
+    }))).toBe('design-doc');
+  });
+
+  it('mounts both github-repo and ado-skills for GitHub ADR assistants', () => {
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'adr',
+        freeformContext: 'adr_id: adr-1\nthread_id: t-1',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(servers['github-repo']).toEqual({
+      url: 'http://localhost:3001/mcp/github-repo',
+    });
+    expect(servers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills',
+    });
+  });
+
+  it('mounts ado-skills for GitHub design-doc assistants inferred from freeform context', () => {
+    const servers = buildMcpServers(
+      baseKickoff({
+        freeformContext: 'doc_id: doc-1\nthread_id: t-1',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(servers['github-repo']).toBeDefined();
+    expect(servers['ado-skills']).toBeDefined();
+  });
+
+  it('does not mount ado-skills for plain GitHub free-chat threads', () => {
+    const servers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(servers['github-repo']).toBeDefined();
+    expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('still mounts only ado-skills for ADO-backed document assistants', () => {
+    const servers = buildMcpServers(
+      baseKickoff({
+        skillProvider: 'ado',
+        repo: 'Apex',
+        assistantType: 'prd',
+        freeformContext: 'prd_id: prd-1\nthread_id: t-1',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toBeDefined();
+  });
+});
+
+describe('buildDocumentAssistantEditGuidance', () => {
+  it('requires update_adr and forbids output-file fallbacks for ADR assistants', () => {
+    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
+      assistantType: 'adr',
+      freeformContext: 'adr_id: adr-1\nthread_id: thread-1',
+    })).join('\n');
+
+    expect(guidance).toContain('update_adr');
+    expect(guidance).toContain('adr_id:    adr-1');
+    expect(guidance).toContain('thread_id: thread-1');
+    expect(guidance).toContain('Do NOT write proposed ADR content to `.ai-pilot/output/`');
+    expect(guidance).toContain('staging tool is missing');
+  });
+
+  it('requires update_prd for PRD assistants', () => {
+    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
+      assistantType: 'prd',
+      freeformContext: 'prd_id: prd-1\nthread_id: thread-1',
+    })).join('\n');
+
+    expect(guidance).toContain('update_prd');
+    expect(guidance).toContain('Do NOT write proposed PRD/backlog content to `.ai-pilot/output/`');
+  });
+
+  it('requires update_design_doc for design-doc assistants', () => {
+    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
+      assistantType: 'design-doc',
+      freeformContext: 'doc_id: doc-1\nthread_id: thread-1',
+    })).join('\n');
+
+    expect(guidance).toContain('update_design_doc');
+    expect(guidance).toContain('Do NOT write proposed design-doc content to `.ai-pilot/output/`');
   });
 });

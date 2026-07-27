@@ -1,3 +1,8 @@
+import type { PrdReadinessOverride } from '../utils/prdReadiness';
+import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
+
+export type { PrdReadinessOverride };
+
 export type InterviewStatus = 'in_progress' | 'complete' | 'archived';
 
 export interface InterviewSummary {
@@ -81,6 +86,8 @@ export interface Prd extends PrdSummary {
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: PrdValidationBaseline | null;
+  /** Soft-blocker override allowing review despite unresolved readiness gaps. */
+  readinessOverride?: PrdReadinessOverride | null;
   /** Set while a single-comment Apex fix is in progress or awaiting review. */
   fixCommentId?: string | null;
 }
@@ -252,6 +259,17 @@ export interface PrdValidationBaseline {
 
 export type DesignDocStatus = 'generating' | 'generation_failed' | 'validating' | 'draft' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
 
+export interface DesignDocValidationOverride {
+  reason: string;
+  userId: string;
+  userDisplayName?: string;
+  at: string;
+  validationScore: number | null;
+  validationThreshold: number;
+  /** Full audit trail including the current override (newest last). */
+  history?: ValidationOverrideAuditEntry[];
+}
+
 export interface DesignDocSummary {
   id: string;
   prdId: string;
@@ -270,6 +288,8 @@ export interface DesignDocSummary {
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: ContentSnapshot | null;
+  /** Active validation-score override with audit history. */
+  validationOverride?: DesignDocValidationOverride | null;
   authorId: string;
   authorName?: string;
   ownerId?: string;

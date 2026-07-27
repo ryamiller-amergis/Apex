@@ -35,8 +35,3 @@
   border-bottom-color: var(--accent-color);
   color: var(--accent-color);
 }
-
-.disabledTab {
-  opacity: 0.55;
-  cursor: not-allowed;
-}

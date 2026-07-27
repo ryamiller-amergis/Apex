@@ -100,6 +100,7 @@ describe('LoadTestAiGeneratePanel', () => {
       script: "export default function() {}",
       suggested_thresholds: [{ metric: 'http_req_duration', expression: 'p(95)<500' }],
     });
+    expect(screen.getByTestId('load-test-ai-applied')).toHaveTextContent(/editor below/i);
   });
 
   it('AC-1: renders load-test-ai-error on failure and never calls onApply', () => {

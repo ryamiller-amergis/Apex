@@ -1,6 +1,7 @@
 jest.mock('../db/drizzle', () => {
   const where = jest.fn().mockResolvedValue(undefined);
   const set = jest.fn().mockReturnValue({ where });
+  const deleteWhere = jest.fn().mockResolvedValue(undefined);
   return {
     db: {
       query: {
@@ -9,7 +10,9 @@ jest.mock('../db/drizzle', () => {
         },
       },
       update: jest.fn().mockReturnValue({ set }),
+      delete: jest.fn().mockReturnValue({ where: deleteWhere }),
       _set: set,
+      _deleteWhere: deleteWhere,
     },
   };
 });
@@ -40,7 +43,7 @@ jest.mock('../services/groupService', () => ({
   listGroupsWithMembers: jest.fn(),
 }));
 
-import { updateAdrStatus } from '../services/adrService';
+import { deleteAdr, updateAdrStatus } from '../services/adrService';
 import { isApprovalComplete } from '../services/documentApprovalService';
 import { getUnresolvedCount } from '../services/reviewCommentService';
 import { recordOwnerApproval } from '../services/ownerApprovalService';
@@ -49,7 +52,9 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
     query: { adrs: { findFirst: jest.Mock } };
     update: jest.Mock;
+    delete: jest.Mock;
     _set: jest.Mock;
+    _deleteWhere: jest.Mock;
   };
 };
 
@@ -137,5 +142,45 @@ describe('updateAdrStatus', () => {
     }));
     expect(mockDb._set.mock.calls[0][0].content).toContain('## Status\n\nSuperseded');
     expect(recordOwnerApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteAdr', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.delete.mockReturnValue({ where: mockDb._deleteWhere });
+  });
+
+  it('deletes the ADR when the requesting user is the author', async () => {
+    mockDb.query.adrs.findFirst.mockResolvedValue({
+      id: 'adr-1',
+      authorId: 'owner-1',
+    });
+
+    await deleteAdr('adr-1', 'owner-1');
+
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(mockDb._deleteWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws 404 when ADR does not exist', async () => {
+    mockDb.query.adrs.findFirst.mockResolvedValue(null);
+
+    await expect(deleteAdr('adr-missing', 'owner-1')).rejects.toMatchObject({
+      message: 'ADR not found',
+    });
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('throws 403 when a non-author tries to delete', async () => {
+    mockDb.query.adrs.findFirst.mockResolvedValue({
+      id: 'adr-1',
+      authorId: 'owner-1',
+    });
+
+    await expect(deleteAdr('adr-1', 'other-user')).rejects.toMatchObject({
+      message: 'Only the author can modify this ADR',
+    });
+    expect(mockDb.delete).not.toHaveBeenCalled();
   });
 });

@@ -227,8 +227,10 @@ export async function stageAdrProposedContent(
 ): Promise<void> {
   const row = await requireAuthor(id, userId);
   if (row.status !== 'proposed') throw httpError('ADR edits can be proposed only while the ADR is proposed', 409);
-  if (row.adrAssistantThreadId !== threadId) throw httpError('Thread is not linked to this ADR assistant', 403);
+  // Always stage for the calling assistant thread. If the author started a new
+  // conversation, re-link so propose/review still works.
   await db.update(adrs).set({
+    adrAssistantThreadId: threadId,
     proposedContent: forceProposedStatus(content),
     fixCommentId: null,
     updatedAt: new Date().toISOString(),
@@ -250,11 +252,16 @@ export async function stageAdrReviewFix(
   }).where(eq(adrs.id, id));
 }
 
-export async function applyAdrProposedContent(id: string, userId: string): Promise<void> {
+export async function applyAdrProposedContent(
+  id: string,
+  userId: string,
+  options?: { mergedContent?: string },
+): Promise<void> {
   const row = await requireAuthor(id, userId);
   if (row.status !== 'proposed') throw httpError('Proposed edits can be applied only while the ADR is proposed', 409);
-  if (row.proposedContent == null) throw httpError('No proposed ADR edits to apply', 409);
-  const content = forceProposedStatus(row.proposedContent);
+  const source = options?.mergedContent ?? row.proposedContent;
+  if (source == null) throw httpError('No proposed ADR edits to apply', 409);
+  const content = forceProposedStatus(source);
   const metadata = parseFrontmatter(content);
   const now = new Date().toISOString();
   await db.update(adrs).set({

@@ -6,7 +6,7 @@ import { prds, appUsers, chatThreads, interviews, testCases, designDocs, designP
 
 const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
-import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
+import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -20,8 +20,9 @@ import { listDesignDocs } from '../services/designDocService';
 import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
+import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
-import { getTestCases, listLatestTestCaseSummariesForPrds } from './testCaseService';
+import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import {
@@ -308,6 +309,7 @@ export async function getPrd(id: string): Promise<Prd | null> {
     validationReportMd: row.validationReportMd ?? null,
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as PrdValidationBaseline | null) ?? null,
+    readinessOverride: (row.readinessOverride as PrdReadinessOverride | null) ?? null,
     prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
     validationScoreThreshold: skillConfig?.prdValidationScoreThreshold ?? null,
     fixCommentId: row.fixCommentId ?? null,
@@ -484,6 +486,7 @@ export async function submitForReview(
     {
       testCasesRequired,
       prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+      overriddenStates: (row.readinessOverride as PrdReadinessOverride | null)?.states,
     },
   );
   if (!readiness.readyForReviewActions) {
@@ -574,6 +577,7 @@ export async function reviewPrd(
     {
       testCasesRequired: reviewTestCasesRequired,
       prdValidationEnabled: !!reviewSkillConfig?.prdValidationSkillPath,
+      overriddenStates: (row.readinessOverride as PrdReadinessOverride | null)?.states,
     },
   );
   if (!readiness.readyForReviewActions) {
@@ -1394,10 +1398,18 @@ void assertValidPrdStatus;
 /**
  * Promote proposed PRD content/backlog to live, resolve related review comments,
  * sync backlog test-case counts, and re-run validation when configured.
+ *
+ * When `mergedContent` / `mergedBacklogJson` are provided (selective wizard Finish),
+ * those values are written to live instead of blindly COALESCE-ing the proposed columns.
  */
 export async function applyProposedPrdChanges(
   prdId: string,
-  options: { resolvedBy: string; fixCommentId?: string | null },
+  options: {
+    resolvedBy: string;
+    fixCommentId?: string | null;
+    mergedContent?: string;
+    mergedBacklogJson?: unknown;
+  },
 ): Promise<{ applied: boolean }> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -1415,18 +1427,59 @@ export async function applyProposedPrdChanges(
 
   const fixCommentId =
     options.fixCommentId !== undefined ? options.fixCommentId : prdRow.fixCommentId;
-  const backlogWillUpdate = prdRow.proposedBacklogJson != null;
 
-  await db.execute(sql`
-    UPDATE prds
-    SET content = COALESCE(proposed_content, content),
-        backlog_json = COALESCE(proposed_backlog_json, backlog_json),
-        proposed_content = NULL,
-        proposed_backlog_json = NULL,
-        fix_comment_id = NULL,
-        updated_at = NOW()
-    WHERE id = ${prdId}
-  `);
+  const useMerged =
+    options.mergedContent !== undefined || options.mergedBacklogJson !== undefined;
+
+  const backlogWillUpdate = useMerged
+    ? options.mergedBacklogJson !== undefined
+    : prdRow.proposedBacklogJson != null;
+
+  if (useMerged) {
+    // Write explicit merged values, then promote any remaining proposed side not in the payload.
+    await db
+      .update(prds)
+      .set({
+        ...(options.mergedContent !== undefined ? { content: options.mergedContent } : {}),
+        ...(options.mergedBacklogJson !== undefined
+          ? { backlogJson: options.mergedBacklogJson as any }
+          : {}),
+        proposedContent: null,
+        proposedBacklogJson: null,
+        fixCommentId: null,
+        updatedAt: new Date().toISOString(),
+      } as any)
+      .where(eq(prds.id, prdId));
+
+    if (options.mergedContent === undefined && prdRow.proposedContent != null) {
+      await db.execute(sql`
+        UPDATE prds
+        SET content = COALESCE(${prdRow.proposedContent}, content),
+            updated_at = NOW()
+        WHERE id = ${prdId}
+      `);
+    }
+    if (options.mergedBacklogJson === undefined && prdRow.proposedBacklogJson != null) {
+      await db
+        .update(prds)
+        .set({
+          backlogJson: prdRow.proposedBacklogJson as any,
+          updatedAt: new Date().toISOString(),
+        } as any)
+        .where(eq(prds.id, prdId));
+    }
+  } else {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          fix_comment_id = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
 
   if (backlogWillUpdate) {
     const { syncPrdBacklogTestCaseCounts } = await import('./testCaseService');
@@ -1459,9 +1512,20 @@ export async function applyProposedPrdChanges(
       );
   }
 
-  void autoStartPrdValidation(prdId).catch((err) =>
-    console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
-  );
+  // Never re-validate mid Fix-with-Apex — accept-fix owns that kickoff.
+  const afterApply = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { fixBaseline: true },
+  });
+  if (afterApply?.fixBaseline) {
+    console.log(
+      `[prd] Skipping autoStartPrdValidation after apply-proposed — fix session active (prdId=${prdId})`,
+    );
+  } else {
+    void autoStartPrdValidation(prdId).catch((err) =>
+      console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
+    );
+  }
 
   return { applied: true };
 }
@@ -1552,6 +1616,17 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       ].join('\n');
     },
     updateDbForValidationStart: async (threadId: string) => {
+      // Never clear/replace the displayed score while Fix-with-Apex owns the session.
+      const current = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { fixBaseline: true },
+      });
+      if (current?.fixBaseline) {
+        console.log(
+          `[prd] Skipping validation start write — fix session active (prdId=${prd.id})`,
+        );
+        return;
+      }
       await db.update(prds)
         .set({
           validationThreadId: threadId,
@@ -1565,6 +1640,22 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         .where(eq(prds.id, prd.id));
     },
     updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
+      // Stale watchers must not flip validationScore mid Fix-with-Apex review.
+      const current = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { fixBaseline: true, status: true },
+      });
+      if (current?.fixBaseline) {
+        console.log(
+          `[prd] Skipping validation result write — fix session active (prdId=${prd.id})`,
+        );
+        if (current.status === 'validating') {
+          await db.update(prds)
+            .set({ status: 'draft', updatedAt: new Date().toISOString() })
+            .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+        }
+        return;
+      }
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
       const kickoff = newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
@@ -1622,6 +1713,15 @@ export async function autoStartPrdValidation(prdId: string): Promise<void> {
   const prd = await getPrd(prdId);
   if (!prd) return;
 
+  // Fix-with-Apex owns re-validation via acceptFixPrdValidation. Do not kick off
+  // a validation thread while the agent is still applying (or awaiting review of) edits.
+  if (prd.fixBaseline) {
+    console.log(
+      `[prd] Skipping autoStartPrdValidation — fix session active (prdId=${prdId})`,
+    );
+    return;
+  }
+
   const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
   if (!skillConfig?.prdValidationSkillPath) return;
 
@@ -1649,6 +1749,17 @@ export async function cancelPrdValidation(prdId: string, requestingUserId: strin
 export async function syncPrdValidationResult(prdId: string): Promise<{ score: number | null; is_ready: boolean } | null> {
   const prd = await getPrd(prdId);
   if (!prd || !prd.validationThreadId) return null;
+
+  // Fix-with-Apex review must keep the pre-fix score until Accept & Re-validate.
+  if (prd.fixBaseline) {
+    console.log(
+      `[prd] Skipping syncPrdValidationResult — fix session active (prdId=${prdId})`,
+    );
+    return {
+      score: prd.validationScore ?? null,
+      is_ready: prd.validationScorecard?.is_ready ?? false,
+    };
+  }
 
   const { readOutputValidationScorecard, readOutputValidationScorecardMd } = await import('./chatAgentService');
   const scorecardRaw = readOutputValidationScorecard(prd.validationThreadId);
@@ -1774,8 +1885,15 @@ export async function triggerFixPrdValidation(
   }
 
   baseline.fixThreadId = threadId;
+  // Clear leftover proposed drafts so Fix-with-Apex owns the accept/revert UX
+  // (live writes via update_prd in fix mode; no parallel proposed-changes banner).
   await db.update(prds)
-    .set({ fixBaseline: baseline, updatedAt: new Date().toISOString() })
+    .set({
+      fixBaseline: baseline,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
     .where(eq(prds.id, prdId));
 
   const scorecard = prd.validationScorecard;
@@ -1817,6 +1935,22 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!row) throw notFound('PRD not found');
 
+  // Promote any residual proposed drafts (older assistant path) before clearing
+  // the fix session — fix-mode MCP writes are already live.
+  const hasProposed =
+    row.proposedContent != null || row.proposedBacklogJson != null;
+  if (hasProposed) {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
+
   await db.update(prds)
     .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
     .where(eq(prds.id, prdId));
@@ -1826,6 +1960,239 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
   );
 
   await autoStartPrdValidation(prdId);
+}
+
+/**
+ * Record an authorized readiness override so review can proceed despite unresolved gaps.
+ * Captures the currently blocking readiness state(s) for audit.
+ */
+export async function overridePrdReadiness(
+  prdId: string,
+  userId: string,
+  reason: string,
+  userDisplayName?: string,
+): Promise<PrdReadinessOverride> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    const err = new Error('A reason is required to override readiness');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const prd = await getPrd(prdId);
+  if (!prd) throw notFound('PRD not found');
+  if (prd.status !== 'draft' && prd.status !== 'revision_requested' && prd.status !== 'pending_review') {
+    throw conflict(`Cannot override readiness from status '${prd.status}'`);
+  }
+
+  const skillConfig = await resolveSkillConfig({
+    project: prd.project,
+    settingsId: prd.skillSettingsId ?? undefined,
+  });
+  const readiness = derivePrdReadiness(
+    {
+      status: prd.status,
+      content: prd.content,
+      validationScore: prd.validationScore,
+      validationScorecard: prd.validationScorecard,
+    },
+    await getTestCases(prdId),
+    skillConfig?.prdValidationScoreThreshold ?? undefined,
+    {
+      testCasesRequired: prd.testCasesRequired !== false,
+      prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    },
+  );
+
+  if (readiness.readyForReviewActions) {
+    throw conflict('PRD is already ready for review; no override is needed');
+  }
+
+  const priorStates = prd.readinessOverride?.states ?? [];
+  const states = Array.from(new Set([...priorStates, readiness.state]));
+  const at = new Date().toISOString();
+  const trimmedName = userDisplayName?.trim();
+  const summary = `Overrode readiness state: ${readiness.state.replace(/_/g, ' ')}`;
+  const history = buildOverrideHistory(
+    prd.readinessOverride,
+    {
+      reason: trimmed,
+      userId,
+      ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+      at,
+      summary,
+    },
+    prd.readinessOverride
+      ? `Overrode readiness state(s): ${(prd.readinessOverride.states ?? []).join(', ').replace(/_/g, ' ')}`
+      : summary,
+  );
+  const override: PrdReadinessOverride = {
+    reason: trimmed,
+    userId,
+    ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+    at,
+    states,
+    history,
+  };
+
+  await db.update(prds)
+    .set({ readinessOverride: override, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  return override;
+}
+
+export async function triggerFixCoverageGaps(
+  prdId: string,
+  userId: string,
+): Promise<{ threadId: string }> {
+  const prd = await getPrd(prdId);
+  if (!prd) throw notFound('PRD not found');
+
+  if (prd.status !== 'draft' && prd.status !== 'revision_requested') {
+    throw conflict(`Cannot fix coverage from status '${prd.status}'`);
+  }
+
+  const uncovered = await getUncoveredCoverageItems(prdId);
+  if (uncovered.length === 0) {
+    throw conflict('No uncovered acceptance criteria or business rules to fix');
+  }
+
+  const baseline: PrdValidationBaseline = {
+    content: prd.content || '',
+    backlogJson: prd.backlogJson,
+    capturedAt: new Date().toISOString(),
+  };
+
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+  const globalModel = await getDefaultModel();
+  const model = skillConfig?.prdAssistantModel ?? globalModel;
+
+  let threadId = prd.prdAssistantThreadId ?? null;
+
+  if (!threadId) {
+    const context = [
+      '# PRD Assistant Context',
+      `prd_id: ${prdId}`,
+      '',
+      '> Use the `update_prd` MCP tool to apply edits back to the database.',
+      '> Use the `add_test_case` MCP tool to add real QA test cases with steps and traceability.',
+      '',
+      '## PRD Content',
+      prd.content || '(empty)',
+      '',
+      '## Backlog JSON',
+      '```json',
+      JSON.stringify(prd.backlogJson ?? {}, null, 2),
+      '```',
+    ].join('\n');
+
+    const thread = await createChatThread(userId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
+      skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
+      freeformContext: context,
+      model,
+    }, { skipAutoKickoff: true });
+
+    threadId = thread.id;
+    await db.update(prds)
+      .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(prds.id, prdId));
+  }
+
+  baseline.fixThreadId = threadId;
+  await db.update(prds)
+    .set({
+      fixBaseline: baseline,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+
+  const acItems = uncovered.filter((i) => i.kind === 'acceptance_criteria');
+  const brItems = uncovered.filter((i) => i.kind === 'business_rule');
+
+  const prompt = [
+    '# Fix PRD Test-Case Coverage Gaps',
+    '',
+    `There are **${uncovered.length}** uncovered item(s) (${acItems.length} acceptance criteria, ${brItems.length} business rules).`,
+    '',
+    '## Your Task',
+    '',
+    'Add QA test cases that cover every uncovered item below. For each item, call the `add_test_case` MCP tool with:',
+    '- `pbiId` — the PBI id for the item',
+    '- `title` — a clear test-case title',
+    '- `steps` — an ordered array of concrete test steps',
+    '- `acceptanceCriteriaIndex` and/or `businessRules` — full traceability for the uncovered item',
+    '',
+    'Do NOT only bump counts via `update_prd`. Prefer `add_test_case` so coverage is recalculated from real cases.',
+    '',
+    BACKLOG_USER_TYPE_CONVENTIONS_MD,
+    '',
+    '## Uncovered Acceptance Criteria',
+    '',
+    ...(acItems.length === 0
+      ? ['(none)', '']
+      : acItems.map((item, i) => [
+          `### AC ${i + 1}`,
+          `- **PBI ID:** ${item.pbiId ?? '(unknown)'}`,
+          `- **Index:** ${item.index ?? '(unknown)'}`,
+          `- **Text:** ${item.text ?? '(no text)'}`,
+          '',
+        ].join('\n'))),
+    '## Uncovered Business Rules',
+    '',
+    ...(brItems.length === 0
+      ? ['(none)', '']
+      : brItems.map((item, i) => [
+          `### BR ${i + 1}`,
+          `- **Rule ID:** ${item.id ?? '(unknown)'}`,
+          `- **PBI ID:** ${item.pbiId ?? '(n/a)'}`,
+          `- **Text:** ${item.text ?? '(no text)'}`,
+          '',
+        ].join('\n'))),
+  ].join('\n');
+
+  void sendMessage(threadId, prompt).catch((err) => {
+    console.error(`[prd] fix-coverage sendMessage error for thread ${threadId}:`, err);
+  });
+
+  return { threadId };
+}
+
+export async function acceptFixCoverageGaps(prdId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+
+  // Same as acceptFixPrdValidation: promote residual proposed drafts so coverage
+  // fix reviewing never requires a second Accept Changes click.
+  const hasProposed =
+    row.proposedContent != null || row.proposedBacklogJson != null;
+  if (hasProposed) {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
+
+  await recalculateTestCaseCoverage(prdId);
+
+  await db.update(prds)
+    .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  notifyAiCompletion('prd_fix_complete', prdId, { title: row.title }).catch(err =>
+    console.error(`[prdFixCoverage] AI notification failed (prdId=${prdId}):`, err),
+  );
 }
 
 export async function revertPrdSection(prdId: string, requestingUserId: string): Promise<void> {
@@ -1843,6 +2210,31 @@ export async function revertPrdSection(prdId: string, requestingUserId: string):
       content: baseline.content,
       backlogJson: baseline.backlogJson as any,
       fixBaseline: null,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+}
+
+/**
+ * Clear a Fix-with-Apex session without restoring baseline or re-validating.
+ * Keeps current live content (including no-op sessions) so Fix with Apex returns.
+ */
+export async function dismissPrdFixSession(prdId: string, requestingUserId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author can dismiss a fix session');
+  }
+
+  if (!row.fixBaseline) throw conflict('No active fix session to dismiss');
+
+  await db.update(prds)
+    .set({
+      fixBaseline: null,
+      proposedContent: null,
+      proposedBacklogJson: null,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, prdId));

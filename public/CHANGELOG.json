@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.35.0",
+    "date": "2026-07-26",
+    "title": "Validation Overrides & Review UX",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Authorized users can override PRD readiness blockers (e.g. coverage or validation gaps) with a required reason and proceed to review"
+      },
+      {
+        "type": "feature",
+        "description": "Authorized users can override a failing design-doc validation score with a required reason and continue the approval flow"
+      },
+      {
+        "type": "feature",
+        "description": "Override audit history shows who overrode, when, what was overridden, and why — for both PRD readiness and design-doc validation"
+      },
+      {
+        "type": "feature",
+        "description": "Step-by-step Change Review wizard lets you accept, reject, or regenerate each proposed AI change (PRD, design doc, and ADR) before applying"
+      },
+      {
+        "type": "feature",
+        "description": "ADRs can be permanently deleted from the dashboard and chat view (requires adr:delete)"
+      },
+      {
+        "type": "improvement",
+        "description": "PRD fix review gets a sticky action strip with score/readiness chips, progress, Continue review, Accept all & re-validate, and Revert"
+      },
+      {
+        "type": "improvement",
+        "description": "Load Test definition builder streamlines AI generate / raw script mode switching and unavailable-state messaging"
+      }
+    ]
+  },
+  {
     "version": "1.34.0",
     "date": "2026-07-15",
     "title": "Calendar Work-Item Assistant",

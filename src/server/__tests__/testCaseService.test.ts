@@ -65,6 +65,7 @@ import {
   readOutputTestCasesMd,
   syncTestCaseOutput,
   triggerTestCaseGeneration,
+  extractUncoveredCoverageItems,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -396,6 +397,42 @@ describe('testCaseService', () => {
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('extractUncoveredCoverageItems', () => {
+    it('returns uncovered AC and BR entries from coverageMatrix', () => {
+      const items = extractUncoveredCoverageItems({
+        coverageMatrix: {
+          acceptanceCriteria: [
+            { pbiId: 'PBI-1', index: 0, text: 'Covered AC', covered: true },
+            { pbiId: 'PBI-1', index: 1, text: 'Missing AC', covered: false },
+          ],
+          businessRules: [
+            { id: 'BR-1', text: 'Covered BR', covered: true },
+            { id: 'BR-2', text: 'Missing BR', covered: false },
+          ],
+        },
+      });
+
+      expect(items).toEqual([
+        {
+          kind: 'acceptance_criteria',
+          pbiId: 'PBI-1',
+          index: 1,
+          text: 'Missing AC',
+        },
+        {
+          kind: 'business_rule',
+          id: 'BR-2',
+          pbiId: undefined,
+          text: 'Missing BR',
+        },
+      ]);
+    });
+
+    it('returns an empty array when there is no coverage matrix', () => {
+      expect(extractUncoveredCoverageItems({ suites: [] })).toEqual([]);
     });
   });
 });

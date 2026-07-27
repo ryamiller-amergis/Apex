@@ -14,6 +14,7 @@ import {
   useAssignAdrReviewers,
   useCreateAdrComment,
   useCreateAdr,
+  useDeleteAdr,
   useDeleteAdrComment,
   useFixAdrCommentWithAi,
   useFixAdrWithAi,
@@ -32,6 +33,7 @@ import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
@@ -265,6 +267,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [newCommentBody, setNewCommentBody] = useState('');
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
   const [reviewerModalOpen, setReviewerModalOpen] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
@@ -280,6 +283,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   });
   const generateAdr = useGenerateAdr();
   const updateAdr = useUpdateAdr();
+  const deleteAdr = useDeleteAdr();
   const createComment = useCreateAdrComment(id);
   const replyToComment = useReplyToAdrComment(id);
   const resolveComment = useResolveAdrComment(id);
@@ -501,6 +505,23 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               Mark Superseded
             </button>
           )}
+          {isAuthor && can('adr:delete') && (
+            <button
+              className={styles.actionBtnDanger}
+              onClick={() => setShowDeleteModal(true)}
+              disabled={deleteAdr.isPending}
+              type="button"
+              title="Delete this ADR"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 4 4 4 14 4" />
+                <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                <path d="M6.5 7v4M9.5 7v4" />
+                <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+              </svg>
+              Delete
+            </button>
+          )}
         </div>
       </div>
       {error && (
@@ -538,6 +559,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         adrId={adr.id}
         currentContent={adr.content}
         proposedContent={adr.proposedContent}
+        fixCommentId={adr.fixCommentId}
       />
       {adr.content && (
         <div className={styles.adrReviewLayout}>
@@ -729,6 +751,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               onError: (caught) => setError(caught.message),
             });
           }}
+        />
+      )}
+      {showDeleteModal && (
+        <ConfirmDeleteModal
+          title="Delete ADR"
+          itemName={adr.title}
+          description="Are you sure you want to permanently delete the ADR"
+          isPending={deleteAdr.isPending}
+          onConfirm={() => {
+            deleteAdr.mutate(id, {
+              onSuccess: () => navigate('/adr'),
+            });
+          }}
+          onCancel={() => setShowDeleteModal(false)}
         />
       )}
     </div>

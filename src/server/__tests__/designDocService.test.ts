@@ -107,6 +107,7 @@ import {
   syncDesignDocContent,
   syncValidationResult,
   markValidationReady,
+  overrideDesignDocValidation,
   startDesignDocWatcher,
   startSingleFeatureDocWatcher,
   startSingleFeatureDesignDocWatcher,
@@ -1022,6 +1023,85 @@ describe('reviewDesignDoc (approve with validation gate)', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'reviewer_approved', reviewerId: 'user-reviewer' }),
     );
+  });
+
+  it('allows approve below threshold when a validation override is recorded', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({
+        status: 'pending_review',
+        authorId: 'user-author',
+        validationScore: 55,
+        validationOverride: {
+          reason: 'Accepted residual risk',
+          userId: 'user-admin',
+          userDisplayName: 'Admin',
+          at: '2026-07-26T12:00:00.000Z',
+          validationScore: 55,
+          validationThreshold: 90,
+          history: [
+            {
+              reason: 'Accepted residual risk',
+              userId: 'user-admin',
+              userDisplayName: 'Admin',
+              at: '2026-07-26T12:00:00.000Z',
+              summary: 'Overrode validation score 55% (threshold 90%)',
+            },
+          ],
+        },
+      }),
+    );
+    mockGetSkillConfig.mockResolvedValue({ designDocValidationSkillPath: '/skills/validate.md' });
+    mockIsAssignedApprover.mockResolvedValue(true);
+    mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await reviewDesignDoc('doc-1', 'user-reviewer', { action: 'approve' });
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'reviewer_approved', reviewerId: 'user-reviewer' }),
+    );
+  });
+});
+
+describe('overrideDesignDocValidation', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('stores an audited override with history', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({ status: 'pending_review', validationScore: 40 }),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      designDocValidationSkillPath: '/skills/validate.md',
+      designDocValidationScoreThreshold: 90,
+    });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const override = await overrideDesignDocValidation('doc-1', 'user-1', 'Need to ship', 'Ada');
+
+    expect(override.reason).toBe('Need to ship');
+    expect(override.userDisplayName).toBe('Ada');
+    expect(override.history).toHaveLength(1);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        validationOverride: expect.objectContaining({
+          reason: 'Need to ship',
+          history: expect.arrayContaining([
+            expect.objectContaining({ reason: 'Need to ship', summary: expect.stringContaining('40%') }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('requires a reason', async () => {
+    await expect(overrideDesignDocValidation('doc-1', 'user-1', '   ')).rejects.toMatchObject({
+      message: expect.stringContaining('reason is required'),
+      status: 400,
+    });
   });
 });
 

@@ -21,8 +21,10 @@ interface LoadTestAiGeneratePanelProps {
  *
  * Flow-hints input + Generate/Cancel + streaming preview; applies the
  * result into shared form state via `onApply` once the backend reports
- * status 'ready'. Errors and cancellation never call `onApply`, so prior
- * builder content (script/thresholds) is left untouched (AC-1).
+ * status 'ready'. Lives on the Raw script tab above the editor so the
+ * author can review the generated script in place. Errors and cancellation
+ * never call `onApply`, so prior builder content (script/thresholds) is
+ * left untouched (AC-1).
  */
 export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = ({
   project,
@@ -131,7 +133,7 @@ export const LoadTestAiGeneratePanel: React.FC<LoadTestAiGeneratePanelProps> = (
 
       {status === 'ready' && result && (
         <p className={styles.successNote} role="status" data-testid="load-test-ai-applied">
-          Script and suggested thresholds applied below — review before saving.
+          Script and suggested thresholds applied to the editor below — review before saving.
         </p>
       )}
 

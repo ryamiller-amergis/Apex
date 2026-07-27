@@ -75,6 +75,10 @@ test.describe('Calendar and work items @smoke', () => {
     }
     await expect(calendarNav).toBeVisible({ timeout: 8_000 });
 
+    // Wait for sidebar hydration + dismiss What's New / changelog overlays that
+    // auto-open on deployed after permissions load (they intercept nav clicks).
+    await sidebar.waitForReady();
+
     const calendar = new CalendarPage(page);
     await sidebar.clickModule('calendar');
     await calendar.waitForReady();

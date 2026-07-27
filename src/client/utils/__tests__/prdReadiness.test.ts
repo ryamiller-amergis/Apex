@@ -248,6 +248,45 @@ describe('derivePrdReadiness', () => {
     );
   });
 
+  it('shows validating readiness while status is validating even with a stale failed scorecard', () => {
+    const readiness = derivePrdReadiness(
+      {
+        status: 'validating',
+        content: '# Generated PRD',
+        validationScore: 69,
+        validationScorecard: {
+          is_ready: false,
+          overall_score: 69,
+          ready_threshold: 90,
+        },
+      },
+      makeTestCase({
+        validationStatus: 'not_available',
+        validationSummary: { status: 'not_available' },
+      }),
+      undefined,
+      { prdValidationEnabled: true },
+    );
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'prd_validating',
+        label: 'Validating PRD',
+        severity: 'info',
+        readyForReviewActions: false,
+        blockingReason: 'PRD validation must finish before review.',
+      }),
+    );
+    expect(readiness.qaFailures).toEqual([]);
+    expect(getStage(readiness, 'validation')).toEqual(
+      expect.objectContaining({
+        label: 'Validating PRD',
+        status: 'current',
+        detail: 'PRD validation is running.',
+      }),
+    );
+  });
+
   it('distinguishes validation failures from generation and coverage failures', () => {
     const readiness = derivePrdReadiness(
       generatedPrd,
@@ -317,6 +356,65 @@ describe('derivePrdReadiness', () => {
         label: 'Validation pending',
         status: 'current',
         detail: 'Run PRD validation before review.',
+      }),
+    );
+  });
+
+  it('allows review when coverage_gaps is overridden', () => {
+    const readiness = derivePrdReadiness(
+      generatedPrd,
+      makeTestCase({
+        coverageSummary: {
+          totalCases: 10,
+          pbisCovered: 1,
+          acCovered: '3/4',
+          brCovered: '4/4',
+          gaps: 0,
+        },
+        validationStatus: 'not_available',
+        validationSummary: { status: 'not_available' },
+      }),
+      undefined,
+      {
+        prdValidationEnabled: true,
+        overriddenStates: ['coverage_gaps'],
+      },
+    );
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'coverage_gaps',
+        label: 'Proceeding with unresolved gaps',
+        severity: 'warning',
+        readyForReviewActions: true,
+        overridden: true,
+      }),
+    );
+    expect(readiness.blockingReason).toBeUndefined();
+  });
+
+  it('allows review when validation_failed is overridden', () => {
+    const readiness = derivePrdReadiness(
+      {
+        ...generatedPrd,
+        validationScore: 70,
+        validationScorecard: { is_ready: false, overall_score: 70, ready_threshold: 90 },
+      },
+      makeTestCase(),
+      90,
+      {
+        prdValidationEnabled: true,
+        overriddenStates: ['validation_failed'],
+      },
+    );
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        state: 'validation_failed',
+        label: 'Proceeding with unresolved gaps',
+        severity: 'warning',
+        readyForReviewActions: true,
+        overridden: true,
       }),
     );
   });

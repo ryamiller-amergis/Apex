@@ -28,7 +28,11 @@ import {
   useRefreshPrdValidation,
   useFixPrdValidation,
   useAcceptFixPrdValidation,
+  useFixPrdCoverage,
+  useAcceptFixPrdCoverage,
+  useOverridePrdReadiness,
   useRevertPrdSection,
+  useDismissPrdFixSession,
   usePrdValidationReport,
   useGenerateTestCases,
   useRecalculateTestCaseCoverage,
@@ -37,6 +41,8 @@ import {
   useOwnerApprove,
   useOwnerApproval,
   useActiveUsers,
+  useApplyProposedPrd,
+  useRejectProposedPrd,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -47,33 +53,44 @@ import {
   useDeleteComment,
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
+import { PrdFixActionStrip } from './PrdFixActionStrip';
+import type { PrdFixActionStripProgress } from './PrdFixActionStrip';
 import { usePrototypesForPrd, useGeneratePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { useDesignPlan } from '../hooks/useDesignPlan';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import { ReviewReasonModal } from './ReviewReasonModal';
+import { ValidationOverrideAudit } from './ValidationOverrideAudit';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewerApprovalChecklist } from './ReviewerApprovalChecklist';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
-import { FixingProgressView } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
-import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary } from '../../shared/types/interview';
+import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
 import {
+  isPrdFixFlowOwningAccept,
   isPrdSingleCommentFixPending,
+  isPrdUnchangedFromFixBaseline,
   prdHasProposedChanges,
 } from '../utils/apexFixHelpers';
 import {
+  APEX_FIX_TIMEOUT_MS,
+  agentErrorFromChatThreadStatus,
+  cancelChatThread,
   clearApexFixInProgress,
   fetchChatThreadStatus,
+  isTerminalChatThreadStatus,
   markApexFixInProgress,
   readApexFixInProgress,
+  type ApexFixSessionScope,
 } from '../utils/apexFixSession';
 import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   derivePrdReadiness,
   type PrdReadiness,
+  type PrdReadinessOverride,
   type PrdReadinessSeverity,
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
@@ -86,24 +103,27 @@ import styles from './PrdReviewView.module.css';
 
 type TabId = 'preview' | 'backlog' | 'validation';
 
+type PrdFixKind = 'validation' | 'coverage';
+
 type PrdFixFlowState =
   | { phase: 'idle' }
-  | { phase: 'fixing'; baseline: PrdValidationBaseline; threadId: string }
-  | { phase: 'reviewing'; baseline: PrdValidationBaseline; threadId: string; agentError?: string };
+  | { phase: 'fixing'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string }
+  | { phase: 'reviewing'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string; agentError?: string };
 
 type PrdFixFlowAction =
-  | { type: 'START_FIX'; baseline: PrdValidationBaseline; threadId: string }
+  | { type: 'START_FIX'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string }
   | { type: 'FIX_COMPLETE'; agentError?: string }
   | { type: 'RESET' };
 
 function prdFixFlowReducer(state: PrdFixFlowState, action: PrdFixFlowAction): PrdFixFlowState {
   switch (action.type) {
     case 'START_FIX':
-      return { phase: 'fixing', baseline: action.baseline, threadId: action.threadId };
+      return { phase: 'fixing', kind: action.kind, baseline: action.baseline, threadId: action.threadId };
     case 'FIX_COMPLETE':
       if (state.phase !== 'fixing') return state;
       return {
         phase: 'reviewing',
+        kind: state.kind,
         baseline: state.baseline,
         threadId: state.threadId,
         agentError: action.agentError,
@@ -113,6 +133,10 @@ function prdFixFlowReducer(state: PrdFixFlowState, action: PrdFixFlowAction): Pr
     default:
       return state;
   }
+}
+
+function fixSessionScope(kind: PrdFixKind): ApexFixSessionScope {
+  return kind === 'coverage' ? 'prd-coverage' : 'prd-validation';
 }
 
 /* ── User-story projection (read-only, derived from the backlog) ──────────────── */
@@ -269,6 +293,7 @@ function formatCoverageSummary(summary: TestCaseCoverageSummary): string[] {
 }
 
 function shouldDefaultReadinessExpanded(readiness: PrdReadiness): boolean {
+  if (readiness.overridden) return true;
   if (readiness.blockingReason) return true;
   if (readiness.qaFailures.length > 0) return true;
   return readiness.severity === 'error' || readiness.severity === 'warning';
@@ -277,7 +302,10 @@ function shouldDefaultReadinessExpanded(readiness: PrdReadiness): boolean {
 const PrdReadinessPanel: React.FC<{
   readiness: PrdReadiness;
   coverage?: TestCaseCoverageSummary | null;
-}> = ({ readiness, coverage }) => {
+  override?: PrdReadinessOverride | null;
+  overrideUserName?: string | null;
+  actions?: React.ReactNode;
+}> = ({ readiness, coverage, override, overrideUserName, actions }) => {
   const [expanded, setExpanded] = useState(() => shouldDefaultReadinessExpanded(readiness));
 
   return (
@@ -308,6 +336,11 @@ const PrdReadinessPanel: React.FC<{
         {!expanded && readiness.blockingReason && (
           <span className={styles.readinessCollapsedHint}>{readiness.blockingReason}</span>
         )}
+        {!expanded && readiness.overridden && override && (
+          <span className={styles.readinessCollapsedHint}>
+            Overridden by {override.userDisplayName ?? overrideUserName ?? override.userId}
+          </span>
+        )}
       </button>
 
       {expanded && (
@@ -316,6 +349,13 @@ const PrdReadinessPanel: React.FC<{
             <div className={styles.readinessDescription}>{readiness.description}</div>
             {readiness.blockingReason && (
               <div className={styles.readinessBlocker}>{readiness.blockingReason}</div>
+            )}
+            {readiness.overridden && override && (
+              <ValidationOverrideAudit
+                override={override}
+                legacySummary={`Overrode readiness state(s): ${(override.states ?? []).join(', ').replace(/_/g, ' ')}`}
+                title="Override audit history"
+              />
             )}
           </div>
 
@@ -354,6 +394,8 @@ const PrdReadinessPanel: React.FC<{
               )}
             </div>
           )}
+
+          {actions && <div className={styles.readinessActions}>{actions}</div>}
         </>
       )}
     </div>
@@ -388,6 +430,7 @@ export const PrdReviewView: React.FC = () => {
     ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
         testCasesRequired,
         prdValidationEnabled: prd.prdValidationEnabled === true,
+        overriddenStates: prd.readinessOverride?.states,
       })
     : null;
 
@@ -403,6 +446,8 @@ export const PrdReviewView: React.FC = () => {
   const syncAdoStatus = useSyncPrdAdoStatus(id);
   const fixWithAi = useFixPrdWithAi(id ?? '');
   const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
+  const applyProposedPrd = useApplyProposedPrd(id ?? '');
+  const rejectProposedPrd = useRejectProposedPrd(id ?? '');
 
   const generateTestCases = useGenerateTestCases();
   const recalculateTestCaseCoverage = useRecalculateTestCaseCoverage();
@@ -413,7 +458,11 @@ export const PrdReviewView: React.FC = () => {
   const refreshPrdValidation = useRefreshPrdValidation();
   const fixPrdValidation = useFixPrdValidation();
   const acceptFixPrdValidation = useAcceptFixPrdValidation();
+  const fixPrdCoverage = useFixPrdCoverage();
+  const acceptFixPrdCoverage = useAcceptFixPrdCoverage();
+  const overridePrdReadiness = useOverridePrdReadiness();
   const revertPrdSection = useRevertPrdSection();
+  const dismissPrdFixSession = useDismissPrdFixSession();
   const { data: validationReport } = usePrdValidationReport(
     id,
     prd?.validationThreadId,
@@ -421,6 +470,23 @@ export const PrdReviewView: React.FC = () => {
   );
 
   const [prdFixFlow, prdFixFlowDispatch] = useReducer(prdFixFlowReducer, { phase: 'idle' });
+  const [fixIdleNotice, setFixIdleNotice] = useState<string | null>(null);
+  const fixCompletionInFlightRef = useRef(false);
+  const [fixReviewModalOpen, setFixReviewModalOpen] = useState(false);
+  const [fixReviewProgress, setFixReviewProgress] = useState<PrdFixActionStripProgress>({
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    total: 0,
+  });
+  const [proposedReviewModalOpen, setProposedReviewModalOpen] = useState(false);
+  const [proposedReviewProgress, setProposedReviewProgress] = useState<PrdFixActionStripProgress>({
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    total: 0,
+  });
+  const didAutoOpenProposedRef = useRef(false);
 
   const [activeTab, setActiveTab] = useState<TabId>('preview');
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
@@ -469,6 +535,7 @@ export const PrdReviewView: React.FC = () => {
   const [showAdoModal, setShowAdoModal] = useState(false);
   const [showApprovalsModal, setShowApprovalsModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -838,8 +905,20 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, fixWithAi]);
 
+  const handleAcceptAllProposed = useCallback(() => {
+    if (!id) return;
+    applyProposedPrd.mutate();
+  }, [id, applyProposedPrd]);
+
+  const handleRejectAllProposed = useCallback(() => {
+    if (!id) return;
+    rejectProposedPrd.mutate();
+  }, [id, rejectProposedPrd]);
+
   const handleStartFixValidation = useCallback(async () => {
     if (!id || !prd) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
     const baseline: PrdValidationBaseline = {
       content: prd.content || '',
       backlogJson: prd.backlogJson,
@@ -849,31 +928,125 @@ export const PrdReviewView: React.FC = () => {
     try {
       const result = await fixPrdValidation.mutateAsync(id);
       markApexFixInProgress('prd-validation', id, { threadId: result.threadId });
-      prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
+      prdFixFlowDispatch({ type: 'START_FIX', kind: 'validation', baseline, threadId: result.threadId });
     } catch {
       clearApexFixInProgress('prd-validation', id);
       prdFixFlowDispatch({ type: 'RESET' });
     }
   }, [id, prd, fixPrdValidation]);
 
-  const handleFixValidationCancel = useCallback(() => {
-    if (id) clearApexFixInProgress('prd-validation', id);
-    prdFixFlowDispatch({ type: 'RESET' });
+  const handleStartFixCoverage = useCallback(async () => {
+    if (!id || !prd) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
+    const baseline: PrdValidationBaseline = {
+      content: prd.content || '',
+      backlogJson: prd.backlogJson,
+      capturedAt: new Date().toISOString(),
+    };
+    markApexFixInProgress('prd-coverage', id);
+    try {
+      const result = await fixPrdCoverage.mutateAsync(id);
+      markApexFixInProgress('prd-coverage', id, { threadId: result.threadId });
+      prdFixFlowDispatch({ type: 'START_FIX', kind: 'coverage', baseline, threadId: result.threadId });
+    } catch {
+      clearApexFixInProgress('prd-coverage', id);
+      prdFixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, prd, fixPrdCoverage]);
+
+  const clearPrdFixSessions = useCallback(() => {
+    if (!id) return;
+    clearApexFixInProgress('prd-validation', id);
+    clearApexFixInProgress('prd-coverage', id);
   }, [id]);
+
+  /** After Apex finishes: no-op sessions return to idle with Fix with Apex; otherwise enter reviewing. */
+  const finalizePrdFixCompletion = useCallback(async (
+    baseline: PrdValidationBaseline,
+    kind: PrdFixKind,
+    threadId: string,
+    agentError?: string,
+  ): Promise<'idle' | 'reviewing'> => {
+    if (!id) return 'reviewing';
+    if (fixCompletionInFlightRef.current) return 'reviewing';
+    fixCompletionInFlightRef.current = true;
+
+    // Leave fixing immediately so poll/timeout effects stop.
+    prdFixFlowDispatch({ type: 'START_FIX', kind, baseline, threadId });
+    prdFixFlowDispatch({ type: 'FIX_COMPLETE', agentError });
+
+    try {
+      await queryClient.refetchQueries({ queryKey: ['prd', id] });
+      const fresh = queryClient.getQueryData<Prd>(['prd', id]);
+      clearPrdFixSessions();
+      if (fresh && isPrdUnchangedFromFixBaseline(fresh, baseline)) {
+        try {
+          await dismissPrdFixSession.mutateAsync(id);
+        } catch {
+          return 'reviewing';
+        }
+        fixCompletionInFlightRef.current = false;
+        prdFixFlowDispatch({ type: 'RESET' });
+        setFixIdleNotice(
+          agentError
+            ? `${agentError} No changes were applied.`
+            : 'No changes applied. You can try Fix with Apex again.',
+        );
+        return 'idle';
+      }
+      return 'reviewing';
+    } catch {
+      return 'reviewing';
+    }
+  }, [id, queryClient, clearPrdFixSessions, dismissPrdFixSession]);
+
+  const handleFixValidationCancel = useCallback(() => {
+    const threadId =
+      prdFixFlow.phase !== 'idle'
+        ? prdFixFlow.threadId
+        : (prd?.prdAssistantThreadId ?? undefined);
+    if (threadId) void cancelChatThread(threadId);
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+  }, [clearPrdFixSessions, prd?.prdAssistantThreadId, prdFixFlow]);
 
   const handleAcceptFixValidation = useCallback(async () => {
     if (!id) return;
-    await acceptFixPrdValidation.mutateAsync(id);
-    clearApexFixInProgress('prd-validation', id);
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
+    if (prdFixFlow.phase === 'reviewing' && prdFixFlow.kind === 'coverage') {
+      await acceptFixPrdCoverage.mutateAsync(id);
+    } else {
+      await acceptFixPrdValidation.mutateAsync(id);
+    }
+    clearPrdFixSessions();
     prdFixFlowDispatch({ type: 'RESET' });
-  }, [id, acceptFixPrdValidation]);
+  }, [id, prdFixFlow, acceptFixPrdValidation, acceptFixPrdCoverage, clearPrdFixSessions]);
 
   const handleRevertFixValidation = useCallback(async () => {
     if (!id) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
     await revertPrdSection.mutateAsync(id);
-    clearApexFixInProgress('prd-validation', id);
+    clearPrdFixSessions();
     prdFixFlowDispatch({ type: 'RESET' });
-  }, [id, revertPrdSection]);
+  }, [id, revertPrdSection, clearPrdFixSessions]);
+
+  const handleDismissFixSession = useCallback(async () => {
+    if (!id) return;
+    fixCompletionInFlightRef.current = false;
+    await dismissPrdFixSession.mutateAsync(id);
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+    setFixIdleNotice('Fix review dismissed. Current content was kept; Fix with Apex is available again.');
+  }, [id, dismissPrdFixSession, clearPrdFixSessions]);
+
+  const handleOverrideReadiness = useCallback(async (reason: string) => {
+    if (!id) return;
+    await overridePrdReadiness.mutateAsync({ prdId: id, reason });
+    setShowOverrideModal(false);
+  }, [id, overridePrdReadiness]);
 
   // Recover in-progress comment fixes after navigation.
   useEffect(() => {
@@ -890,7 +1063,7 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [prd, id]);
 
-  // Restore validation fix flow from server fixBaseline after navigation.
+  // Restore validation/coverage fix flow from server fixBaseline after navigation.
   useEffect(() => {
     if (!prd || prdFixFlow.phase !== 'idle') return;
     if (!prd.fixBaseline) return;
@@ -902,45 +1075,48 @@ export const PrdReviewView: React.FC = () => {
     let cancelled = false;
 
     (async () => {
-      if (!readApexFixInProgress('prd-validation', prd.id)) {
-        markApexFixInProgress('prd-validation', prd.id, { threadId });
+      const coverageSession = readApexFixInProgress('prd-coverage', prd.id);
+      const validationSession = readApexFixInProgress('prd-validation', prd.id);
+      const kind: PrdFixKind = coverageSession ? 'coverage' : 'validation';
+      const sessionScope = fixSessionScope(kind);
+      if (!coverageSession && !validationSession) {
+        markApexFixInProgress(sessionScope, prd.id, { threadId });
       }
       const thread = await fetchChatThreadStatus(threadId);
       if (cancelled) return;
-      if (thread && thread.status !== 'idle' && thread.status !== 'error') {
-        prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      if (thread && !isTerminalChatThreadStatus(thread.status)) {
+        prdFixFlowDispatch({ type: 'START_FIX', kind, baseline, threadId });
         return;
       }
-      if (thread && (thread.status === 'idle' || thread.status === 'error')) {
-        await queryClient.refetchQueries({ queryKey: ['prd', prd.id] });
+      if (thread && isTerminalChatThreadStatus(thread.status)) {
         if (cancelled) return;
-        prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-        prdFixFlowDispatch({
-          type: 'FIX_COMPLETE',
-          agentError: thread.status === 'error'
-            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-            : undefined,
-        });
+        await finalizePrdFixCompletion(
+          baseline,
+          kind,
+          threadId,
+          agentErrorFromChatThreadStatus(thread.status, thread.lastError),
+        );
         return;
       }
-      // Thread not found — treat as completed with error so the UI doesn't get stuck
-      clearApexFixInProgress('prd-validation', prd.id);
-      prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-      prdFixFlowDispatch({
-        type: 'FIX_COMPLETE',
-        agentError: 'The fix session is no longer available. You can try again.',
-      });
+      // Thread not found — treat as completed (no-op check still applies)
+      if (cancelled) return;
+      await finalizePrdFixCompletion(
+        baseline,
+        kind,
+        threadId,
+        'The fix session is no longer available. You can try again.',
+      );
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [prd?.id, prd?.fixBaseline, prd?.prdAssistantThreadId, prdFixFlow.phase, queryClient]);
+  }, [prd?.id, prd?.fixBaseline, prd?.prdAssistantThreadId, prdFixFlow.phase, finalizePrdFixCompletion]);
 
-  // Poll the assistant thread until Apex finishes applying validation fixes.
+  // Poll the assistant thread until Apex finishes applying validation/coverage fixes.
   useEffect(() => {
     if (prdFixFlow.phase !== 'fixing' || !id) return;
-    const { threadId } = prdFixFlow;
+    const { threadId, baseline, kind } = prdFixFlow;
     let cancelled = false;
 
     let notFoundCount = 0;
@@ -951,25 +1127,24 @@ export const PrdReviewView: React.FC = () => {
         if (!thread) {
           notFoundCount++;
           if (notFoundCount >= 3) {
-            clearApexFixInProgress('prd-validation', id);
-            prdFixFlowDispatch({
-              type: 'FIX_COMPLETE',
-              agentError: 'The fix session is no longer available. You can try again.',
-            });
+            await finalizePrdFixCompletion(
+              baseline,
+              kind,
+              threadId,
+              'The fix session is no longer available. You can try again.',
+            );
           }
           return;
         }
         notFoundCount = 0;
-        if (thread.status === 'idle' || thread.status === 'error') {
-          await queryClient.refetchQueries({ queryKey: ['prd', id] });
+        if (isTerminalChatThreadStatus(thread.status)) {
           if (!cancelled) {
-            clearApexFixInProgress('prd-validation', id);
-            prdFixFlowDispatch({
-              type: 'FIX_COMPLETE',
-              agentError: thread.status === 'error'
-                ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-                : undefined,
-            });
+            await finalizePrdFixCompletion(
+              baseline,
+              kind,
+              threadId,
+              agentErrorFromChatThreadStatus(thread.status, thread.lastError),
+            );
           }
         }
       } catch {
@@ -986,7 +1161,62 @@ export const PrdReviewView: React.FC = () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [prdFixFlow, id, queryClient]);
+  }, [prdFixFlow, id, finalizePrdFixCompletion]);
+
+  // Hard wall-clock timeout so the fixing overlay can never spin indefinitely.
+  useEffect(() => {
+    if (prdFixFlow.phase !== 'fixing' || !id) return;
+    const { threadId, baseline, kind } = prdFixFlow;
+    const timeoutId = window.setTimeout(() => {
+      void cancelChatThread(threadId);
+      void finalizePrdFixCompletion(
+        baseline,
+        kind,
+        threadId,
+        'The fix took too long and was stopped. You can try again.',
+      );
+    }, APEX_FIX_TIMEOUT_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [prdFixFlow, id, finalizePrdFixCompletion]);
+
+  // If server cleared fixBaseline while UI is still reviewing, return to idle so Fix with Apex returns.
+  useEffect(() => {
+    if (prdFixFlow.phase !== 'reviewing' || !prd) return;
+    if (prd.fixBaseline) return;
+    if (dismissPrdFixSession.isPending || revertPrdSection.isPending || acceptFixPrdValidation.isPending || acceptFixPrdCoverage.isPending) {
+      return;
+    }
+    fixCompletionInFlightRef.current = false;
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+  }, [
+    prd,
+    prdFixFlow.phase,
+    dismissPrdFixSession.isPending,
+    revertPrdSection.isPending,
+    acceptFixPrdValidation.isPending,
+    acceptFixPrdCoverage.isPending,
+    clearPrdFixSessions,
+  ]);
+
+  useEffect(() => {
+    if (prdFixFlow.phase === 'idle') {
+      fixCompletionInFlightRef.current = false;
+    }
+  }, [prdFixFlow.phase]);
+
+  // If validation was incorrectly auto-started mid Fix-with-Apex, cancel it so the
+  // fix session owns the UI until the user Accepts & Re-validates.
+  // Only while fixBaseline is still set — after Accept clears it, validation is intentional.
+  useEffect(() => {
+    if (!id || !prd) return;
+    if (!prd.fixBaseline) return;
+    if (prdFixFlow.phase !== 'fixing' && prdFixFlow.phase !== 'reviewing') return;
+    if (prd.status !== 'validating') return;
+    void cancelPrdValidation.mutateAsync(id).catch(() => {
+      /* non-fatal — server also guards auto-start while fixBaseline is set */
+    });
+  }, [id, prd?.status, prd?.fixBaseline, prdFixFlow.phase, cancelPrdValidation]);
 
   // Clear bulk comment fix session once proposed changes land.
   useEffect(() => {
@@ -997,6 +1227,34 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [prd, id, bulkCommentFixRunning]);
 
+  // Auto-open the section wizard once when comment/assistant proposals land.
+  useEffect(() => {
+    if (!prd) return;
+    const showProposed =
+      prdHasProposedChanges(prd) && !isPrdFixFlowOwningAccept(prd, prdFixFlow.phase);
+    if (!showProposed) {
+      didAutoOpenProposedRef.current = false;
+      setProposedReviewModalOpen((open) => (open ? false : open));
+      setProposedReviewProgress((prev) =>
+        prev.approved === 0 && prev.rejected === 0 && prev.pending === 0 && prev.total === 0
+          ? prev
+          : { approved: 0, rejected: 0, pending: 0, total: 0 },
+      );
+      return;
+    }
+    if (didAutoOpenProposedRef.current) return;
+    didAutoOpenProposedRef.current = true;
+    setProposedReviewModalOpen(true);
+  // Depend on proposal fields / fix ownership — not the whole `prd` object identity.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    prd?.proposedContent,
+    prd?.proposedBacklogJson,
+    prd?.fixBaseline,
+    prd?.fixCommentId,
+    prdFixFlow.phase,
+  ]);
+
   // Poll while bulk comment fix is in flight (no server-side in-progress flag).
   useEffect(() => {
     if (!id || !bulkCommentFixRunning) return;
@@ -1006,10 +1264,11 @@ export const PrdReviewView: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [id, bulkCommentFixRunning, queryClient]);
 
-  // Poll until fixBaseline lands after validation fix was started (e.g. user navigated away early).
+  // Poll until fixBaseline lands after a fix was started (e.g. user navigated away early).
   useEffect(() => {
     if (!id || prdFixFlow.phase !== 'idle') return;
-    const session = readApexFixInProgress('prd-validation', id);
+    const session =
+      readApexFixInProgress('prd-validation', id) ?? readApexFixInProgress('prd-coverage', id);
     if (!session || prd?.fixBaseline) return;
     const interval = window.setInterval(() => {
       void queryClient.refetchQueries({ queryKey: ['prd', id] });
@@ -1177,24 +1436,35 @@ export const PrdReviewView: React.FC = () => {
     canReassignReviewersAction;
 
   const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
-  const validationFixSession = id ? readApexFixInProgress('prd-validation', id) : null;
+  const validationFixSession = id
+    ? (readApexFixInProgress('prd-validation', id) ?? readApexFixInProgress('prd-coverage', id))
+    : null;
   const apexFixRunningBanner = (() => {
     if (prdFixFlow.phase === 'fixing' || (validationFixSession && prdFixFlow.phase === 'idle')) {
+      const isCoverage = !!id && !!readApexFixInProgress('prd-coverage', id);
       return {
-        title: 'Apex is fixing validation gaps…',
+        title: isCoverage
+          ? 'Apex is fixing coverage gaps…'
+          : 'Apex is fixing validation gaps…',
         subtitle: 'You can leave this page — progress will resume when you return.',
+        hint: 'Typically 1–3 min',
+        showCancel: prdFixFlow.phase === 'fixing',
       };
     }
     if (bulkCommentFixRunning || fixWithAi.isPending) {
       return {
         title: 'Apex is applying review comment fixes…',
         subtitle: 'Proposed changes will appear here when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     if (fixingCommentId || isPrdSingleCommentFixPending(prd)) {
       return {
         title: 'Apex is fixing a review comment…',
         subtitle: 'The proposed edit will appear when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     return null;
@@ -1774,79 +2044,205 @@ export const PrdReviewView: React.FC = () => {
         <ApexFixRunningBanner
           title={apexFixRunningBanner.title}
           subtitle={apexFixRunningBanner.subtitle}
+          hint={apexFixRunningBanner.hint}
+          onCancel={apexFixRunningBanner.showCancel ? handleFixValidationCancel : undefined}
         />
       )}
 
-      {/* Validation Banner */}
-      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < (prd.validationScoreThreshold ?? 90) && prd.status === 'draft' && prd.validationScorecard && (
-        <div className={styles.validationPanel}>
-          {prdFixFlow.phase === 'fixing' ? (
-            <FixingProgressView onCancel={handleFixValidationCancel} />
-          ) : (
-            <div className={styles.validationBanner}>
-              <div className={styles.validationBannerLeft}>
-                <span className={styles.validationBannerText}>
-                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
-                  {prdFixFlow.phase === 'reviewing'
-                    ? prdFixFlow.agentError
-                      ? ` ${prdFixFlow.agentError}`
-                      : ' Review Apex\'s changes, then accept to re-validate.'
-                    : ' Fix gaps to proceed.'}
-                </span>
-              </div>
-              <div className={styles.validationActions}>
-                {prdFixFlow.phase === 'idle' && canManage && (
-                  <button
-                    className={prd.validationScore < 70 ? styles.fixBtnRed : styles.fixBtnAmber}
-                    onClick={() => void handleStartFixValidation()}
-                    disabled={fixPrdValidation.isPending}
-                    type="button"
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
-                      <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
-                    </svg>
-                    {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
-                  </button>
-                )}
-                {prdFixFlow.phase === 'reviewing' && canManage && (
-                  <>
-                    <button
-                      className={styles.fixBtnGreen}
-                      onClick={() => void handleAcceptFixValidation()}
-                      disabled={acceptFixPrdValidation.isPending}
-                      type="button"
-                    >
-                      Accept & Re-validate
-                    </button>
-                    <button
-                      className={styles.fixBtnSecondary}
-                      onClick={() => void handleRevertFixValidation()}
-                      disabled={revertPrdSection.isPending}
-                      type="button"
-                    >
-                      Revert
-                    </button>
-                  </>
-                )}
-                <button
-                  className={styles.fixBtnSecondary}
-                  onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
-                  disabled={createPrdValidationThread.isPending || prdFixFlow.phase !== 'idle'}
-                  type="button"
-                >
-                  Re-run
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Unified Option-A strip while Fix-with-Apex reviewing + baseline diffs exist */}
+      {(() => {
+        const showUnifiedStrip =
+          prdFixFlow.phase === 'reviewing'
+          && !!prd.fixBaseline
+          && !isPrdUnchangedFromFixBaseline(prd, prd.fixBaseline);
+        const showLegacyValidationBanner =
+          !showUnifiedStrip
+          && prd.validationScore !== null
+          && prd.validationScore !== undefined
+          && prd.validationScore < (prd.validationScoreThreshold ?? 90)
+          && prd.status === 'draft'
+          && !!prd.validationScorecard
+          && prdFixFlow.phase !== 'fixing';
 
-      <PrdReadinessPanel
-        readiness={readiness}
-        coverage={testCasesRequired ? (latestTestCase?.coverageSummary ?? null) : null}
-      />
+        return (
+          <>
+            {showUnifiedStrip && (
+              <PrdFixActionStrip
+                validationScore={prd.validationScore ?? 0}
+                validationThreshold={prd.validationScoreThreshold ?? 90}
+                readinessLabel={readiness?.label ?? 'Validation gaps'}
+                readinessBlockingReason={readiness?.blockingReason}
+                progress={fixReviewProgress}
+                agentError={
+                  prdFixFlow.phase === 'reviewing' ? prdFixFlow.agentError : undefined
+                }
+                busy={
+                  acceptFixPrdValidation.isPending
+                  || acceptFixPrdCoverage.isPending
+                  || dismissPrdFixSession.isPending
+                  || revertPrdSection.isPending
+                }
+                onContinueReview={() => setFixReviewModalOpen(true)}
+                onAcceptAll={() => void handleAcceptFixValidation()}
+                onRevert={() => void handleRevertFixValidation()}
+                onDismiss={() => void handleDismissFixSession()}
+                onPreview={() => setFixReviewModalOpen(true)}
+                acceptLabel={
+                  prdFixFlow.kind === 'coverage'
+                    ? 'Accept all & re-evaluate coverage'
+                    : 'Accept all & re-validate'
+                }
+              />
+            )}
+
+            {showLegacyValidationBanner && (
+              <div className={styles.validationPanel}>
+                <div className={styles.validationBanner}>
+                  <div className={styles.validationBannerLeft}>
+                    <span className={styles.validationBannerText}>
+                      Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
+                      {fixIdleNotice
+                        ? ` ${fixIdleNotice}`
+                        : ' Fix gaps to proceed.'}
+                    </span>
+                  </div>
+                  <div className={styles.validationActions}>
+                    {prdFixFlow.phase === 'idle' && canManage && (
+                      <button
+                        className={prd.validationScore! < 70 ? styles.fixBtnRed : styles.fixBtnAmber}
+                        onClick={() => void handleStartFixValidation()}
+                        disabled={fixPrdValidation.isPending}
+                        type="button"
+                      >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
+                          <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
+                        </svg>
+                        {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                      </button>
+                    )}
+                    {prdFixFlow.phase === 'idle' && (
+                      <button
+                        className={styles.fixBtnSecondary}
+                        onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
+                        disabled={createPrdValidationThread.isPending}
+                        type="button"
+                      >
+                        Re-run
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!showUnifiedStrip && (
+              <PrdReadinessPanel
+                readiness={readiness}
+                coverage={testCasesRequired ? (latestTestCase?.coverageSummary ?? null) : null}
+                override={prd.readinessOverride}
+                overrideUserName={
+                  prd.readinessOverride
+                    ? (activeUsers.find((u) => u.oid === prd.readinessOverride?.userId)?.displayName ?? null)
+                    : null
+                }
+                actions={(() => {
+                  if (!canManage || !readiness || prdFixFlow.phase === 'fixing') return undefined;
+                  const showCoverageFix = readiness.state === 'coverage_gaps' && prdFixFlow.phase === 'idle';
+                  const showValidationFixInPanel =
+                    readiness.state === 'validation_failed' &&
+                    prdFixFlow.phase === 'idle' &&
+                    !(
+                      prd.validationScore !== null &&
+                      prd.validationScore !== undefined &&
+                      prd.validationScore < (prd.validationScoreThreshold ?? 90) &&
+                      prd.status === 'draft' &&
+                      !!prd.validationScorecard
+                    );
+                  const showCoverageReview =
+                    prdFixFlow.phase === 'reviewing' && prdFixFlow.kind === 'coverage';
+                  const showProceedAnyway =
+                    prdFixFlow.phase === 'idle' &&
+                    !readiness.readyForReviewActions &&
+                    !readiness.overridden &&
+                    (readiness.state === 'coverage_gaps' ||
+                      readiness.state === 'validation_failed' ||
+                      readiness.state === 'test_case_generation_failed');
+                  if (!showCoverageFix && !showValidationFixInPanel && !showCoverageReview && !showProceedAnyway) {
+                    return undefined;
+                  }
+                  return (
+                    <div className={styles.validationActions}>
+                      {showCoverageFix && (
+                        <button
+                          className={styles.fixBtnAmber}
+                          onClick={() => void handleStartFixCoverage()}
+                          disabled={fixPrdCoverage.isPending}
+                          type="button"
+                        >
+                          {fixPrdCoverage.isPending ? 'Starting…' : 'Fix with Apex'}
+                        </button>
+                      )}
+                      {showValidationFixInPanel && (
+                        <button
+                          className={styles.fixBtnAmber}
+                          onClick={() => void handleStartFixValidation()}
+                          disabled={fixPrdValidation.isPending}
+                          type="button"
+                        >
+                          {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                        </button>
+                      )}
+                      {showCoverageReview && (
+                        <>
+                          <button
+                            className={styles.fixBtnGreen}
+                            onClick={() => void handleAcceptFixValidation()}
+                            disabled={acceptFixPrdCoverage.isPending || dismissPrdFixSession.isPending || revertPrdSection.isPending}
+                            type="button"
+                          >
+                            Accept & Re-evaluate Coverage
+                          </button>
+                          <button
+                            className={styles.fixBtnSecondary}
+                            onClick={() => void handleRevertFixValidation()}
+                            disabled={revertPrdSection.isPending || dismissPrdFixSession.isPending || acceptFixPrdCoverage.isPending}
+                            type="button"
+                            title="Restore content from before Fix with Apex"
+                          >
+                            {revertPrdSection.isPending ? 'Reverting…' : 'Revert'}
+                          </button>
+                          <button
+                            className={styles.fixBtnSecondary}
+                            onClick={() => void handleDismissFixSession()}
+                            disabled={dismissPrdFixSession.isPending || revertPrdSection.isPending || acceptFixPrdCoverage.isPending}
+                            type="button"
+                            title="Keep current content, clear the fix session, and show Fix with Apex again"
+                          >
+                            {dismissPrdFixSession.isPending ? 'Dismissing…' : 'Dismiss'}
+                          </button>
+                          {prdFixFlow.agentError && (
+                            <span className={styles.readinessCollapsedHint}>{prdFixFlow.agentError}</span>
+                          )}
+                        </>
+                      )}
+                      {showProceedAnyway && (
+                        <button
+                          className={styles.fixBtnSecondary}
+                          onClick={() => setShowOverrideModal(true)}
+                          type="button"
+                        >
+                          Proceed anyway
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+              />
+            )}
+          </>
+        );
+      })()}
 
       <div className={styles.bannerRow}>
         {prototypeStageEnabled && prd.status === 'approved' && designPlanResponse?.plan && (
@@ -1995,14 +2391,60 @@ export const PrdReviewView: React.FC = () => {
         </div>
       )}
 
-      {(prd.proposedContent != null || prd.proposedBacklogJson != null) && (
+      {/* Fix-with-Apex (validation/coverage): review baseline → live diffs section by section. */}
+      {prdFixFlow.phase === 'reviewing'
+        && prd.fixBaseline
+        && !isPrdUnchangedFromFixBaseline(prd, prd.fixBaseline) && (
         <ProposedChangesReview
+          reviewMode="fix-baseline"
+          hideBanner
+          deferAutoOpen
+          modalOpen={fixReviewModalOpen}
+          onModalOpenChange={setFixReviewModalOpen}
+          onReviewProgress={setFixReviewProgress}
           prdId={prd.id}
-          currentContent={prd.content}
-          currentBacklogJson={prd.backlogJson}
-          proposedContent={prd.proposedContent}
-          proposedBacklogJson={prd.proposedBacklogJson}
+          currentContent={prd.fixBaseline.content}
+          currentBacklogJson={prd.fixBaseline.backlogJson}
+          proposedContent={prd.content}
+          proposedBacklogJson={prd.backlogJson ?? null}
+          onAcceptAndRevalidate={() => handleAcceptFixValidation()}
+          onRejectAll={() => handleRevertFixValidation()}
         />
+      )}
+
+      {/* Comment / assistant proposed drafts — same section wizard + Option A strip. */}
+      {prdHasProposedChanges(prd) && !isPrdFixFlowOwningAccept(prd, prdFixFlow.phase) && (
+        <>
+          <PrdFixActionStrip
+            summaryLabel={
+              prd.fixCommentId ? 'Comment fix ready' : 'Proposed changes'
+            }
+            progress={proposedReviewProgress}
+            busy={
+              applyProposedPrd.isPending
+              || rejectProposedPrd.isPending
+            }
+            onContinueReview={() => setProposedReviewModalOpen(true)}
+            onAcceptAll={handleAcceptAllProposed}
+            onRevert={handleRejectAllProposed}
+            onPreview={() => setProposedReviewModalOpen(true)}
+            acceptLabel="Accept all"
+            revertLabel="Reject all"
+            ariaLabel="Proposed changes review"
+          />
+          <ProposedChangesReview
+            hideBanner
+            deferAutoOpen
+            modalOpen={proposedReviewModalOpen}
+            onModalOpenChange={setProposedReviewModalOpen}
+            onReviewProgress={setProposedReviewProgress}
+            prdId={prd.id}
+            currentContent={prd.content}
+            currentBacklogJson={prd.backlogJson}
+            proposedContent={prd.proposedContent}
+            proposedBacklogJson={prd.proposedBacklogJson}
+          />
+        </>
       )}
 
       {isGenerating ? (
@@ -2524,6 +2966,17 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {/* ── Full-document edit modal ────────────────────────────────────────── */}
+      {showOverrideModal && (
+        <ReviewReasonModal
+          title="Proceed with unresolved gaps?"
+          placeholder="Why are you proceeding without resolving these gaps?"
+          confirmLabel="Proceed anyway"
+          isPending={overridePrdReadiness.isPending}
+          onConfirm={(reason) => void handleOverrideReadiness(reason)}
+          onCancel={() => setShowOverrideModal(false)}
+        />
+      )}
+
       {showEditModal && (
         <div
           className={styles.editModal}
