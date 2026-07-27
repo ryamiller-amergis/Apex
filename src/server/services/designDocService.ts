@@ -1554,6 +1554,7 @@ export async function triggerFixValidation(
       skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,
+      assistantType: 'design-doc',
     }, { skipAutoKickoff: true });
 
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');

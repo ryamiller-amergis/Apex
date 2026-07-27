@@ -1618,6 +1618,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,
+      assistantType: 'design-doc',
     }, { skipAutoKickoff: true });
 
     // Rewrite the context file now that we have the real thread ID.

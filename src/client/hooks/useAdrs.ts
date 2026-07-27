@@ -92,7 +92,10 @@ export function useDeleteAdr() {
   const queryClient = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: (id) => apiFetch(`/api/adr/${id}`, { method: 'DELETE' }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['adrs'] }),
+    onSuccess: (_data, id) => {
+      void queryClient.removeQueries({ queryKey: ['adr', id] });
+      void queryClient.invalidateQueries({ queryKey: ['adrs'] });
+    },
   });
 }
 
