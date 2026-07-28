@@ -21,6 +21,8 @@ import {
   listRepoStatuses,
 } from '../services/foundationSkillCompatibilityService';
 import { listCandidates } from '../services/azureArtifactsSkillService';
+import { updateRepoWithFoundationSkills } from '../services/foundationSkillRepoUpdateService';
+import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CreateFoundationSkillReleaseRequest } from '../../shared/types/foundationSkills';
 
 const router = Router();
@@ -143,6 +145,50 @@ router.get('/repo-statuses', async (_req: Request, res: Response): Promise<void>
     res.json({ statuses });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to list repo statuses' });
+  }
+});
+
+// ── Repo update PR ────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/platform-admin/foundation-skills/update-repo
+ * Clone a consumer repo, install the selected release, and open a PR.
+ * Body: { project, repo, provider?, defaultBranch?, releaseId?, selectedSkills? }
+ */
+router.post('/update-repo', async (req: Request, res: Response): Promise<void> => {
+  const { project, repo, provider, defaultBranch, releaseId, selectedSkills } = req.body;
+  if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
+  if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
+
+  const actorInfo = actor(req);
+
+  // Build an ADO service using the app-level PAT (Platform Admin action — no user token needed)
+  let adoService: AzureDevOpsService | null = null;
+  if (!provider || provider === 'ado') {
+    try {
+      adoService = new AzureDevOpsService(project);
+    } catch {
+      // Non-fatal — PR creation will be skipped with a warning
+    }
+  }
+
+  try {
+    const result = await updateRepoWithFoundationSkills(
+      {
+        project,
+        repo,
+        provider: provider ?? 'ado',
+        defaultBranch: defaultBranch ?? 'main',
+        releaseId,
+        selectedSkills: Array.isArray(selectedSkills) ? selectedSkills : undefined,
+        actor: { id: actorInfo.id, email: actorInfo.email },
+      },
+      adoService,
+    );
+    res.json(result);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
   }
 });
 
