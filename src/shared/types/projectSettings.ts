@@ -174,6 +174,10 @@ export interface ProjectSkillConfig {
   designModuleSkillPath?: string | null;
   /** Model override for Design Module architecture document generation. */
   designModuleModel?: string | null;
+  /** Skill used to propose Design Module sourceGlobs. */
+  designModuleScopingSkillPath?: string | null;
+  /** Model override for Design Module sourceGlob scoping. */
+  designModuleScopingModel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -253,6 +257,8 @@ export interface UpsertProjectSkillConfigRequest {
   loadTestGenerationModel?: string | null;
   designModuleSkillPath?: string | null;
   designModuleModel?: string | null;
+  designModuleScopingSkillPath?: string | null;
+  designModuleScopingModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -341,6 +347,8 @@ export interface ProjectSkillConfigResponse {
   loadTestGenerationModel?: string | null;
   designModuleSkillPath?: string | null;
   designModuleModel?: string | null;
+  designModuleScopingSkillPath?: string | null;
+  designModuleScopingModel?: string | null;
 }
 
 /** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */

@@ -239,6 +239,61 @@ describe('startScoping', () => {
     );
   });
 
+  it('uses designModuleScopingSkillPath and designModuleScopingModel from project settings', async () => {
+    const customSkill = '.cursor/skills/custom-module-scoping/SKILL.md';
+    mockedResolveSkillConfig.mockResolvedValue({
+      ...FAKE_SKILL_CONFIG,
+      designModuleScopingSkillPath: customSkill,
+      designModuleScopingModel: 'opus-custom',
+    } as any);
+    mockFs.existsSync.mockImplementation((p) => {
+      const norm = String(p).replace(/\\/g, '/');
+      return (
+        norm.endsWith(customSkill) ||
+        norm.endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)
+      );
+    });
+    mockFs.readFileSync.mockImplementation((p) => {
+      const norm = String(p).replace(/\\/g, '/');
+      if (norm.endsWith(customSkill)) return '# Custom scoping skill\n';
+      if (norm.endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)) return LOCAL_SKILL;
+      return '';
+    });
+    mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
+
+    await startScoping(PROJECT_ID, REQUEST, USER_ID);
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({
+        skillPath: customSkill,
+        model: 'opus-custom',
+        freeformContext: expect.stringContaining('Custom scoping skill'),
+      }),
+      expect.objectContaining({ skipAutoKickoff: true })
+    );
+  });
+
+  it('falls back to the default skill path when designModuleScopingSkillPath is unset', async () => {
+    mockedResolveSkillConfig.mockResolvedValue({
+      ...FAKE_SKILL_CONFIG,
+      designModuleScopingSkillPath: null,
+      designModuleScopingModel: null,
+    } as any);
+    mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
+
+    await startScoping(PROJECT_ID, REQUEST, USER_ID);
+
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({
+        skillPath: DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
+        model: 'claude-sonnet-4',
+      }),
+      expect.objectContaining({ skipAutoKickoff: true })
+    );
+  });
+
   it('includes searchHints in freeform kickoff context', async () => {
     mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
     mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));

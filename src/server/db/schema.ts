@@ -637,6 +637,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   loadTestGenerationModel: text('load_test_generation_model'),
   designModuleSkillPath: text('design_module_skill_path'),
   designModuleModel: text('design_module_model'),
+  designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
+  designModuleScopingModel: text('design_module_scoping_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({

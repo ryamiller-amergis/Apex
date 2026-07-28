@@ -55,21 +55,29 @@ function trackScopingSend(
  * output). Embed the local skill text so scoping works before the skill is
  * published to the connected repo. Repo *file discovery* still happens via MCP
  * against the project's configured skillRepo/branch — not the local disk.
+ *
+ * When a project overrides designModuleScopingSkillPath, try that path first
+ * under the Apex checkout, then fall back to the default local skill.
  */
 export function loadLocalScopingSkill(
+  skillPathRel = DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
   repositoryRoot = process.cwd()
 ): string {
-  const skillPath = path.join(
-    repositoryRoot,
-    DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH
-  );
-  if (!fs.existsSync(skillPath)) {
-    throw new DesignModuleScopingError(
-      `Design module scoping skill is missing at ${DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH}.`,
-      'SKILL_MISSING'
-    );
+  const normalized = skillPathRel.replace(/^\//, '');
+  const candidates = [normalized];
+  if (normalized !== DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH) {
+    candidates.push(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH);
   }
-  return fs.readFileSync(skillPath, 'utf-8');
+  for (const rel of candidates) {
+    const skillPath = path.join(repositoryRoot, rel);
+    if (fs.existsSync(skillPath)) {
+      return fs.readFileSync(skillPath, 'utf-8');
+    }
+  }
+  throw new DesignModuleScopingError(
+    `Design module scoping skill is missing at ${normalized}.`,
+    'SKILL_MISSING'
+  );
 }
 
 function buildModuleContext(
@@ -113,11 +121,12 @@ function buildModuleContext(
 function buildFreeformContext(
   projectId: string,
   input: DesignModuleScopingRequest,
-  repoMeta: { repo: string; branch: string; skillProvider: string }
+  repoMeta: { repo: string; branch: string; skillProvider: string },
+  skillPathRel = DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH
 ): string {
   return [
     '# Design Module Scoping skill — follow exactly',
-    loadLocalScopingSkill(),
+    loadLocalScopingSkill(skillPathRel),
     '',
     '# Module to scope',
     buildModuleContext(projectId, input, repoMeta),
@@ -196,6 +205,9 @@ export async function startScoping(
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? 'ado',
   };
+  const skillPath =
+    skillConfig.designModuleScopingSkillPath?.trim() ||
+    DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH;
 
   const resumeThreadId = await resolveResumeThreadId(input);
 
@@ -203,7 +215,12 @@ export async function startScoping(
     await loadThreadForUser(resumeThreadId, userId);
     cancelledThreads.delete(resumeThreadId);
 
-    const freeformContext = buildFreeformContext(projectId, input, repoMeta);
+    const freeformContext = buildFreeformContext(
+      projectId,
+      input,
+      repoMeta,
+      skillPath
+    );
     updateThreadKickoffContext(resumeThreadId, freeformContext);
 
     const row = await db.query.chatThreads.findFirst({
@@ -253,10 +270,17 @@ export async function startScoping(
   }
 
   const model =
+    skillConfig.designModuleScopingModel ??
+    skillConfig.designModuleModel ??
     skillConfig.designDocModel ??
     skillConfig.defaultModel ??
     (await getDefaultModel());
-  const freeformContext = buildFreeformContext(projectId, input, repoMeta);
+  const freeformContext = buildFreeformContext(
+    projectId,
+    input,
+    repoMeta,
+    skillPath
+  );
 
   const thread = await createChatThread(
     userId,
@@ -265,7 +289,7 @@ export async function startScoping(
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider ?? 'ado',
-      skillPath: DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
+      skillPath,
       freeformContext,
       model,
     },
