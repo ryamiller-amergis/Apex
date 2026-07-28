@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
@@ -574,12 +575,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 readOnly={adr.status === 'accepted'}
               >
                 <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {stripYamlFrontmatter(adr.content)}
+                  </ReactMarkdown>
                 </div>
               </AnnotationLayer>
             ) : (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {stripYamlFrontmatter(adr.content)}
+                </ReactMarkdown>
               </div>
             )}
           </div>

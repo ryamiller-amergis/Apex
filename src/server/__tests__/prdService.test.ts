@@ -34,6 +34,7 @@ jest.mock('../db/drizzle', () => {
         prds: { findFirst: jest.fn() },
         interviews: { findFirst: jest.fn() },
         testCases: { findFirst: jest.fn() },
+        chatThreads: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -299,6 +300,7 @@ beforeEach(() => {
     testCasesEnabled: true,
     prototypeStageEnabled: true,
   });
+  mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
 });
 
 // ── Select chain helper ────────────────────────────────────────────────────────

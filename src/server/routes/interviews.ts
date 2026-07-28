@@ -338,12 +338,7 @@ router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req,
 
     if (approved) {
       const prd = await getPrd(req.params.prdId);
-      let prototypeEnabled = prd?.prototypeStageEnabled;
-      if (prototypeEnabled === undefined && prd) {
-        const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
-        prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
-      }
-      if (prototypeEnabled !== false) {
+      if (prd?.prototypeStageEnabled !== false) {
         generateDesignPlan(req.params.prdId).catch(err => {
           console.error('[interviews] Design plan generation failed:', err);
         });
@@ -2525,21 +2520,9 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
         updatedAt: new Date().toISOString(),
       }).where(eq(prdsTable.id, prdId));
 
-      const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
-      let prototypeEnabled: boolean | undefined;
-      if (prd.interviewId) {
-        const interviewRows = await db.select({
-          prototypeStageEnabled: interviewsTable.prototypeStageEnabled,
-        })
-          .from(interviewsTable)
-          .where(eq(interviewsTable.id, prd.interviewId))
-          .limit(1);
-        prototypeEnabled = interviewRows[0]?.prototypeStageEnabled;
-      }
-      if (prototypeEnabled === undefined) {
-        prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
-      }
-      if (prototypeEnabled) {
+      // Re-fetch so prototypeStageEnabled includes skill-option resolution / stale-false heal.
+      const approvedPrd = await getPrd(prdId);
+      if (approvedPrd?.prototypeStageEnabled !== false) {
         generateDesignPlan(prdId).catch(err => {
           console.error('[owner-approve] Design plan generation failed:', err);
         });

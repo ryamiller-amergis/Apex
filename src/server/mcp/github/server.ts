@@ -6,17 +6,27 @@ import {
   searchRepoCode,
   listSkills,
 } from '../../services/skillCatalogGitHub';
+import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
+
+function toolErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /**
  * Lightweight GitHub-backed MCP server that exposes read-only repo browsing
  * tools. Used by the Ask Apex agent to look up source code, docs, and skills
  * on demand without needing a local clone of the repo.
+ *
+ * Each tool handler is raced against MCP_TOOL_TIMEOUT_MS (default 35s) so a
+ * stuck GitHub call or ignored AbortSignal still returns a completed tool
+ * result to the Cursor SDK instead of hanging the interview turn.
  */
 export function createGitHubMcpServer(): McpServer {
   const server = new McpServer({
     name: 'github-repo',
     version: '1.0.0',
   });
+  const toolTimeoutMs = resolveMcpToolTimeoutMs();
 
   server.tool(
     'get_skill_file',
@@ -30,11 +40,12 @@ export function createGitHubMcpServer(): McpServer {
     },
     async ({ repo, path, branch, org }) => {
       try {
-        const content = await getSkillFile(repo, path, branch, org);
+        const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
+          getSkillFile(repo, path, branch, org),
+        );
         return { content: [{ type: 'text', text: content }] };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: 'text', text: `Error reading file: ${message}` }] };
+        return { content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }] };
       }
     },
   );
@@ -51,7 +62,9 @@ export function createGitHubMcpServer(): McpServer {
     },
     async ({ repo, path, branch, org }) => {
       try {
-        const entries = await listRepoDir(repo, path, branch, org);
+        const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
+          listRepoDir(repo, path, branch, org),
+        );
         return { content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }] };
       } catch {
         return { content: [{ type: 'text', text: '[]' }] };
@@ -72,11 +85,12 @@ export function createGitHubMcpServer(): McpServer {
     },
     async ({ repo, query, branch, org, limit }) => {
       try {
-        const results = await searchRepoCode(repo, query, branch, org, limit ?? 10);
+        const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
+          searchRepoCode(repo, query, branch, org, limit ?? 10),
+        );
         return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: 'text', text: `Search error: ${message}` }] };
+        return { content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }] };
       }
     },
   );
@@ -91,7 +105,9 @@ export function createGitHubMcpServer(): McpServer {
     },
     async ({ repo, branch, org }) => {
       try {
-        const skills = await listSkills(repo, branch, org);
+        const skills = await raceWithTimeout('list_skills', toolTimeoutMs, () =>
+          listSkills(repo, branch, org),
+        );
         const summary = skills.map(s => ({
           name: s.name,
           description: s.description,
@@ -99,8 +115,7 @@ export function createGitHubMcpServer(): McpServer {
         }));
         return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: 'text', text: `Error listing skills: ${message}` }] };
+        return { content: [{ type: 'text', text: `Error listing skills: ${toolErrorMessage(err)}` }] };
       }
     },
   );

@@ -54,6 +54,7 @@ const branchCache = makeCache<string[]>();
 const skillListCache = makeCache<SkillEntry[]>();
 const skillDetailCache = makeCache<SkillDetail>();
 const fileContentCache = makeCache<string>();
+const codeSearchCache = makeCache<CodeSearchResult[]>();
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -414,7 +415,15 @@ export async function searchRepoCode(
 ): Promise<CodeSearchResult[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
+  if (!query.trim()) return [];
 
+  // GitHub code search is capped ~10 req/min; cache identical interview lookups.
+  const cacheKey = `codesearch:${resolvedOrg}:${repo}:${branch ?? 'default'}:${query}:${limit}`;
+  const cached = codeSearchCache.get(cacheKey);
+  if (cached) return cached;
+
+  // Branch is best-effort only — GitHub code search indexes the default branch
+  // and does not support a reliable branch qualifier; keep it in the cache key only.
   const q = encodeURIComponent(`${query} repo:${resolvedOrg}/${repo}`);
   const response = await ghFetch<{
     items: Array<{
@@ -425,11 +434,13 @@ export async function searchRepoCode(
     }>;
   }>(`/search/code?q=${q}&per_page=${limit}`, true);
 
-  return response.items.map((item) => ({
+  const results = (response.items ?? []).map((item) => ({
     path: `/${item.path}`,
     url: item.html_url,
     matches: (item.text_matches ?? []).map((m) => ({ fragment: m.fragment })),
   }));
+  codeSearchCache.set(cacheKey, results);
+  return results;
 }
 
 export function invalidateCache(org?: string, repo?: string) {
@@ -438,13 +449,16 @@ export function invalidateCache(org?: string, repo?: string) {
     skillListCache.invalidate(`skills:${resolvedOrg}:${repo}`);
     skillDetailCache.invalidate(`detail:${resolvedOrg}:${repo}`);
     fileContentCache.invalidate(`file:${resolvedOrg}:${repo}`);
+    codeSearchCache.invalidate(`codesearch:${resolvedOrg}:${repo}`);
   } else if (resolvedOrg) {
     repoCache.invalidate(`repos:${resolvedOrg}`);
     skillListCache.invalidate(`skills:${resolvedOrg}`);
     skillDetailCache.invalidate(`detail:${resolvedOrg}`);
     fileContentCache.invalidate(`file:${resolvedOrg}`);
+    codeSearchCache.invalidate(`codesearch:${resolvedOrg}`);
   } else {
     repoCache.invalidate('repos:');
+    codeSearchCache.invalidate('codesearch:');
   }
 }
 

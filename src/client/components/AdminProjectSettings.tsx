@@ -530,7 +530,12 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
       <button
         type="button"
         className={styles.btnAction}
-        onClick={() => onChange([...options, { path: '', friendlyName: '' }])}
+        onClick={() => onChange([...options, {
+          path: '',
+          friendlyName: '',
+          wantsDesignPrototype: true,
+          wantsTestCases: true,
+        }])}
         disabled={disabled || skillsDisabled}
       >
         + Add option
@@ -1495,7 +1500,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         quickSkillPills: edit.quickSkillPills.length > 0 ? edit.quickSkillPills : null,
         quickMcpPills: edit.quickMcpPills.length > 0 ? edit.quickMcpPills : null,
         interviewSkillOptions: edit.interviewSkillOptions.length > 0 ? edit.interviewSkillOptions : null,
-        prototypeStageEnabled: edit.prototypeStageEnabled,
+        // Keep project-level flag aligned with interview options (project-level UI toggle was removed).
+        prototypeStageEnabled: edit.interviewSkillOptions.length > 0
+          ? edit.interviewSkillOptions.some((o) => o.wantsDesignPrototype !== false)
+          : edit.prototypeStageEnabled,
         interviewWebResearchEnabled: edit.interviewWebResearchEnabled,
         interviewWebMcp: edit.interviewWebResearchEnabled ? edit.interviewWebMcp : null,
         prototypeEngine: edit.prototypeEngine,

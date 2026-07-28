@@ -160,6 +160,7 @@ describe('chat run-event SSE transport', () => {
       queuedTimeoutMs: 90_000,
       progressStaleMs: 2 * 60_000,
       progressAbortMs: 10 * 60_000,
+      inFlightToolMaxMs: 15 * 60_000,
       longRunMs: 30 * 60_000,
       hardLimitMs: 2 * 60 * 60_000,
     })).toMatchObject({

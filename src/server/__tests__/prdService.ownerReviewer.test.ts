@@ -21,7 +21,10 @@ jest.mock('../db/drizzle', () => {
 
   return {
     db: {
-      query: { prds: { findFirst: jest.fn() } },
+      query: {
+        prds: { findFirst: jest.fn() },
+        chatThreads: { findFirst: jest.fn() },
+      },
       insert: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -86,7 +89,10 @@ function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit
 // ── getPrd — owner resolution ─────────────────────────────────────────────────
 
 describe('getPrd — owner resolution', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
+  });
 
   it('uses the interview prdOwner as ownerId and ownerName when set', async () => {
     mockDb.select.mockReturnValue(makeSelectChain([{

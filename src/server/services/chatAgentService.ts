@@ -33,7 +33,8 @@ import {
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
-import { isThreadRunAlive } from './agentRunReaperService';
+import { isThreadRunAlive, resolveAgentRunHealthConfig } from './agentRunReaperService';
+import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
@@ -47,6 +48,7 @@ import {
   nextRunEventSequence,
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
+  subscribeRunEvents,
 } from './pgNotifyService';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import { isFeatureEnabled } from './featureFlagService';
@@ -85,6 +87,50 @@ interface ThreadState {
 
 const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
+
+/**
+ * Cap concurrent local Cursor agents per App Service instance. Interview →
+ * design-doc kickoff spawns one agent per backlog feature in a tight loop;
+ * unbounded local CLIs share the same VM RAM and previously correlated with
+ * unhandled SDK EPIPE crashes taking down the whole site.
+ */
+function resolveMaxConcurrentLocalAgents(): number {
+  const parsed = Number(process.env.MAX_CONCURRENT_LOCAL_AGENTS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 2;
+}
+
+let activeLocalAgentSlots = 0;
+const localAgentSlotWaiters: Array<() => void> = [];
+
+async function acquireLocalAgentSlot(threadId: string): Promise<void> {
+  const max = resolveMaxConcurrentLocalAgents();
+  if (activeLocalAgentSlots < max) {
+    activeLocalAgentSlots++;
+    console.log(
+      `[chat] Acquired local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+    );
+    return;
+  }
+  console.log(
+    `[chat] Waiting for local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+  );
+  await new Promise<void>((resolve) => {
+    localAgentSlotWaiters.push(resolve);
+  });
+  activeLocalAgentSlots++;
+  console.log(
+    `[chat] Acquired local agent slot after wait (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+  );
+}
+
+function releaseLocalAgentSlot(threadId: string): void {
+  activeLocalAgentSlots = Math.max(0, activeLocalAgentSlots - 1);
+  const next = localAgentSlotWaiters.shift();
+  if (next) next();
+  console.log(
+    `[chat] Released local agent slot (${activeLocalAgentSlots}/${resolveMaxConcurrentLocalAgents()}) threadId=${threadId}`,
+  );
+}
 
 // ── Output file helpers ───────────────────────────────────────────────────────
 
@@ -1254,6 +1300,57 @@ function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
     return event.status === 'error' ? 'failed' : event.status === 'completed' ? 'completed' : 'running';
   }
   return 'running';
+}
+
+function makeCancelledError(reason: string): Error & { _cancelled: true } {
+  return Object.assign(new Error(reason), { _cancelled: true as const });
+}
+
+/**
+ * Dispose the in-memory Cursor SDK agent so the next send cannot hit
+ * "already has active run". Optionally drop cursorAgentId to force Agent.create.
+ */
+async function forceDisposeThreadAgent(
+  state: ThreadState,
+  options?: { clearCursorAgentId?: boolean; reason?: string },
+): Promise<void> {
+  if (state.agent) {
+    console.log(
+      `[chat] Force-disposing agent (threadId=${state.thread.id}` +
+        `, reason=${options?.reason ?? 'unspecified'})`,
+    );
+    await state.agent[Symbol.asyncDispose]().catch(() => {});
+    state.agent = null;
+  }
+  if (options?.clearCursorAgentId) {
+    state.thread.cursorAgentId = undefined;
+  }
+}
+
+async function cancelSdkRunBestEffort(
+  state: ThreadState,
+  runId: string,
+): Promise<void> {
+  if (!state.agent) return;
+  try {
+    type AgentRunHandle = {
+      supports: (capability: string) => boolean;
+      cancel: () => Promise<void>;
+    };
+    type AgentWithGetRun = typeof Agent & {
+      getRun: (
+        id: string,
+        opts: { runtime: 'local'; cwd: string },
+      ) => Promise<AgentRunHandle>;
+    };
+    const run = await (Agent as AgentWithGetRun).getRun(runId, {
+      runtime: 'local',
+      cwd: state.thread.workspaceDir,
+    });
+    if (run.supports('cancel')) await run.cancel();
+  } catch {
+    // Best-effort — dispose below is the hard guarantee.
+  }
 }
 
 function inferRunEventDetail(event: SseEvent): string | undefined {
@@ -2456,8 +2553,13 @@ export async function sendMessage(
 
   let agentRunId: string | undefined;
   let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
+  let unsubscribeAbort: (() => void) | null = null;
+  let heldLocalAgentSlot = false;
 
   try {
+    await acquireLocalAgentSlot(threadId);
+    heldLocalAgentSlot = true;
+
     // Create or resume the agent (retry up to 3x on transient errors)
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
 
@@ -2583,6 +2685,22 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
     const thinkingPhase = new ThinkingPhaseCoalescer();
+    // Long tool executions (esp. `edit` during design-doc generation) can exceed
+    // progressAbortMs with no further stream events. Track in-flight tools so the
+    // background heartbeat can refresh progressAt — but only for a bounded window.
+    // Refreshing forever defeats the reaper (prod: hung tools pinned local CLIs).
+    const inFlightToolCallIds = new Set<string>();
+    let inFlightToolsSinceMs: number | null = null;
+    const markToolInFlight = (id: string): void => {
+      const wasEmpty = inFlightToolCallIds.size === 0;
+      inFlightToolCallIds.add(id);
+      if (wasEmpty) inFlightToolsSinceMs = Date.now();
+    };
+    const clearToolInFlight = (id: string): void => {
+      inFlightToolCallIds.delete(id);
+      if (inFlightToolCallIds.size === 0) inFlightToolsSinceMs = null;
+    };
+    const { progressAbortMs } = resolveAgentRunHealthConfig();
     const flushThinkingPhase = async (): Promise<void> => {
       const phaseEvent = thinkingPhase.flush();
       if (!phaseEvent) return;
@@ -2592,6 +2710,7 @@ export async function sendMessage(
     // Shared heartbeat helper — call from any event handler that can run > 90s
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
     // agentRunId is always assigned before this function is ever called.
+    let streamAbortError: (Error & { _cancelled?: true }) | null = null;
     const bumpHeartbeat = async (): Promise<void> => {
       if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
       lastHeartbeatMs = Date.now();
@@ -2603,24 +2722,78 @@ export async function sendMessage(
       if (!runRow) {
         // Run was cancelled/failed/completed elsewhere (user Stop, reaper, etc.)
         console.log(`[chat] Run ${runId} no longer running, aborting stream`);
-        throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
+        throw makeCancelledError('Run cancelled');
       }
     };
 
+    const abortInFlightRun = (reason: string): void => {
+      if (streamAbortError) return;
+      streamAbortError = makeCancelledError(reason);
+      const runId = agentRunId!;
+      void (async () => {
+        await cancelSdkRunBestEffort(state, runId);
+        // Dispose even while stream() is blocked on a hung MCP tool so the
+        // next user send cannot hit "already has active run".
+        await forceDisposeThreadAgent(state, {
+          clearCursorAgentId: true,
+          reason,
+        });
+      })();
+    };
+
+    const throwIfAborted = (): void => {
+      if (streamAbortError) throw streamAbortError;
+    };
+
+    // React immediately to reaper/user cancel fan-out (do not wait for the next
+    // stream token or the 30s background heartbeat).
+    unsubscribeAbort = subscribeRunEvents(threadId, (envelope) => {
+      if (envelope.runId && envelope.runId !== agentRunId) return;
+      if (!isExternalRunAbortEvent(envelope)) return;
+      const detail = envelope.detail || envelope.event.type;
+      abortInFlightRun(`External abort: ${detail}`);
+    });
+
     // Background heartbeat — bumps every 30s unconditionally so long thinking
     // phases that emit no stream events don't trigger the reaper's expiry threshold.
+    // If the run was reaped/cancelled, do NOT swallow the error — abort the stream.
     backgroundHeartbeatId = setInterval(() => {
       lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
-      bumpHeartbeat().catch(() => {});
+      bumpHeartbeat().catch((err: unknown) => {
+        const cancelled =
+          !!err &&
+          typeof err === 'object' &&
+          '_cancelled' in err &&
+          Boolean((err as { _cancelled?: unknown })._cancelled);
+        if (cancelled) {
+          abortInFlightRun('Heartbeat observed non-running agent_runs row');
+        }
+      });
+      // Keep progressAt fresh while a tool is executing — but only for
+      // progressAbortMs after the first in-flight tool. Beyond that, stop
+      // refreshing so the reaper can abort at inFlightToolMaxMs.
+      if (inFlightToolCallIds.size > 0 && agentRunId && inFlightToolsSinceMs !== null) {
+        if (Date.now() - inFlightToolsSinceMs < progressAbortMs) {
+          void persistMeaningfulProgress(agentRunId, createRunEventEnvelope({
+            threadId,
+            runId: agentRunId,
+            sequence: 0,
+            event: { type: 'tool_status', toolName: 'in-flight', callId: '', status: 'running' },
+            phase: 'implementation',
+          }));
+        }
+      }
     }, 30_000);
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
+      throwIfAborted();
 
       // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
       if (currentRun.supports('stream')) {
         try {
           for await (const event of currentRun.stream()) {
+            throwIfAborted();
             if (event.type === 'assistant') {
               for (const block of event.message.content) {
                 if (block.type === 'text') {
@@ -2647,6 +2820,12 @@ export async function sendMessage(
                     pgInsertMessage(threadId, reasoningMsg).catch(() => {});
                     agentTextBuffer = '';
                   }
+
+                  const toolUseId =
+                    typeof (block as { id?: unknown }).id === 'string'
+                      ? (block as { id: string }).id
+                      : `tool_use:${block.name}:${inFlightToolCallIds.size}`;
+                  markToolInFlight(toolUseId);
 
                   const toolMsg: ChatMessage = {
                     id: uuidv4(),
@@ -2708,6 +2887,19 @@ export async function sendMessage(
               };
               const toolStatus: 'running' | 'completed' | 'error' =
                 tc.status === 'completed' || tc.status === 'error' ? tc.status : 'running';
+              const toolCallKey = tc.call_id || tc.name || 'unknown';
+              if (toolStatus === 'running') {
+                markToolInFlight(toolCallKey);
+              } else {
+                clearToolInFlight(toolCallKey);
+                // Assistant tool_use ids may differ from tool_call call_id — clear
+                // any anon keys for this tool name once the call finishes.
+                for (const key of [...inFlightToolCallIds]) {
+                  if (key === toolCallKey || key.startsWith(`tool_use:${tc.name ?? ''}:`)) {
+                    clearToolInFlight(key);
+                  }
+                }
+              }
               logMyWork('run.tool_status', {
                 runId: agentRunId,
                 toolName: tc.name ?? 'unknown',
@@ -2723,6 +2915,7 @@ export async function sendMessage(
                 args: summarizeToolInput(tc.args),
                 result: summarizeToolResult(tc.result),
               }, { phase: inferToolPhase(tc.name ?? '', tc.args) });
+              await bumpHeartbeat();
             }
           }
         } catch (streamErr) {
@@ -2911,10 +3104,10 @@ export async function sendMessage(
       '_cancelled' in err &&
       Boolean((err as { _cancelled?: unknown })._cancelled);
     if (cancelled) {
-      if (state.agent) {
-        await state.agent[Symbol.asyncDispose]().catch(() => {});
-        state.agent = null;
-      }
+      await forceDisposeThreadAgent(state, {
+        clearCursorAgentId: true,
+        reason: 'cross_worker_cancellation',
+      });
       state.thread.status = 'idle';
       state.thread.activeRunId = undefined;
       if (agentRunId) {
@@ -2950,8 +3143,10 @@ export async function sendMessage(
     trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
 
     if (state.agent) {
-      await state.agent[Symbol.asyncDispose]().catch(() => {});
-      state.agent = null;
+      await forceDisposeThreadAgent(state, {
+        clearCursorAgentId: false,
+        reason: `error_tier_${tier}`,
+      });
     }
 
     switch (tier) {
@@ -3039,6 +3234,10 @@ export async function sendMessage(
       console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
     }
   } finally {
+    if (unsubscribeAbort) {
+      unsubscribeAbort();
+      unsubscribeAbort = null;
+    }
     if (backgroundHeartbeatId !== null) {
       clearInterval(backgroundHeartbeatId);
       backgroundHeartbeatId = null;
@@ -3046,6 +3245,10 @@ export async function sendMessage(
     // Clean up provisional liveness row if it was never replaced by the real one
     db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
+    if (heldLocalAgentSlot) {
+      releaseLocalAgentSlot(threadId);
+      heldLocalAgentSlot = false;
+    }
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);
@@ -3140,28 +3343,14 @@ export async function cancelRun(threadId: string): Promise<void> {
     console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
   });
 
-  // If this IS the owner worker, cancel the SDK run directly
-  if (state.agent) {
-    try {
-      type AgentRunHandle = {
-        supports: (capability: string) => boolean;
-        cancel: () => Promise<void>;
-      };
-      type AgentWithGetRun = typeof Agent & {
-        getRun: (
-          id: string,
-          opts: { runtime: 'local'; cwd: string },
-        ) => Promise<AgentRunHandle>;
-      };
-      const run = await (Agent as AgentWithGetRun).getRun(activeRunId, {
-        runtime: 'local',
-        cwd: state.thread.workspaceDir,
-      });
-      if (run.supports('cancel')) await run.cancel();
-    } catch {
-      // Best-effort cancel
-    }
-  }
+  // Cancel the SDK run and force-dispose the in-memory agent on this instance.
+  // Dispose is required: cancel alone leaves Cursor holding an active run, and
+  // the next send surfaces "A previous run is still active on the agent."
+  await cancelSdkRunBestEffort(state, activeRunId);
+  await forceDisposeThreadAgent(state, {
+    clearCursorAgentId: true,
+    reason: 'user_or_api_cancel',
+  });
 
   state.thread.status = 'idle';
   state.thread.activeRunId = undefined;

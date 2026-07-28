@@ -2,6 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import styles from './PRDPreviewDrawer.module.css';
 
 // ── Two load-source variants ──────────────────────────────────────────────────
@@ -447,7 +448,7 @@ export const PRDPreviewDrawer: React.FC<PRDPreviewDrawerProps> = (props) => {
                     h4: ({ children, ...rest }) => <h4 id={slugify(String(children))} {...rest}>{children}</h4>,
                   }}
                 >
-                  {currentMarkdown}
+                  {stripYamlFrontmatter(currentMarkdown)}
                 </ReactMarkdown>
               </div>
             )}

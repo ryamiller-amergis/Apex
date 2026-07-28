@@ -1224,7 +1224,7 @@ describe('startSingleFeatureDocWatcher', () => {
     );
   });
 
-  it('skips fail when this instance did not own the run (non-owner)', async () => {
+  it('keeps polling when canFail is false (does not abandon the watcher)', async () => {
     mockIsThreadRunAlive.mockResolvedValue(false);
     mockCanFail.mockResolvedValue(false);
     const whereMock = jest.fn().mockResolvedValue(undefined);
@@ -1233,6 +1233,7 @@ describe('startSingleFeatureDocWatcher', () => {
 
     startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
 
+    // First tick: not allowed to fail yet — must not mark failed and must keep watching
     jest.advanceTimersByTime(5_000);
     await Promise.resolve();
     await Promise.resolve();
@@ -1241,9 +1242,23 @@ describe('startSingleFeatureDocWatcher', () => {
     expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
+
+    // Later tick: orphan grace / ownership allows fail — watcher must still be alive
+    mockCanFail.mockResolvedValue(true);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    jest.advanceTimersByTime(5_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
   });
 
-  it('skips fail when no agent_runs row exists yet (kickoff in progress)', async () => {
+  it('does not fail on first tick when no agent_runs row exists yet (kickoff in progress)', async () => {
     mockIsThreadRunAlive.mockResolvedValue(false);
     mockCanFail.mockResolvedValue(false);
     const whereMock = jest.fn().mockResolvedValue(undefined);

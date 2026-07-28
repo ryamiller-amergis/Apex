@@ -58,6 +58,7 @@ Key constraints:
 ### PRD (`.ai-pilot/output/{kebab-slug}.prd.md`) — write first
 Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 - Frontmatter must include `triage-status: needs-triage` and `glossary-terms-used`
+- **Each frontmatter field MUST be on its own line** (never concatenate `title`, `slug`, `created`, `triage-status` onto one line)
 - **Do NOT author a `## User Stories` section** — user stories are owned by the backlog PBIs and projected read-only into the PRD view. The PRD markdown must not contain a duplicate authored copy.
 - Implementation Decisions: **no file paths, no code snippets** — describe modules and interfaces only
 - `## Assumptions Made` must be populated even if minimal. **The PRD is the sole author of assumptions**; the backlog's `assumptionsMade` mirrors this section.
@@ -84,6 +85,7 @@ Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 - [ ] `implementationPhases` assigns every epic to exactly one phase; epic titles match exactly
 - [ ] `implementationPhases` rationale explains why earlier phases must precede later ones
 - [ ] `triage-status: needs-triage` present in PRD frontmatter
+- [ ] PRD frontmatter has one key per line (title, slug, created, triage-status, glossary-terms-used)
 - [ ] Both files written to `.ai-pilot/output/`
 - [ ] `## Target Surface` section present; surface label matches the backlog PBI content
 - [ ] `## Access Control and Permissions` section present with at least one action row

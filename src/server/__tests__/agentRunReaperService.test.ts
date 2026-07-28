@@ -24,6 +24,7 @@ import {
   assessAgentRunHealth,
   isThreadRunAlive,
   isTerminalAgentRunStatus,
+  isInFlightToolProgressLabel,
   getLatestThreadRun,
   canThisInstanceFailGeneration,
   reapOrphanedRuns,
@@ -36,6 +37,7 @@ const config: AgentRunHealthConfig = {
   queuedTimeoutMs: 90_000,
   progressStaleMs: 2 * 60_000,
   progressAbortMs: 5 * 60_000,
+  inFlightToolMaxMs: 15 * 60_000,
   longRunMs: 30 * 60_000,
   hardLimitMs: 2 * 60 * 60_000,
 };
@@ -78,6 +80,80 @@ describe('assessAgentRunHealth', () => {
         config
       )
     ).toBe('progress_timeout');
+  });
+
+  it('does not abort a healthy worker whose last progress is an in-flight tool (edit running)', () => {
+    // Mirrors prod failure: design-doc generation spent >5 minutes inside `edit`
+    // with heartbeat alive but progressAt frozen on "edit running".
+    expect(
+      assessAgentRunHealth(
+        {
+          status: 'running',
+          createdAt: timestamp(10 * 60_000),
+          startedAt: timestamp(10 * 60_000),
+          heartbeatAt: timestamp(10_000),
+          progressAt: timestamp(6 * 60_000),
+          progressLabel: 'edit running',
+          timeoutAt: timestamp(-60 * 60_000),
+        },
+        now,
+        config,
+      ),
+    ).toBe('progress_stale');
+  });
+
+  it('aborts an in-flight tool that exceeds inFlightToolMaxMs even while heartbeat is alive', () => {
+    expect(
+      assessAgentRunHealth(
+        {
+          status: 'running',
+          createdAt: timestamp(20 * 60_000),
+          startedAt: timestamp(20 * 60_000),
+          heartbeatAt: timestamp(10_000),
+          progressAt: timestamp(16 * 60_000),
+          progressLabel: 'edit running',
+          timeoutAt: timestamp(-60 * 60_000),
+        },
+        now,
+        config,
+      ),
+    ).toBe('progress_timeout');
+  });
+
+  it('still aborts when progress is stale after a completed tool (not in-flight)', () => {
+    expect(
+      assessAgentRunHealth(
+        {
+          status: 'running',
+          createdAt: timestamp(10 * 60_000),
+          startedAt: timestamp(10 * 60_000),
+          heartbeatAt: timestamp(10_000),
+          progressAt: timestamp(6 * 60_000),
+          progressLabel: 'edit completed',
+          timeoutAt: timestamp(-60 * 60_000),
+        },
+        now,
+        config,
+      ),
+    ).toBe('progress_timeout');
+  });
+
+  it('still detects worker loss even when last progress was an in-flight tool', () => {
+    expect(
+      assessAgentRunHealth(
+        {
+          status: 'running',
+          createdAt: timestamp(10 * 60_000),
+          startedAt: timestamp(10 * 60_000),
+          heartbeatAt: timestamp(6 * 60_000),
+          progressAt: timestamp(6 * 60_000),
+          progressLabel: 'edit running',
+          timeoutAt: timestamp(-60 * 60_000),
+        },
+        now,
+        config,
+      ),
+    ).toBe('worker_lost');
   });
 
   it('detects worker loss independently of recent meaningful progress', () => {
@@ -415,13 +491,36 @@ describe('isTerminalAgentRunStatus', () => {
   });
 });
 
+describe('isInFlightToolProgressLabel', () => {
+  it('matches tool-running labels from inferRunEventDetail', () => {
+    expect(isInFlightToolProgressLabel('edit running')).toBe(true);
+    expect(isInFlightToolProgressLabel('Write running')).toBe(true);
+    expect(isInFlightToolProgressLabel('Shell:npm running')).toBe(true);
+  });
+
+  it('rejects completed/idle labels', () => {
+    expect(isInFlightToolProgressLabel('edit completed')).toBe(false);
+    expect(isInFlightToolProgressLabel('Generating response')).toBe(false);
+    expect(isInFlightToolProgressLabel(null)).toBe(false);
+    expect(isInFlightToolProgressLabel(undefined)).toBe(false);
+  });
+});
+
 describe('getLatestThreadRun', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns the latest run status and ownerInstance', async () => {
-    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-a' });
+  it('returns the latest run status, ownerInstance, and updatedAt', async () => {
+    mockFindFirst.mockResolvedValue({
+      status: 'completed',
+      ownerInstance: 'worker-a',
+      updatedAt: '2026-07-14T13:59:00.000Z',
+    });
     const result = await getLatestThreadRun('thread-1');
-    expect(result).toEqual({ status: 'completed', ownerInstance: 'worker-a' });
+    expect(result).toEqual({
+      status: 'completed',
+      ownerInstance: 'worker-a',
+      updatedAt: '2026-07-14T13:59:00.000Z',
+    });
   });
 
   it('returns null when no runs exist', async () => {
@@ -440,22 +539,51 @@ describe('canThisInstanceFailGeneration', () => {
   });
 
   it('returns false when the latest run is not terminal (still alive)', async () => {
-    mockFindFirst.mockResolvedValue({ status: 'running', ownerInstance: 'worker-a' });
+    mockFindFirst.mockResolvedValue({
+      status: 'running',
+      ownerInstance: 'worker-a',
+      updatedAt: timestamp(0),
+    });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
   });
 
-  it('returns false when the latest run is terminal but owned by another instance', async () => {
-    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-b' });
-    await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
+  it('returns false when a foreign owner terminal run is still within orphan grace', async () => {
+    mockFindFirst.mockResolvedValue({
+      status: 'completed',
+      ownerInstance: 'worker-b',
+      updatedAt: timestamp(60_000), // 1 min ago — within 2 min grace
+    });
+    await expect(
+      canThisInstanceFailGeneration('thread-1', { now: () => now }),
+    ).resolves.toBe(false);
+  });
+
+  it('returns true when a foreign owner terminal run is past orphan grace (takeover)', async () => {
+    mockFindFirst.mockResolvedValue({
+      status: 'failed',
+      ownerInstance: 'worker-b',
+      updatedAt: timestamp(3 * 60_000), // 3 min ago — past 2 min grace
+    });
+    await expect(
+      canThisInstanceFailGeneration('thread-1', { now: () => now }),
+    ).resolves.toBe(true);
   });
 
   it('returns true when this instance owned the terminal run', async () => {
-    mockFindFirst.mockResolvedValue({ status: 'completed', ownerInstance: 'worker-a' });
+    mockFindFirst.mockResolvedValue({
+      status: 'completed',
+      ownerInstance: 'worker-a',
+      updatedAt: timestamp(0),
+    });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
   });
 
   it('returns true when ownerInstance is null (legacy/reaped)', async () => {
-    mockFindFirst.mockResolvedValue({ status: 'failed', ownerInstance: null });
+    mockFindFirst.mockResolvedValue({
+      status: 'failed',
+      ownerInstance: null,
+      updatedAt: timestamp(0),
+    });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
   });
 });
