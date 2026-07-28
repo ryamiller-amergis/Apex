@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { NotificationPreferences } from './NotificationPreferences';
-import type { ThemeMode } from '../hooks/useAppShell';
+import { THEME_OPTIONS, type ThemeMode } from '../config/themes';
 import styles from './UserMenu.module.css';
 
 interface UserMenuProps {
@@ -14,12 +14,6 @@ interface UserMenuProps {
   } | null;
   hasUnreadChangelog: boolean;
 }
-
-const themeOptions: Array<{ value: ThemeMode; label: string }> = [
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'amergis', label: 'Amergis' },
-];
 
 function getUserInitials(user: UserMenuProps['user']): string {
   const displayName = user?.name?.trim();
@@ -62,6 +56,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
   const handleLogoutClick = () => { onLogout(); setIsOpen(false); };
   const userInitials = getUserInitials(user);
   const userDisplayName = user?.name?.trim() || user?.email || 'User';
+  const activeThemeLabel = THEME_OPTIONS.find((option) => option.value === theme)?.label ?? theme;
 
   return (
     <div className={styles['user-menu']} ref={menuRef}>
@@ -133,22 +128,47 @@ export const UserMenu: React.FC<UserMenuProps> = ({
               </span>
               <div>
                 <div className={styles['theme-section-title']}>Theme</div>
-                <div className={styles['theme-section-subtitle']}>Choose your display mode</div>
+                <div className={styles['theme-section-subtitle']}>
+                  {activeThemeLabel} · pick a look
+                </div>
               </div>
             </div>
-            <div className={styles['theme-toggle']} role="radiogroup" aria-label="Theme">
-              {themeOptions.map((option) => (
-                <button
-                  key={option.value}
-                  className={`${styles['theme-toggle-option']} ${theme === option.value ? styles['theme-toggle-option-active'] : ''}`}
-                  onClick={() => handleThemeSelect(option.value)}
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === option.value}
-                >
-                  {option.label}
-                </button>
-              ))}
+            <div className={styles['theme-grid']} role="radiogroup" aria-label="Theme">
+              {THEME_OPTIONS.map((option) => {
+                const isActive = theme === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    className={`${styles['theme-card']} ${isActive ? styles['theme-card-active'] : ''}`}
+                    onClick={() => handleThemeSelect(option.value)}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    aria-label={`${option.label}: ${option.description}`}
+                    title={option.description}
+                    style={{ '--theme-preview': option.preview } as React.CSSProperties}
+                  >
+                    <span className={styles['theme-card-preview']} aria-hidden="true">
+                      <span className={styles['theme-card-accents']}>
+                        {option.accents.map((color) => (
+                          <i key={color} style={{ background: color }} />
+                        ))}
+                      </span>
+                    </span>
+                    <span className={styles['theme-card-meta']}>
+                      <span className={styles['theme-card-label']}>{option.label}</span>
+                      <span className={styles['theme-card-desc']}>{option.description}</span>
+                    </span>
+                    {isActive && (
+                      <span className={styles['theme-card-check']} aria-hidden="true">
+                        <svg viewBox="0 0 12 12" fill="none">
+                          <path d="M2.5 6.2L4.8 8.5 9.5 3.5" />
+                        </svg>
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

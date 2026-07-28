@@ -6,11 +6,9 @@ import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
 
-export type ThemeMode = 'light' | 'dark' | 'amergis';
+import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
 
-const isThemeMode = (value: string | null): value is ThemeMode => (
-  value === 'light' || value === 'dark' || value === 'amergis'
-);
+export type { ThemeMode };
 
 interface AuthenticatedUser {
   name: string;
@@ -321,7 +319,7 @@ export function useAppShell() {
     setSelectedItem,
     theme,
     setThemeMode: setTheme,
-    toggleTheme: () => setTheme(p => p === 'light' ? 'dark' : p === 'dark' ? 'amergis' : 'light'),
+    toggleTheme: () => setTheme(p => THEME_CYCLE[(THEME_CYCLE.indexOf(p) + 1) % THEME_CYCLE.length]),
     showChangelog,
     setShowChangelog,
     hasUnreadChangelog,

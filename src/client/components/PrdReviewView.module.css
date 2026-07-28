@@ -142,12 +142,11 @@
 
 .badgeGenerating { background: rgba(99, 102, 241, 0.15); color: #6366f1; }
 .badgeDraft { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
-/* Amber tuned per surface: darker amber on the light theme's pale composite,
-   lighter amber on the dark themes' dark composite — both meet WCAG AA where
-   the single #d97706 did not (only ~3.3:1 on the dark surface). */
-.badgePendingReview { background: rgba(245, 158, 11, 0.15); color: #92400e; }
-:global([data-theme="dark"]) .badgePendingReview,
-:global([data-theme="amergis"]) .badgePendingReview { color: #fbbf24; }
+/* Amber tuned via --warning-text / --warning-color theme tokens (AA on both polarities). */
+.badgePendingReview {
+  background: color-mix(in srgb, var(--warning-color) 15%, transparent);
+  color: var(--warning-text);
+}
 .badgeApproved { background: rgba(34, 197, 94, 0.15); color: var(--success-color); }
 .badgeRevisionRequested { background: rgba(249, 115, 22, 0.15); color: #ea580c; }
 

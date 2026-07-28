@@ -38,17 +38,20 @@
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
-  --brand-surface: #EEF2FF;
+  --brand-surface: #D5DDEC;
   --brand-surface-dark: #18181B;
   --brand-text-inverse: #F9FAFB;
-  --bg-primary: #F8FAFF;
-  --bg-secondary: #EEF2FF;
-  --bg-tertiary: #E0E7FF;
+  /* Softened cool slate — less glare than near-white, still AA with muted text. */
+  --bg-primary: #E4EAF4;
+  --bg-secondary: #D5DDEC;
+  --bg-tertiary: #C8D2E4;
+  --bg-page: #E4EAF4;
   --text-primary: #111827;
-  --text-secondary: #4B5563;
-  --text-muted: #6B7280;
-  --border-color: #D6DDF7;
-  --border-color-light: #E5E9FF;
+  --text-secondary: #3F4B5C;
+  /* #4B5563 keeps ≥4.5:1 on primary/secondary/tertiary (was failing on #EEF2FF). */
+  --text-muted: #4B5563;
+  --border-color: #B8C3D9;
+  --border-color-light: #C9D2E6;
   --accent-color: #2747D9;
   --accent-hover: #1C33A6;
   --accent-teal: #2747D9;
@@ -61,10 +64,15 @@
   --on-accent: #ffffff;
   --on-success: #0b1220;
   --error-color: #d32f2f;
+  /* Warning / pending — dark amber text on pale wash (AA on light surfaces). */
+  --warning-color: #f59e0b;
+  --warning-text: #92400e;
+  /* Mix % for success/error/warning surface washes (light needs less tint). */
+  --status-mix: 14%;
   --shadow-sm: rgba(0, 0, 0, 0.08);
   --shadow-md: rgba(0, 0, 0, 0.14);
-  --calendar-bg: #F8FAFF;
-  --calendar-event-bg: #E0E7FF;
+  --calendar-bg: #E4EAF4;
+  --calendar-event-bg: #C8D2E4;
   --calendar-event-border: #2747D9;
   --calendar-event-text: #1C33A6;
 }
@@ -79,6 +87,7 @@
   --bg-primary: #050506;
   --bg-secondary: #111113;
   --bg-tertiary: #18181B;
+  --bg-page: #050506;
   --text-primary: #F9FAFB;
   --text-secondary: #D4D4D8;
   --text-muted: #A1A1AA;
@@ -95,6 +104,9 @@
   --on-accent: #0b1220;
   --on-success: #0b1220;
   --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);
   --calendar-bg: #111113;
@@ -113,6 +125,7 @@
   --bg-primary: #1e1e1e;
   --bg-secondary: #2d2d2d;
   --bg-tertiary: #3d3d3d;
+  --bg-page: #1e1e1e;
   --text-primary: #e0e0e0;
   --text-secondary: #b0b0b0;
   --text-muted: #808080;
@@ -130,12 +143,126 @@
   --on-accent: #0B3B2E;
   --on-success: #0B3B2E;
   --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);
   --calendar-bg: #2d2d2d;
   --calendar-event-bg: #1a3330;
   --calendar-event-border: #5ACCA6;
   --calendar-event-text: #5ACCA6;
+}
+
+/* Deep indigo → violet page wash with periwinkle accents. */
+[data-theme="midnight"] {
+  --brand-primary: #9BA8FF;
+  --brand-primary-light: #B8C0FF;
+  --brand-navy: #0B1020;
+  --brand-surface: #1A2140;
+  --brand-surface-dark: #0B1020;
+  --brand-text-inverse: #E8ECFF;
+  --bg-primary: #0B1020;
+  --bg-secondary: #151B2E;
+  --bg-tertiary: #1E2640;
+  --bg-page: linear-gradient(165deg, #080C18 0%, #121A32 48%, #1A1235 100%);
+  --text-primary: #E8ECFF;
+  --text-secondary: #A8B0C8;
+  --text-muted: #8B93A8;
+  --border-color: #2A3352;
+  --border-color-light: #3A4568;
+  --accent-color: #9BA8FF;
+  --accent-hover: #B8C0FF;
+  --accent-teal: #9BA8FF;
+  --accent-teal-hover: #B8C0FF;
+  --success-color: #4ADE80;
+  --success-hover: #86EFAC;
+  --on-accent: #0b1220;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #151B2E;
+  --calendar-event-bg: #1E2640;
+  --calendar-event-border: #9BA8FF;
+  --calendar-event-text: #E8ECFF;
+}
+
+/* Warm charcoal → plum wash with soft amber accents. */
+[data-theme="dusk"] {
+  --brand-primary: #E8A87C;
+  --brand-primary-light: #F0C4A0;
+  --brand-navy: #14101A;
+  --brand-surface: #2A2230;
+  --brand-surface-dark: #14101A;
+  --brand-text-inverse: #F3EDE6;
+  --bg-primary: #14101A;
+  --bg-secondary: #1E1826;
+  --bg-tertiary: #2A2230;
+  --bg-page: linear-gradient(165deg, #100C14 0%, #1A1422 46%, #241820 100%);
+  --text-primary: #F3EDE6;
+  --text-secondary: #C4B8AE;
+  --text-muted: #9A8F86;
+  --border-color: #3A3240;
+  --border-color-light: #4A4250;
+  --accent-color: #E8A87C;
+  --accent-hover: #F0C4A0;
+  --accent-teal: #E8A87C;
+  --accent-teal-hover: #F0C4A0;
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #1A1008;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #1E1826;
+  --calendar-event-bg: #2A2230;
+  --calendar-event-border: #E8A87C;
+  --calendar-event-text: #F3EDE6;
+}
+
+/* Purple → magenta → orange aurora wash. */
+[data-theme="aurora"] {
+  --brand-primary: #E879F9;
+  --brand-primary-light: #F0ABFC;
+  --brand-navy: #140A1C;
+  --brand-surface: #2A1638;
+  --brand-surface-dark: #140A1C;
+  --brand-text-inverse: #F3E8FF;
+  --bg-primary: #140A1C;
+  --bg-secondary: #1E1028;
+  --bg-tertiary: #2A1638;
+  --bg-page: linear-gradient(160deg, #0E0614 0%, #1A0A28 38%, #3B1520 72%, #2A1208 100%);
+  --text-primary: #F3E8FF;
+  --text-secondary: #C4B0D8;
+  --text-muted: #9B8AAD;
+  --border-color: #3D2A50;
+  --border-color-light: #4E3A62;
+  --accent-color: #E879F9;
+  --accent-hover: #F0ABFC;
+  --accent-teal: #FB923C;
+  --accent-teal-hover: #FDBA74;
+  --success-color: #4ADE80;
+  --success-hover: #86EFAC;
+  --on-accent: #2E1065;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #1E1028;
+  --calendar-event-bg: #2A1638;
+  --calendar-event-border: #FB923C;
+  --calendar-event-text: #FDBA74;
 }
 
 body {
@@ -145,7 +272,8 @@ body {
     Cantarell, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--bg-primary);
+  background: var(--bg-page, var(--bg-primary));
+  background-attachment: fixed;
   color: var(--text-primary);
   transition: background-color 0.3s ease, color 0.3s ease;
 }
