@@ -25,6 +25,7 @@ import {
   useRemoveFlagRule,
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
+import { FoundationSkillsAdmin } from './FoundationSkillsAdmin';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
@@ -47,7 +48,7 @@ const menuSchema = z.object({
 
 type MenuFormValues = z.infer<typeof menuSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'flags';
+type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'skills';
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
@@ -316,6 +317,17 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             >
               Feature Flags
             </button>
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-skills"
+              aria-selected={activeTab === 'skills'}
+              aria-controls="platform-admin-panel-skills"
+              className={`${styles.tabButton} ${activeTab === 'skills' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('skills')}
+            >
+              APEX Skills
+            </button>
           </div>
 
           {activeTab === 'access' && (
@@ -386,6 +398,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <FeatureFlagsSection />
+            </div>
+          )}
+          {activeTab === 'skills' && (
+            <div
+              id="platform-admin-panel-skills"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-skills"
+              className={styles.tabPanel}
+            >
+              <FoundationSkillsAdmin />
             </div>
           )}
         </main>

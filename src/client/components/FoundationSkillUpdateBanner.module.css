@@ -1,0 +1,65 @@
+.banner {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, var(--border-color));
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.text {
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.or {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.codeBtn {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  color: var(--text-primary);
+}
+
+.codeBtn:hover {
+  border-color: var(--accent-color);
+}
+
+.codeBtn code {
+  font-size: 11px;
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  color: var(--accent-color);
+}

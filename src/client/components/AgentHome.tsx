@@ -21,6 +21,7 @@ import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSet
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { BrandLogo } from './BrandLogo';
 import { ReadAloudButton } from './ReadAloudButton';
+import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
 import styles from './AgentHome.module.css';
 
 interface AgentHomeProps {
@@ -1128,6 +1129,15 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           >
             {showHistory ? '← Hide History' : '⏱ History'}
           </button>
+          {/* Foundation skills optional update notice — shown only when update is available */}
+          {resolvedRepoName && (
+            <FoundationSkillUpdateBanner
+              project={selectedProject || null}
+              repo={resolvedRepoName}
+              provider={skillConfig?.skillProvider ?? 'ado'}
+              branch={defaultBranch}
+            />
+          )}
           <div className={styles.composeInner}>
             <div className={styles.composeLogo}>
               <BrandLogo />
