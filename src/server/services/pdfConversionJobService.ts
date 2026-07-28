@@ -234,7 +234,7 @@ export async function enqueuePdfExport(
   userId: string,
   filename?: string,
   pages?: number[],
-  format: PdfExportFormat = 'pdf',
+  format: PdfExportFormat = 'pdf'
 ): Promise<EnqueueExportResponse> {
   await assertPdfQueueCapacity(userId);
   const jobId = crypto.randomUUID();
@@ -324,7 +324,7 @@ async function mapJob(row: PdfJobRow): Promise<PdfConversionJob> {
         : null,
     resultFilename: result.filename ?? null,
     resultFileName: result.resultFileName ?? null,
-    resultFormat: (result.format === 'docx' ? 'docx' : 'pdf') ?? null,
+    resultFormat: result.format === 'docx' ? 'docx' : 'pdf',
     attempts: row.attempts,
     maxAttempts: row.maxAttempts,
     error: row.errorCode

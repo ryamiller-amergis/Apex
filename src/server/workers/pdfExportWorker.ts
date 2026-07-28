@@ -196,13 +196,14 @@ export async function assemblePdf(
       );
     }
 
-    let pdfBytes = new Uint8Array(await outputDoc.save());
-    if (apryseReplacements.length > 0) {
-      pdfBytes = await aprysePdfEditingService.replaceText(
-        pdfBytes,
-        apryseReplacements
-      );
-    }
+    const assembledPdfBytes = new Uint8Array(await outputDoc.save());
+    const pdfBytes =
+      apryseReplacements.length > 0
+        ? await aprysePdfEditingService.replaceText(
+            assembledPdfBytes,
+            apryseReplacements
+          )
+        : assembledPdfBytes;
     if (outputRef) {
       await getPdfArtifactStore().putFile(outputRef, pdfBytes);
     }

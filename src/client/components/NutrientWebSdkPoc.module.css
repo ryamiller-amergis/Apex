@@ -1,109 +1,80 @@
-.page {
+/* ── Workbench root ──────────────────────────────────────────────────────── */
+
+.workbench {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
   background: var(--bg-primary);
   color: var(--text-primary);
 }
 
-.header {
+/* ── Body: tool rail + canvas ─────────────────────────────────────────────── */
+
+.body {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-}
+/* ── Canvas wrapper (relative so the floating toolbar can be fixed/absolute) */
 
-.header p {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-}
-
-.eyebrow {
-  margin-bottom: 4px;
-  color: var(--accent-color);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.backLink,
-.exportButton {
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+.canvasWrapper {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
   background: var(--bg-secondary);
-  color: var(--text-primary);
-  text-decoration: none;
-  cursor: pointer;
+  overflow: hidden;
 }
 
-.backLink:hover,
-.exportButton:hover:not(:disabled) {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.exportButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-}
-
-.fileLabel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
-
-.evaluation {
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
-  color: var(--accent-color);
-  font-size: 0.75rem;
-}
-
-.status {
-  color: var(--text-secondary);
-}
-
-.error {
-  color: var(--error-color);
-}
+/* ── Nutrient viewer container ────────────────────────────────────────────── */
 
 .viewer {
   flex: 1;
-  min-height: 560px;
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-secondary);
 }
 
-@media (max-width: 900px) {
-  .header,
-  .controls {
-    align-items: stretch;
-    flex-direction: column;
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+
+.emptyState {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.emptyIcon {
+  font-size: 3rem;
+  opacity: 0.4;
+}
+
+.emptyTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
+.emptyHint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  opacity: 0.6;
+}
+
+/* ── Mobile ───────────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .body {
+    flex-direction: column-reverse;
   }
 }
