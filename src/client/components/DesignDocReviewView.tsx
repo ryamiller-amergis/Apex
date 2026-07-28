@@ -2330,21 +2330,47 @@ export const DesignDocReviewView: React.FC = () => {
 
       {isGenerationFailed && (
         /* ── Generation failed banner ────────────────────────────────── */
-        <div className={styles.generatingBanner} style={{ borderColor: 'var(--error-color)' }}>
-          <div>
-            <div style={{ fontWeight: 600, color: 'var(--error-color)' }}>Generation failed</div>
-            <div style={{ marginTop: 4, color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+        <div
+          className={styles.generationFailedBanner}
+          role="alert"
+          data-testid="dd-generation-failed-banner"
+        >
+          <svg
+            className={`${styles.failureBannerIcon} ${styles.failureBannerIconRed}`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </svg>
+          <div className={styles.failureBannerBody}>
+            <div className={styles.failureBannerTitle}>Generation failed</div>
+            <div className={styles.failureBannerSummary}>
               {doc?.generationError ?? 'The AI agent did not produce the required output files.'}
             </div>
+            <div className={styles.failureBannerActions}>
+              <button
+                className={styles.failureBannerBtnPrimaryAccent}
+                onClick={() => id && retryGenerate.mutate(id)}
+                disabled={retryGenerate.isPending}
+                type="button"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 8a5.5 5.5 0 0 1 9.6-3.7" />
+                  <polyline points="12.5 2.5 12.5 4.8 10.2 4.8" />
+                  <path d="M13.5 8a5.5 5.5 0 0 1-9.6 3.7" />
+                  <polyline points="3.5 13.5 3.5 11.2 5.8 11.2" />
+                </svg>
+                {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
+              </button>
+            </div>
           </div>
-          <button
-            className={styles.btnApprove}
-            onClick={() => id && retryGenerate.mutate(id)}
-            disabled={retryGenerate.isPending}
-            type="button"
-          >
-            {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
-          </button>
         </div>
       )}
 

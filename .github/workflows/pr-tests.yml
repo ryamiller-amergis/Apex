@@ -402,7 +402,7 @@ jobs:
             --name $APP_NAME \
             --resource-group $RG_NAME \
             --linux-fx-version "NODE|24-lts" \
-            --startup-file 'bash -c "apt-get update && apt-get install -y git && node /home/site/wwwroot/dist/server/index.js"'
+            --startup-file 'bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
             --name $APP_NAME \

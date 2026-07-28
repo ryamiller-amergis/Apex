@@ -69,7 +69,10 @@ export interface InterviewSkillOption {
   friendlyName: string;
   /** Model override for this interview skill; null/undefined uses project default. */
   model?: string | null;
-  /** When unset, falls back to project-level prototypeStageEnabled. */
+  /**
+   * When unset, defaults to true (prototypes are generated) for that interview option.
+   * Project-level prototypeStageEnabled is only used when no interview skill option is selected.
+   */
   wantsDesignPrototype?: boolean;
   /** When unset, defaults to true (test cases are generated). */
   wantsTestCases?: boolean;

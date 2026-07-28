@@ -1,7 +1,7 @@
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -15,14 +15,14 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--scrollbar-thumb-hover);
   border: 2px solid transparent;
   background-clip: content-box;
 }
@@ -35,6 +35,7 @@
      Usage: @media (max-width: 768px) { ... }
      ─────────────────────────────────────────────── */
 
+  color-scheme: light;
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
@@ -56,6 +57,9 @@
   --accent-hover: #1C33A6;
   --accent-teal: #2747D9;
   --accent-teal-hover: #1C33A6;
+  /* Scrollbar — muted accent so thumbs match the active theme everywhere. */
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #16A34A;
   --success-hover: #15803D;
   /* Text color that renders ON accent/success fills (WCAG AA >= 4.5:1).
@@ -78,6 +82,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
@@ -97,6 +102,8 @@
   --accent-hover: #9CA8FF;
   --accent-teal: #7C8CFF;
   --accent-teal-hover: #9CA8FF;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #4ADE80;
   --success-hover: #86EFAC;
   /* Dark-theme accent/success fills are light (periwinkle / bright green),
@@ -116,6 +123,7 @@
 }
 
 [data-theme="amergis"] {
+  color-scheme: dark;
   --brand-primary: #5ACCA6;
   --brand-primary-light: #5ACCA6;
   --brand-navy: #1e1e1e;
@@ -135,6 +143,8 @@
   --accent-hover: #6ed9b4;
   --accent-teal: #5ACCA6;
   --accent-teal-hover: #6ed9b4;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #5ACCA6;
   --success-hover: #6ed9b4;
   /* Accent/success are the light mint brand color; white text is only 1.97:1.
@@ -156,6 +166,7 @@
 
 /* Deep indigo → violet page wash with periwinkle accents. */
 [data-theme="midnight"] {
+  color-scheme: dark;
   --brand-primary: #9BA8FF;
   --brand-primary-light: #B8C0FF;
   --brand-navy: #0B1020;
@@ -175,6 +186,8 @@
   --accent-hover: #B8C0FF;
   --accent-teal: #9BA8FF;
   --accent-teal-hover: #B8C0FF;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #4ADE80;
   --success-hover: #86EFAC;
   --on-accent: #0b1220;
@@ -193,6 +206,7 @@
 
 /* Warm charcoal → plum wash with soft amber accents. */
 [data-theme="dusk"] {
+  color-scheme: dark;
   --brand-primary: #E8A87C;
   --brand-primary-light: #F0C4A0;
   --brand-navy: #14101A;
@@ -212,6 +226,8 @@
   --accent-hover: #F0C4A0;
   --accent-teal: #E8A87C;
   --accent-teal-hover: #F0C4A0;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #6BCB8B;
   --success-hover: #8FDBA8;
   --on-accent: #1A1008;
@@ -230,6 +246,7 @@
 
 /* Purple → magenta → orange aurora wash. */
 [data-theme="aurora"] {
+  color-scheme: dark;
   --brand-primary: #E879F9;
   --brand-primary-light: #F0ABFC;
   --brand-navy: #140A1C;
@@ -249,6 +266,8 @@
   --accent-hover: #F0ABFC;
   --accent-teal: #FB923C;
   --accent-teal-hover: #FDBA74;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #4ADE80;
   --success-hover: #86EFAC;
   --on-accent: #2E1065;

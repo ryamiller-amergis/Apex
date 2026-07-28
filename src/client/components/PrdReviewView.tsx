@@ -4,6 +4,7 @@ import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   usePrd,
@@ -94,6 +95,7 @@ import {
   type PrdReadinessSeverity,
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
+import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
@@ -425,7 +427,10 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const prototypeStageEnabled = prd?.prototypeStageEnabled !== false;
+  const prototypeStageEnabled = resolvePrototypeStageEnabled(
+    prd?.prototypeStageEnabled,
+    projectConfig,
+  );
   const testCasesRequired = prd?.testCasesRequired !== false;
   const readiness = prd
     ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
@@ -1491,12 +1496,16 @@ export const PrdReviewView: React.FC = () => {
   );
 
   /* ── Preview content (with optional section editing) ────────────────────── */
+  // Strip YAML frontmatter for preview only — ReactMarkdown collapses soft
+  // line breaks, which turns title/slug/created/… into one unprofessional line.
   const previewContent = prd.content ? (
     canEditContent ? (
       <>
         {parsedSections.map((section, index) => (
           <div key={index} className={styles.sectionWrapper}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{section}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {stripYamlFrontmatter(section)}
+            </ReactMarkdown>
             <button
               type="button"
               className={styles.sectionEditBtn}
@@ -1509,7 +1518,9 @@ export const PrdReviewView: React.FC = () => {
         ))}
       </>
     ) : (
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {stripYamlFrontmatter(prd.content)}
+      </ReactMarkdown>
     )
   ) : (
     <div className={styles.emptyPreview}>
@@ -2376,7 +2387,7 @@ export const PrdReviewView: React.FC = () => {
           );
         })()}
 
-      {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
+      {!prototypeStageEnabled && prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
         <div className={styles.designDocRow}>
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>

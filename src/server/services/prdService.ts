@@ -25,6 +25,7 @@ import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUser
 import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import {
   autoStartDocumentValidation,
   cancelDocumentValidation,
@@ -233,20 +234,33 @@ export async function listPrds(
   const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
   const settingsNameMap = new Map(settingsNameEntries);
 
-  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, prototypeStageEnabled, testCasesEnabled }) => ({
-    ...rowToPrdSummary(
-      prd,
-      reviewerDisplayName,
-      authorDisplayName,
-      prdOwnerId,
-      prdOwnerDisplayName,
-      latestTestCases.get(prd.id) ?? null,
-      prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
-      { prototypeStageEnabled, testCasesEnabled },
-    ),
-    validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
-    prdValidationEnabled: validationEnabledByProject.get(prd.project) ?? false,
+  const skillConfigByKey = new Map<string, Awaited<ReturnType<typeof resolveSkillConfig>>>();
+  await Promise.all(rows.map(async ({ prd }) => {
+    const key = `${prd.project}::${prd.skillSettingsId ?? ''}`;
+    if (skillConfigByKey.has(key)) return;
+    skillConfigByKey.set(key, await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }));
   }));
+
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, prototypeStageEnabled, testCasesEnabled }) => {
+    const skillConfig = skillConfigByKey.get(`${prd.project}::${prd.skillSettingsId ?? ''}`);
+    return {
+      ...rowToPrdSummary(
+        prd,
+        reviewerDisplayName,
+        authorDisplayName,
+        prdOwnerId,
+        prdOwnerDisplayName,
+        latestTestCases.get(prd.id) ?? null,
+        prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
+        {
+          prototypeStageEnabled: resolvePrototypeStageEnabled(prototypeStageEnabled, skillConfig),
+          testCasesEnabled,
+        },
+      ),
+      validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+      prdValidationEnabled: validationEnabledByProject.get(prd.project) ?? false,
+    };
+  });
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
@@ -278,10 +292,16 @@ export async function getPrd(id: string): Promise<Prd | null> {
     prototypeStageEnabled,
     testCasesEnabled,
   } = rows[0];
-  const [latestTestCase, skillConfig, skillSettingsName] = await Promise.all([
+  const [latestTestCase, skillConfig, skillSettingsName, kickoffSkillPath] = await Promise.all([
     getTestCases(id),
     resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined }),
     getSkillSettingsName(row.skillSettingsId),
+    row.chatThreadId
+      ? db.query.chatThreads.findFirst({
+          where: eq(chatThreads.id, row.chatThreadId),
+          columns: { kickoff: true },
+        }).then((t) => t?.kickoff?.skillPath ?? null)
+      : Promise.resolve(null),
   ]);
   return {
     ...rowToPrdSummary(
@@ -293,7 +313,11 @@ export async function getPrd(id: string): Promise<Prd | null> {
       latestTestCase,
       skillSettingsName,
       {
-        prototypeStageEnabled: prototypeStageEnabled ?? (skillConfig?.prototypeStageEnabled !== false),
+        prototypeStageEnabled: resolvePrototypeStageEnabled(
+          prototypeStageEnabled,
+          skillConfig,
+          kickoffSkillPath,
+        ),
         testCasesEnabled: testCasesEnabled ?? true,
       },
     ),

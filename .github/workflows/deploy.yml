@@ -196,16 +196,18 @@ jobs:
               LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
               LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}"
 
-          # The Azure Node/Linux image ships without git, and the Dev Workbench
-          # feature shells out to git at runtime. Install it on boot before
-          # starting the app. safe.directory is handled in application code
-          # (repoCheckoutService.ts), so it is intentionally not set here.
+          # The Azure Node/Linux image ships without git, and Dev Workbench
+          # shells out to git at runtime. Install git in the background so Node
+          # can bind :8080 immediately — blocking apt-get before listen() exceeds
+          # WEBSITES_CONTAINER_START_TIME_LIMIT (230s) when apt mirrors are slow,
+          # which takes instances out of rotation (503 / timeouts).
+          # safe.directory is handled in application code (repoCheckoutService.ts).
           az webapp config set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --linux-fx-version "NODE|24-lts" \
-            --startup-file 'bash -c "(apt-get update && apt-get install -y git || true) && node /home/site/wwwroot/dist/server/index.js"'
+            --startup-file 'bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
 
           az webapp update \
             --name ${{ env.APP_SERVICE_NAME }} \

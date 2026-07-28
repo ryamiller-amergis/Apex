@@ -622,7 +622,10 @@ export const InterviewsDashboard: React.FC = () => {
   });
 
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
-  const prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
+  const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
+  const prototypeEnabled = interviewSkillOptions.length > 0
+    ? interviewSkillOptions.some((o) => o.wantsDesignPrototype !== false)
+    : skillConfig?.prototypeStageEnabled !== false;
 
   const canManage = can('interviews:manage');
   const canStartInterview = permissionsLoaded && canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);

@@ -699,9 +699,11 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
 
     if (agentFinished && !allDone) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
-        clearInterval(interval);
-        activeDocWatchers.delete(seedDocId);
-        console.warn(`[designDocWatcher] Skipping fail — not run owner or no terminal run (seedDocId=${seedDocId})`);
+        // Keep polling — do not stop the watcher. Stopping here left seed docs
+        // stuck in `generating` forever when recovery ran on a non-owner instance
+        // after the owning worker died. Orphan grace in canThisInstanceFailGeneration
+        // eventually allows takeover; until then (or until timeout) keep watching.
+        console.warn(`[designDocWatcher] Waiting — not run owner or no terminal run yet (seedDocId=${seedDocId})`);
         return;
       }
     }
@@ -859,9 +861,11 @@ export function startSingleFeatureDocWatcher(
     // unreliable after hydrateThread resets status on non-owner workers.
     if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
-        clearInterval(interval);
-        activeDocWatchers.delete(designDocId);
-        console.warn(`[singleFeatureDocWatcher] Skipping fail — not run owner or no terminal run (designDocId=${designDocId})`);
+        // Keep polling — do NOT clear the interval. Clearing here permanently
+        // abandoned docs in `generating` when a non-owner recovery watcher saw a
+        // terminal run owned by a dead instance. Orphan grace eventually lets
+        // canThisInstanceFailGeneration return true; timeout is the backstop.
+        console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
         return;
       }
       clearInterval(interval);

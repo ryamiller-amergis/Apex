@@ -307,8 +307,11 @@ const NewInterviewCompose: React.FC = () => {
     ? skills.find((s) => s.path === resolvedSkillPath)
     : skills.find((s) => s.name === 'grill-with-docs');
 
-  const prototypeStageEnabled =
-    selectedSkillOption?.wantsDesignPrototype ?? (skillConfig?.prototypeStageEnabled !== false);
+  // Per-option checkbox defaults to on (undefined === checked). Do not fall back to
+  // stale project-level prototypeStageEnabled when an interview skill option is selected.
+  const prototypeStageEnabled = selectedSkillOption
+    ? selectedSkillOption.wantsDesignPrototype !== false
+    : (skillConfig?.prototypeStageEnabled !== false);
   const testCasesEnabled = selectedSkillOption?.wantsTestCases ?? true;
 
   const {

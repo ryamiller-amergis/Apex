@@ -35,6 +35,12 @@ export interface AgentRunHealthConfig {
   progressStaleMs: number;
   /** Fail the run after this much time without meaningful progress (must be >= progressStaleMs). */
   progressAbortMs: number;
+  /**
+   * Hard cap for a single in-flight tool (`… running`). Beyond this, abort even
+   * while heartbeat is alive — prevents hung MCP/SDK tools from pinning a local
+   * Cursor CLI on the App Service forever (see progress refresh exemption).
+   */
+  inFlightToolMaxMs: number;
   longRunMs: number;
   hardLimitMs: number;
 }
@@ -45,6 +51,8 @@ export interface AgentRunHealthSnapshot {
   startedAt: string | null;
   heartbeatAt: string | null;
   progressAt?: string | null;
+  /** Last progress detail, e.g. "edit running" / "edit completed". */
+  progressLabel?: string | null;
   timeoutAt: string | null;
 }
 
@@ -64,11 +72,16 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
     progressStaleMs,
     positiveDuration(process.env.AGENT_PROGRESS_ABORT_MS, 5 * 60_000),
   );
+  const inFlightToolMaxMs = Math.max(
+    progressAbortMs,
+    positiveDuration(process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS, 15 * 60_000),
+  );
   return {
     heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
     queuedTimeoutMs: positiveDuration(process.env.AGENT_QUEUE_TIMEOUT_MS, 90_000),
     progressStaleMs,
     progressAbortMs,
+    inFlightToolMaxMs,
     longRunMs: positiveDuration(process.env.AGENT_LONG_RUN_MS, 30 * 60_000),
     hardLimitMs: positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000),
   };
@@ -111,6 +124,16 @@ function ageMs(timestamp: string | null | undefined, nowMs: number): number {
   return Number.isFinite(parsed) ? nowMs - parsed : Number.POSITIVE_INFINITY;
 }
 
+/**
+ * True when the last progress label indicates a tool is still executing
+ * (e.g. "edit running", "Write:path running"). Long file edits can exceed
+ * progressAbortMs without further stream events while the worker remains healthy.
+ */
+export function isInFlightToolProgressLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  return /\brunning$/i.test(label.trim());
+}
+
 export function assessAgentRunHealth(
   run: AgentRunHealthSnapshot,
   nowMs: number,
@@ -131,7 +154,16 @@ export function assessAgentRunHealth(
   // pre-migration rows bounded until the progress_at column is populated.
   const meaningfulProgressAt = run.progressAt ?? run.startedAt ?? run.createdAt;
   const progressAge = ageMs(meaningfulProgressAt, nowMs);
-  if (progressAge >= config.progressAbortMs) return 'progress_timeout';
+  if (progressAge >= config.progressAbortMs) {
+    // Long `edit`/tool calls can exceed progressAbortMs with no stream events.
+    // Stay in progress_stale (warn) until inFlightToolMaxMs, then abort — a
+    // hung MCP/CLI must not pin the App Service for the full hardLimitMs.
+    if (isInFlightToolProgressLabel(run.progressLabel)) {
+      if (progressAge >= config.inFlightToolMaxMs) return 'progress_timeout';
+      return progressAge >= config.progressStaleMs ? 'progress_stale' : 'healthy';
+    }
+    return 'progress_timeout';
+  }
   if (progressAge >= config.progressStaleMs) return 'progress_stale';
   if (ageMs(runStartedAt, nowMs) >= config.longRunMs) return 'long_running';
   return 'healthy';
@@ -158,7 +190,8 @@ export async function isThreadRunAlive(
   });
   return rows.some((row) => {
     const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
-    const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
+    const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
+    const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
     return health !== 'worker_lost'
       && health !== 'hard_timeout'
       && health !== 'never_claimed';
@@ -172,18 +205,33 @@ export function isTerminalAgentRunStatus(status: string): boolean {
 }
 
 /**
+ * How long a non-owner watcher waits after a terminal agent_runs row before
+ * taking over finalization. Gives the owning instance a chance to persist
+ * output / mark generation_failed; after this, any instance may finalize so
+ * docs cannot stay stuck in `generating` forever after a crash/deploy.
+ */
+export const GENERATION_FAIL_ORPHAN_GRACE_MS = 2 * 60_000;
+
+/**
  * Return the most recent agent_runs row for a thread (by createdAt DESC).
  */
 export async function getLatestThreadRun(threadId: string): Promise<{
   status: string;
   ownerInstance: string | null;
+  updatedAt: string;
 } | null> {
   const row = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.threadId, threadId),
     orderBy: desc(agentRuns.createdAt),
-    columns: { status: true, ownerInstance: true },
+    columns: { status: true, ownerInstance: true, updatedAt: true },
   });
   return row ?? null;
+}
+
+export interface CanFailGenerationOptions {
+  now?: () => number;
+  /** Override orphan grace (tests). Defaults to GENERATION_FAIL_ORPHAN_GRACE_MS. */
+  orphanGraceMs?: number;
 }
 
 /**
@@ -191,18 +239,31 @@ export async function getLatestThreadRun(threadId: string): Promise<{
  * `generation_failed`. Returns false when:
  * - No agent_runs row exists yet (kickoff still starting — keep polling).
  * - The latest run is non-terminal (still alive — the liveness gate handles it).
- * - The latest run is terminal but owned by a different instance (that instance
- *   is responsible for finalization).
+ * - The latest run is terminal but owned by a different instance AND still
+ *   within the orphan grace window (owner may still be finalizing).
  *
- * Returns true when this instance owned the terminal run (or ownerInstance is
- * null — legacy/reaped rows where no owner was recorded).
+ * Returns true when this instance owned the terminal run, ownerInstance is
+ * null (legacy/reaped), or the foreign owner's terminal run is older than the
+ * orphan grace (owner crashed/deployed away without finalizing).
  */
-export async function canThisInstanceFailGeneration(threadId: string): Promise<boolean> {
+export async function canThisInstanceFailGeneration(
+  threadId: string,
+  options: CanFailGenerationOptions = {},
+): Promise<boolean> {
   const latest = await getLatestThreadRun(threadId);
   if (!latest) return false;
   if (!isTerminalAgentRunStatus(latest.status)) return false;
-  if (latest.ownerInstance && latest.ownerInstance !== RUN_EVENT_SOURCE_INSTANCE) return false;
-  return true;
+  if (!latest.ownerInstance || latest.ownerInstance === RUN_EVENT_SOURCE_INSTANCE) {
+    return true;
+  }
+
+  const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
+  const nowMs = options.now?.() ?? Date.now();
+  const updatedMs = Date.parse(latest.updatedAt);
+  if (Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs) {
+    return true;
+  }
+  return false;
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {
@@ -293,7 +354,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
     for (const row of rows) {
       const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
-      const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
+      const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
+      const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
 
       if (health === 'worker_lost') {
         const detail = 'Worker lost (heartbeat expired)';

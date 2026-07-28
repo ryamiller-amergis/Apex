@@ -414,6 +414,45 @@ export function startRecoveryLoop(): void {
   }, RECOVERY_INTERVAL_MS);
 }
 
+function isPipeClosedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED';
+}
+
+/**
+ * Prevent Cursor SDK local-CLI pipe failures (EPIPE) from taking down the whole
+ * App Service process. Prod 2026-07-28: unhandled EPIPE from @cursor/sdk crashed
+ * Node while design-doc agents were running, then apt-blocked restart prolonged
+ * the outage.
+ *
+ * Non-EPIPE fatals still exit after logging so Azure can recycle cleanly.
+ */
+export function registerProcessGuards(): void {
+  process.on('uncaughtException', (err) => {
+    if (isPipeClosedError(err)) {
+      console.error(
+        '[process] Ignoring uncaught EPIPE/stream error (Cursor SDK CLI pipe likely closed):',
+        err,
+      );
+      return;
+    }
+    console.error('[process] Uncaught exception — exiting after log:', err);
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    if (isPipeClosedError(reason)) {
+      console.error(
+        '[process] Ignoring unhandled EPIPE/stream rejection (Cursor SDK CLI pipe likely closed):',
+        reason,
+      );
+      return;
+    }
+    console.error('[process] Unhandled promise rejection:', reason);
+  });
+}
+
 /**
  * Register SIGTERM / SIGINT handlers for graceful shutdown.
  * Stops accepting new connections and waits for in-flight requests
@@ -421,6 +460,8 @@ export function startRecoveryLoop(): void {
  */
 export function registerGracefulShutdown(server: Server): void {
   let shuttingDown = false;
+
+  registerProcessGuards();
 
   const shutdown = (signal: string) => {
     if (shuttingDown) return;

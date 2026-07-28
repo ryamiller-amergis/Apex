@@ -6,6 +6,7 @@ import {
   normalizeMermaidBlocks,
   normalizeMermaidChart,
 } from '../utils/mermaidMarkdown';
+import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import styles from './MarkdownWithMermaid.module.css';
 
 let mermaidDiagramCounter = 0;
@@ -339,7 +340,7 @@ export const MarkdownWithMermaid: React.FC<MarkdownWithMermaidProps> = ({
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
       >
-        {normalizeMermaidBlocks(content)}
+        {normalizeMermaidBlocks(stripYamlFrontmatter(content))}
       </ReactMarkdown>
     </div>
   );
