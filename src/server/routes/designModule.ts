@@ -47,9 +47,14 @@ function handleScopingError(err: unknown, res: import('express').Response): void
 router.get(
   '/',
   requirePermission('design-module:view'),
-  async (_req, res, next) => {
+  async (req, res, next) => {
     try {
-      return res.json(await listModules());
+      const project =
+        typeof req.query.project === 'string' ? req.query.project.trim() : '';
+      if (!project) {
+        return res.status(400).json({ error: 'project query parameter is required' });
+      }
+      return res.json(await listModules(project));
     } catch (error) {
       next(error);
     }
@@ -121,11 +126,17 @@ router.post(
   requirePermission('design-module:manage'),
   async (req, res, next) => {
     try {
-      const body = (req.body ?? {}) as DesignModuleGlobPreviewRequest;
+      const body = (req.body ?? {}) as DesignModuleGlobPreviewRequest & { project?: string };
       if (!Array.isArray(body.sourceGlobs) || body.sourceGlobs.length === 0) {
         return res
           .status(400)
           .json({ error: 'sourceGlobs must be a non-empty string array' });
+      }
+      const project = typeof body.project === 'string' ? body.project.trim() : '';
+      if (project && project !== 'Apex') {
+        return res.json({
+          matches: body.sourceGlobs.map((g) => ({ pattern: g, files: [] })),
+        });
       }
       const matches = resolveGlobFiles(body.sourceGlobs);
       return res.json({ matches });
@@ -146,7 +157,12 @@ router.get(
   requirePermission('design-module:view'),
   async (req, res, next) => {
     try {
-      const module = await getModule(req.params.slug);
+      const project =
+        typeof req.query.project === 'string' ? req.query.project.trim() : '';
+      if (!project) {
+        return res.status(400).json({ error: 'project query parameter is required' });
+      }
+      const module = await getModule(project, req.params.slug);
       if (!module)
         return res.status(404).json({ error: 'Design module not found' });
       return res.json(module);
@@ -162,13 +178,11 @@ router.post(
   async (req, res, next) => {
     try {
       const body = req.body as CreateDesignModuleInput;
-      const project =
-        typeof body.project === 'string' ? body.project.trim() : '';
-      const created = await createModule(body, getUserId(req));
-
-      if (!project) {
-        return res.status(201).json(created);
+      if (!body.project?.trim()) {
+        return res.status(400).json({ error: 'project is required' });
       }
+      const project = body.project.trim();
+      const created = await createModule({ ...body, project }, getUserId(req));
 
       try {
         const generation = await regenerateModule(created.slug, {
@@ -198,8 +212,14 @@ router.put(
   requirePermission('design-module:manage'),
   async (req, res, next) => {
     try {
+      const project =
+        typeof req.query.project === 'string' ? req.query.project.trim() : '';
+      if (!project) {
+        return res.status(400).json({ error: 'project query parameter is required' });
+      }
       return res.json(
         await updateModule(
+          project,
           req.params.slug,
           req.body as UpdateDesignModuleInput,
           getUserId(req)
@@ -216,7 +236,12 @@ router.delete(
   requirePermission('design-module:manage'),
   async (req, res, next) => {
     try {
-      const deleted = await deleteModule(req.params.slug);
+      const project =
+        typeof req.query.project === 'string' ? req.query.project.trim() : '';
+      if (!project) {
+        return res.status(400).json({ error: 'project query parameter is required' });
+      }
+      const deleted = await deleteModule(project, req.params.slug);
       if (!deleted)
         return res.status(404).json({ error: 'Design module not found' });
       return res.status(204).send();

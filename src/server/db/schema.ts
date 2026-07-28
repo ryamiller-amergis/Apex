@@ -768,7 +768,8 @@ export const appSettings = pgTable('app_settings', {
 
 export const designModules = pgTable('design_modules', {
   id: uuid('id').primaryKey().defaultRandom(),
-  slug: text('slug').notNull().unique(),
+  project: text('project').notNull().default('Apex'),
+  slug: text('slug').notNull(),
   label: text('label').notNull(),
   description: text('description'),
   iconKey: text('icon_key').$type<DesignModuleIconKey>().notNull().default('default'),
@@ -785,6 +786,8 @@ export const designModules = pgTable('design_modules', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
+  projectSlugUnique: uniqueIndex('design_modules_project_slug_key').on(t.project, t.slug),
+  projectIdx: index('idx_design_modules_project').on(t.project),
   sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
 }));
 

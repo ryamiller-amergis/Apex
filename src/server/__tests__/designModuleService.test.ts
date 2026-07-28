@@ -285,6 +285,7 @@ describe('seeded design module documentation', () => {
 describe('regenerateModule skill settings', () => {
   const moduleRow = {
     id: 'mod-1',
+    project: 'Apex',
     slug: 'rbac',
     label: 'RBAC',
     description: 'Access control',

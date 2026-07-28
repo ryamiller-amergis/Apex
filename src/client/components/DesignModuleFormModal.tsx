@@ -106,8 +106,8 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  const createModule = useCreateDesignModule();
-  const updateModule = useUpdateDesignModule();
+  const createModule = useCreateDesignModule(project);
+  const updateModule = useUpdateDesignModule(project);
   const { data: repoConfigs = [] } = useProjectRepoConfigs(project);
   const hasConnectedRepo = repoConfigs.some((config) =>
     Boolean(config.skillRepo?.trim())
@@ -221,7 +221,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
     }
     const timer = window.setTimeout(() => {
       globPreview.mutate(
-        { sourceGlobs: includedPatterns },
+        { sourceGlobs: includedPatterns, project },
         {
           onSuccess: (data) => {
             const files = Array.from(

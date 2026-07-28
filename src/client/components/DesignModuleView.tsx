@@ -27,10 +27,10 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
     string | null
   >(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const modulesQuery = useDesignModules();
-  const moduleQuery = useDesignModule(selectedSlug);
-  const regenerate = useRegenerateDesignModule();
-  const deleteModule = useDeleteDesignModule();
+  const modulesQuery = useDesignModules(selectedProject);
+  const moduleQuery = useDesignModule(selectedProject, selectedSlug);
+  const regenerate = useRegenerateDesignModule(selectedProject);
+  const deleteModule = useDeleteDesignModule(selectedProject);
   const { can } = useAppShell();
 
   const modules = [...(modulesQuery.data ?? [])].sort((a, b) =>
@@ -45,13 +45,20 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
     !activeModule.hasContent;
 
   useEffect(() => {
+    setSelectedSlug(null);
+    setPendingGenerationSlug(null);
+    setNotice(null);
+    setFormMode(null);
+    setShowDeleteConfirm(false);
+  }, [selectedProject]);
+
+  useEffect(() => {
     if (!selectedSlug && modules.length > 0) setSelectedSlug(modules[0].slug);
     if (
       selectedSlug &&
       modules.length > 0 &&
       !modules.some((module) => module.slug === selectedSlug)
     ) {
-      // Keep the new slug selected while the list query catches up after create.
       if (selectedSlug === pendingGenerationSlug) return;
       setSelectedSlug(modules[0].slug);
     }

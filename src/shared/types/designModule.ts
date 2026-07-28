@@ -13,6 +13,7 @@ export type DesignModuleIconKey = (typeof DESIGN_MODULE_ICON_KEYS)[number];
 
 export interface DesignModuleSummary {
   id: string;
+  project: string;
   slug: string;
   label: string;
   description: string | null;
@@ -38,6 +39,7 @@ export interface DesignModule extends DesignModuleSummary {
 }
 
 export interface CreateDesignModuleInput {
+  project: string;
   slug: string;
   label: string;
   description?: string | null;
@@ -46,11 +48,6 @@ export interface CreateDesignModuleInput {
   sortOrder?: number;
   /** Persist an AI scoping thread started before the module was saved. */
   scopingThreadId?: string | null;
-  /**
-   * When set on create, the server auto-starts architecture doc generation
-   * for this project. Not persisted on the module row.
-   */
-  project?: string;
 }
 
 export type UpdateDesignModuleInput = Partial<

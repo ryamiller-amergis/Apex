@@ -48,6 +48,7 @@ export interface DesignModuleScopingResultResponse {
 
 export interface DesignModuleGlobPreviewRequest {
   sourceGlobs: string[];
+  project?: string;
 }
 
 export interface DesignModuleGlobPreviewMatch {

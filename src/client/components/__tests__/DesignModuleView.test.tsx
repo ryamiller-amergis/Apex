@@ -19,6 +19,7 @@ jest.mock('../../hooks/useDesignModules', () => ({
     data: [
       {
         id: 'module-1',
+        project: 'Apex',
         slug: 'rbac',
         label: 'RBAC',
         description: 'Role-based access control',
@@ -40,6 +41,7 @@ jest.mock('../../hooks/useDesignModules', () => ({
   useDesignModule: () => ({
     data: {
       id: 'module-1',
+      project: 'Apex',
       slug: 'rbac',
       label: 'RBAC',
       description: 'Role-based access control',
@@ -170,7 +172,7 @@ describe('DesignModuleView', () => {
     expect(
       await screen.findByRole('dialog', { name: /Delete architecture module/i })
     ).toBeInTheDocument();
-    expect(screen.getByText(/“RBAC”/)).toBeInTheDocument();
+    expect(screen.getByText(/\u201CRBAC\u201D/)).toBeInTheDocument();
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });

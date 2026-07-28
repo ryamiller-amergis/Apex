@@ -39,6 +39,7 @@ function mockFetchError(status: number, body: unknown = { error: `HTTP ${status}
 
 const summary: DesignModuleSummary = {
   id: 'mod-1',
+  project: 'Apex',
   slug: 'chat',
   label: 'Chat',
   description: null,
@@ -67,15 +68,15 @@ const designModule: DesignModule = {
 describe('useDesignModules', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('fetches the design module list', async () => {
+  it('fetches the design module list scoped by project', async () => {
     mockFetchOk([summary]);
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useDesignModules(), { wrapper });
+    const { result } = renderHook(() => useDesignModules('Apex'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toEqual([summary]);
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/design-modules',
+      '/api/design-modules?project=Apex',
       expect.objectContaining({ credentials: 'include' })
     );
   });
@@ -83,7 +84,7 @@ describe('useDesignModules', () => {
   it('surfaces list fetch errors', async () => {
     mockFetchError(500, { error: 'boom' });
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useDesignModules(), { wrapper });
+    const { result } = renderHook(() => useDesignModules('Apex'), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('boom');
@@ -93,15 +94,17 @@ describe('useDesignModules', () => {
 describe('useDesignModule', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('fetches a module by slug when enabled', async () => {
+  it('fetches a module by project and slug when enabled', async () => {
     mockFetchOk(designModule);
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useDesignModule('chat'), { wrapper });
+    const { result } = renderHook(() => useDesignModule('Apex', 'chat'), {
+      wrapper,
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.slug).toBe('chat');
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/design-modules/chat',
+      '/api/design-modules/chat?project=Apex',
       expect.objectContaining({ credentials: 'include' })
     );
   });
@@ -109,7 +112,9 @@ describe('useDesignModule', () => {
   it('does not fetch when slug is null', async () => {
     mockFetchOk(designModule);
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useDesignModule(null), { wrapper });
+    const { result } = renderHook(() => useDesignModule('Apex', null), {
+      wrapper,
+    });
 
     expect(result.current.fetchStatus).toBe('idle');
     expect(global.fetch).not.toHaveBeenCalled();
@@ -122,10 +127,13 @@ describe('useCreateDesignModule', () => {
   it('POSTs a new module and caches the result', async () => {
     mockFetchOk({ ...designModule, generation: { started: false } });
     const { queryClient, wrapper } = createWrapper();
-    const { result } = renderHook(() => useCreateDesignModule(), { wrapper });
+    const { result } = renderHook(() => useCreateDesignModule('Apex'), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.mutateAsync({
+        project: 'Apex',
         slug: 'chat',
         label: 'Chat',
         iconKey: 'chat',
@@ -134,7 +142,9 @@ describe('useCreateDesignModule', () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(queryClient.getQueryData(['design-modules', 'chat'])).toMatchObject({
+    expect(
+      queryClient.getQueryData(['design-modules', 'Apex', 'chat'])
+    ).toMatchObject({
       slug: 'chat',
       label: 'Chat',
     });
@@ -144,7 +154,7 @@ describe('useCreateDesignModule', () => {
 describe('useDeleteDesignModule', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('DELETEs a module by slug', async () => {
+  it('DELETEs a module by slug with project', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 204,
@@ -152,7 +162,9 @@ describe('useDeleteDesignModule', () => {
     }) as jest.Mock;
 
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useDeleteDesignModule(), { wrapper });
+    const { result } = renderHook(() => useDeleteDesignModule('Apex'), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.mutateAsync('chat');
@@ -160,7 +172,7 @@ describe('useDeleteDesignModule', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/design-modules/chat',
+      '/api/design-modules/chat?project=Apex',
       expect.objectContaining({ method: 'DELETE' })
     );
   });
