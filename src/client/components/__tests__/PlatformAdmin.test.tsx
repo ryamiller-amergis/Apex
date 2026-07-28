@@ -470,3 +470,52 @@ describe('PlatformAdmin feature flags', () => {
     );
   });
 });
+
+// ── APEX Skills tab ───────────────────────────────────────────────────────────
+
+jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
+  useFoundationSkillReleases:           jest.fn().mockReturnValue({ data: [], isLoading: false }),
+  useFoundationSkillCandidates:         jest.fn().mockReturnValue({ data: [], isLoading: false }),
+  useFoundationSkillRepoStatuses:       jest.fn().mockReturnValue({ data: [], isLoading: false }),
+  useFoundationSkillReleaseAudit:       jest.fn().mockReturnValue({ data: [], isLoading: false }),
+  useCreateFoundationSkillRelease:      jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+  usePublishFoundationSkillRelease:     jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+  useDeprecateFoundationSkillRelease:   jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+  useDeleteDraftFoundationSkillRelease: jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+  useUpdateRepoWithFoundationSkills:    jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+  useCheckFoundationSkillCompatibility: jest.fn().mockReturnValue({ mutateAsync: jest.fn(), isPending: false }),
+}));
+
+describe('PlatformAdmin — APEX Skills tab', () => {
+  it('renders the APEX Skills tab button', () => {
+    setupPlatformAdmin();
+    render(<PlatformAdmin
+      onBackToProjects={() => undefined}
+      user={null}
+      theme="light"
+      hasUnreadChangelog={false}
+      onThemeChange={() => undefined}
+      onOpenChangelog={() => undefined}
+      onLogout={() => undefined}
+    />);
+    expect(screen.getByRole('tab', { name: /APEX Skills/i })).toBeInTheDocument();
+  });
+
+  it('shows FoundationSkillsAdmin section when APEX Skills tab is clicked', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+    render(<PlatformAdmin
+      onBackToProjects={() => undefined}
+      user={null}
+      theme="light"
+      hasUnreadChangelog={false}
+      onThemeChange={() => undefined}
+      onOpenChangelog={() => undefined}
+      onLogout={() => undefined}
+    />);
+
+    await user.click(screen.getByRole('tab', { name: /APEX Skills/i }));
+    // The FoundationSkillsAdmin renders its own section heading
+    expect(screen.getByText('APEX Foundation Skills')).toBeInTheDocument();
+  });
+});
