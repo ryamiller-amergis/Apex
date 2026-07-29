@@ -25,6 +25,7 @@ import {
   walkthroughDraftFormSchema,
   type WalkthroughDraftFormValues,
 } from '../utils/walkthroughAuthoringValidation';
+import { WalkthroughAiDraftPanel } from './WalkthroughAiDraftPanel';
 import styles from './WalkthroughAuthoring.module.css';
 
 interface ManualWalkthroughEditorProps {
@@ -91,6 +92,7 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
 
   useEffect(() => {
     if (!isOpen) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset dialog controls when opened; pre-existing FEAT-003 pattern
     setMode(isPublished ? 'silent' : 'fresh');
     setLifecycleError(null);
   }, [isOpen, isPublished]);
@@ -116,6 +118,7 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
   };
 
   return (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click-to-dismiss; Escape handled separately; pre-existing FEAT-003 pattern
     <div
       className={styles.dialogOverlay}
       role="dialog"
@@ -336,6 +339,59 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     onClose();
   }, [isDirty, onClose]);
 
+  const handleAiMergeDraft = useCallback(
+    (next: {
+      internalName: string;
+      userTitle: string;
+      whyItMatters: string;
+      steps: Array<{
+        id?: string;
+        ordinal: number;
+        heading: string;
+        bodyMarkdown: string;
+        imageUrl?: string | null;
+        ctaLabel?: string | null;
+        ctaRoute?: string | null;
+        anchor?: {
+          key: string;
+          targetRoute: string;
+          placement:
+            | 'top'
+            | 'bottom'
+            | 'left'
+            | 'right'
+            | 'top-start'
+            | 'top-end'
+            | 'bottom-start'
+            | 'bottom-end';
+        } | null;
+      }>;
+    }) => {
+      setValue('internalName', next.internalName, { shouldDirty: true });
+      setValue('userTitle', next.userTitle, { shouldDirty: true });
+      setValue('whyItMatters', next.whyItMatters, { shouldDirty: true });
+      setValue(
+        'steps',
+        next.steps.length > 0
+          ? next.steps.map((step, index) => ({
+              id: step.id ?? `ai-${index}`,
+              heading: step.heading,
+              bodyMarkdown: step.bodyMarkdown,
+              imageUrl: step.imageUrl ?? null,
+              imageAlt: '',
+              ctaLabel: step.ctaLabel ?? null,
+              ctaRoute: step.ctaRoute ?? null,
+              anchorKey: step.anchor?.key ?? '',
+              anchorTargetRoute: step.anchor?.targetRoute ?? '',
+              anchorPlacement: step.anchor?.placement ?? '',
+            }))
+          : [createEmptyStep(0)],
+        { shouldDirty: true },
+      );
+    },
+    [setValue],
+  );
+
   const onSaveDraft = handleSubmit(async (values) => {
     const command = draftFormToCreateCommand(values);
     const effectiveId = walkthroughId ?? savedWalkthrough?.id ?? null;
@@ -390,6 +446,7 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     const entry = registry.find((anchor) => anchor.key === key);
     if (entry) {
       setValue(`steps.${index}.anchorTargetRoute`, entry.targetRoute);
+      // eslint-disable-next-line react-hooks/incompatible-library -- react-hook-form watch is required for current placement read; pre-existing FEAT-003 pattern
       if (!watch(`steps.${index}.anchorPlacement`)) {
         setValue(`steps.${index}.anchorPlacement`, entry.allowedPlacements[0] ?? 'bottom');
       }
@@ -463,6 +520,42 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
           </ul>
         </div>
       )}
+
+      <WalkthroughAiDraftPanel
+        {...{ 'data-testid': 'walkthrough-ai-draft-panel' }}
+        projectId={watchedProject}
+        currentDraft={{
+          internalName: watch('internalName') || '',
+          userTitle: watch('userTitle') || '',
+          whyItMatters: watch('whyItMatters') || '',
+          steps: (watchedSteps ?? []).map((step, index) => ({
+            id: step.id,
+            ordinal: index,
+            heading: step.heading || '',
+            bodyMarkdown: step.bodyMarkdown || '',
+            imageUrl: step.imageUrl,
+            ctaLabel: step.ctaLabel,
+            ctaRoute: step.ctaRoute,
+            anchor:
+              step.anchorKey && step.anchorTargetRoute && step.anchorPlacement
+                ? {
+                    key: step.anchorKey,
+                    targetRoute: step.anchorTargetRoute,
+                    placement: step.anchorPlacement as
+                      | 'top'
+                      | 'bottom'
+                      | 'left'
+                      | 'right'
+                      | 'top-start'
+                      | 'top-end'
+                      | 'bottom-start'
+                      | 'bottom-end',
+                  }
+                : null,
+          })),
+        }}
+        onMergeDraft={handleAiMergeDraft}
+      />
 
       <section className={styles.section} aria-labelledby="walkthrough-metadata-title">
         <h3 id="walkthrough-metadata-title" className={styles.sectionTitle}>

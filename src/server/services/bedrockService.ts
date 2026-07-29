@@ -264,7 +264,7 @@ async function loadSkillContent(): Promise<string> {
         console.log(`[bedrockService] Loaded SDLC skill from ADO path: ${path} (${content.length} chars)`);
         return content;
       }
-    } catch (err: any) {
+    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any -- ADO fetch errors are untyped
       console.warn(`[bedrockService] Could not fetch skill at ${path}: ${err.message}`);
     }
   }
@@ -459,9 +459,11 @@ export async function generateFeatureFromBedrock(
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'Feature')) as GeneratedFeatureWithPBIs;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification JSON is loosely shaped
   const normClarificationQuestions = (arr: any): ClarificationQuestion[] | undefined => {
     if (!Array.isArray(arr) || arr.length === 0) return undefined;
     const valid = arr.filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification JSON is loosely shaped
       (q: any) => q && typeof q.title === 'string' && Array.isArray(q.answers) && q.answers.length > 0
     ) as ClarificationQuestion[];
     return valid.length > 0 ? valid : undefined;
@@ -704,6 +706,7 @@ export async function resolveClarificationWithBedrock(
     ? (parsed.action as ClarificationAction)
     : 'update';
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification PBI JSON is loosely shaped
   const normPBI = (p: any): ClarificationPBIData => ({
     title: p?.title ?? '',
     description: p?.description ?? '',
@@ -750,6 +753,7 @@ export async function resolveClarificationWithBedrock(
   }
 
   // create-pbi
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy Bedrock payload field name
   const pbi = parsed.newPBI ?? (parsed as any).newChild;
   return {
     action: 'create-pbi',
@@ -2496,6 +2500,7 @@ function parseUiPlanResult(text: string): UiSurfacePlan {
   const validContributions: PbiContributionType[] = ['new-section', 'new-tab', 'table-column', 'filter', 'action', 'state', 'modal', 'drawer', 'no-ui'];
 
   const pbiContributions: PbiContribution[] = Array.isArray(parsed.pbiContributions)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock UI plan contributions are loosely shaped
     ? (parsed.pbiContributions as any[]).map(c => ({
         pbiId: typeof c.pbiId === 'string' ? c.pbiId : '',
         pbiTitle: typeof c.pbiTitle === 'string' ? c.pbiTitle : '',
@@ -3145,7 +3150,7 @@ export async function fixDesignDocSectionWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
-  usageCtx?: BedrockUsageContext,
+  _usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -3314,6 +3319,7 @@ function normalisePlanTargetRoute(raw: unknown): string | undefined {
 
 function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): DesignPlanFeature[] {
   const parsed = JSON.parse(extractJson(text, 'DesignPlan')) as unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock design-plan array elements are loosely shaped
   const arr: any[] = Array.isArray(parsed) ? parsed : [];
 
   const validDecisions = ['new-page', 'update-page', 'no-ui'];
@@ -3328,6 +3334,7 @@ function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): De
     const layoutPattern = validLayouts.includes(match.layoutPattern) ? match.layoutPattern as UiLayoutPattern : undefined;
 
     const pbiContributions = Array.isArray(match.pbiContributions) && match.pbiContributions.length > 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock design-plan contributions are loosely shaped
       ? match.pbiContributions.map((c: any) => ({
           pbiTitle: typeof c?.pbiTitle === 'string' ? c.pbiTitle : '',
           contribution: typeof c?.contribution === 'string' ? c.contribution : '',
@@ -3390,6 +3397,32 @@ export async function generateDesignPlanForPrd(
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : DESIGN_PLAN_MAX_TOKENS;
   const text = await invokeModel(prompt, undefined, effectiveModel, effectiveMaxTokens, undefined, usageCtx ?? { feature: 'design-plan', project: 'unknown' });
   return parseDesignPlanResult(text, input);
+}
+
+/**
+ * FEAT-004 — structured JSON generation for staged Walkthrough AI drafts.
+ * Model/token/timeout come from the caller (project settings + policy preset).
+ */
+export async function generateWalkthroughAiJsonFromBedrock(
+  prompt: string,
+  options?: {
+    modelId?: string;
+    maxTokens?: number;
+    timeoutMs?: number;
+    usageCtx?: BedrockUsageContext;
+  },
+): Promise<string> {
+  const effectiveModel = options?.modelId ?? UI_MOCK_MODEL_ID;
+  const effectiveMaxTokens =
+    options?.maxTokens != null && options.maxTokens > 0 ? options.maxTokens : DESIGN_PLAN_MAX_TOKENS;
+  return invokeModel(
+    prompt,
+    undefined,
+    effectiveModel,
+    effectiveMaxTokens,
+    options?.timeoutMs,
+    options?.usageCtx ?? { feature: 'other', project: 'unknown' },
+  );
 }
 
 /* ════════════════════════════════════════════════════════════

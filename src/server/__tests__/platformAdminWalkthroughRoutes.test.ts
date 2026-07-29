@@ -47,16 +47,33 @@ jest.mock('../services/pendingAssignmentService', () => ({
   removePendingAssignment: jest.fn(),
 }));
 jest.mock('../services/walkthroughService');
+jest.mock('../services/walkthroughAiDraftService', () => {
+  const actual = jest.requireActual('../services/walkthroughAiDraftService');
+  return {
+    ...actual,
+    generateProposal: jest.fn(),
+    redoProposalUnit: jest.fn(),
+    validateProposalUnit: jest.fn(),
+  };
+});
 jest.mock('../middleware/rbac', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
   requireSuperAdmin: jest.fn((_req: any, _res: any, next: any) => next()),
 }));
 
 const mockWt = walkthroughService as jest.Mocked<typeof walkthroughService>;
+const mockAi = jest.requireMock('../services/walkthroughAiDraftService') as {
+  generateProposal: jest.Mock;
+  redoProposalUnit: jest.Mock;
+  validateProposalUnit: jest.Mock;
+  listWalkthroughAiPolicyPresets: typeof import('../services/walkthroughAiDraftService').listWalkthroughAiPolicyPresets;
+};
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
 function buildApp() {
   const app = express();
   app.use(express.json());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test harness attaches auth profile
   app.use((req: any, _res, next) => {
     req.user = { profile: { oid: 'super-admin', displayName: 'Admin' } };
     next();
@@ -67,6 +84,7 @@ function buildApp() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
   mockRequireSuperAdmin.mockImplementation((_req: any, _res: any, next: any) => next());
 });
 
@@ -78,6 +96,7 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
   });
 
   it('VT-09 — when Super Admin middleware denies, create is not reached', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
     mockRequireSuperAdmin.mockImplementation((_req: any, res: any) => {
       res.status(403).json({ error: 'Forbidden' });
     });
@@ -87,6 +106,7 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
   });
 
   it('POST create delegates to service', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial WalkthroughDefinition stub
     mockWt.createWalkthrough.mockResolvedValue({ id: 'wt-1' } as any);
     const res = await request(buildApp())
       .post('/api/platform-admin/walkthroughs')
@@ -112,6 +132,7 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
   });
 
   it('GET :id delegates to getWalkthroughAdmin', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial WalkthroughDefinition stub
     mockWt.getWalkthroughAdmin.mockResolvedValue({ id: 'wt-1', internalName: 'Intro' } as any);
     const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/wt-1');
     expect(res.status).toBe(200);
@@ -129,7 +150,9 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
   });
 
   it('POST publish / archive / report endpoints exist', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial WalkthroughDefinition stub
     mockWt.publishWalkthrough.mockResolvedValue({ id: 'wt-1' } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial WalkthroughDefinition stub
     mockWt.archiveWalkthrough.mockResolvedValue({ id: 'wt-1' } as any);
     mockWt.getAcknowledgementReport.mockResolvedValue({
       walkthroughId: 'wt-1',
@@ -177,5 +200,56 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(true);
+  });
+
+  it('PBI-003 AC-3 — POST ai-drafts/generate returns 403 when Super Admin middleware denies', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
+    mockRequireSuperAdmin.mockImplementation((_req: any, res: any) => {
+      res.status(403).json({ error: 'Forbidden' });
+    });
+    const res = await request(buildApp())
+      .post('/api/platform-admin/walkthroughs/ai-drafts/generate')
+      .send({ projectId: 'Apex', intent: 'Introduce feature' });
+    expect(res.status).toBe(403);
+    expect(mockAi.generateProposal).not.toHaveBeenCalled();
+  });
+
+  it('POST ai-drafts/generate delegates to service and ignores client allow-lists', async () => {
+    mockAi.generateProposal.mockResolvedValue({
+      proposalId: 'p1',
+      walkthroughFields: { internalName: 'n', userTitle: 't', whyItMatters: 'w' },
+      steps: [],
+      units: [],
+      generatedAt: new Date().toISOString(),
+      generationContextVersion: 'v1',
+      policyPreset: 'A',
+    });
+    const res = await request(buildApp())
+      .post('/api/platform-admin/walkthroughs/ai-drafts/generate')
+      .send({
+        projectId: 'Apex',
+        intent: 'Introduce feature',
+        policyPreset: 'A',
+        assetAllowList: ['https://evil.example/x.png'],
+        anchors: [{ key: 'fake' }],
+      });
+    expect(res.status).toBe(200);
+    expect(mockAi.generateProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'Apex',
+        intent: 'Introduce feature',
+        policyPreset: 'A',
+      }),
+    );
+    expect(mockAi.generateProposal.mock.calls[0][0].assetAllowList).toBeUndefined();
+  });
+
+  it('GET ai-drafts/policy-presets returns A/B/C with default A', async () => {
+    const res = await request(buildApp()).get(
+      '/api/platform-admin/walkthroughs/ai-drafts/policy-presets',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.defaultPreset).toBe('A');
+    expect(res.body.presets.map((p: { id: string }) => p.id)).toEqual(['A', 'B', 'C']);
   });
 });

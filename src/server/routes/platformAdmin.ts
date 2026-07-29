@@ -25,12 +25,19 @@ import {
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
 import * as walkthroughService from '../services/walkthroughService';
+import {
+  generateProposal,
+  listWalkthroughAiPolicyPresets,
+  redoProposalUnit,
+  validateProposalUnit,
+} from '../services/walkthroughAiDraftService';
 import { listWalkthroughAnchors } from '../../shared/walkthroughAnchors';
 import {
   WalkthroughDomainError,
   type PublishWalkthroughCommand,
   type UpdateWalkthroughCommand,
 } from '../../shared/types/walkthrough';
+import { WalkthroughAiError } from '../../shared/types/walkthroughAiDraft';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -48,7 +55,28 @@ function mapWalkthroughError(err: unknown, res: Response): boolean {
     case 'INVALID_TARGET':
     case 'INVALID_PROGRESS':
     case 'VALIDATION_ERROR':
-      res.status(422).json({ error: err.message, code: err.code });
+    case 'INACCESSIBLE':
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    default:
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+  }
+}
+
+function mapWalkthroughAiError(err: unknown, res: Response): boolean {
+  if (!(err instanceof WalkthroughAiError)) return false;
+  switch (err.code) {
+    case 'INTENT_INVALID':
+    case 'FEEDBACK_INVALID':
+    case 'PROPOSAL_UNIT_INVALID':
+    case 'AI_OUTPUT_INVALID':
+    case 'REGISTRY_VALUE_STALE':
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    case 'AI_GENERATION_FAILED':
+    case 'AI_REDO_FAILED':
+      res.status(502).json({ error: err.message, code: err.code });
       return true;
     default:
       res.status(400).json({ error: err.message, code: err.code });
@@ -76,10 +104,12 @@ function isMenuItemKeyArray(value: unknown): value is MenuItemKey[] {
 }
 
 function getActingUserId(req: Request): string | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Passport user profile shape is not typed on Request
   return (req.user as any)?.profile?.oid ?? null;
 }
 
 function getActingUserLabel(req: Request): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Passport user profile shape is not typed on Request
   const profile = (req.user as any)?.profile;
   return profile?.displayName ?? profile?.upn ?? profile?.email ?? profile?._json?.preferred_username ?? 'unknown';
 }
@@ -293,6 +323,7 @@ router.post('/feature-flags', async (req: Request, res: Response): Promise<void>
     const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
     const flag = await featureFlagService.createFlag(req.body, actor);
     res.status(201).json(flag);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- featureFlagService throws plain Error with message checks
   } catch (err: any) {
     if (err?.message?.includes('Invalid flag key') || err?.message?.includes('already exists')) {
       res.status(400).json({ error: err.message });
@@ -307,6 +338,7 @@ router.patch('/feature-flags/:id', async (req: Request, res: Response): Promise<
     const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
     const flag = await featureFlagService.updateFlag(req.params.id, req.body, actor);
     res.json(flag);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- featureFlagService throws plain Error with message checks
   } catch (err: any) {
     if (err?.message?.includes('not found')) {
       res.status(404).json({ error: 'Flag not found' });
@@ -331,6 +363,7 @@ router.post('/feature-flags/:id/rules', async (req: Request, res: Response): Pro
     const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
     const rule = await featureFlagService.addRule(req.params.id, req.body, actor);
     res.status(201).json(rule);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- featureFlagService throws plain Error with message checks
   } catch (err: any) {
     if (err?.message?.includes('not found')) {
       res.status(404).json({ error: err.message });
@@ -373,6 +406,7 @@ router.get('/walkthroughs', async (req: Request, res: Response): Promise<void> =
       cursor,
       limit,
       project,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- query string lifecycle may be single value or CSV; validated in service
       lifecycle: lifecycle as any,
     });
     res.json(page);
@@ -395,6 +429,13 @@ router.post('/walkthroughs', async (req: Request, res: Response): Promise<void> 
 
 router.get('/walkthroughs/anchors', async (_req: Request, res: Response): Promise<void> => {
   res.json({ anchors: listWalkthroughAnchors() });
+});
+
+router.get('/walkthroughs/ai-drafts/policy-presets', async (_req: Request, res: Response): Promise<void> => {
+  res.json({
+    defaultPreset: 'A',
+    presets: listWalkthroughAiPolicyPresets(),
+  });
 });
 
 router.get('/walkthroughs/:id', async (req: Request, res: Response): Promise<void> => {
@@ -471,6 +512,56 @@ router.post('/walkthroughs/ai-drafts/validate', async (req: Request, res: Respon
     res.json(validated);
   } catch (err) {
     if (mapWalkthroughError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/generate', async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Never trust client-supplied allow-lists — strip if present.
+    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
+    const proposal = await generateProposal({
+      projectId: body.projectId,
+      intent: body.intent,
+      policyPreset: body.policyPreset,
+      existingDraft: body.existingDraft,
+    });
+    res.json({ proposal });
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/redo', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
+    const unit = await redoProposalUnit({
+      projectId: body.projectId,
+      proposalId: body.proposalId,
+      generationContextVersion: body.generationContextVersion,
+      unit: body.unit,
+      feedback: body.feedback,
+      policyPreset: body.policyPreset,
+    });
+    res.json({ unit });
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/validate-unit', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
+    const result = validateProposalUnit({
+      projectId: body.projectId,
+      unit: body.unit,
+      imageConfirmed: Boolean(body.imageConfirmed),
+    });
+    res.json(result);
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
     res.status(500).json({ error: 'Internal server error' });
   }
 });
