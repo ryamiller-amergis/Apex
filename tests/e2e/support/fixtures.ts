@@ -50,8 +50,8 @@ export const test = base.extend<E2EFixtures>({
       // programmatic-SSO storageState (or optional E2E_STORAGE_STATE). /auth/dev-login
       // is gated off on NODE_ENV=production deployments, so we never call it there.
       //
-      // The saved connect.sid can still be stale (FileStore miss after recycle /
-      // concurrent write) while the cookie is present — /auth/status then returns
+      // The saved connect.sid can still be stale after a deploy or session expiry
+      // while the cookie is present — /auth/status then returns
       // authenticated:false and every smoke lands on the login card. Detect that
       // and re-run Entra SSO into this context, refreshing deployed.json.
       if (isDeployedAuthMode()) {
