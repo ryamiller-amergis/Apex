@@ -14,6 +14,14 @@ import {
 type AuthedRequest = Request & { user?: { profile?: { oid?: string } } };
 
 jest.mock('../services/walkthroughService');
+jest.mock('../services/walkthroughNotificationService', () => ({
+  notifyPublishedAudience: jest.fn(),
+  reconcileForUser: jest.fn().mockResolvedValue({
+    created: 0,
+    skippedDuplicate: 0,
+    failed: 0,
+  }),
+}));
 jest.mock('../utils/requestUser', () => ({
   getUserId: (req: AuthedRequest) => req.user?.profile?.oid ?? 'anonymous',
 }));

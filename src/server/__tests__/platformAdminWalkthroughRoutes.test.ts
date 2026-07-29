@@ -47,6 +47,19 @@ jest.mock('../services/pendingAssignmentService', () => ({
   removePendingAssignment: jest.fn(),
 }));
 jest.mock('../services/walkthroughService');
+jest.mock('../services/walkthroughNotificationService', () => ({
+  notifyPublishedAudience: jest.fn().mockResolvedValue({
+    targeted: 0,
+    created: 0,
+    skippedDuplicate: 0,
+    failed: 0,
+  }),
+  reconcileForUser: jest.fn().mockResolvedValue({
+    created: 0,
+    skippedDuplicate: 0,
+    failed: 0,
+  }),
+}));
 jest.mock('../services/walkthroughAiDraftService', () => {
   const actual = jest.requireActual('../services/walkthroughAiDraftService');
   return {

@@ -118,6 +118,17 @@ export function useUpdateWalkthrough() {
   });
 }
 
+export type PublishWalkthroughResponse = {
+  walkthrough: WalkthroughDefinition;
+  notificationFanout: {
+    queued: number;
+    targeted: number;
+    created: number;
+    skippedDuplicate: number;
+    failed: number;
+  };
+};
+
 export function usePublishWalkthrough() {
   const queryClient = useQueryClient();
   return useMutation<
@@ -125,15 +136,21 @@ export function usePublishWalkthrough() {
     Error,
     { id: string } & PublishWalkthroughCommand
   >({
-    mutationFn: ({ id, ...body }) =>
-      walkthroughFetch<WalkthroughDefinition>(
+    mutationFn: async ({ id, ...body }) => {
+      const res = await walkthroughFetch<PublishWalkthroughResponse | WalkthroughDefinition>(
         `/api/platform-admin/walkthroughs/${encodeURIComponent(id)}/publish`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         },
-      ),
+      );
+      // FEAT-007 wraps `{ walkthrough, notificationFanout }`; tolerate legacy flat shape.
+      if (res && typeof res === 'object' && 'walkthrough' in res && (res as PublishWalkthroughResponse).walkthrough) {
+        return (res as PublishWalkthroughResponse).walkthrough;
+      }
+      return res as WalkthroughDefinition;
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'walkthroughs'] });
       queryClient.setQueryData(walkthroughQueryKeys.detail(data.id), data);

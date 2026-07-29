@@ -50,7 +50,16 @@ function callerId(req: Request): string {
 // GET /next — one eligible Walkthrough or null
 router.get('/next', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const walkthrough = await walkthroughService.getNextEligible(projectIdOf(req), callerId(req));
+    const userId = callerId(req);
+    const projectId = projectIdOf(req);
+    // FEAT-007: reconcile newly included audience members before eligibility.
+    try {
+      const { reconcileForUser } = await import('../services/walkthroughNotificationService');
+      await reconcileForUser(userId, projectId);
+    } catch {
+      // Delivery failures must not block eligibility reads.
+    }
+    const walkthrough = await walkthroughService.getNextEligible(projectId, userId);
     res.json({ walkthrough });
   } catch (err) {
     if (mapDomainError(err, res)) return;
@@ -61,9 +70,18 @@ router.get('/next', async (req: Request, res: Response, next: NextFunction): Pro
 // GET /replay — New + Acknowledged list for live audience
 router.get('/replay', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const userId = callerId(req);
+    const projectId = projectIdOf(req);
+    // FEAT-007: reconcile newly included audience members before replay list.
+    try {
+      const { reconcileForUser } = await import('../services/walkthroughNotificationService');
+      await reconcileForUser(userId, projectId);
+    } catch {
+      // Delivery failures must not block replay reads.
+    }
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
-    const page = await walkthroughService.listReplay(projectIdOf(req), callerId(req), {
+    const page = await walkthroughService.listReplay(projectId, userId, {
       cursor,
       limit,
     });

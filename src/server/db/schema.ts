@@ -759,8 +759,12 @@ export const notifications = pgTable('notifications', {
   body: text('body'),
   link: text('link'),
   read: boolean('read').notNull().default(false),
+  /** Optional producer idempotency key (unique when present). FEAT-007. */
+  dedupeKey: text('dedupe_key'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  dedupeKeyUq: uniqueIndex('uq_notifications_dedupe_key').on(t.dedupeKey),
+}));
 
 export const notificationPreferences = pgTable('notification_preferences', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -1758,11 +1762,56 @@ export const walkthroughProgress = pgTable('walkthrough_progress', {
   ),
 }));
 
+export type WalkthroughNotificationAttemptState = 'pending' | 'delivered' | 'failed';
+
+export const walkthroughNotificationDeliveries = pgTable('walkthrough_notification_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  notificationId: uuid('notification_id').references(() => notifications.id, { onDelete: 'set null' }),
+  attemptState: text('attempt_state').$type<WalkthroughNotificationAttemptState>().notNull().default('pending'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastErrorClass: text('last_error_class'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  wtRevUserUq: unique('uq_walkthrough_notification_deliveries_wt_rev_user').on(
+    t.walkthroughId,
+    t.revision,
+    t.userId,
+  ),
+  userRevisionIdx: index('idx_walkthrough_notification_deliveries_user_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
 export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
   steps: many(walkthroughSteps),
   targetingRules: many(walkthroughTargetingRules),
   progress: many(walkthroughProgress),
+  notificationDeliveries: many(walkthroughNotificationDeliveries),
 }));
+
+export const walkthroughNotificationDeliveriesRelations = relations(
+  walkthroughNotificationDeliveries,
+  ({ one }) => ({
+    walkthrough: one(walkthroughs, {
+      fields: [walkthroughNotificationDeliveries.walkthroughId],
+      references: [walkthroughs.id],
+    }),
+    user: one(appUsers, {
+      fields: [walkthroughNotificationDeliveries.userId],
+      references: [appUsers.oid],
+    }),
+    notification: one(notifications, {
+      fields: [walkthroughNotificationDeliveries.notificationId],
+      references: [notifications.id],
+    }),
+  }),
+);
 
 export const walkthroughStepsRelations = relations(walkthroughSteps, ({ one, many }) => ({
   walkthrough: one(walkthroughs, {

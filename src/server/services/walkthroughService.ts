@@ -935,6 +935,51 @@ async function loadAudienceUserIds(targeting: WalkthroughTargeting): Promise<str
   return rows.map((r) => r.userId);
 }
 
+/**
+ * Live audience user IDs for a Walkthrough (FEAT-007 notification fan-out).
+ * Resolves project assignment and optional in-project group membership server-side.
+ */
+export async function listLiveAudienceUserIds(walkthroughId: string): Promise<string[]> {
+  const row = await loadDefinition(walkthroughId);
+  if (!row) {
+    throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
+  }
+  const targeting = rulesToTargeting(mapRules(row.targetingRules));
+  return loadAudienceUserIds(targeting);
+}
+
+/**
+ * Published Walkthroughs the user currently matches in a project (FEAT-007 reconcile).
+ */
+export async function listPublishedForUserInProject(
+  userId: string,
+  projectId: string,
+): Promise<Array<{ id: string; revision: number; userTitle: string }>> {
+  const hasProject = await userHasProjectAccess(userId, projectId);
+  if (!hasProject) return [];
+
+  const groupIds = await getUserGroupIdsForProject(userId, projectId);
+  const published = await db.query.walkthroughs.findMany({
+    where: eq(walkthroughs.lifecycle, 'published'),
+    with: { targetingRules: true },
+    orderBy: [desc(walkthroughs.priority), desc(walkthroughs.publishedAt)],
+  });
+
+  const out: Array<{ id: string; revision: number; userTitle: string }> = [];
+  for (const row of published) {
+    let targeting: WalkthroughTargeting;
+    try {
+      targeting = rulesToTargeting(mapRules(row.targetingRules));
+    } catch {
+      continue;
+    }
+    if (targeting.project !== projectId) continue;
+    if (targeting.groupId && !groupIds.includes(targeting.groupId)) continue;
+    out.push({ id: row.id, revision: row.revision, userTitle: row.userTitle });
+  }
+  return out;
+}
+
 /** Admin get by id (no audience filter). */
 export async function getWalkthroughAdmin(id: string): Promise<WalkthroughDefinition> {
   const row = await loadDefinition(id);

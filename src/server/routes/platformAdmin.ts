@@ -466,12 +466,49 @@ router.patch('/walkthroughs/:id', async (req: Request, res: Response): Promise<v
 router.post('/walkthroughs/:id/publish', async (req: Request, res: Response): Promise<void> => {
   try {
     const actor = { id: getUserId(req) };
+    const command = req.body as PublishWalkthroughCommand;
     const published = await walkthroughService.publishWalkthrough(
       req.params.id,
-      req.body as PublishWalkthroughCommand,
+      command,
       actor,
     );
-    res.json(published);
+
+    let notificationFanout = {
+      queued: 0,
+      targeted: 0,
+      created: 0,
+      skippedDuplicate: 0,
+      failed: 0,
+    };
+
+    // FEAT-007: fan-out after lifecycle commit; failures must not roll back publication.
+    if (command.mode === 'fresh' || command.mode === 'reshow') {
+      try {
+        const { notifyPublishedAudience } = await import('../services/walkthroughNotificationService');
+        const fanout = await notifyPublishedAudience({
+          walkthroughId: published.id,
+          revision: published.revision,
+          mode: command.mode,
+        });
+        notificationFanout = {
+          queued: fanout.targeted,
+          targeted: fanout.targeted,
+          created: fanout.created,
+          skippedDuplicate: fanout.skippedDuplicate,
+          failed: fanout.failed,
+        };
+      } catch {
+        notificationFanout = {
+          queued: 0,
+          targeted: 0,
+          created: 0,
+          skippedDuplicate: 0,
+          failed: 1,
+        };
+      }
+    }
+
+    res.json({ walkthrough: published, notificationFanout });
   } catch (err) {
     if (mapWalkthroughError(err, res)) return;
     res.status(500).json({ error: 'Internal server error' });
