@@ -38,6 +38,8 @@
 
 .markFill { fill: var(--brand-primary); }
 
+.markCutout { fill: var(--bg-primary); }
+
 /* ── Circuit track — static faint dashed A outline ─────────────────────── */
 
 .circuitTrack {
@@ -50,9 +52,9 @@
 
 /* ── Circuit flow — animated bright dash sweeping around the A ───────────── */
 
-/* A-silhouette perimeter ≈ 214; dash 54 + gap 160 = 214 (one segment per lap) */
+/* A-silhouette perimeter ≈ 210; dash 54 + gap 156 = 210 (one segment per lap) */
 @keyframes circuitFlow {
-  from { stroke-dashoffset: 214; }
+  from { stroke-dashoffset: 210; }
   to   { stroke-dashoffset: 0; }
 }
 
@@ -61,8 +63,8 @@
   stroke: var(--accent-color);
   stroke-width: 1.5;
   stroke-linecap: round;
-  stroke-dasharray: 54 160;
-  stroke-dashoffset: 214;
+  stroke-dasharray: 54 156;
+  stroke-dashoffset: 210;
   animation: circuitFlow 2.2s linear infinite;
 }
 

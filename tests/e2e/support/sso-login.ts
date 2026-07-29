@@ -69,7 +69,7 @@ export async function performEntraSsoLogin(page: Page): Promise<void> {
     }
   }
 
-  // Cold login: may already be on the login card, or need a fresh navigation.
+  // Cold login: may already be on the split-gate login, or need a fresh navigation.
   const ssoButton = page.getByRole('button', { name: /sign in with amergis sso/i });
   if (!(await ssoButton.isVisible().catch(() => false))) {
     await page.goto('/', { waitUntil: 'domcontentloaded' });

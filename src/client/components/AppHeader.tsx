@@ -169,12 +169,24 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           className="app-brand"
           onClick={onNavigateProjects ?? onNavigateHome}
           type="button"
-          aria-label="Select an Apex project"
+          aria-label={
+            selectedProject
+              ? `Select an Apex project (current: ${selectedProject})`
+              : 'Select an Apex project'
+          }
           title="Select project"
         >
           <BrandLogo variant="mark" className="app-brand-mark" beta={IS_BETA_RELEASE} />
           <span className="app-brand-text">
-            Apex
+            <span>Apex</span>
+            {selectedProject && (
+              <>
+                <span className="app-brand-separator" aria-hidden="true">
+                  ·
+                </span>
+                <span className="app-brand-project">{selectedProject}</span>
+              </>
+            )}
             {IS_BETA_RELEASE && <span className="app-brand-beta">BETA</span>}
           </span>
         </button>

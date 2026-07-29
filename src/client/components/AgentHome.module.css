@@ -57,18 +57,9 @@
 
 .composeLogo {
   width: max-content;
-  font-size: 3.2rem;
+  font-size: 2.8rem;
   color: var(--text-primary);
   opacity: 0.9;
-}
-
-.composeLogo > svg {
-  display: none;
-}
-
-.composeLogo svg {
-  width: 100%;
-  height: auto;
 }
 
 .composeHeading {

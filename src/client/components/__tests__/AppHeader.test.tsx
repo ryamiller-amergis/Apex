@@ -42,9 +42,11 @@ jest.mock('../UserMenu', () => ({
 describe('AppHeader — no menuEnabledViews, not super admin', () => {
   const can = (_key: string) => false;
 
-  it('renders the Home button when canAccessHome is true (default)', () => {
-    render(<AppHeader {...baseProps} can={can} canAccessHome />);
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+  it('renders the project name with a middle-dot separator in the brand', () => {
+    render(<AppHeader {...baseProps} can={can} selectedProject="MaxView" canAccessHome />);
+    expect(screen.getByText('Apex')).toBeInTheDocument();
+    expect(screen.getByText('MaxView')).toBeInTheDocument();
+    expect(screen.getByText('·')).toBeInTheDocument();
   });
 
   it('hides the Home button when canAccessHome is false', () => {

@@ -376,17 +376,46 @@ body {
 }
 
 .app-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
+  line-height: 0;
 }
 
 .app-brand-text {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 1rem;
   font-weight: 800;
   letter-spacing: -0.03em;
+  line-height: 1;
+  /* System UI ink box sits ~2px below the mark’s optical center. */
+  transform: translateY(-2px);
+}
+
+.app-brand-separator {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  /* Hide the · glyph; the CSS circle is optically centered with the type. */
+  font-size: 0;
+  line-height: 0;
+  color: transparent;
+  overflow: hidden;
+}
+
+.app-brand-project {
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 
 .app-brand-beta {

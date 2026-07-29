@@ -73,7 +73,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
       <div className={styles.header}>
         <div className={styles.logoMark}>
-          <BrandLogo beta={IS_BETA_RELEASE} />
+          <BrandLogo beta={IS_BETA_RELEASE} align="center" />
         </div>
         <p className={styles.subtitle}>Select a project to start planning</p>
         <div className={styles.actions}>
