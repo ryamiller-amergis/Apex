@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -106,9 +106,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [menuOpen, closeMenu]);
 
-  useEffect(() => {
-    if (!isMobile && menuOpen) closeMenu();
-  }, [isMobile, menuOpen, closeMenu]);
+  // Close the mobile drawer when the viewport leaves mobile — adjust during render
+  // to avoid a cascading setState-in-effect when the breakpoint flips.
+  if (!isMobile && menuOpen) {
+    setMenuOpen(false);
+  }
 
   const navItems: NavItem[] = [
     { label: 'Home', view: 'home', permission: null, onNavigate: onNavigateHome },

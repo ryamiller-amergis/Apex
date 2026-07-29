@@ -13,8 +13,19 @@ const NOTIFICATION_TYPES: { type: NotificationType; label: string; description: 
   { type: 'background', label: 'Background Jobs', description: 'Job status updates', comingSoon: true },
 ];
 
-export const NotificationPreferences: React.FC = () => {
-  const { data: preferences = [], isLoading } = useNotificationPreferences();
+interface NotificationPreferencesProps {
+  /**
+   * When true (Profile page), surface load/update failures as contained
+   * inline alerts without changing the existing mutation contract.
+   */
+  showContainedErrors?: boolean;
+}
+
+export const NotificationPreferences: React.FC<NotificationPreferencesProps> = ({
+  showContainedErrors = false,
+}) => {
+  const { data: preferences = [], isLoading, isError, refetch, error: loadError } =
+    useNotificationPreferences();
   const updatePref = useUpdateNotificationPreference();
 
   const getPreference = (type: NotificationType) =>
@@ -24,8 +35,38 @@ export const NotificationPreferences: React.FC = () => {
     return <div className={styles['prefs-loading']}>Loading preferences...</div>;
   }
 
+  if (showContainedErrors && isError) {
+    return (
+      <div
+        className={styles['prefs-error']}
+        role="alert"
+        data-testid="profile-section-error-notifications"
+      >
+        <div>{loadError?.message || 'Failed to load notification preferences.'}</div>
+        <button
+          type="button"
+          className={styles['prefs-retry']}
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={styles['prefs-container']}>
+      {showContainedErrors && updatePref.isError && (
+        <div
+          className={styles['prefs-error']}
+          role="alert"
+          data-testid="profile-section-error-notifications"
+        >
+          {updatePref.error?.message || 'Failed to update notification preference. Previous value retained.'}
+        </div>
+      )}
       {NOTIFICATION_TYPES.map(({ type, label, description, comingSoon }) => {
         const pref = getPreference(type);
         const enabled = pref?.enabled ?? true;
@@ -48,6 +89,7 @@ export const NotificationPreferences: React.FC = () => {
                     type="checkbox"
                     className={styles['prefs-checkbox']}
                     checked={enabled}
+                    data-testid={`notification-pref-enabled-${type}`}
                     onChange={(e) =>
                       updatePref.mutate({ notificationType: type, enabled: e.target.checked })
                     }
@@ -61,6 +103,7 @@ export const NotificationPreferences: React.FC = () => {
                     className={styles['prefs-checkbox']}
                     checked={toastEnabled}
                     disabled={!enabled}
+                    data-testid={`notification-pref-toast-${type}`}
                     onChange={(e) =>
                       updatePref.mutate({ notificationType: type, toastEnabled: e.target.checked })
                     }

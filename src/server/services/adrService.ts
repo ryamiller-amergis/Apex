@@ -1,6 +1,13 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { adrs, appUsers, reviewComments } from '../db/schema';
+import {
+  adrs,
+  appUsers,
+  documentApproverAssignments,
+  documentOwnerApprovals,
+  featureRequestAdrs,
+  reviewComments,
+} from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
 import { markAsInterviewThread, readOutputAdr } from './chatAgentService';
 import { getSkillSettingsName } from './projectSettingsService';
@@ -304,7 +311,20 @@ export async function rejectAdrProposedContent(id: string, userId: string): Prom
 
 export async function deleteAdr(id: string, userId: string): Promise<void> {
   await requireAuthor(id, userId);
-  await db.delete(adrs).where(eq(adrs.id, id));
+  // feature_request_adrs.adr_id is RESTRICT (or CASCADE after migration); clear
+  // junction + softeless approval rows before deleting the ADR itself.
+  await db.transaction(async (tx) => {
+    await tx.delete(featureRequestAdrs).where(eq(featureRequestAdrs.adrId, id));
+    await tx.delete(documentApproverAssignments).where(and(
+      eq(documentApproverAssignments.documentId, id),
+      eq(documentApproverAssignments.documentType, 'adr'),
+    ));
+    await tx.delete(documentOwnerApprovals).where(and(
+      eq(documentOwnerApprovals.documentId, id),
+      eq(documentOwnerApprovals.documentType, 'adr'),
+    ));
+    await tx.delete(adrs).where(eq(adrs.id, id));
+  });
 }
 
 export async function markAdrGenerating(id: string, userId: string): Promise<void> {

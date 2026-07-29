@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdrChatView } from '../AdrChatView';
 import type { Adr } from '../../../shared/types/adr';
@@ -160,10 +160,26 @@ describe('AdrChatView — delete', () => {
 
     expect(deleteMutate).toHaveBeenCalledWith('adr-1', expect.objectContaining({
       onSuccess: expect.any(Function),
+      onError: expect.any(Function),
     }));
 
     const [, options] = deleteMutate.mock.calls[0] as [string, { onSuccess: () => void }];
     options.onSuccess();
     expect(mockNavigate).toHaveBeenCalledWith('/adr');
+  });
+
+  it('surfaces the delete error and closes the modal on failure', () => {
+    renderAdrView();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Delete ADR' })).getByRole('button', { name: 'Delete' }));
+
+    const [, options] = deleteMutate.mock.calls[0] as [string, { onError: (err: Error) => void }];
+    act(() => {
+      options.onError(new Error('update or delete on table "adrs" violates foreign key'));
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Delete ADR' })).not.toBeInTheDocument();
+    expect(screen.getByText(/violates foreign key/i)).toBeInTheDocument();
   });
 });

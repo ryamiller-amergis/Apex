@@ -54,6 +54,7 @@ const NewAdrCompose: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showReviewerModal, setShowReviewerModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const { selectedProject, selectedSkillSettingsId, authenticatedUser } = useAppShell();
   const navigate = useNavigate();
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
@@ -78,6 +79,10 @@ const NewAdrCompose: React.FC = () => {
     ?? repos.find((candidate) => candidate.name === repo)?.defaultBranch
     ?? 'main';
   const pending = startChat.isPending || createAdr.isPending;
+
+  useEffect(() => {
+    titleInputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     setModel(skillConfig?.adrModel ?? globalDefault?.value ?? DEFAULT_MODEL_ID);
@@ -163,11 +168,11 @@ const NewAdrCompose: React.FC = () => {
             <label className={styles.composeTitleLabel} htmlFor="adr-title">Title</label>
             <input
               id="adr-title"
+              ref={titleInputRef}
               className={styles.composeTitleInput}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Short decision title"
-              autoFocus
             />
           </div>
           <textarea
@@ -270,6 +275,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [reviewerModalOpen, setReviewerModalOpen] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
@@ -327,6 +333,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
+
+  useEffect(() => {
+    if (!pendingSelector) return;
+    commentInputRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPendingSelector(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [pendingSelector]);
 
   useEffect(() => {
     if (adr?.status !== 'generating') return;
@@ -706,20 +722,17 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="adr-comment-title"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setPendingSelector(null);
-          }}
         >
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle} id="adr-comment-title">Add ADR Comment</h3>
             <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
             <textarea
+              ref={commentInputRef}
               className={styles.commentModalInput}
               value={newCommentBody}
               onChange={(event) => setNewCommentBody(event.target.value)}
               placeholder="Write your review comment…"
               rows={3}
-              autoFocus
             />
             <div className={styles.commentModalActions}>
               <button className={styles.actionBtn} type="button" onClick={() => setPendingSelector(null)}>Cancel</button>
@@ -767,6 +780,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           onConfirm={() => {
             deleteAdr.mutate(id, {
               onSuccess: () => navigate('/adr'),
+              onError: (caught) => {
+                setShowDeleteModal(false);
+                setError(caught.message);
+              },
             });
           }}
           onCancel={() => setShowDeleteModal(false)}

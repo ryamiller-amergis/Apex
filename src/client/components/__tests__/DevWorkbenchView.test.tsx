@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { DevWorkbenchView } from '../DevWorkbenchView';
 
@@ -6,6 +6,7 @@ const mockNavigate = jest.fn();
 const mockStartMutateAsync = jest.fn();
 const mockCloseMutateAsync = jest.fn();
 const mockCompleteMutateAsync = jest.fn();
+const mockStartLocalMutateAsync = jest.fn();
 
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
@@ -22,10 +23,20 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useStartDevSession: jest.fn(),
   useCloseDevSession: jest.fn(),
   useCompleteFeature: jest.fn(),
+  useStartLocalFeature: jest.fn(),
 }));
 
 jest.mock('../../hooks/useApexBacklog', () => ({
   useApexBacklogFeatures: jest.fn(),
+}));
+
+jest.mock('../StartLocalDevModal', () => ({
+  __esModule: true,
+  default: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="start-local-modal">
+      <button type="button" onClick={onClose}>Close Local Modal</button>
+    </div>
+  ),
 }));
 
 import { useAppShell } from '../../hooks/useAppShell';
@@ -35,8 +46,10 @@ import {
   useStartDevSession,
   useCloseDevSession,
   useCompleteFeature,
+  useStartLocalFeature,
 } from '../../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../../hooks/useApexBacklog';
+import type { ActiveDevSession, ApexBacklogGroup } from '../../../shared/types/devWorkbench';
 
 const workItems = [
   {
@@ -86,6 +99,11 @@ describe('DevWorkbenchView', () => {
     });
     (useCompleteFeature as jest.Mock).mockReturnValue({
       mutateAsync: mockCompleteMutateAsync,
+      error: null,
+    });
+    (useStartLocalFeature as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartLocalMutateAsync,
+      isPending: false,
       error: null,
     });
     (useApexBacklogFeatures as jest.Mock).mockReturnValue({
@@ -281,7 +299,7 @@ describe('DevWorkbenchView', () => {
   });
 });
 
-const apexBacklogGroups = [
+const apexBacklogGroups: ApexBacklogGroup[] = [
   {
     prdId: 'prd-1',
     prdTitle: 'PDF Assembly',
@@ -319,72 +337,194 @@ const apexBacklogGroups = [
   },
 ];
 
+function expandPrdAndEpic() {
+  fireEvent.click(screen.getByRole('button', { name: /PDF Assembly/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Core Platform/i }));
+}
+
+function mockApexWorkbenchHooks() {
+  (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'Apex' });
+  (useAssignedWorkItems as jest.Mock).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  });
+  (useActiveSessions as jest.Mock).mockReturnValue({ data: [] });
+  (useStartDevSession as jest.Mock).mockReturnValue({
+    mutateAsync: mockStartMutateAsync,
+    error: null,
+  });
+  (useCloseDevSession as jest.Mock).mockReturnValue({
+    mutateAsync: mockCloseMutateAsync,
+  });
+  (useCompleteFeature as jest.Mock).mockReturnValue({
+    mutateAsync: mockCompleteMutateAsync,
+    error: null,
+  });
+  (useStartLocalFeature as jest.Mock).mockReturnValue({
+    mutateAsync: mockStartLocalMutateAsync,
+    isPending: false,
+    error: null,
+  });
+  (useApexBacklogFeatures as jest.Mock).mockReturnValue({
+    data: apexBacklogGroups,
+    isLoading: false,
+    error: null,
+  });
+}
+
+describe('filterApexBacklogByStatus', () => {
+  const { filterApexBacklogByStatus, filterApexBacklogBySearch } = jest.requireActual('../DevWorkbenchView') as typeof import('../DevWorkbenchView');
+
+  it('returns all groups for the All filter', () => {
+    const result = filterApexBacklogByStatus(apexBacklogGroups, [], 'all');
+    expect(result).toHaveLength(1);
+    expect(result[0].epics[0].features).toHaveLength(2);
+  });
+
+  it('keeps only Ready features for the Ready filter', () => {
+    const sessions: ActiveDevSession[] = [
+      {
+        id: 's1',
+        workItemId: null,
+        chatThreadId: null,
+        branchName: null,
+        status: 'completed',
+        prUrl: null,
+        createdAt: '2026-07-01T00:00:00Z',
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+      },
+    ];
+    const result = filterApexBacklogByStatus(apexBacklogGroups, sessions, 'ready');
+    expect(result[0].epics[0].features.map((f) => f.featureId)).toEqual(['FEAT-002']);
+  });
+
+  it('keeps only Complete features for the Complete filter', () => {
+    const sessions: ActiveDevSession[] = [
+      {
+        id: 's1',
+        workItemId: null,
+        chatThreadId: null,
+        branchName: null,
+        status: 'completed',
+        prUrl: null,
+        createdAt: '2026-07-01T00:00:00Z',
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+      },
+    ];
+    const result = filterApexBacklogByStatus(apexBacklogGroups, sessions, 'complete');
+    expect(result[0].epics[0].features.map((f) => f.featureId)).toEqual(['FEAT-001']);
+  });
+
+  it('treats locallyCompleted keys as Complete before sessions refetch', () => {
+    const result = filterApexBacklogByStatus(
+      apexBacklogGroups,
+      [],
+      'complete',
+      new Set(['prd-1:FEAT-001']),
+    );
+    expect(result[0].epics[0].features.map((f) => f.featureId)).toEqual(['FEAT-001']);
+  });
+
+  it('returns an empty list when nothing matches', () => {
+    const result = filterApexBacklogByStatus(apexBacklogGroups, [], 'in_progress');
+    expect(result).toEqual([]);
+  });
+
+  describe('filterApexBacklogBySearch', () => {
+    it('returns all groups when the query is blank', () => {
+      expect(filterApexBacklogBySearch(apexBacklogGroups, '  ')).toEqual(apexBacklogGroups);
+    });
+
+    it('matches PRD titles and keeps all nested features', () => {
+      const result = filterApexBacklogBySearch(apexBacklogGroups, 'pdf');
+      expect(result).toHaveLength(1);
+      expect(result[0].prdTitle).toBe('PDF Assembly');
+      expect(result[0].epics[0].features).toHaveLength(2);
+    });
+
+    it('matches Epic titles and keeps features under that epic', () => {
+      const result = filterApexBacklogBySearch(apexBacklogGroups, 'core platform');
+      expect(result[0].epics).toHaveLength(1);
+      expect(result[0].epics[0].features).toHaveLength(2);
+    });
+
+    it('matches Feature titles and keeps only those features', () => {
+      const result = filterApexBacklogBySearch(apexBacklogGroups, 'navigation');
+      expect(result[0].epics[0].features.map((f) => f.featureId)).toEqual(['FEAT-001']);
+    });
+
+    it('matches feature ids case-insensitively', () => {
+      const result = filterApexBacklogBySearch(apexBacklogGroups, 'feat-002');
+      expect(result[0].epics[0].features.map((f) => f.featureId)).toEqual(['FEAT-002']);
+    });
+
+    it('returns an empty list when nothing matches', () => {
+      expect(filterApexBacklogBySearch(apexBacklogGroups, 'zzzz-no-match')).toEqual([]);
+    });
+  });
+});
+
 describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'Apex' });
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: null,
-    });
-    (useActiveSessions as jest.Mock).mockReturnValue({ data: [] });
-    (useStartDevSession as jest.Mock).mockReturnValue({
-      mutateAsync: mockStartMutateAsync,
-      error: null,
-    });
-    (useCloseDevSession as jest.Mock).mockReturnValue({
-      mutateAsync: mockCloseMutateAsync,
-    });
-    (useCompleteFeature as jest.Mock).mockReturnValue({
-      mutateAsync: mockCompleteMutateAsync,
-      error: null,
-    });
-    (useApexBacklogFeatures as jest.Mock).mockReturnValue({
-      data: apexBacklogGroups,
-      isLoading: false,
-      error: null,
-    });
+    mockApexWorkbenchHooks();
   });
 
-  it('renders features with Mark Complete buttons', () => {
+  it('defaults PRD and Epic sections to collapsed', () => {
     renderView();
+
+    expect(screen.getByText('PDF Assembly')).toBeInTheDocument();
+    expect(screen.queryByText('Menu & Navigation')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /PDF Assembly/i })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('searches by feature title and expands matching sections', () => {
+    renderView();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: /search prds, epics, and features/i }), {
+      target: { value: 'Upload' },
+    });
+
+    expect(screen.getByText('Document Upload')).toBeInTheDocument();
+    expect(screen.queryByText('Menu & Navigation')).not.toBeInTheDocument();
+  });
+
+  it('searches by PRD title and shows nested features', () => {
+    renderView();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: /search prds, epics, and features/i }), {
+      target: { value: 'PDF Assembly' },
+    });
 
     expect(screen.getByText('Menu & Navigation')).toBeInTheDocument();
     expect(screen.getByText('Document Upload')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /mark complete/i })).toHaveLength(2);
   });
 
-  it('shows Ready badge for features with no unmet dependencies', () => {
+  it('shows an empty search message when nothing matches', () => {
     renderView();
 
-    expect(screen.getByText('Ready')).toBeInTheDocument();
-  });
-
-  it('shows Blocked badge for features with unmet dependencies', () => {
-    renderView();
-
-    expect(screen.getByText('Blocked by FEAT-001')).toBeInTheDocument();
-  });
-
-  it('calls completeFeature with the correct prdId and featureId', async () => {
-    mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-new' });
-
-    renderView();
-    const completeButtons = screen.getAllByRole('button', { name: /mark complete/i });
-    fireEvent.click(completeButtons[0]);
-
-    await waitFor(() => {
-      expect(mockCompleteMutateAsync).toHaveBeenCalledWith({
-        prdId: 'prd-1',
-        featureId: 'FEAT-001',
-        project: 'Apex',
-      });
+    fireEvent.change(screen.getByRole('searchbox', { name: /search prds, epics, and features/i }), {
+      target: { value: 'no-such-item' },
     });
+
+    expect(screen.getByText(/no prds, epics, or features match this search/i)).toBeInTheDocument();
   });
 
-  it('shows Completed badge and Done label when a feature has a completed session', () => {
+  it('renders status filter pills matching the interviews toolbar layout', () => {
+    renderView();
+
+    const toolbar = screen.getByRole('toolbar', { name: /filter features by status/i });
+    expect(toolbar).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: /^All$/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(toolbar).getByRole('button', { name: /^Ready$/i })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: /^In Progress$/i })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: /^Complete$/i })).toBeInTheDocument();
+  });
+
+  it('filters the backlog when a status pill is selected', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -402,8 +542,125 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     });
 
     renderView();
+    const toolbar = screen.getByRole('toolbar', { name: /filter features by status/i });
+    fireEvent.click(within(toolbar).getByRole('button', { name: /^Complete/i }));
+    expandPrdAndEpic();
 
-    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.getByText('Menu & Navigation')).toBeInTheDocument();
+    expect(screen.queryByText('Document Upload')).not.toBeInTheDocument();
+  });
+
+  it('shows an empty state when the filter matches nothing', () => {
+    renderView();
+    const toolbar = screen.getByRole('toolbar', { name: /filter features by status/i });
+    fireEvent.click(within(toolbar).getByRole('button', { name: /^Complete/i }));
+    expect(screen.getByText(/no features match this filter/i)).toBeInTheDocument();
+  });
+
+  it('renders features with Mark Complete buttons after expanding', () => {
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getByText('Menu & Navigation')).toBeInTheDocument();
+    expect(screen.getByText('Document Upload')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /mark complete/i })).toHaveLength(2);
+  });
+
+  it('shows Ready badge for features with no unmet dependencies', () => {
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows Blocked badge for features with unmet dependencies', () => {
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getByText('Blocked by FEAT-001')).toBeInTheDocument();
+  });
+
+  it('calls completeFeature with the correct prdId and featureId', async () => {
+    mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-new' });
+
+    renderView();
+    expandPrdAndEpic();
+    const completeButtons = screen.getAllByRole('button', { name: /mark complete/i });
+    fireEvent.click(completeButtons[0]);
+
+    await waitFor(() => {
+      expect(mockCompleteMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        project: 'Apex',
+      });
+    });
+  });
+
+  it('hides Start Local Development immediately after Mark Complete', async () => {
+    mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-new' });
+
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /mark complete/i })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Done')).toBeInTheDocument();
+    });
+    // Completed feature no longer offers Start Local; remaining Ready feature still does
+    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).toBeInTheDocument();
+  });
+
+  it('hides Start Local Development when a feature already has a completed session', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-completed-1',
+          workItemId: 0,
+          status: 'completed',
+          chatThreadId: null,
+          branchName: null,
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+    // FEAT-002 still Ready — only one Start Local remains
+    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
+  });
+
+  it('shows Complete badge and Done label when a feature has a completed session', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-completed-1',
+          workItemId: 0,
+          status: 'completed',
+          chatThreadId: null,
+          branchName: null,
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByText('Complete').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Done')).toBeInTheDocument();
   });
 
@@ -425,39 +682,96 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     });
 
     renderView();
+    expandPrdAndEpic();
 
     expect(screen.queryByText('Blocked by FEAT-001')).not.toBeInTheDocument();
-    const readyBadges = screen.getAllByText('Ready');
-    expect(readyBadges).toHaveLength(1);
+    expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rolls Ready status up to Epic and PRD when all features are Ready', () => {
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('rolls In Progress up to Epic and PRD when any feature is In Progress', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-1',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/x',
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('marks In Progress via Start Local Development', async () => {
+    mockStartLocalMutateAsync.mockResolvedValue({ ok: true, sessionId: 'local-1', status: 'in_progress' });
+
+    renderView();
+    expandPrdAndEpic();
+    fireEvent.click(screen.getAllByRole('button', { name: /start local development/i })[0]);
+
+    await waitFor(() => {
+      expect(mockStartLocalMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        project: 'Apex',
+      });
+    });
+  });
+
+  it('allows Mark Complete while a feature is In Progress', async () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-1',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/x',
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+    mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-1' });
+
+    renderView();
+    expandPrdAndEpic();
+    const completeButtons = screen.getAllByRole('button', { name: /mark complete/i });
+    fireEvent.click(completeButtons[0]);
+
+    await waitFor(() => {
+      expect(mockCompleteMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        project: 'Apex',
+      });
+    });
   });
 });
 
 describe('DevWorkbenchView — session-to-feature matching', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'Apex' });
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: null,
-    });
-    (useStartDevSession as jest.Mock).mockReturnValue({
-      mutateAsync: mockStartMutateAsync,
-      error: null,
-    });
-    (useCloseDevSession as jest.Mock).mockReturnValue({
-      mutateAsync: mockCloseMutateAsync,
-    });
-    (useCompleteFeature as jest.Mock).mockReturnValue({
-      mutateAsync: mockCompleteMutateAsync,
-      error: null,
-    });
-    (useApexBacklogFeatures as jest.Mock).mockReturnValue({
-      data: apexBacklogGroups,
-      isLoading: false,
-      error: null,
-    });
+    mockApexWorkbenchHooks();
   });
 
   it('prefers active session over closed session for the same feature', () => {
@@ -489,10 +803,10 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     });
 
     renderView();
+    expandPrdAndEpic();
 
-    // Should show In Progress (from the active session), NOT Completed
-    expect(screen.getByText('In Progress')).toBeInTheDocument();
-    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+    expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /resume session/i })).toBeInTheDocument();
   });
 
@@ -526,25 +840,21 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     mockCloseMutateAsync.mockResolvedValue({ ok: true });
 
     renderView();
+    expandPrdAndEpic();
 
-    // Both features should show In Progress
     const inProgressBadges = screen.getAllByText('In Progress');
-    expect(inProgressBadges).toHaveLength(2);
+    expect(inProgressBadges.length).toBeGreaterThanOrEqual(2);
 
-    // Close feature 001 by clicking its Close Session button (first one)
     const closeButtons = screen.getAllByRole('button', { name: /close session/i });
     fireEvent.click(closeButtons[0]);
 
     await waitFor(() => {
-      // Must close session-feat-001, NOT session-feat-002
       expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-feat-001');
       expect(mockCloseMutateAsync).not.toHaveBeenCalledWith('session-feat-002');
     });
   });
 
   it('does not cross-reference sessions between different features', () => {
-    // Regression: if sessions are returned in wrong order, feature 001 might
-    // pick up feature 002's session
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -573,17 +883,16 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     });
 
     renderView();
+    expandPrdAndEpic();
 
-    // Both should show In Progress independently
     const inProgressBadges = screen.getAllByText('In Progress');
-    expect(inProgressBadges).toHaveLength(2);
+    expect(inProgressBadges.length).toBeGreaterThanOrEqual(2);
 
-    // Both should have Resume Session buttons
     const resumeButtons = screen.getAllByRole('button', { name: /resume session/i });
     expect(resumeButtons).toHaveLength(2);
   });
 
-  it('shows In PR state for a feature with a pushed session', () => {
+  it('shows In Progress with In PR note for a feature with a pushed session', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -601,12 +910,13 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     });
 
     renderView();
+    expandPrdAndEpic();
 
+    expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('In PR')).toBeInTheDocument();
   });
 
   it('with multiple sessions per feature, active session wins over older closed one regardless of array order', async () => {
-    // Sessions returned with closed AFTER active (reverse creation order)
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -636,11 +946,10 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     mockCloseMutateAsync.mockResolvedValue({ ok: true });
 
     renderView();
+    expandPrdAndEpic();
 
-    // Feature 001 should show as In Progress (the active session)
-    expect(screen.getByText('In Progress')).toBeInTheDocument();
+    expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
 
-    // Closing should target the active session, not the old closed one
     const closeButton = screen.getByRole('button', { name: /close session/i });
     fireEvent.click(closeButton);
 

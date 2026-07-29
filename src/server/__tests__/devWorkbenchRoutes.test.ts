@@ -345,11 +345,16 @@ describe('POST /api/dev-workbench/start', () => {
       setWorkItemState: jest.fn().mockResolvedValue(undefined),
     };
     MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
-    bootstrapDevelopmentDependencies.mockImplementationOnce(async (_workspace: string, options: any) => {
-      await options.onPhase('dependencies_preparing', 'Preparing locked dependencies');
-      await options.onPhase('dependencies_ready', 'Dependencies are ready');
-      return { cacheKey: 'cache', cacheDir: '/tmp/cache', cacheHit: false };
-    });
+    bootstrapDevelopmentDependencies.mockImplementationOnce(
+      async (
+        _workspace: string,
+        options: import('../services/dependencyBootstrapService').DependencyBootstrapOptions,
+      ) => {
+        await options.onPhase?.('dependencies_preparing', 'Preparing locked dependencies');
+        await options.onPhase?.('dependencies_ready', 'Dependencies are ready');
+        return { cacheKey: 'cache', cacheDir: '/tmp/cache', cacheHit: false };
+      },
+    );
 
     const res = await request(buildApp())
       .post('/api/dev-workbench/start')
@@ -988,6 +993,23 @@ describe('POST /api/dev-workbench/features/complete', () => {
     );
   });
 
+  it('promotes an active session to completed instead of inserting', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(undefined) // no completed
+      .mockResolvedValueOnce({ id: 'active-session', status: 'in_progress' });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, sessionId: 'active-session' });
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' }),
+    );
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
   it('returns the existing session if the feature is already complete', async () => {
     mockFindFirst.mockResolvedValue({ id: 'existing-session' });
 
@@ -1019,6 +1041,58 @@ describe('POST /api/dev-workbench/features/complete', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/failed to mark feature/i);
+  });
+});
+
+describe('POST /api/dev-workbench/features/start-local', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('creates a synthetic in_progress session for local development', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, sessionId: 'session-abc', status: 'in_progress' });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'session-abc',
+        project: 'Apex',
+        authorId: 'user-1',
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        status: 'in_progress',
+      }),
+    );
+  });
+
+  it('returns the existing active session without inserting', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(undefined) // not completed
+      .mockResolvedValueOnce({ id: 'existing-active', status: 'in_progress' });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, sessionId: 'existing-active', status: 'in_progress' });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when required fields are missing', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ featureId: 'FEAT-001' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
   });
 });
 
