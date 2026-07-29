@@ -4,16 +4,16 @@ overview: Add a read-only, feature-scoped reference viewer to Apex My Work rows 
 todos:
   - id: phase-1-context-api
     content: "Phase 1: Define the shared feature-context contract and implement the tested Apex-only Dev Workbench context service and GET endpoint."
-    status: pending
+    status: done
   - id: phase-2-context-hook
     content: "Phase 2: Add and test the lazy TanStack Query hook for loading one selected feature's reference context."
-    status: pending
+    status: done
   - id: phase-2-context-modal
     content: "Phase 2: Build and test the accessible tabbed FeatureContextModal and its CSS Module, using existing MarkdownWithMermaid and UiMockPreview renderers."
-    status: pending
+    status: done
   - id: phase-3-workbench-integration
     content: "Phase 3: Integrate View Context into Apex rows, remove cloud start/resume/close actions, preserve conditional Clear Progress, and update My Work interaction tests."
-    status: pending
+    status: done
 isProject: false
 ---
 

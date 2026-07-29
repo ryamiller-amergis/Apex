@@ -49,6 +49,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
+import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
 
 const router = Router();
 
@@ -155,6 +156,38 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[dev-workbench] getBacklogFeatures failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch backlog features' });
+  }
+});
+
+// GET /features/:prdId/:featureId/context?project=Apex — lazy feature reference context
+router.get('/features/:prdId/:featureId/context', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const { prdId, featureId } = req.params;
+
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (project !== 'Apex') {
+      res.status(400).json({ error: 'Feature context is only available for the Apex project' });
+      return;
+    }
+    if (!prdId || !featureId) {
+      res.status(400).json({ error: 'prdId and featureId are required' });
+      return;
+    }
+
+    const context = await getApexFeatureContext(project, prdId, featureId);
+    if (!context) {
+      res.status(404).json({ error: 'Approved PRD feature context not found' });
+      return;
+    }
+
+    res.json(context);
+  } catch (err) {
+    console.error('[dev-workbench] getFeatureContext failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch feature context' });
   }
 });
 

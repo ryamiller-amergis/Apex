@@ -39,6 +39,16 @@ jest.mock('../StartLocalDevModal', () => ({
   ),
 }));
 
+jest.mock('../FeatureContextModal', () => ({
+  __esModule: true,
+  default: ({ feature, onClose }: { feature: { featureId: string }; onClose: () => void }) => (
+    <div data-testid="feature-context-modal">
+      <span>Context for {feature.featureId}</span>
+      <button type="button" onClick={onClose}>Close Context</button>
+    </div>
+  ),
+}));
+
 import { useAppShell } from '../../hooks/useAppShell';
 import {
   useAssignedWorkItems,
@@ -612,7 +622,8 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     });
     // Completed feature no longer offers Start Local; remaining Ready feature still does
     expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: /^Start Development$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /view context/i }).length).toBeGreaterThanOrEqual(2);
   });
 
   it('hides Start Local Development when a feature already has a completed session', () => {
@@ -766,6 +777,72 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
       });
     });
   });
+
+  it('shows View Context on every feature including Complete and opens the modal', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-completed-1',
+          workItemId: 0,
+          status: 'completed',
+          chatThreadId: null,
+          branchName: null,
+          prUrl: null,
+          createdAt: '2026-07-01T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+      ],
+    });
+
+    renderView();
+    expandPrdAndEpic();
+
+    const viewButtons = screen.getAllByRole('button', { name: /view context/i });
+    expect(viewButtons.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(viewButtons[0]);
+    expect(screen.getByTestId('feature-context-modal')).toBeInTheDocument();
+    expect(screen.getByText(/Context for FEAT-/i)).toBeInTheDocument();
+  });
+
+  it('shows Clear Progress for cloud and local in-progress sessions and never Resume/Close Session', () => {
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'session-cloud',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/x',
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-001',
+        },
+        {
+          id: 'session-local',
+          workItemId: 0,
+          status: 'in_progress',
+          chatThreadId: null,
+          branchName: null,
+          prUrl: null,
+          createdAt: '2026-07-02T00:00:00Z',
+          prdId: 'prd-1',
+          featureId: 'FEAT-002',
+        },
+      ],
+    });
+
+    renderView();
+    expandPrdAndEpic();
+
+    expect(screen.getAllByRole('button', { name: /clear progress/i })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /close session/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('DevWorkbenchView — session-to-feature matching', () => {
@@ -807,7 +884,8 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
 
     expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /resume session/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /clear progress/i })).toBeInTheDocument();
   });
 
   it('closing feature 001 does not affect feature 002 session', async () => {
@@ -845,8 +923,8 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     const inProgressBadges = screen.getAllByText('In Progress');
     expect(inProgressBadges.length).toBeGreaterThanOrEqual(2);
 
-    const closeButtons = screen.getAllByRole('button', { name: /close session/i });
-    fireEvent.click(closeButtons[0]);
+    const clearButtons = screen.getAllByRole('button', { name: /clear progress/i });
+    fireEvent.click(clearButtons[0]);
 
     await waitFor(() => {
       expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-feat-001');
@@ -888,8 +966,10 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
     const inProgressBadges = screen.getAllByText('In Progress');
     expect(inProgressBadges.length).toBeGreaterThanOrEqual(2);
 
-    const resumeButtons = screen.getAllByRole('button', { name: /resume session/i });
-    expect(resumeButtons).toHaveLength(2);
+    const clearButtons = screen.getAllByRole('button', { name: /clear progress/i });
+    expect(clearButtons).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /close session/i })).not.toBeInTheDocument();
   });
 
   it('shows In Progress with In PR note for a feature with a pushed session', () => {
@@ -950,8 +1030,8 @@ describe('DevWorkbenchView — session-to-feature matching', () => {
 
     expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
 
-    const closeButton = screen.getByRole('button', { name: /close session/i });
-    fireEvent.click(closeButton);
+    const clearButton = screen.getByRole('button', { name: /clear progress/i });
+    fireEvent.click(clearButton);
 
     await waitFor(() => {
       expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-new-active');

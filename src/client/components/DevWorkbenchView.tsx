@@ -19,6 +19,7 @@ import {
   type MyWorkStatus,
 } from '../../shared/utils/myWorkStatus';
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
+import FeatureContextModal from './FeatureContextModal';
 import styles from './DevWorkbenchView.module.css';
 
 export type ApexStatusFilter = 'all' | MyWorkStatus;
@@ -143,18 +144,16 @@ const ApexBacklogView: React.FC<{
   project: string;
   activeSessions: ActiveDevSession[];
 }> = ({ project, activeSessions }) => {
-  const navigate = useNavigate();
   const { data: backlogGroups, isLoading, error } = useApexBacklogFeatures(project);
-  const startSession = useStartDevSession();
   const closeSession = useCloseDevSession();
   const completeFeature = useCompleteFeature();
   const startLocalFeature = useStartLocalFeature();
-  const [startingFeature, setStartingFeature] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [completingFeature, setCompletingFeature] = useState<string | null>(null);
   const [openPrds, setOpenPrds] = useState<Set<string>>(() => new Set());
   const [openEpics, setOpenEpics] = useState<Set<string>>(() => new Set());
   const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
+  const [selectedContextFeature, setSelectedContextFeature] = useState<BacklogFeatureItem | null>(null);
   const [statusFilter, setStatusFilter] = useState<ApexStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [locallyCompleted, setLocallyCompleted] = useState<Set<string>>(() => new Set());
@@ -197,21 +196,7 @@ const ApexBacklogView: React.FC<{
     });
   };
 
-  const handleStart = async (feature: BacklogFeatureItem) => {
-    setStartingFeature(feature.featureId);
-    try {
-      const result = await startSession.mutateAsync({ prdId: feature.prdId, featureId: feature.featureId, project });
-      navigate(`/my-work/session/${result.sessionId}`);
-    } finally {
-      setStartingFeature(null);
-    }
-  };
-
-  const handleResume = (sessionId: string) => {
-    navigate(`/my-work/session/${sessionId}`);
-  };
-
-  const handleClose = async (sessionId: string) => {
+  const handleClearProgress = async (sessionId: string) => {
     setClosingId(sessionId);
     try {
       await closeSession.mutateAsync(sessionId);
@@ -268,9 +253,6 @@ const ApexBacklogView: React.FC<{
 
   return (
     <div className={styles['apex-backlog']}>
-      {startSession.error && (
-        <div className={styles.error}>{startSession.error.message}</div>
-      )}
       {startLocalFeature.error && (
         <div className={styles.error}>{startLocalFeature.error.message}</div>
       )}
@@ -422,47 +404,27 @@ const ApexBacklogView: React.FC<{
                                 </div>
                               </div>
                               <div className={styles['item-actions']}>
+                                <button
+                                  className={styles['view-context-btn']}
+                                  onClick={() => setSelectedContextFeature(feature)}
+                                  type="button"
+                                  title="Inspect PRD, backlog, design artifacts, and prototype"
+                                >
+                                  View Context
+                                </button>
                                 {isComplete ? (
                                   <span className={styles['completed-label']}>Done</span>
                                 ) : (
                                   <>
-                                    {isInProgress && readiness.hasCloudSession && readiness.sessionId && (
-                                      <>
-                                        <button
-                                          className={styles['resume-btn']}
-                                          onClick={() => handleResume(readiness.sessionId!)}
-                                          type="button"
-                                        >
-                                          Resume Session
-                                        </button>
-                                        <button
-                                          className={styles['close-btn']}
-                                          onClick={() => handleClose(readiness.sessionId!)}
-                                          disabled={closingId === readiness.sessionId}
-                                          type="button"
-                                        >
-                                          {closingId === readiness.sessionId ? 'Closing...' : 'Close Session'}
-                                        </button>
-                                      </>
-                                    )}
-                                    {isInProgress && !readiness.hasCloudSession && readiness.sessionId && (
+                                    {isInProgress && readiness.sessionId && (
                                       <button
                                         className={styles['close-btn']}
-                                        onClick={() => handleClose(readiness.sessionId!)}
+                                        onClick={() => handleClearProgress(readiness.sessionId!)}
                                         disabled={closingId === readiness.sessionId}
                                         type="button"
+                                        title="Clear in-progress status for this feature"
                                       >
                                         {closingId === readiness.sessionId ? 'Closing...' : 'Clear Progress'}
-                                      </button>
-                                    )}
-                                    {(!isInProgress || !readiness.hasCloudSession) && (
-                                      <button
-                                        className={styles['start-btn']}
-                                        onClick={() => handleStart(feature)}
-                                        disabled={isBlocked || startingFeature !== null}
-                                        type="button"
-                                      >
-                                        {startingFeature === feature.featureId ? 'Starting...' : 'Start Development'}
                                       </button>
                                     )}
                                     <button
@@ -503,6 +465,14 @@ const ApexBacklogView: React.FC<{
         <StartLocalDevModal
           target={localDevTarget}
           onClose={() => setLocalDevTarget(null)}
+        />
+      )}
+
+      {selectedContextFeature && (
+        <FeatureContextModal
+          project={project}
+          feature={selectedContextFeature}
+          onClose={() => setSelectedContextFeature(null)}
         />
       )}
     </div>
