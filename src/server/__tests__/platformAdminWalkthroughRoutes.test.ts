@@ -101,6 +101,33 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
     expect(mockWt.createWalkthrough).toHaveBeenCalled();
   });
 
+  it('GET anchors returns curated registry entries', async () => {
+    const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/anchors');
+    expect(res.status).toBe(200);
+    expect(res.body.anchors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'user-menu-trigger', targetRoute: '/home' }),
+      ]),
+    );
+  });
+
+  it('GET :id delegates to getWalkthroughAdmin', async () => {
+    mockWt.getWalkthroughAdmin.mockResolvedValue({ id: 'wt-1', internalName: 'Intro' } as any);
+    const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/wt-1');
+    expect(res.status).toBe(200);
+    expect(mockWt.getWalkthroughAdmin).toHaveBeenCalledWith('wt-1');
+    expect(res.body.internalName).toBe('Intro');
+  });
+
+  it('GET :id returns 404 when not found', async () => {
+    const { WalkthroughDomainError } = await import('../../shared/types/walkthrough');
+    mockWt.getWalkthroughAdmin.mockRejectedValue(
+      new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found'),
+    );
+    const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/missing');
+    expect(res.status).toBe(404);
+  });
+
   it('POST publish / archive / report endpoints exist', async () => {
     mockWt.publishWalkthrough.mockResolvedValue({ id: 'wt-1' } as any);
     mockWt.archiveWalkthrough.mockResolvedValue({ id: 'wt-1' } as any);

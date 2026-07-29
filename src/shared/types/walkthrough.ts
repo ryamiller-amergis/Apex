@@ -153,6 +153,12 @@ export interface UpdateWalkthroughCommand {
 export interface PublishWalkthroughCommand {
   mode: WalkthroughPublishMode;
   targeting: WalkthroughTargeting;
+  /** Optimistic concurrency against current updatedAt. */
+  expectedUpdatedAt?: string;
+}
+
+export interface WalkthroughLifecycleCommand {
+  expectedUpdatedAt?: string;
 }
 
 export type WalkthroughDraftCommand = CreateWalkthroughCommand;

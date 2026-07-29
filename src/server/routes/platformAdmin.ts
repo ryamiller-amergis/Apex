@@ -25,6 +25,7 @@ import {
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
 import * as walkthroughService from '../services/walkthroughService';
+import { listWalkthroughAnchors } from '../../shared/walkthroughAnchors';
 import {
   WalkthroughDomainError,
   type PublishWalkthroughCommand,
@@ -392,6 +393,20 @@ router.post('/walkthroughs', async (req: Request, res: Response): Promise<void> 
   }
 });
 
+router.get('/walkthroughs/anchors', async (_req: Request, res: Response): Promise<void> => {
+  res.json({ anchors: listWalkthroughAnchors() });
+});
+
+router.get('/walkthroughs/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const walkthrough = await walkthroughService.getWalkthroughAdmin(req.params.id);
+    res.json(walkthrough);
+  } catch (err) {
+    if (mapWalkthroughError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.patch('/walkthroughs/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const actor = { id: getUserId(req) };
@@ -425,7 +440,10 @@ router.post('/walkthroughs/:id/publish', async (req: Request, res: Response): Pr
 router.post('/walkthroughs/:id/unpublish', async (req: Request, res: Response): Promise<void> => {
   try {
     const actor = { id: getUserId(req) };
-    const result = await walkthroughService.unpublishWalkthrough(req.params.id, actor);
+    const result = await walkthroughService.unpublishWalkthrough(req.params.id, actor, {
+      expectedUpdatedAt:
+        typeof req.body?.expectedUpdatedAt === 'string' ? req.body.expectedUpdatedAt : undefined,
+    });
     res.json(result);
   } catch (err) {
     if (mapWalkthroughError(err, res)) return;
@@ -436,7 +454,10 @@ router.post('/walkthroughs/:id/unpublish', async (req: Request, res: Response): 
 router.post('/walkthroughs/:id/archive', async (req: Request, res: Response): Promise<void> => {
   try {
     const actor = { id: getUserId(req) };
-    const result = await walkthroughService.archiveWalkthrough(req.params.id, actor);
+    const result = await walkthroughService.archiveWalkthrough(req.params.id, actor, {
+      expectedUpdatedAt:
+        typeof req.body?.expectedUpdatedAt === 'string' ? req.body.expectedUpdatedAt : undefined,
+    });
     res.json(result);
   } catch (err) {
     if (mapWalkthroughError(err, res)) return;

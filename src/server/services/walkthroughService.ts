@@ -356,6 +356,9 @@ export async function publishWalkthrough(
   if (!existing) {
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
   }
+  if (command.expectedUpdatedAt !== undefined && command.expectedUpdatedAt !== existing.updatedAt) {
+    throw new WalkthroughDomainError('REVISION_CONFLICT', 'Update timestamp conflict');
+  }
 
   const targeting = await validateTargetingAgainstDb(command.targeting);
   if (existing.steps.length === 0) {
@@ -424,10 +427,14 @@ export async function publishWalkthrough(
 export async function unpublishWalkthrough(
   id: string,
   actor: { id: string },
+  command: { expectedUpdatedAt?: string } = {},
 ): Promise<WalkthroughDefinition> {
   const existing = await loadDefinition(id);
   if (!existing) {
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
+  }
+  if (command.expectedUpdatedAt !== undefined && command.expectedUpdatedAt !== existing.updatedAt) {
+    throw new WalkthroughDomainError('REVISION_CONFLICT', 'Update timestamp conflict');
   }
   if (!canTransitionLifecycle(existing.lifecycle, 'unpublished')) {
     throw new WalkthroughDomainError(
@@ -455,10 +462,14 @@ export async function unpublishWalkthrough(
 export async function archiveWalkthrough(
   id: string,
   actor: { id: string },
+  command: { expectedUpdatedAt?: string } = {},
 ): Promise<WalkthroughDefinition> {
   const existing = await loadDefinition(id);
   if (!existing) {
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
+  }
+  if (command.expectedUpdatedAt !== undefined && command.expectedUpdatedAt !== existing.updatedAt) {
+    throw new WalkthroughDomainError('REVISION_CONFLICT', 'Update timestamp conflict');
   }
   if (!canTransitionLifecycle(existing.lifecycle, 'archived')) {
     throw new WalkthroughDomainError(
