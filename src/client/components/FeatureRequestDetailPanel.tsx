@@ -1,6 +1,7 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
+import { ApexGenerateWorkItemsWizard } from './ApexGenerateWorkItemsWizard';
 import type {
   FeatureRequest,
   FeatureRequestStatus,
@@ -114,10 +115,11 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   isReanalyzing,
 }) => {
   const navigate = useNavigate();
-  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded } = useAppShell();
   const canKickOff = permissionsLoaded
     && can('interviews:manage')
     && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+  const [showGenerateWizard, setShowGenerateWizard] = useState(false);
   const handleClose = useCallback(() => onClose(), [onClose]);
 
   useEffect(() => {
@@ -308,6 +310,15 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
               </button>
             )}
+            {isSuperAdmin && fr.status !== 'declined' && (
+              <button
+                className={styles['secondaryAction']}
+                type="button"
+                onClick={() => setShowGenerateWizard(true)}
+              >
+                Generate Work Items
+              </button>
+            )}
             {isInterviewableWorkItemType(fr.type) && canKickOff && !fr.interviewId && (
               <button
                 className={styles['primaryAction']}
@@ -324,6 +335,12 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
           </footer>
         )}
       </aside>
+      {showGenerateWizard && (
+        <ApexGenerateWorkItemsWizard
+          featureRequest={fr}
+          onClose={() => setShowGenerateWizard(false)}
+        />
+      )}
     </>
   );
 };

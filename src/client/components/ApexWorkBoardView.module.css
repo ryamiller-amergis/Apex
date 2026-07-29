@@ -1,0 +1,389 @@
+/* ── Board shell ─────────────────────────────────────────────────────────── */
+.board {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.header {
+  padding: 20px 24px 0;
+  flex-shrink: 0;
+}
+
+.headerTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Filter bar ──────────────────────────────────────────────────────────── */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.filterChip:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.filterChipActive {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+}
+
+/* Type filters — colored borders only; keep theme text color */
+.filterChipPBI {
+  border-color: #06b6d440;
+}
+.filterChipPBI:hover,
+.filterChipPBI.filterChipActive {
+  border-color: #06b6d4;
+  background: #06b6d420;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.filterChipTBI {
+  border-color: #a855f740;
+}
+.filterChipTBI:hover,
+.filterChipTBI.filterChipActive {
+  border-color: #a855f7;
+  background: #a855f720;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.filterChipBug {
+  border-color: #f43f5e40;
+}
+.filterChipBug:hover,
+.filterChipBug.filterChipActive {
+  border-color: #f43f5e;
+  background: #f43f5e20;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.filterSelect {
+  appearance: none;
+  padding: 4px 24px 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%236B7280' stroke-width='2' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  transition: all 0.15s ease;
+}
+
+.filterSelect:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+
+.searchInput {
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  min-width: 160px;
+  transition: all 0.15s ease;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+
+.filterSpacer {
+  flex: 1;
+}
+
+.clearFiltersBtn {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+
+.clearFiltersBtn:hover {
+  color: var(--error-color);
+}
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 0 0 0;
+  flex-shrink: 0;
+}
+
+/* ── Kanban canvas ───────────────────────────────────────────────────────── */
+.canvas {
+  flex: 1;
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0;
+}
+
+.canvas::-webkit-scrollbar { height: 6px; }
+.canvas::-webkit-scrollbar-track { background: var(--bg-secondary); }
+.canvas::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+
+/* ── Column ──────────────────────────────────────────────────────────────── */
+.column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 230px;
+  max-width: 320px;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  transition: background 0.15s ease;
+}
+
+.column:last-child {
+  border-right: none;
+}
+
+.columnDragOver {
+  background: var(--status-bg, color-mix(in srgb, var(--accent-color) 4%, var(--bg-primary)));
+  box-shadow: inset 0 0 0 1px var(--status-border, transparent);
+}
+
+.columnHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-primary);
+  z-index: 2;
+  border-bottom: 2px solid var(--status-border, var(--border-color));
+  flex-shrink: 0;
+}
+
+.columnIcon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--status-color, var(--text-muted));
+  background: var(--status-bg, transparent);
+  border: 1px solid var(--status-border, var(--border-color));
+}
+
+.columnIcon svg {
+  stroke: currentColor;
+  fill: none;
+}
+
+.columnLabel {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.columnCount {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--status-bg, transparent);
+  border: 1px solid var(--status-border, transparent);
+  color: var(--status-color, var(--text-muted));
+  transition: all 0.2s ease;
+  min-width: 20px;
+  text-align: center;
+}
+
+.columnCards {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.columnCards::-webkit-scrollbar { width: 4px; }
+.columnCards::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+
+.columnEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.columnEmptyIcon {
+  opacity: 0.35;
+}
+
+.columnEmptyText {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btnPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnPrimary:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px var(--shadow-md);
+}
+
+.btnPrimary:active {
+  transform: translateY(0);
+}
+
+/* ── States ──────────────────────────────────────────────────────────────── */
+.loadingState {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  gap: 8px;
+  font-size: 0.875rem;
+}
+
+.errorState {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+/* ── Skeleton card ───────────────────────────────────────────────────────── */
+.skeletonCard {
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.skeletonLine {
+  border-radius: 4px;
+  background: var(--border-color);
+  height: 10px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .column {
+    min-width: 80vw;
+    max-width: 80vw;
+  }
+}
+
+@media (max-width: 600px) {
+  .header { padding: 12px 16px 0; }
+  .title { font-size: 1.125rem; }
+  .column { min-width: 90vw; max-width: 90vw; }
+}

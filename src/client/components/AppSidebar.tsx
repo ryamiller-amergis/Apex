@@ -32,6 +32,7 @@ interface AppSidebarProps {
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
+  onNavigateWorkBoard?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -126,6 +127,14 @@ const IconDesignModule: React.FC = () => (
   </svg>
 );
 
+const IconWorkBoard: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="4" width="4" height="12" rx="1" />
+    <rect x="8" y="4" width="4" height="9" rx="1" />
+    <rect x="14" y="4" width="4" height="6" rx="1" />
+  </svg>
+);
+
 const IconAdmin: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -167,6 +176,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
+  onNavigateWorkBoard,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -189,6 +199,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     { label: 'Standup', view: 'standup', icon: <IconStandup />, permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: null, onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
   ];
@@ -207,6 +218,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
+      return true;
+    }
+    if (item.view === 'work-board') {
+      if (!isSuperAdmin) return false;
+      if (selectedProject !== 'Apex') return false;
       return true;
     }
     if (item.view === 'pdf-tools') {
@@ -229,6 +245,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const isActive = (view: string) => {
     if (view === 'home') return currentView === 'home';
     if (view === 'standup') return currentView === 'standup' || currentView === 'standup-manage' || currentView === 'standup-summary';
+    if (view === 'work-board') return currentView === 'work-board';
     return currentView === view;
   };
 

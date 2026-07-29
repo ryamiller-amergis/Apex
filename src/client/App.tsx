@@ -66,6 +66,7 @@ const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
+const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
@@ -125,7 +126,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'work-board';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -165,6 +166,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname.startsWith('/work-board')
+                    ? 'work-board'
                     : 'calendar';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -286,6 +289,7 @@ function App() {
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate('/home');
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate('/home');
     if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate('/home');
+    if (currentView === 'work-board' && (!isSuperAdmin || selectedProject !== 'Apex')) navigate('/home');
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate('/home');
@@ -446,6 +450,7 @@ function App() {
             onNavigatePdfTools={() => navigate('/pdf-tools')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
+            onNavigateWorkBoard={() => navigate('/work-board')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -720,6 +725,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <FeatureRequestsView />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'work-board' && isSuperAdmin && selectedProject === 'Apex' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ApexWorkBoardView currentUserId={userId ?? ''} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'ui-lab' ? (

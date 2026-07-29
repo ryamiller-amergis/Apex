@@ -1,4 +1,4 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, serial, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type {
   PageManifestEntry,
@@ -1531,3 +1531,76 @@ export const workItemChangeProposalsRelations = relations(workItemChangeProposal
 
 // Add calendar assistant columns to projectSkillSettings (applied via migration)
 // Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql
+
+// ── Apex Work Board ───────────────────────────────────────────────────────────
+
+import type { AcceptanceCriterion, ApexWorkItemStatus, ApexWorkItemType, ApexWorkItemSourceType, ApexWorkItemEventAction } from '../../shared/types/apexWorkItem';
+
+export const apexWorkItems = pgTable('apex_work_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  itemNumber: serial('item_number').notNull(),
+  title: text('title').notNull(),
+  outcome: text('outcome').notNull().default(''),
+  type: text('type').$type<ApexWorkItemType>().notNull(),
+  status: text('status').$type<ApexWorkItemStatus>().notNull().default('idea'),
+  ownerOid: text('owner_oid').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  acceptanceCriteria: jsonb('acceptance_criteria').$type<AcceptanceCriterion[]>().notNull().default([]),
+  branch: text('branch'),
+  prUrl: text('pr_url'),
+  position: integer('position').notNull().default(0),
+  sourceType: text('source_type').$type<ApexWorkItemSourceType>().notNull().default('standalone'),
+  prdId: uuid('prd_id').references(() => interviews.id, { onDelete: 'set null' }),
+  backlogItemId: text('backlog_item_id'),
+  featureRequestId: uuid('feature_request_id').references(() => featureRequests.id, { onDelete: 'set null' }),
+  epicId: text('epic_id'),
+  epicTitle: text('epic_title'),
+  featureId: text('feature_id'),
+  featureTitle: text('feature_title'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  updatedBy: text('updated_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  ownerStatusIdx: index('idx_apex_work_items_owner_status').on(t.ownerOid, t.status),
+  statusPosIdx: index('idx_apex_work_items_status_pos').on(t.status, t.position),
+  frIdx: index('idx_apex_work_items_feature_request').on(t.featureRequestId),
+}));
+
+export const apexWorkItemCollaborators = pgTable('apex_work_item_collaborators', {
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  userOid: text('user_oid').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  addedAt: timestamp('added_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workItemId, t.userOid] }),
+  userIdx: index('idx_apex_work_item_collab_user').on(t.userOid),
+}));
+
+export const apexWorkItemEvents = pgTable('apex_work_item_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  actorId: text('actor_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  action: text('action').$type<ApexWorkItemEventAction>().notNull(),
+  fromStatus: text('from_status').$type<ApexWorkItemStatus>(),
+  toStatus: text('to_status').$type<ApexWorkItemStatus>(),
+  details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  itemCreatedIdx: index('idx_apex_work_item_events_item').on(t.workItemId, t.createdAt),
+}));
+
+export const apexWorkItemsRelations = relations(apexWorkItems, ({ one, many }) => ({
+  owner: one(appUsers, { fields: [apexWorkItems.ownerOid], references: [appUsers.oid] }),
+  collaborators: many(apexWorkItemCollaborators),
+  events: many(apexWorkItemEvents),
+  featureRequest: one(featureRequests, { fields: [apexWorkItems.featureRequestId], references: [featureRequests.id] }),
+}));
+
+export const apexWorkItemCollaboratorsRelations = relations(apexWorkItemCollaborators, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemCollaborators.workItemId], references: [apexWorkItems.id] }),
+  user: one(appUsers, { fields: [apexWorkItemCollaborators.userOid], references: [appUsers.oid] }),
+}));
+
+export const apexWorkItemEventsRelations = relations(apexWorkItemEvents, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemEvents.workItemId], references: [apexWorkItems.id] }),
+  actor: one(appUsers, { fields: [apexWorkItemEvents.actorId], references: [appUsers.oid] }),
+}));
