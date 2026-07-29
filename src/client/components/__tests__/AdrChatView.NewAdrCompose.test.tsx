@@ -76,6 +76,12 @@ jest.mock('../AdrReviewerModal', () => ({
   ),
 }));
 
+jest.mock('../MarkdownWithMermaid', () => ({
+  MarkdownWithMermaid: ({ content }: { content: string }) => (
+    <div data-testid="adr-markdown-with-mermaid" data-content={content}>{content}</div>
+  ),
+}));
+
 describe('NewAdrCompose', () => {
   beforeEach(() => {
     jest.clearAllMocks();

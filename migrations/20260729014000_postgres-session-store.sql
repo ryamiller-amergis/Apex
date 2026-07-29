@@ -1,3 +1,4 @@
+-- Up Migration
 -- PostgreSQL-backed Express sessions. The application owns this table through
 -- migrations; connect-pg-simple must not create it at runtime.
 
