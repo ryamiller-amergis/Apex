@@ -98,10 +98,30 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   const [themeRevision, setThemeRevision] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const panSessionRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const titleId = useId();
   const renderChart = normalizeMermaidChart(chart);
+
+  const resetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const closeLightbox = () => {
+    setExpanded(false);
+    setIsPanning(false);
+    panSessionRef.current = null;
+    resetView();
+  };
 
   useEffect(() => {
     const observer = new MutationObserver(() =>
@@ -109,18 +129,17 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     );
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme', 'style'],
+      attributeFilter: ['class', 'data-theme'],
     });
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme', 'style'],
+      attributeFilter: ['class', 'data-theme'],
     });
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setSvg(null);
     setError(null);
     const renderAttempt = renderMermaid(
       renderChart,
@@ -133,12 +152,14 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       .catch((renderError: unknown) => {
         document.getElementById(renderAttempt.id)?.remove();
         document.getElementById(`d${renderAttempt.id}`)?.remove();
-        if (!cancelled)
+        if (!cancelled) {
+          setSvg(null);
           setError(
             renderError instanceof Error
               ? renderError.message
               : 'Unable to render Mermaid diagram.'
           );
+        }
       });
     return () => {
       cancelled = true;
@@ -149,14 +170,17 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 
   useEffect(() => {
     if (!expanded) {
-      setZoom(1);
+      resetView();
       return;
     }
     closeRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setExpanded(false);
+      if (event.key === 'Escape') {
+        closeLightbox();
+        return;
+      }
       if (event.key === '+' || event.key === '=') {
         event.preventDefault();
         setZoom((value) => Math.min(3, Number((value + 0.25).toFixed(2))));
@@ -167,7 +191,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       }
       if (event.key === '0') {
         event.preventDefault();
-        setZoom(1);
+        resetView();
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -176,6 +200,31 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [expanded]);
+
+  const handlePanStart = (clientX: number, clientY: number) => {
+    panSessionRef.current = {
+      startX: clientX,
+      startY: clientY,
+      originX: pan.x,
+      originY: pan.y,
+    };
+    setIsPanning(true);
+  };
+
+  const handlePanMove = (clientX: number, clientY: number) => {
+    const session = panSessionRef.current;
+    if (!session) return;
+    setPan({
+      x: session.originX + (clientX - session.startX),
+      y: session.originY + (clientY - session.startY),
+    });
+  };
+
+  const endPan = () => {
+    if (!panSessionRef.current) return;
+    panSessionRef.current = null;
+    setIsPanning(false);
+  };
 
   if (error) {
     return (
@@ -236,14 +285,17 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
           aria-labelledby={titleId}
           data-testid="mermaid-lightbox"
           onClick={(event) => {
-            if (event.target === event.currentTarget) setExpanded(false);
+            if (event.target === event.currentTarget) closeLightbox();
           }}
         >
           <div className={styles.lightboxCard}>
             <header className={styles.lightboxHeader}>
-              <h2 id={titleId} className={styles.lightboxTitle}>
-                Diagram
-              </h2>
+              <div className={styles.lightboxHeading}>
+                <h2 id={titleId} className={styles.lightboxTitle}>
+                  Diagram
+                </h2>
+                <p className={styles.lightboxHint}>Drag to pan · + / − to zoom</p>
+              </div>
               <div className={styles.lightboxControls}>
                 <button
                   type="button"
@@ -277,9 +329,9 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
                 <button
                   type="button"
                   className={styles.zoomButton}
-                  onClick={() => setZoom(1)}
+                  onClick={resetView}
                   aria-label="Reset zoom"
-                  title="Reset zoom (0)"
+                  title="Reset zoom and pan (0)"
                 >
                   Reset
                 </button>
@@ -287,17 +339,42 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
                   ref={closeRef}
                   type="button"
                   className={styles.closeButton}
-                  onClick={() => setExpanded(false)}
+                  onClick={closeLightbox}
                   aria-label="Close diagram"
                 >
                   Close
                 </button>
               </div>
             </header>
-            <div className={styles.lightboxBody}>
+            <div
+              className={`${styles.lightboxBody}${isPanning ? ` ${styles.lightboxBodyPanning}` : ''}`}
+              data-testid="mermaid-pan-viewport"
+              onMouseDown={(event) => {
+                if (event.button !== 0) return;
+                handlePanStart(event.clientX, event.clientY);
+              }}
+              onMouseMove={(event) => handlePanMove(event.clientX, event.clientY)}
+              onMouseUp={endPan}
+              onMouseLeave={endPan}
+              onTouchStart={(event) => {
+                if (event.touches.length !== 1) return;
+                const touch = event.touches[0];
+                handlePanStart(touch.clientX, touch.clientY);
+              }}
+              onTouchMove={(event) => {
+                if (event.touches.length !== 1) return;
+                event.preventDefault();
+                const touch = event.touches[0];
+                handlePanMove(touch.clientX, touch.clientY);
+              }}
+              onTouchEnd={endPan}
+              onTouchCancel={endPan}
+            >
               <div
-                className={styles.lightboxDiagram}
-                style={{ transform: `scale(${zoom})` }}
+                className={`${styles.lightboxDiagram}${isPanning ? ` ${styles.lightboxDiagramPanning}` : ''}`}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                }}
                 dangerouslySetInnerHTML={{ __html: svg }}
               />
             </div>

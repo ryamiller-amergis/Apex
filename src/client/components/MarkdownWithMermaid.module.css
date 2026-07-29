@@ -139,11 +139,24 @@
   background: var(--bg-secondary);
 }
 
+.lightboxHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .lightboxTitle {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.lightboxHint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .lightboxControls {
@@ -194,9 +207,16 @@
 .lightboxBody {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 24px;
   background: var(--bg-secondary);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.lightboxBodyPanning {
+  cursor: grabbing;
 }
 
 .lightboxDiagram {
@@ -204,8 +224,13 @@
   min-width: 100%;
   max-width: none;
   margin: 0 auto;
-  transform-origin: top center;
+  transform-origin: center center;
   transition: transform 0.12s ease;
+  will-change: transform;
+}
+
+.lightboxDiagramPanning {
+  transition: none;
 }
 
 .lightboxDiagram :global(svg) {
@@ -213,6 +238,7 @@
   max-width: none;
   height: auto;
   margin: 0 auto;
+  pointer-events: none;
 }
 
 @media (max-width: 768px) {
