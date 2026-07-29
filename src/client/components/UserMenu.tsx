@@ -6,6 +6,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ThemeMode } from '../config/themes';
 import { useCurrentProfile } from '../hooks/useProfile';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
 import { SharedAvatar } from './SharedAvatar';
 import { WhatsNewIndicator } from './WhatsNewIndicator';
 import styles from './UserMenu.module.css';
@@ -154,7 +158,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
         aria-label="User menu"
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        data-testid="user-menu-trigger"
+        {...anchorTestIdProps(WalkthroughAnchorKeys.USER_MENU_TRIGGER)}
       >
         <SharedAvatar
           oid={avatarOid}

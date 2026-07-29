@@ -40,6 +40,7 @@ From {feature-slug}-assumptions.md:
 - Do NOT modify protected files without user approval
 - Do NOT run `git commit` or `git push`
 - If feature-flag gating applies: top-level split from `feature-flags` at the entry route/component with the agreed flag key; keep the disabled branch functional
+- UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). When editing existing screens, add/convert ids on all interactive controls in that file. Pre-commit enforces this. Hook failures → /resolve-pre-commit-data-testid.
 
 ### TDD Instructions (see below)
 <paste the TDD block matching this item's layer>
@@ -98,9 +99,19 @@ TDD — Red to Green:
    - Mock fetch and external hooks; use MSW or inline jest.fn() mocks
    - Use AAA pattern; test user-visible behavior matching Given/When/Then, not implementation details
    - Align UI assertions with {feature-slug}-design.md states/labels where specified
+   - Prefer querying by data-testid from the design-spec list (getByTestId) for interactive controls
    - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation.
+   - data-testid policy (pre-commit enforced): every interactive UI element in a staged client TSX file MUST have a stable kebab-case id via spread syntax
+     `{...{ 'data-testid': 'test-id-example' }}` (whole-file scan — not only new lines). Never write kebab-case JSX attrs `data-testid="…"` / `data-testid={…}`.
+     Covers button, input, select, textarea, a, form, dialog; elements with onClick/onSubmit/onChange/etc.; UI components whose names end in
+     Button/Modal/Dialog/Input/…. Match ids listed in {feature-slug}-design.md when present.
+   - Dynamic: `{...{ 'data-testid': \`work-item-${id}\` }}`. Walkthrough: `{...anchorTestIdProps('registry-key')}`.
+   - When extending an existing screen, add missing ids AND convert any legacy `data-testid="…"` / `data-testid={…}` on interactive controls in that file to spread form.
+   - Screen / landmark roots (page container, primary panel, empty/error states used by E2E) also need the spread form.
+   - Do not rely on CSS class or text selectors for new E2E/unit queries when a test id exists.
+   - Hook failures: /resolve-pre-commit-data-testid (or /resolve-pre-commit-eslint for lint-staged).
    - Run: npm test -- <testfile> — confirm all tests PASS
 
 3. REFACTOR: Clean up; re-run tests to confirm still green.

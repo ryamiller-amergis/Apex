@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { ChangelogEntry } from '../../shared/types/changelog';
 import { semverGt, semverValid } from '../../shared/utils/semverStrict';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
 import { useChangelog } from '../hooks/useChangelog';
 import styles from './Changelog.module.css';
 
@@ -133,6 +137,7 @@ export const Changelog: React.FC<ChangelogProps> = ({
         className={styles['changelog-overlay']}
         onClick={handleClose}
         aria-label="Close What's New"
+        data-testid="whats-new-overlay"
       />
       <div
         ref={dialogRef}
@@ -140,7 +145,7 @@ export const Changelog: React.FC<ChangelogProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="whats-new-title"
-        data-testid="whats-new-modal"
+        {...anchorTestIdProps(WalkthroughAnchorKeys.WHATS_NEW_MODAL)}
       >
         <div className={styles['changelog-header']}>
           <div>
@@ -153,6 +158,7 @@ export const Changelog: React.FC<ChangelogProps> = ({
             onClick={handleClose}
             className={styles['changelog-close-btn']}
             aria-label="Close What's New"
+            data-testid="whats-new-close-btn"
           >
             ×
           </button>
@@ -192,6 +198,7 @@ export const Changelog: React.FC<ChangelogProps> = ({
                       className={styles['changelog-entry-header']}
                       onClick={() => toggleVersion(entry.version)}
                       aria-expanded={expandedVersions.has(entry.version)}
+                      data-testid={`whats-new-entry-${entry.version}`}
                     >
                       <div className={styles['changelog-entry-info']}>
                         <div className={styles['changelog-version-row']}>
@@ -246,7 +253,12 @@ export const Changelog: React.FC<ChangelogProps> = ({
               Show automatically on login
             </label>
           )}
-          <button type="button" onClick={handleClose} className={styles['changelog-done-btn']}>
+          <button
+            type="button"
+            onClick={handleClose}
+            className={styles['changelog-done-btn']}
+            data-testid="whats-new-done-btn"
+          >
             {showUnavailable ? 'Dismiss' : 'Got it!'}
           </button>
         </div>

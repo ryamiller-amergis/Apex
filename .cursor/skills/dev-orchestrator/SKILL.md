@@ -52,7 +52,7 @@ Supporting contracts (Coordinator only, when emitting the plan):
 | F0.5 | Assumption gate — resolve naming against live repo; stop on material ⚠ items |
 | F1 | Build Context Block (rules, skills, protected files) |
 | F2 | Inner item DAG + parallel waves |
-| F3 | Requirements → Test Matrix; author E2E specs (defer execution only if env unavailable) |
+| F3 | Requirements → Test Matrix; author E2E specs; enforce data-testid on UI (defer E2E execution only if env unavailable) |
 | F4 | Dispatch items with TDD prompts from [tdd-prompts.md](tdd-prompts.md) |
 | F5 | Inner-wave gate: `tsc` + tests + AC/DoD coverage |
 | F6 | Completion synopsis; no commit/push |

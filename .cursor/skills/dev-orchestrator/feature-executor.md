@@ -136,6 +136,7 @@ Feature flag: <yes — key `my-feature-key` | no>
 Protected files requiring explicit permission: <list or "none">
 Key existing files: <3-5 most relevant file paths>
 Design specs: <paths to the three {feature-slug}-*.md files>
+data-testid: <ids from design.md, or "n/a — no UI"> — new/touched interactive UI must use spread `{...{ 'data-testid': 'kebab-id' }}` (pre-commit enforced)
 Git policy: NO `git commit` / NO `git push`. The Dev Workbench captures the diff and opens the PR.
 ```
 
@@ -184,6 +185,33 @@ Any test case (or matrix row) with `automation.recommendedTier === 'e2e-playwrig
 **Coverage gate:** An AC that has only e2e test cases must still have a unit/integration RED test derived from the Given/When/Then. E2E deferral must not leave an AC entirely untested.
 
 Report the deferred list at the end of the Feature Executor run.
+
+### F3.3 — `data-testid` on UI (mandatory for client work)
+
+Pre-commit runs `scripts/check-data-testid.mjs` on staged client TSX under `src/client/` (non-test). When a file is staged, **every** interactive element in that file must have `data-testid` — missing ids on existing controls in a touched file fail the commit. Resolve with `/resolve-pre-commit-data-testid`.
+
+**Required syntax (spread — not kebab-case JSX attribute):**
+
+```tsx
+// ✅ REQUIRED
+<button type="button" {...{ 'data-testid': 'test-id-example' }}>…</button>
+<button type="button" {...{ 'data-testid': `work-item-${id}` }}>…</button>
+<button type="button" {...anchorTestIdProps('registry-key')}>…</button>
+
+// ❌ FORBIDDEN — do not write kebab-case attributes
+<button type="button" data-testid="test-id-example">…</button>
+<button type="button" data-testid={`work-item-${id}`}>…</button>
+```
+
+Id **values** stay kebab-case (`test-id-example`); only the JSX form must be the object spread.
+
+When the Feature (or any PBI) touches UI:
+
+1. From `{feature-slug}-design.md`, copy the **data-testid attributes** list into the Context Block and every client subagent prompt.
+2. **New screens / components:** put `{...{ 'data-testid': 'kebab-id' }}` on the screen root, primary landmarks (empty/error/loading containers used in tests), and every interactive control (`button`, `input`, `select`, `textarea`, `a`, `form`, `dialog`, handler-driven elements, and UI components named `*Button` / `*Modal` / `*Dialog` / `*Input` / …).
+3. **Existing / touched screens:** before staging, ensure **all** interactive controls in that file have a spread `data-testid` (pre-commit scans the whole file). Convert any legacy `data-testid="…"` / `data-testid={…}` attributes on touched elements to the spread form in the same change.
+4. Prefer design-spec ids verbatim. If the design spec omitted an id for a control you add, invent a stable kebab-case id and note it in the completion synopsis under Files changed.
+5. Escape hatch only for non-testable decorative markup: `// data-testid-exempt` on the line above the tag (rare).
 
 ## Phase F4 — Dispatch inner waves with TDD
 
@@ -273,6 +301,7 @@ Copy and track per Feature Executor run:
 [ ] Context Block produced and injected into every subagent prompt (includes design-spec paths)
 [ ] Inner item DAG built from item.dependsOn (verified self-contained) + parallelGroup
 [ ] e2e-playwright test cases: specs AUTHORED; execution DEFERRED only when Playwright environment is unavailable; AC still covered at unit/integration
+[ ] data-testid: new/touched interactive UI and screen landmarks use spread `{...{ 'data-testid': 'kebab-id' }}` (design.md list + any extras; no kebab-case attributes); pre-commit policy would pass
 [ ] Every subagent prompt included verbatim work-item contract + design-spec anchors + matrix rows (from tdd-prompts.md)
 [ ] Every item followed RED → GREEN → REFACTOR → tsc with tests bound to AC-/DoD- ids
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)

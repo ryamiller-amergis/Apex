@@ -78,21 +78,28 @@ describe('Walkthrough shared contracts (TBI-001)', () => {
       ).toEqual({ project: 'Apex', groupId: 'grp-1' });
     });
 
-    it('rejects incomplete anchor tuples and accepts full or null (DoD-3 / VT-04)', () => {
+    it('rejects incomplete anchor tuples and accepts registered full or null (DoD-3 / VT-04)', () => {
       expect(validateAnchor(null)).toBeNull();
       expect(validateAnchor(undefined)).toBeNull();
       expect(() =>
         validateAnchor({ key: 'nav-help', targetRoute: '/help' }),
       ).toThrow(/Incomplete anchor/);
-      expect(
+      expect(() =>
         validateAnchor({
           key: 'nav-help',
           targetRoute: '/help',
           placement: 'bottom',
         }),
+      ).toThrow(/Unregistered|unregistered/i);
+      expect(
+        validateAnchor({
+          key: 'user-menu-trigger',
+          targetRoute: '/home',
+          placement: 'bottom',
+        }),
       ).toEqual({
-        key: 'nav-help',
-        targetRoute: '/help',
+        key: 'user-menu-trigger',
+        targetRoute: '/home',
         placement: 'bottom',
       });
     });

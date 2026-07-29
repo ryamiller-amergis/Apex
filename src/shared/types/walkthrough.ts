@@ -1,7 +1,10 @@
 /**
  * Shared Walkthrough domain contracts (FEAT-001).
  * Lifecycle, steps, nullable anchors, targeting, progress, commands, and reports.
+ * FEAT-002 adds renderer definition / callback contracts and registry-backed anchor validation.
  */
+
+import { validateRegisteredAnchor } from '../walkthroughAnchors';
 
 // ── Lifecycle & status ────────────────────────────────────────────────────────
 
@@ -271,6 +274,7 @@ export function assertPersistedProgressStatus(value: unknown): WalkthroughProgre
 
 /**
  * Anchor must be fully null/absent or have key + targetRoute + placement.
+ * Anchored values must match the curated registry (FEAT-002 / BR-013).
  */
 export function validateAnchor(anchor: unknown): WalkthroughAnchor {
   if (anchor === undefined || anchor === null) return null;
@@ -298,11 +302,71 @@ export function validateAnchor(anchor: unknown): WalkthroughAnchor {
   if (typeof placement !== 'string' || !PLACEMENTS.has(placement as WalkthroughAnchorPlacement)) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', `Unsupported anchor placement: ${String(placement)}`);
   }
-  return {
+
+  const registered = validateRegisteredAnchor({
     key: key.trim(),
     targetRoute,
     placement: placement as WalkthroughAnchorPlacement,
-  };
+  });
+  if (registered.ok === false) {
+    const first = registered.errors[0];
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      first?.message ?? 'Invalid registered anchor',
+    );
+  }
+  return registered.anchor;
+}
+
+// ── Renderer contracts (FEAT-002) ─────────────────────────────────────────────
+
+export type WalkthroughAnchorMissReason =
+  | 'timeout'
+  | 'unregistered'
+  | 'invalid_route'
+  | 'route_mismatch'
+  | 'unsupported_placement';
+
+export interface WalkthroughAnchorMiss {
+  walkthroughId: string;
+  revision: number;
+  stepId: string;
+  anchorKey: string;
+  targetRoute: string;
+  reason: WalkthroughAnchorMissReason;
+  clientTimestamp: string;
+}
+
+export interface WalkthroughRendererStep {
+  id: string;
+  position: number;
+  heading: string;
+  bodyMarkdown: string;
+  imageUrl?: string | null;
+  ctaLabel?: string | null;
+  ctaRoute?: string | null;
+  anchor?: WalkthroughAnchor;
+}
+
+export interface WalkthroughRendererDefinition {
+  id: string;
+  revision: number;
+  title: string;
+  intro?: string | null;
+  steps: WalkthroughRendererStep[];
+}
+
+export interface WalkthroughRendererCallbacks {
+  onSeen?: (payload: { walkthroughId: string; revision: number; stepId: string }) => void;
+  onStepChange?: (payload: {
+    walkthroughId: string;
+    revision: number;
+    stepId: string;
+    stepIndex: number;
+  }) => void;
+  onComplete?: (payload: { walkthroughId: string; revision: number; stepId: string }) => void;
+  onDismiss?: (payload: { walkthroughId: string; revision: number; stepId: string }) => void;
+  onAnchorMiss?: (payload: WalkthroughAnchorMiss) => void;
 }
 
 /**
