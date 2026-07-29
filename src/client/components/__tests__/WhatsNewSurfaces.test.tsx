@@ -104,6 +104,7 @@ describe('Changelog modal content', () => {
     const dialog = screen.getByTestId('whats-new-modal');
     expect(dialog).toHaveAttribute('role', 'dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByRole('button', { name: /Close What's New/i })).toBeInTheDocument();
+    // Overlay + header X both expose the same accessible close name.
+    expect(screen.getAllByRole('button', { name: /Close What's New/i })).toHaveLength(2);
   });
 });
