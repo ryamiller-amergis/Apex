@@ -82,11 +82,10 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
       ref={refs.setFloating}
       style={floatingStyles}
       className={styles.coachmark}
-      role="dialog"
-      aria-modal="false"
+      role="region"
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
-      data-testid="walkthrough-coachmark"
+      {...{ 'data-testid': 'walkthrough-coachmark-step' }}
     >
       <div
         ref={arrowRef}

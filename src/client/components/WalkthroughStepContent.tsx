@@ -45,23 +45,31 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
 
   return (
     <>
-      <h2 id={titleId} className={styles.heading}>
+      <h2 id={titleId} className={styles.heading} {...{ 'data-testid': 'walkthrough-step-title' }}>
         {step.heading}
       </h2>
-      <div id={descriptionId} className={styles.body}>
+      <div
+        id={descriptionId}
+        className={styles.body}
+        {...{ 'data-testid': 'walkthrough-step-body' }}
+      >
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.bodyMarkdown}</ReactMarkdown>
       </div>
 
       {locating && (
-        <p className={styles.locating} data-testid="walkthrough-locating-target" aria-live="polite">
-          Locating this feature…
+        <p
+          className={styles.locating}
+          {...{ 'data-testid': 'walkthrough-loading' }}
+          aria-live="polite"
+        >
+          Preparing guide…
         </p>
       )}
 
       {showFallbackNotice && (
         <p
           className={styles.fallbackNotice}
-          data-testid="walkthrough-anchor-fallback"
+          {...{ 'data-testid': 'walkthrough-anchor-fallback' }}
           role="status"
         >
           We couldn&apos;t find that spot in the UI, so here is the same guidance centered.
@@ -77,7 +85,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
         />
       ) : null}
 
-      <p className={styles.progress} data-testid="walkthrough-step-progress">
+      <p className={styles.progress} {...{ 'data-testid': 'walkthrough-step-position' }}>
         Step {stepIndex + 1} of {stepCount}
       </p>
 
@@ -85,7 +93,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
         <button
           type="button"
           className={styles.button}
-          data-testid="walkthrough-back"
+          {...{ 'data-testid': 'walkthrough-previous' }}
           onClick={onBack}
           disabled={isFirst}
           aria-label="Previous step"
@@ -96,7 +104,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
           <button
             type="button"
             className={styles.buttonPrimary}
-            data-testid="walkthrough-next"
+            {...{ 'data-testid': 'walkthrough-next' }}
             onClick={onNext}
             aria-label="Next step"
           >
@@ -106,7 +114,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
           <button
             type="button"
             className={styles.buttonPrimary}
-            data-testid="walkthrough-complete"
+            {...{ 'data-testid': 'walkthrough-complete' }}
             onClick={onComplete}
             aria-label="Complete walkthrough"
           >
@@ -118,7 +126,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
           <Link
             className={styles.cta}
             to={ctaSafe.route}
-            data-testid="walkthrough-cta"
+            {...{ 'data-testid': 'walkthrough-cta' }}
           >
             {ctaSafe.label}
           </Link>
@@ -126,7 +134,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
         <button
           type="button"
           className={styles.button}
-          data-testid="walkthrough-dismiss"
+          {...{ 'data-testid': 'walkthrough-close' }}
           onClick={onDismiss}
           aria-label="Dismiss walkthrough"
         >

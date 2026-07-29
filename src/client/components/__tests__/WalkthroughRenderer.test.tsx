@@ -68,11 +68,11 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     expect(screen.getByTestId('walkthrough-renderer')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-modal-step')).toBeInTheDocument();
     expect(screen.getByText('Welcome')).toBeInTheDocument();
-    expect(screen.getByTestId('walkthrough-step-progress')).toHaveTextContent('Step 1 of 2');
+    expect(screen.getByTestId('walkthrough-step-position')).toHaveTextContent('Step 1 of 2');
 
     await user.click(screen.getByTestId('walkthrough-next'));
     expect(screen.getByText('Next topic')).toBeInTheDocument();
-    expect(screen.getByTestId('walkthrough-step-progress')).toHaveTextContent('Step 2 of 2');
+    expect(screen.getByTestId('walkthrough-step-position')).toHaveTextContent('Step 2 of 2');
     expect(onStepChange).toHaveBeenCalled();
     unmount();
   });
@@ -105,7 +105,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     const { unmount } = renderRenderer(def);
 
     await waitFor(() => {
-      expect(screen.getByTestId('walkthrough-coachmark')).toBeInTheDocument();
+      expect(screen.getByTestId('walkthrough-coachmark-step')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('walkthrough-modal-step')).toBeNull();
     expect(screen.getByText('Open the menu')).toBeInTheDocument();
@@ -136,7 +136,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
 
     const { unmount } = renderRenderer(def, { onAnchorMiss, playbackSessionId: 'play-1' });
 
-    expect(screen.getByTestId('walkthrough-locating-target')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-loading')).toBeInTheDocument();
 
     act(() => {
       jest.advanceTimersByTime(ANCHOR_WAIT_MS);
@@ -177,7 +177,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
       steps,
     });
 
-    expect(screen.getByTestId('walkthrough-back')).toBeDisabled();
+    expect(screen.getByTestId('walkthrough-previous')).toBeDisabled();
     await user.click(screen.getByTestId('walkthrough-next'));
     expect(screen.getByText('Heading 1')).toBeInTheDocument();
 
@@ -216,11 +216,34 @@ describe('WalkthroughRenderer (TBI-004)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('walkthrough-modal-step')).toBeInTheDocument();
-      expect(screen.queryByTestId('walkthrough-coachmark')).toBeNull();
+      expect(screen.queryByTestId('walkthrough-coachmark-step')).toBeNull();
       expect(onAnchorMiss).toHaveBeenCalledWith(
         expect.objectContaining({ reason: 'unregistered' }),
       );
     });
+    unmount();
+  });
+
+  it('FEAT-005 PBI-006 AC-3: external CTA route is not rendered as navigation', async () => {
+    const { unmount } = renderRenderer({
+      id: 'wt-ext',
+      revision: 1,
+      title: 'External',
+      steps: [
+        {
+          id: 'e0',
+          position: 0,
+          heading: 'Stay put',
+          bodyMarkdown: 'No external CTA',
+          ctaLabel: 'Leave Apex',
+          ctaRoute: 'https://evil.example',
+          anchor: null,
+        },
+      ],
+    });
+
+    expect(screen.getByTestId('walkthrough-modal-step')).toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-cta')).toBeNull();
     unmount();
   });
 

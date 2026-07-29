@@ -3,14 +3,19 @@
  */
 
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import walkthroughsRouter from '../routes/walkthroughs';
 import * as walkthroughService from '../services/walkthroughService';
-import { WalkthroughDomainError } from '../../shared/types/walkthrough';
+import {
+  WalkthroughDomainError,
+  type UpdateWalkthroughProgressRequest,
+} from '../../shared/types/walkthrough';
+
+type AuthedRequest = Request & { user?: { profile?: { oid?: string } } };
 
 jest.mock('../services/walkthroughService');
 jest.mock('../utils/requestUser', () => ({
-  getUserId: (req: any) => req.user?.profile?.oid ?? 'anonymous',
+  getUserId: (req: AuthedRequest) => req.user?.profile?.oid ?? 'anonymous',
 }));
 
 const mockService = walkthroughService as jest.Mocked<typeof walkthroughService>;
@@ -18,12 +23,12 @@ const mockService = walkthroughService as jest.Mocked<typeof walkthroughService>
 function buildApp(oid = 'user-1') {
   const app = express();
   app.use(express.json());
-  app.use((req: any, _res, next) => {
+  app.use((req: AuthedRequest, _res: Response, next: NextFunction) => {
     req.user = { profile: { oid } };
     next();
   });
   app.use('/api/projects/:projectId/walkthroughs', walkthroughsRouter);
-  app.use((err: any, _req: any, res: any, _next: any) => {
+  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(500).json({ error: err?.message ?? 'error' });
   });
   return app;
@@ -93,7 +98,8 @@ describe('walkthroughs routes (TBI-002 DoD-1 / DoD-2)', () => {
       'user-1',
       expect.objectContaining({ status: 'completed', revision: 1 }),
     );
-    const passedBody = mockService.updateOwnProgress.mock.calls[0][3] as any;
+    const passedBody = mockService.updateOwnProgress.mock.calls[0][3] as
+      UpdateWalkthroughProgressRequest & { userId?: string };
     expect(passedBody.userId).toBeUndefined();
   });
 
@@ -102,5 +108,31 @@ describe('walkthroughs routes (TBI-002 DoD-1 / DoD-2)', () => {
     const res = await request(buildApp()).get('/api/projects/Apex/walkthroughs/replay');
     expect(res.status).toBe(200);
     expect(res.body.items).toEqual([]);
+  });
+
+  it('FEAT-005 / PBI-006 AC-1 — POST anchor-miss returns 204 and ignores client userId', async () => {
+    mockService.recordAnchorMiss.mockResolvedValue(undefined);
+    const res = await request(buildApp('user-1'))
+      .post('/api/projects/Apex/walkthroughs/wt-1/steps/step-1/anchor-misses')
+      .send({
+        revision: 1,
+        anchorKey: 'user-menu-trigger',
+        targetRoute: '/home',
+        reason: 'timeout',
+        userId: 'victim',
+      });
+
+    expect(res.status).toBe(204);
+    expect(mockService.recordAnchorMiss).toHaveBeenCalledWith(
+      'Apex',
+      'wt-1',
+      'step-1',
+      'user-1',
+      expect.objectContaining({
+        revision: 1,
+        anchorKey: 'user-menu-trigger',
+        targetRoute: '/home',
+      }),
+    );
   });
 });

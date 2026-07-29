@@ -162,13 +162,13 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   const locating = !!step.anchor && anchorResult.locating;
 
   const announcement = locating
-    ? 'Locating this feature…'
+    ? 'Preparing guide…'
     : showFallbackNotice
       ? 'Anchor unavailable; showing centered guidance.'
       : `${step.heading}. Step ${stepIndex + 1} of ${stepCount}.`;
 
   const content = (
-    <div className={styles.renderer} data-testid="walkthrough-renderer">
+    <div className={styles.renderer} {...{ 'data-testid': 'walkthrough-renderer' }}>
       <div className={styles.liveRegion} aria-live="polite" aria-atomic="true">
         {announcement}
       </div>

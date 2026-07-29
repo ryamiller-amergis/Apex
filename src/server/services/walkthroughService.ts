@@ -17,6 +17,7 @@ import {
 } from '../db/schema';
 import { getUserGroupIdsForProject } from './featureFlagService';
 import { trackEvent } from './telemetry';
+import { getWalkthroughAnchor } from '../../shared/walkthroughAnchors';
 import {
   assertPersistedProgressStatus,
   canTransitionLifecycle,
@@ -565,7 +566,8 @@ export async function getNextEligible(
           where: eq(walkthroughProgress.userId, userId),
         },
       },
-      orderBy: [desc(walkthroughs.priority), asc(walkthroughs.publishedAt)],
+      // FEAT-005 AC-0 / BR-005: priority desc, then newest publishedAt wins ties.
+      orderBy: [desc(walkthroughs.priority), desc(walkthroughs.publishedAt)],
     });
 
     for (const row of published as Array<DefinitionRow & { progress: DbProgressRow[] }>) {
@@ -581,6 +583,11 @@ export async function getNextEligible(
       const currentProgress = row.progress.find((p) => p.revision === row.revision);
       if (isSuppressedForRevision(currentProgress, row.revision)) continue;
 
+      trackEvent('walkthrough.eligibility_evaluated', {
+        project: projectId,
+        outcome: 'eligible',
+        walkthroughId: row.id,
+      }, { duration_ms: Date.now() - started });
       trackEvent('walkthrough.eligibility.result', {
         project: projectId,
         result: 'hit',
@@ -628,7 +635,7 @@ export async function listReplay(
         where: eq(walkthroughProgress.userId, userId),
       },
     },
-    orderBy: [desc(walkthroughs.priority), asc(walkthroughs.publishedAt)],
+    orderBy: [desc(walkthroughs.priority), desc(walkthroughs.publishedAt)],
   });
 
   const items = [];
@@ -752,6 +759,66 @@ export async function updateOwnProgress(
   });
 
   return mapProgress(row);
+}
+
+export interface RecordWalkthroughAnchorMissInput {
+  revision: number;
+  anchorKey: string;
+  targetRoute: string;
+  reason?: string;
+}
+
+/**
+ * FEAT-005 — privacy-safe anchor-miss boundary (no durable table; FEAT-008 owns reporting store).
+ * Validates caller access + registry membership, then emits telemetry only.
+ */
+export async function recordAnchorMiss(
+  projectId: string,
+  walkthroughId: string,
+  stepId: string,
+  userId: string,
+  body: RecordWalkthroughAnchorMissInput,
+): Promise<void> {
+  if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'revision must be a positive integer');
+  }
+  if (typeof body.anchorKey !== 'string' || !body.anchorKey.trim()) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is required');
+  }
+  if (typeof body.targetRoute !== 'string' || !body.targetRoute.trim()) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'targetRoute is required');
+  }
+
+  const definition = await getAccessibleDefinition(projectId, walkthroughId, userId);
+  if (body.revision !== definition.revision) {
+    throw new WalkthroughDomainError(
+      'REVISION_CONFLICT',
+      'Anchor-miss revision must match the current Walkthrough revision',
+    );
+  }
+
+  const step = definition.steps.find((s) => s.id === stepId);
+  if (!step) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'stepId must belong to this Walkthrough');
+  }
+
+  const registered = getWalkthroughAnchor(body.anchorKey.trim());
+  if (!registered) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is not in the curated registry');
+  }
+  if (registered.targetRoute !== body.targetRoute.trim()) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'targetRoute must match the registered anchor route');
+  }
+
+  trackEvent('walkthrough.anchor_missed', {
+    walkthroughId,
+    stepId,
+    revision: String(body.revision),
+    anchorKey: registered.key,
+    targetRoute: registered.targetRoute,
+    project: projectId,
+    reason: typeof body.reason === 'string' ? body.reason : 'timeout',
+  });
 }
 
 // ── Admin: acknowledgement report ─────────────────────────────────────────────

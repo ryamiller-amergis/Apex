@@ -58,14 +58,18 @@ node scripts/check-data-testid.mjs
 
 ## What the checker requires
 
+**Source of truth:** `scripts/check-data-testid.mjs` (`REQUIRED_TAGS`, `COMPONENT_SUFFIX_RE`). Prefer that file over any abbreviated list.
+
 Interactive elements that need a test id:
 
 | Kind | Examples |
 |------|----------|
-| Intrinsic | `button`, `input`, `select`, `textarea`, `a`, `form`, `dialog` |
-| Handler-driven | elements with `onClick`, `onSubmit`, `onChange`, `onKeyDown`, … |
+| Intrinsic | `a`, `button`, `dialog`, `form`, `input`, `select`, `textarea` |
+| Handler-driven | elements with `onClick`, `onSubmit`, `onChange`, `onKeyDown`, `onKeyUp`, `onPointerDown`, `onDoubleClick` |
 | Role-driven | `role="button\|dialog\|tab\|…"`, etc. |
-| Named UI components | names ending in `Button`, `Modal`, `Dialog`, `Input`, `Select`, `Panel`, `Card`, … |
+| Named UI components | names ending in `Button`, `Modal`, `Dialog`, `Drawer`, `Input`, `Select`, `Checkbox`, `Toggle`, `Switch`, `Tab`, `Menu`, `MenuItem`, `Dropdown`, `Popover`, `Tooltip`, `Form`, `Field`, `Panel`, `Card`, `Banner`, `Badge`, `Chip`, `Fab`, `Link`, `NavItem` |
+
+Common misses: `<form>`, `*Panel`, `*Card`, `*Field`, and parent mounts of new interactive components in a touched file.
 
 Accepted markers (spread only for new/fixed code):
 

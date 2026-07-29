@@ -109,4 +109,38 @@ router.put('/:id/progress', async (req: Request, res: Response, next: NextFuncti
   }
 });
 
+// POST /:id/steps/:stepId/anchor-misses — privacy-safe miss event (FEAT-005)
+router.post(
+  '/:id/steps/:stepId/anchor-misses',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const body = (req.body ?? {}) as {
+        revision?: number;
+        anchorKey?: string;
+        targetRoute?: string;
+        reason?: string;
+        userId?: string;
+      };
+      const { userId: _ignored, ...safeBody } = body;
+      void _ignored;
+      await walkthroughService.recordAnchorMiss(
+        projectIdOf(req),
+        req.params.id,
+        req.params.stepId,
+        callerId(req),
+        {
+          revision: Number(safeBody.revision),
+          anchorKey: String(safeBody.anchorKey ?? ''),
+          targetRoute: String(safeBody.targetRoute ?? ''),
+          reason: typeof safeBody.reason === 'string' ? safeBody.reason : undefined,
+        },
+      );
+      res.status(204).send();
+    } catch (err) {
+      if (mapDomainError(err, res)) return;
+      next(err);
+    }
+  },
+);
+
 export default router;

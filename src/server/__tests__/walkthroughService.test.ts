@@ -54,19 +54,34 @@ import {
   getNextEligible,
   listReplay,
   publishWalkthrough,
+  recordAnchorMiss,
   unpublishWalkthrough,
   updateOwnProgress,
   validateAiDraft,
 } from '../services/walkthroughService';
 import { getUserGroupIdsForProject } from '../services/featureFlagService';
+import { trackEvent } from '../services/telemetry';
 import { WalkthroughDomainError } from '../../shared/types/walkthrough';
 
-const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { db: mockDb } = jest.requireMock('../db/drizzle') as {
+  db: {
+    query: {
+      walkthroughs: { findMany: jest.Mock; findFirst: jest.Mock };
+      appGroups: { findFirst: jest.Mock };
+    };
+    insert: jest.Mock;
+    update: jest.Mock;
+    delete: jest.Mock;
+    select: jest.Mock;
+    transaction: jest.Mock;
+  };
+};
 const mockGetGroups = getUserGroupIdsForProject as jest.Mock;
+const mockTrackEvent = trackEvent as jest.Mock;
 
 const actor = { id: 'admin-1' };
 
-function stepRow(overrides: Partial<any> = {}) {
+function stepRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'step-1',
     walkthroughId: 'wt-1',
@@ -83,7 +98,7 @@ function stepRow(overrides: Partial<any> = {}) {
   };
 }
 
-function definitionRow(overrides: Partial<any> = {}) {
+function definitionRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'wt-1',
     internalName: 'intro',
@@ -110,7 +125,7 @@ beforeEach(() => {
   mockDb.query.walkthroughs.findFirst.mockReset();
   mockDb.query.walkthroughs.findMany.mockReset();
   mockDb.query.appGroups.findFirst.mockReset();
-  mockDb.transaction.mockImplementation(async (fn: any) => fn(mockDb));
+  mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb));
   mockDb.insert.mockImplementation(() => ({
     values: jest.fn().mockReturnThis(),
     returning: jest.fn().mockResolvedValue([{ id: 'wt-1' }]),
@@ -215,7 +230,7 @@ describe('walkthroughService (TBI-002)', () => {
   });
 
   describe('DoD-1 / DoD-3 — eligibility bounded to published + audience', () => {
-    it('VT-05 — returns highest priority then earliest publish date (DoD-3)', async () => {
+    it('VT-05 / FEAT-005 AC-0 — returns highest priority then newest publish date', async () => {
       mockDb.select.mockImplementation(() => ({
         from: jest.fn().mockReturnThis(),
         innerJoin: jest.fn().mockReturnThis(),
@@ -243,6 +258,55 @@ describe('walkthroughService (TBI-002)', () => {
 
       const next = await getNextEligible('Apex', 'user-1');
       expect(next?.id).toBe('high');
+    });
+
+    it('FEAT-005 AC-0 — equal priority breaks ties by newest publishedAt', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      // Drizzle orderBy is mocked via findMany result order — simulate newest-first.
+      mockDb.query.walkthroughs.findMany.mockResolvedValue([
+        definitionRow({
+          id: 'newer',
+          lifecycle: 'published',
+          priority: 5,
+          publishedAt: '2026-07-10T00:00:00Z',
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          progress: [],
+        }),
+        definitionRow({
+          id: 'older',
+          lifecycle: 'published',
+          priority: 5,
+          publishedAt: '2026-07-01T00:00:00Z',
+          targetingRules: [{ id: 'r2', type: 'project', value: 'Apex' }],
+          progress: [],
+        }),
+      ]);
+
+      const next = await getNextEligible('Apex', 'user-1');
+      expect(next?.id).toBe('newer');
+    });
+
+    it('FEAT-005 AC-3 — outside project audience returns null', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findMany.mockResolvedValue([
+        definitionRow({
+          lifecycle: 'published',
+          publishedAt: '2026-07-01T00:00:00Z',
+          targetingRules: [{ id: 'r', type: 'project', value: 'Other' }],
+          progress: [],
+        }),
+      ]);
+      expect(await getNextEligible('Apex', 'user-1')).toBeNull();
     });
 
     it('VT-07 — acknowledged revision 1 does not suppress revision 2 (DoD)', async () => {
@@ -376,7 +440,11 @@ describe('walkthroughService (TBI-002)', () => {
           targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
         }),
       );
-      const chain: any = {
+      const chain: {
+        values: jest.Mock;
+        onConflictDoUpdate: jest.Mock;
+        returning: jest.Mock;
+      } = {
         values: jest.fn(),
         onConflictDoUpdate: jest.fn(),
         returning: jest.fn().mockRejectedValue(new Error('db down')),
@@ -396,7 +464,7 @@ describe('walkthroughService (TBI-002)', () => {
     it('rejects acknowledged as progress status', async () => {
       await expect(
         updateOwnProgress('Apex', 'wt-1', 'user-1', {
-          status: 'acknowledged' as any,
+          status: 'acknowledged' as 'seen',
           revision: 1,
         }),
       ).rejects.toBeInstanceOf(WalkthroughDomainError);
@@ -439,6 +507,75 @@ describe('walkthroughService (TBI-002)', () => {
       });
       expect(progress.acknowledged).toBe(true);
       expect(progress.userId).toBe('user-1');
+    });
+  });
+
+  describe('FEAT-005 — recordAnchorMiss boundary', () => {
+    it('PBI-006 AC-1 — emits privacy-safe telemetry for a registered miss', async () => {
+      mockTrackEvent.mockClear();
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          steps: [
+            stepRow({
+              id: 'step-1',
+              anchorKey: 'user-menu-trigger',
+              targetRoute: '/home',
+              placement: 'bottom',
+            }),
+          ],
+        }),
+      );
+
+      await recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+        revision: 1,
+        anchorKey: 'user-menu-trigger',
+        targetRoute: '/home',
+        reason: 'timeout',
+      });
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'walkthrough.anchor_missed',
+        expect.objectContaining({
+          walkthroughId: 'wt-1',
+          stepId: 'step-1',
+          anchorKey: 'user-menu-trigger',
+          targetRoute: '/home',
+        }),
+      );
+    });
+
+    it('PBI-006 AC-3 — rejects unregistered anchor keys', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          steps: [stepRow({ id: 'step-1' })],
+        }),
+      );
+
+      await expect(
+        recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+          revision: 1,
+          anchorKey: '#css-selector',
+          targetRoute: '/home',
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     });
   });
 });

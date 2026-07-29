@@ -80,7 +80,7 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
         className={styles.overlay}
         aria-label="Walkthrough backdrop"
         tabIndex={-1}
-        data-testid="walkthrough-modal-overlay"
+        {...{ 'data-testid': 'walkthrough-modal-overlay' }}
       />
       <div
         ref={dialogRef}
@@ -89,7 +89,7 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        data-testid="walkthrough-modal-step"
+        {...{ 'data-testid': 'walkthrough-modal-step' }}
       >
         <WalkthroughStepContent
           step={step}
