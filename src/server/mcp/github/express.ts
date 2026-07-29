@@ -15,6 +15,9 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
   app.post(basePath, async (req: Request, res: Response) => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
+      // Keep headers uncommitted until the JSON-RPC result is ready. This lets
+      // timeout handling return a terminal tools/call result without an SSE race.
+      enableJsonResponse: true,
     });
 
     const server = createGitHubMcpServer();
@@ -31,6 +34,7 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
       if (err instanceof McpTimeoutError) {
         // handleMcpPost already attempted to fail the response
         failMcpHttpResponse(res, req.body, message);
+        await transport.close().catch(() => undefined);
         return;
       }
       if (!res.headersSent) {

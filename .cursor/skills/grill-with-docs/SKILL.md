@@ -28,9 +28,9 @@ No arguments. The session runs against whatever plan, design, or idea is current
 
 ## Pre-read (do this before the first question)
 
-1. Read `context.md` (repo root) — the product context guide. Know the features, terminology, and workflows. This is the only mandatory pre-read.
-2. Read `AGENTS.md` (repo root) — the feature map, directory structure, and key file references. Use this to cross-reference service boundaries and locate relevant code.
-3. Scan file names in `design-docs/` — note existing design doc titles so you don't re-litigate prior decisions. Only open a design doc when a question directly touches that area.
+1. Read `context.md` (repo root) — the product context guide. In a remote-repo/MCP context, call `get_skill_file` with this exact path; do not search for it. Know the features, terminology, and workflows. This is the only mandatory pre-read.
+2. Read `AGENTS.md` (repo root) — in a remote-repo/MCP context, call `get_skill_file` with this exact path. Use its feature map and key file references for subsequent scoped reads.
+3. Scan file names in `design-docs/` — use `list_repo_dir` in remote-repo/MCP contexts. Only open a design doc with `get_skill_file` when a question directly touches that area.
 
 Do not ask the user a question until step 1 is complete. Steps 2–3 are deferred lookups, not blocking pre-reads.
 
@@ -49,7 +49,7 @@ Ask whether the feature will be on the frontend (React client), backend (Express
 
 **Q2 — Access control**
 
-Ask which groups/roles can perform each action and what data scope applies. If the feature area maps to a known route or service, check that route for existing RBAC guards (limit to 1–2 targeted Grep calls). Surface what you found and ask only where ambiguity remains.
+Ask which groups/roles can perform each action and what data scope applies. If the feature area maps to a known route or service, check that route for existing RBAC guards (limit to 1–2 targeted local Grep calls, or exact-path `get_skill_file` reads in remote-repo/MCP contexts). Surface what you found and ask only where ambiguity remains.
 
 - Group options: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin (Super Admin)`, `Project Admin`
 - RBAC role options: `admin`, `member`, `viewer`
@@ -91,7 +91,7 @@ Interview the user **relentlessly** until you reach a shared, precise understand
 
 **Ask questions one at a time.** Use the **AskQuestion tool** for each question (never render questions as plain markdown). One `AskQuestion` call per message, wait for the answer, acknowledge it, then ask the next.
 
-If a question can be answered by **exploring the codebase** (using Grep, Read, or Glob), do that instead of asking the human — but **limit exploration to 2 tool calls per question**. If ambiguity remains after 2 calls, surface what you found and ask the user to clarify. If exploration hits its cap and a gap remains, flag it as a `⚠ Unresolved assumption` in your acknowledgment so it carries forward to to-prd.
+If a question can be answered by **exploring the codebase** (using Grep, Read, or Glob), do that instead of asking the human — but **limit exploration to 2 tool calls per question**. In remote-repo/MCP contexts, prefer scoped lookups: use `list_repo_dir` to locate the relevant area, then `get_skill_file` for the specific file. Use `search_repo_code` only when the file/path is genuinely unknown, at most once per question, and never issue duplicate or parallel code searches in the same turn. If a search reports busy, throttled, rate-limited, or timed out, continue with known paths or ask the user; do not immediately retry. If ambiguity remains after 2 calls, surface what you found and ask the user to clarify. If exploration hits its cap and a gap remains, flag it as a `⚠ Unresolved assumption` in your acknowledgment so it carries forward to to-prd.
 
 ### During the session, apply these five lenses:
 
@@ -115,7 +115,7 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 **4. Cross-reference with code**
 
-When the user asserts how something works, check whether the code agrees. Read the relevant files:
+When the user asserts how something works, check whether the code agrees. Read the relevant files directly (`get_skill_file` in remote-repo/MCP contexts); search only if no known path applies:
 
 - RBAC assertions → `.cursor/rules/rbac-governance.mdc`
 - Database patterns → `.cursor/rules/postgresql-db.mdc`

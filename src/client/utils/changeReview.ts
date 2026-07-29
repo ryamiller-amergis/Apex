@@ -21,6 +21,89 @@ const DESIGN_DOC_SECTION_LABELS: Record<DesignDocSectionKey, string> = {
   assumptions: 'Assumptions',
 };
 
+interface MermaidFenceRange {
+  start: number;
+  end: number;
+}
+
+function findMermaidFenceRanges(markdown: string): MermaidFenceRange[] {
+  const lines = markdown.split('\n');
+  const ranges: MermaidFenceRange[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const opening = /^\s*(`{3,}|~{3,})\s*mermaid\b/i.exec(lines[i]);
+    if (!opening) continue;
+
+    const marker = opening[1][0];
+    const closingPattern = marker === '`' ? /^\s*`{3,}\s*$/ : /^\s*~{3,}\s*$/;
+    for (let end = i + 1; end < lines.length; end++) {
+      if (!closingPattern.test(lines[end])) continue;
+      ranges.push({ start: i, end: end + 1 });
+      i = end;
+      break;
+    }
+  }
+
+  return ranges;
+}
+
+function mergeMermaidFenceHunks(
+  current: string,
+  proposed: string,
+  hunks: DiffHunk[],
+): DiffHunk[] {
+  if (hunks.length < 2) return hunks;
+
+  const currentLines = current.split('\n');
+  const proposedLines = proposed.split('\n');
+  const replacements = new Map<number, DiffHunk>();
+  const skipped = new Set<number>();
+
+  for (const range of findMermaidFenceRanges(proposed)) {
+    const affected = hunks
+      .map((hunk, index) => ({ hunk, index }))
+      .filter(({ hunk, index }) => {
+        if (skipped.has(index) || replacements.has(index)) return false;
+        if (hunk.newCount === 0) {
+          return hunk.newStart >= range.start && hunk.newStart < range.end;
+        }
+        const hunkEnd = hunk.newStart + hunk.newCount;
+        return hunk.newStart < range.end && hunkEnd > range.start;
+      });
+
+    if (affected.length < 2) continue;
+
+    const firstIndex = affected[0].index;
+    const oldStart = Math.min(...affected.map(({ hunk }) => hunk.oldStart));
+    const oldEnd = Math.max(...affected.map(({ hunk }) => hunk.oldStart + hunk.oldCount));
+    const newStart = Math.min(...affected.map(({ hunk }) => hunk.newStart));
+    const newEnd = Math.max(...affected.map(({ hunk }) => hunk.newStart + hunk.newCount));
+    const oldText = currentLines.slice(oldStart, oldEnd).join('\n');
+    const newText = proposedLines.slice(newStart, newEnd).join('\n');
+
+    replacements.set(firstIndex, {
+      id: `mermaid:${affected.map(({ hunk }) => hunk.id).join(':')}`,
+      oldStart,
+      oldCount: oldEnd - oldStart,
+      newStart,
+      newCount: newEnd - newStart,
+      oldText,
+      newText,
+    });
+    affected.slice(1).forEach(({ index }) => skipped.add(index));
+  }
+
+  return hunks.flatMap((hunk, index) => {
+    const replacement = replacements.get(index);
+    if (replacement) return [replacement];
+    return skipped.has(index) ? [] : [hunk];
+  });
+}
+
+function computeMarkdownDiffHunks(current: string, proposed: string): DiffHunk[] {
+  return mergeMermaidFenceHunks(current, proposed, computeDiffHunks(current, proposed));
+}
+
 export interface BacklogItemMeta {
   change: ItemChange;
   /** Stable path used for regenerate targeting, e.g. "Epic > Feature > PBI". */
@@ -75,7 +158,7 @@ export function buildPrdChangeUnits(
   const units: ChangeUnit[] = [];
 
   if (proposed.content != null && proposed.content !== current.content) {
-    const hunks = computeDiffHunks(current.content, proposed.content);
+    const hunks = computeMarkdownDiffHunks(current.content, proposed.content);
     const total = hunks.length;
     hunks.forEach((hunk, idx) => {
       units.push({
@@ -394,31 +477,8 @@ function pushMarkdownSectionUnits(
   proposed: string | null | undefined,
 ): void {
   if (proposed == null || proposed === current) return;
-  const hunks = computeDiffHunks(current, proposed);
+  const hunks = computeMarkdownDiffHunks(current, proposed);
   const total = hunks.length;
-  if (total === 0) {
-    units.push({
-      id: `${sectionKey}:full`,
-      title: `${label} — full section`,
-      kind: 'markdown-hunk',
-      oldText: current,
-      newText: proposed,
-      meta: {
-        hunk: {
-          id: `${sectionKey}-full`,
-          oldStart: 0,
-          oldCount: current.split('\n').length,
-          newStart: 0,
-          newCount: proposed.split('\n').length,
-          oldText: current,
-          newText: proposed,
-        },
-        docSection: sectionKey,
-      },
-      decision: 'pending',
-    });
-    return;
-  }
   hunks.forEach((hunk, idx) => {
     units.push({
       id: `${sectionKey}:${hunk.id}`,

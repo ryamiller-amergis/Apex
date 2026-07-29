@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
@@ -33,6 +32,7 @@ import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
@@ -591,16 +591,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 readOnly={adr.status === 'accepted'}
               >
                 <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {stripYamlFrontmatter(adr.content)}
-                  </ReactMarkdown>
+                  <MarkdownWithMermaid content={adr.content} />
                 </div>
               </AnnotationLayer>
             ) : (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {stripYamlFrontmatter(adr.content)}
-                </ReactMarkdown>
+                <MarkdownWithMermaid content={adr.content} />
               </div>
             )}
           </div>

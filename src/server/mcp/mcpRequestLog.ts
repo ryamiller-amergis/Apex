@@ -23,22 +23,57 @@ function extractJsonRpcId(body: unknown): string | number | null {
   return null;
 }
 
-/** Best-effort terminate a hung Streamable HTTP response so the Cursor SDK unblocks. */
+function isToolsCall(body: unknown): boolean {
+  return Boolean(
+    body
+    && typeof body === 'object'
+    && (body as Record<string, unknown>).method === 'tools/call',
+  );
+}
+
+export function buildMcpTimeoutResponse(reqBody: unknown, message: string): Record<string, unknown> {
+  const id = extractJsonRpcId(reqBody);
+  if (isToolsCall(reqBody)) {
+    return {
+      jsonrpc: '2.0',
+      id,
+      result: {
+        content: [{
+          type: 'text',
+          text: `Tool timed out: ${message}. Continue without this tool or use a more scoped lookup.`,
+        }],
+        isError: true,
+      },
+    };
+  }
+  return {
+    jsonrpc: '2.0',
+    id,
+    error: { code: -32000, message },
+  };
+}
+
+/**
+ * Finish a hung Streamable HTTP request with a valid JSON-RPC message.
+ * A tools/call timeout is a terminal tool result (HTTP 200 + isError), which
+ * Cursor SDK can consume. Never destroy the response: that can leave the SDK
+ * tool_call in `running` even though the server-side timeout fired.
+ */
 export function failMcpHttpResponse(res: Response, reqBody: unknown, message: string): void {
   if (res.writableEnded || res.destroyed) return;
+  const payload = buildMcpTimeoutResponse(reqBody, message);
   if (!res.headersSent) {
-    res.status(504).json({
-      jsonrpc: '2.0',
-      id: extractJsonRpcId(reqBody),
-      error: { code: -32000, message },
-    });
+    res.status(isToolsCall(reqBody) ? 200 : 504).json(payload);
     return;
   }
-  try {
-    res.destroy(new Error(message));
-  } catch {
-    // ignore
+
+  const contentType = String(res.getHeader('content-type') ?? '').toLowerCase();
+  if (contentType.includes('text/event-stream')) {
+    res.write(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+  } else {
+    res.write(JSON.stringify(payload));
   }
+  res.end();
 }
 
 export async function handleMcpPost(

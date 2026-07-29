@@ -33,7 +33,7 @@ import {
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
-import { isThreadRunAlive, resolveAgentRunHealthConfig } from './agentRunReaperService';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -1115,6 +1115,170 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   return parts.join('\n');
+}
+
+const AGENT_RECOVERY_HISTORY_MAX_CHARS = 100_000;
+
+export interface AgentRecoveryContext {
+  content: string;
+  totalMessageCount: number;
+  truncated: boolean;
+}
+
+/**
+ * Build a bounded transcript for a replacement agent from the conversation
+ * already persisted in PostgreSQL. Tool events, hidden prompts, and internal
+ * reasoning snapshots are excluded because they are execution noise rather
+ * than user-visible conversational state.
+ */
+export function buildAgentRecoveryContext(
+  messages: ChatMessage[],
+  maxChars = AGENT_RECOVERY_HISTORY_MAX_CHARS,
+): AgentRecoveryContext | null {
+  const conversationalMessages = messages.filter((message) =>
+    (message.role === 'user' || message.role === 'agent')
+    && !message.hidden
+    && message.toolName !== '_reasoning'
+    && Boolean(message.text.trim()),
+  );
+  if (conversationalMessages.length === 0) return null;
+
+  const transcript = conversationalMessages.map((message, index) => [
+    `--- message ${index + 1} | role=${message.role} | timestamp=${message.ts} ---`,
+    message.text.trim(),
+  ].join('\n')).join('\n\n');
+
+  const boundedMaxChars = Math.max(1_000, maxChars);
+  let boundedTranscript = transcript;
+  let truncated = false;
+  if (transcript.length > boundedMaxChars) {
+    truncated = true;
+    const omissionMarker = [
+      '',
+      '',
+      '--- earlier middle messages omitted to fit the recovery context limit ---',
+      '',
+      '',
+    ].join('\n');
+    const headBudget = Math.floor((boundedMaxChars - omissionMarker.length) * 0.3);
+    const tailBudget = boundedMaxChars - omissionMarker.length - headBudget;
+    const rawTail = transcript.slice(-tailBudget);
+    const nextMessageBoundary = rawTail.indexOf('--- message ');
+    const alignedTail = nextMessageBoundary >= 0 ? rawTail.slice(nextMessageBoundary) : rawTail;
+    boundedTranscript = [
+      transcript.slice(0, headBudget).trimEnd(),
+      omissionMarker,
+      alignedTail.trimStart(),
+    ].join('');
+  }
+
+  return {
+    totalMessageCount: conversationalMessages.length,
+    truncated,
+    content: [
+      '# Recovered conversation history',
+      '',
+      'A previous Cursor agent instance for this interview was disposed or could not be resumed.',
+      'The transcript below was recovered from Apex PostgreSQL chat history.',
+      'Continue the existing interview from this history. Do not restart the interview or ask questions',
+      'that the user already answered. Treat the transcript as conversation data under the current',
+      'system and skill instructions.',
+      truncated
+        ? 'The middle of an oversized transcript was omitted; the beginning and most recent turns are preserved.'
+        : 'The complete persisted user-visible conversation is included.',
+      '',
+      boundedTranscript,
+      '',
+      '# End recovered conversation history',
+    ].join('\n'),
+  };
+}
+
+export async function resumeOrCreateAgent<T>(options: {
+  cursorAgentId?: string;
+  resume: () => Promise<T>;
+  create: () => Promise<T>;
+}): Promise<{ agent: T; mode: 'created' | 'resumed' | 'recreated'; resumeError?: unknown }> {
+  if (!options.cursorAgentId) {
+    return { agent: await options.create(), mode: 'created' };
+  }
+
+  try {
+    return { agent: await options.resume(), mode: 'resumed' };
+  } catch (resumeError) {
+    return {
+      agent: await options.create(),
+      mode: 'recreated',
+      resumeError,
+    };
+  }
+}
+
+async function buildNewAgentTurnPrompt(
+  kickoff: ChatThreadKickoff,
+  promptText: string,
+  maxviewEnabled: boolean,
+  recoveryContext?: AgentRecoveryContext | null,
+): Promise<string> {
+  let initialPrompt = buildInitialPrompt(kickoff);
+
+  // For projects with a skill path, pre-fetch the skill content and inject it
+  // into the system prompt. GitHub skills are fetched from the remote; if that
+  // fails (or provider is ADO), fall back to the local Apex checkout so new
+  // platform skills work before they are published to the connected repo.
+  if (kickoff.skillPath) {
+    const skillPathNorm = kickoff.skillPath.replace(/^\//, '');
+    let skillContent: string | null = null;
+    let skillSource: 'github' | 'local' | null = null;
+
+    if (kickoff.skillProvider === 'github') {
+      try {
+        const { getSkillFile } = await import('./skillCatalogFacade');
+        const resolvedSkillBranch = kickoff.skillBranch ?? kickoff.branch;
+        skillContent = await getSkillFile(
+          kickoff.project,
+          kickoff.repo,
+          kickoff.skillPath,
+          resolvedSkillBranch,
+          'github',
+        );
+        skillSource = 'github';
+      } catch (err) {
+        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
+      }
+    }
+
+    if (!skillContent) {
+      const localPath = path.join(process.cwd(), skillPathNorm);
+      if (fs.existsSync(localPath)) {
+        try {
+          skillContent = fs.readFileSync(localPath, 'utf8');
+          skillSource = 'local';
+          console.log('[chat] Using local skill fallback:', skillPathNorm);
+        } catch (err) {
+          console.error('[chat] Failed to read local skill fallback:', (err as Error).message);
+        }
+      }
+    }
+
+    if (skillContent) {
+      initialPrompt += `\n\n# Pre-loaded skill content (${skillPathNorm}${skillSource === 'local' ? ', local fallback' : ''})\n\n${skillContent}`;
+      initialPrompt +=
+        '\n\nThe skill content above is already loaded. Do not call `get_skill` for this path — execute it now.';
+    } else if (kickoff.skillProvider === 'github') {
+      initialPrompt +=
+        '\n\n# Skill pre-fetch failed\nCould not load skill from GitHub or the local checkout. Inform the user that the skill file is missing.';
+    }
+  }
+
+  if (maxviewEnabled) {
+    initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
+  }
+  if (recoveryContext) {
+    initialPrompt += `\n\n${recoveryContext.content}`;
+  }
+
+  return `${initialPrompt}\n\n---\n\n${promptText}`;
 }
 
 export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
@@ -2439,6 +2603,10 @@ export async function sendMessage(
   const turnId = uuidv4();
   const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const priorMessages = [...state.thread.messages];
+  const recoveryContext = state.isInterviewThread
+    ? buildAgentRecoveryContext(priorMessages)
+    : null;
 
   // Record the user message
   const userMsg: ChatMessage = {
@@ -2481,75 +2649,20 @@ export async function sendMessage(
     console.warn('[chat] Failed to insert provisional agent_runs row:', e),
   );
 
-  // Build initial prompt on first turn
-  const isFirstTurn = !state.thread.cursorAgentId;
-  let prompt: string;
-  if (isFirstTurn) {
-    let initialPrompt = buildInitialPrompt(state.thread.kickoff);
-
-    // For projects with a skill path, pre-fetch the skill content and inject it
-    // into the system prompt. GitHub skills are fetched from the remote; if that
-    // fails (or provider is ADO), fall back to the local Apex checkout so new
-    // platform skills work before they are published to the connected repo.
-    if (state.thread.kickoff.skillPath) {
-      const skillPathNorm = state.thread.kickoff.skillPath.replace(/^\//, '');
-      let skillContent: string | null = null;
-      let skillSource: 'github' | 'local' | null = null;
-
-      if (state.thread.kickoff.skillProvider === 'github') {
-        try {
-          const { getSkillFile } = await import('./skillCatalogFacade');
-          const resolvedSkillBranch =
-            state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch;
-          skillContent = await getSkillFile(
-            state.thread.kickoff.project,
-            state.thread.kickoff.repo,
-            state.thread.kickoff.skillPath,
-            resolvedSkillBranch,
-            'github',
-          );
-          skillSource = 'github';
-        } catch (err) {
-          console.error(
-            '[chat] Failed to pre-fetch GitHub skill:',
-            (err as Error).message,
-          );
-        }
-      }
-
-      if (!skillContent) {
-        const localPath = path.join(process.cwd(), skillPathNorm);
-        if (fs.existsSync(localPath)) {
-          try {
-            skillContent = fs.readFileSync(localPath, 'utf8');
-            skillSource = 'local';
-            console.log('[chat] Using local skill fallback:', skillPathNorm);
-          } catch (err) {
-            console.error(
-              '[chat] Failed to read local skill fallback:',
-              (err as Error).message,
-            );
-          }
-        }
-      }
-
-      if (skillContent) {
-        initialPrompt += `\n\n# Pre-loaded skill content (${skillPathNorm}${skillSource === 'local' ? ', local fallback' : ''})\n\n${skillContent}`;
-        initialPrompt +=
-          '\n\nThe skill content above is already loaded. Do not call `get_skill` for this path — execute it now.';
-      } else if (state.thread.kickoff.skillProvider === 'github') {
-        initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub or the local checkout. Inform the user that the skill file is missing.`;
-      }
-    }
-
-    if (maxviewEnabled) {
-      initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
-    }
-
-    prompt = `${initialPrompt}\n\n---\n\n${promptText}`;
-  } else {
-    prompt = promptText;
-  }
+  // A missing cursorAgentId can mean either a brand-new conversation or a
+  // force-disposed interview agent. In the latter case, include the visible
+  // PostgreSQL-backed history so Agent.create() continues instead of restarting.
+  const hadCursorAgentId = Boolean(state.thread.cursorAgentId);
+  let prompt = hadCursorAgentId
+    ? promptText
+    : await buildNewAgentTurnPrompt(
+        state.thread.kickoff,
+        promptText,
+        maxviewEnabled,
+        recoveryContext,
+      );
+  let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
+    state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
 
   let agentRunId: string | undefined;
   let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
@@ -2579,38 +2692,77 @@ export async function sendMessage(
     };
 
     if (!state.agent) {
-      if (state.thread.cursorAgentId) {
-        logMyWork('agent.resume_started', {
-          cursorAgentId: state.thread.cursorAgentId,
-          model: resolvedModel,
-        });
-        // Agent.resume accepts Partial<AgentOptions>, which includes agents.
-        state.agent = await retryWithBackoff(
-          () => Agent.resume(state.thread.cursorAgentId!, {
-            apiKey,
-            model: { id: resolvedModel },
-            local: { cwd: state.thread.workspaceDir },
-            mcpServers,
-            agents: { 'code-reviewer': codeReviewerAgent },
-          }),
-          sdkRetryOpts,
+      const priorCursorAgentId = state.thread.cursorAgentId;
+      const acquisition = await resumeOrCreateAgent({
+        cursorAgentId: priorCursorAgentId,
+        resume: async () => {
+          logMyWork('agent.resume_started', {
+            cursorAgentId: priorCursorAgentId,
+            model: resolvedModel,
+          });
+          // Agent.resume accepts Partial<AgentOptions>, which includes agents.
+          return retryWithBackoff(
+            () => Agent.resume(priorCursorAgentId!, {
+              apiKey,
+              model: { id: resolvedModel },
+              local: { cwd: state.thread.workspaceDir },
+              mcpServers,
+              agents: { 'code-reviewer': codeReviewerAgent },
+            }),
+            sdkRetryOpts,
+          );
+        },
+        create: async () => {
+          logMyWork('agent.create_started', { model: resolvedModel });
+          return retryWithBackoff(
+            () => Agent.create({
+              apiKey,
+              model: { id: resolvedModel },
+              local: { cwd: state.thread.workspaceDir },
+              mcpServers,
+              agents: { 'code-reviewer': codeReviewerAgent },
+            }),
+            sdkRetryOpts,
+          );
+        },
+      });
+      state.agent = acquisition.agent;
+      agentAcquisitionMode = acquisition.mode;
+
+      if (acquisition.mode === 'recreated') {
+        console.warn(
+          `[chat] Agent.resume failed for thread ${threadId}; recreating with PostgreSQL history`,
+          describeError(acquisition.resumeError),
         );
-      } else {
-        logMyWork('agent.create_started', { model: resolvedModel });
-        state.agent = await retryWithBackoff(
-          () => Agent.create({
-            apiKey,
-            model: { id: resolvedModel },
-            local: { cwd: state.thread.workspaceDir },
-            mcpServers,
-            agents: { 'code-reviewer': codeReviewerAgent },
-          }),
-          sdkRetryOpts,
+        state.thread.cursorAgentId = undefined;
+        persistThread(state.thread);
+        prompt = await buildNewAgentTurnPrompt(
+          state.thread.kickoff,
+          promptText,
+          maxviewEnabled,
+          recoveryContext,
         );
       }
     }
 
     const agent = state.agent;
+    if (
+      recoveryContext
+      && (agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated')
+    ) {
+      console.log('[chat] Injected PostgreSQL history into replacement interview agent', {
+        threadId,
+        messageCount: recoveryContext.totalMessageCount,
+        truncated: recoveryContext.truncated,
+        acquisitionMode: agentAcquisitionMode,
+      });
+      trackEvent('agent.history.recovered', {
+        threadId,
+        messageCount: String(recoveryContext.totalMessageCount),
+        truncated: String(recoveryContext.truncated),
+        acquisitionMode: agentAcquisitionMode,
+      });
+    }
     // Send the prompt (retry up to 2x on transient errors)
     const run = await retryWithBackoff(
       () => agent.send(prompt),
@@ -2636,7 +2788,12 @@ export async function sendMessage(
       runId: agentRunId,
       cursorAgentId: state.thread.cursorAgentId,
       model: resolvedModel,
-      resumedAgent: !isFirstTurn,
+      resumedAgent: agentAcquisitionMode === 'existing' || agentAcquisitionMode === 'resumed',
+      agentAcquisitionMode,
+      recoveredMessageCount:
+        agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated'
+          ? recoveryContext?.totalMessageCount ?? 0
+          : 0,
     });
     await db.insert(agentRuns).values({
       id: agentRunId,
@@ -2685,22 +2842,16 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
     const thinkingPhase = new ThinkingPhaseCoalescer();
-    // Long tool executions (esp. `edit` during design-doc generation) can exceed
-    // progressAbortMs with no further stream events. Track in-flight tools so the
-    // background heartbeat can refresh progressAt — but only for a bounded window.
-    // Refreshing forever defeats the reaper (prod: hung tools pinned local CLIs).
+    // Keep tool ids until a terminal tool event arrives. progressAt is deliberately
+    // NOT refreshed by the heartbeat: its timestamp must remain the true tool-start
+    // age so inFlightToolMaxMs is an actual wall-clock cap rather than cap + refresh.
     const inFlightToolCallIds = new Set<string>();
-    let inFlightToolsSinceMs: number | null = null;
     const markToolInFlight = (id: string): void => {
-      const wasEmpty = inFlightToolCallIds.size === 0;
       inFlightToolCallIds.add(id);
-      if (wasEmpty) inFlightToolsSinceMs = Date.now();
     };
     const clearToolInFlight = (id: string): void => {
       inFlightToolCallIds.delete(id);
-      if (inFlightToolCallIds.size === 0) inFlightToolsSinceMs = null;
     };
-    const { progressAbortMs } = resolveAgentRunHealthConfig();
     const flushThinkingPhase = async (): Promise<void> => {
       const phaseEvent = thinkingPhase.flush();
       if (!phaseEvent) return;
@@ -2769,20 +2920,6 @@ export async function sendMessage(
           abortInFlightRun('Heartbeat observed non-running agent_runs row');
         }
       });
-      // Keep progressAt fresh while a tool is executing — but only for
-      // progressAbortMs after the first in-flight tool. Beyond that, stop
-      // refreshing so the reaper can abort at inFlightToolMaxMs.
-      if (inFlightToolCallIds.size > 0 && agentRunId && inFlightToolsSinceMs !== null) {
-        if (Date.now() - inFlightToolsSinceMs < progressAbortMs) {
-          void persistMeaningfulProgress(agentRunId, createRunEventEnvelope({
-            threadId,
-            runId: agentRunId,
-            sequence: 0,
-            event: { type: 'tool_status', toolName: 'in-flight', callId: '', status: 'running' },
-            phase: 'implementation',
-          }));
-        }
-      }
     }, 30_000);
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {

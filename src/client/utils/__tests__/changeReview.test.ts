@@ -40,6 +40,39 @@ describe('computeDiffHunks', () => {
     expect(hunks[1].oldText).toBe('d');
     expect(hunks[1].newText).toBe('D');
   });
+
+  it('omits blank-only hunks around a substantive Markdown insertion', () => {
+    const oldText = [
+      '# ADR',
+      '',
+      '## Context',
+      'Current context.',
+      '',
+      '## Consequences',
+      'Current consequences.',
+    ].join('\n');
+    const newText = [
+      '# ADR',
+      '',
+      '',
+      '## Context',
+      'Current context.',
+      '',
+      '',
+      '## Proposed Architecture',
+      'flowchart LR',
+      '  A --> B',
+      '',
+      '## Consequences',
+      'Current consequences.',
+    ].join('\n');
+
+    const hunks = computeDiffHunks(oldText, newText);
+
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0].newText).toContain('## Proposed Architecture');
+    expect(hunks.every((hunk) => hunk.oldText.trim() || hunk.newText.trim())).toBe(true);
+  });
 });
 
 describe('mergeSelectedHunks', () => {
@@ -222,6 +255,50 @@ describe('buildAdrChangeUnits / mergeAdrProposalFromUnits', () => {
     units[1].decision = 'rejected';
     const merged = mergeAdrProposalFromUnits(current, proposed, units);
     expect(merged.content).toBe('a\nB\nc\nd\ne');
+  });
+
+  it('does not create an empty full-section review for whitespace-only changes', () => {
+    expect(buildAdrChangeUnits('# ADR\nContent', '# ADR\nContent\n')).toEqual([]);
+  });
+
+  it('groups Mermaid opening and closing fences into one review unit for every document type', () => {
+    const current = [
+      '## Proposed Architecture',
+      '',
+      'flowchart LR',
+      '  A --> B',
+      '',
+      '## Consequences',
+      'None.',
+    ].join('\n');
+    const proposed = [
+      '## Proposed Architecture',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '```',
+      '',
+      '## Consequences',
+      'None.',
+    ].join('\n');
+
+    const adrUnits = buildAdrChangeUnits(current, proposed);
+    const prdUnits = buildPrdChangeUnits({ content: current }, { content: proposed });
+    const designDocUnits = buildDesignDocChangeUnits(
+      { design: current, techSpec: '', assumptions: '' },
+      { design: proposed },
+    );
+
+    for (const units of [adrUnits, prdUnits, designDocUnits]) {
+      expect(units).toHaveLength(1);
+      expect(units[0].oldText).toContain('flowchart LR');
+      expect(units[0].newText).toContain('```mermaid');
+      expect(units[0].newText).toContain('```');
+    }
+
+    adrUnits[0].decision = 'approved';
+    expect(mergeAdrProposalFromUnits(current, proposed, adrUnits).content).toBe(proposed);
   });
 });
 

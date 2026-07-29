@@ -5,7 +5,12 @@ import {
   resolveMcpToolTimeoutMs,
   resolvePositiveMs,
 } from '../mcp/mcpTimeout';
-import { failMcpHttpResponse, handleMcpPost, summarizeMcpRpc } from '../mcp/mcpRequestLog';
+import {
+  buildMcpTimeoutResponse,
+  failMcpHttpResponse,
+  handleMcpPost,
+  summarizeMcpRpc,
+} from '../mcp/mcpRequestLog';
 
 describe('mcpTimeout', () => {
   const originalHttp = process.env.MCP_HTTP_TIMEOUT_MS;
@@ -50,7 +55,7 @@ describe('mcpTimeout', () => {
 });
 
 describe('handleMcpPost timeout', () => {
-  it('fails the HTTP response with 504 JSON-RPC when the handler stalls', async () => {
+  it('finishes a stalled tools/call with a terminal MCP tool result', async () => {
     const status = jest.fn().mockReturnThis();
     const json = jest.fn();
     const res = {
@@ -59,6 +64,9 @@ describe('handleMcpPost timeout', () => {
       destroyed: false,
       status,
       json,
+      getHeader: jest.fn(),
+      write: jest.fn(),
+      end: jest.fn(),
       destroy: jest.fn(),
     };
 
@@ -71,14 +79,54 @@ describe('handleMcpPost timeout', () => {
       ),
     ).rejects.toBeInstanceOf(McpTimeoutError);
 
-    expect(status).toHaveBeenCalledWith(504);
+    expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({
       jsonrpc: '2.0',
       id: 7,
-      error: {
-        code: -32000,
-        message: expect.stringContaining('timed out after 25ms'),
+      result: {
+        content: [{
+          type: 'text',
+          text: expect.stringContaining('timed out after 25ms'),
+        }],
+        isError: true,
       },
+    });
+  });
+
+  it('ends an already-started SSE response with a terminal tools/call result', () => {
+    const write = jest.fn();
+    const end = jest.fn();
+    const res = {
+      headersSent: true,
+      writableEnded: false,
+      destroyed: false,
+      status: jest.fn(),
+      json: jest.fn(),
+      getHeader: jest.fn().mockReturnValue('text/event-stream'),
+      write,
+      end,
+      destroy: jest.fn(),
+    };
+
+    failMcpHttpResponse(
+      res as never,
+      { jsonrpc: '2.0', id: 'tool-1', method: 'tools/call' },
+      'request timed out',
+    );
+
+    expect(write).toHaveBeenCalledWith(expect.stringContaining('"isError":true'));
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(res.destroy).not.toHaveBeenCalled();
+  });
+
+  it('keeps JSON-RPC errors for non-tool requests', () => {
+    expect(buildMcpTimeoutResponse(
+      { jsonrpc: '2.0', id: 2, method: 'initialize' },
+      'request timed out',
+    )).toEqual({
+      jsonrpc: '2.0',
+      id: 2,
+      error: { code: -32000, message: 'request timed out' },
     });
   });
 
@@ -96,6 +144,9 @@ describe('handleMcpPost timeout', () => {
       destroyed: false,
       status: jest.fn(),
       json: jest.fn(),
+      getHeader: jest.fn(),
+      write: jest.fn(),
+      end: jest.fn(),
       destroy: jest.fn(),
     };
     failMcpHttpResponse(res as never, { id: 1 }, 'timeout');

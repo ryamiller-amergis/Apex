@@ -88,6 +88,11 @@ jest.mock('../../hooks/useAdrs', () => ({
 jest.mock('../AdrAssistantPanel', () => ({ AdrAssistantPanel: () => null }));
 jest.mock('../ProposedAdrChangesReview', () => ({ ProposedAdrChangesReview: () => null }));
 jest.mock('../AdrReviewerModal', () => ({ AdrReviewerModal: () => null }));
+jest.mock('../MarkdownWithMermaid', () => ({
+  MarkdownWithMermaid: ({ content }: { content: string }) => (
+    <div data-testid="adr-markdown-with-mermaid" data-content={content}>{content}</div>
+  ),
+}));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -181,5 +186,18 @@ describe('AdrChatView — delete', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Delete ADR' })).not.toBeInTheDocument();
     expect(screen.getByText(/violates foreign key/i)).toBeInTheDocument();
+  });
+
+  it('renders persisted ADR content with Mermaid-aware Markdown', () => {
+    const content = '## Proposed Architecture\n\nflowchart LR\n  A --> B';
+    (useAdr as jest.Mock).mockReturnValue({
+      data: { ...sampleAdr, content, status: 'proposed' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderAdrView();
+
+    expect(screen.getByTestId('adr-markdown-with-mermaid')).toHaveAttribute('data-content', content);
   });
 });

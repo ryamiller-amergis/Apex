@@ -22,6 +22,7 @@ jest.mock('../services/pgNotifyService', () => ({
 
 import {
   assessAgentRunHealth,
+  resolveAgentRunHealthConfig,
   isThreadRunAlive,
   isTerminalAgentRunStatus,
   isInFlightToolProgressLabel,
@@ -48,6 +49,17 @@ function timestamp(msAgo: number): string {
 }
 
 describe('assessAgentRunHealth', () => {
+  it('defaults the in-flight tool wall-clock cap to six minutes', () => {
+    const previous = process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS;
+    try {
+      delete process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS;
+      expect(resolveAgentRunHealthConfig().inFlightToolMaxMs).toBe(6 * 60_000);
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS;
+      else process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS = previous;
+    }
+  });
+
   it('surfaces stale progress even while worker heartbeats remain healthy', () => {
     expect(
       assessAgentRunHealth(
