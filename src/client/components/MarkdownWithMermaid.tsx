@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import mermaid from 'mermaid';
@@ -11,6 +12,14 @@ import styles from './MarkdownWithMermaid.module.css';
 
 let mermaidDiagramCounter = 0;
 let mermaidRenderQueue: Promise<void> = Promise.resolve();
+
+/** Survives MermaidDiagram remounts (e.g. ADR poll re-renders markdown). */
+type PersistedLightbox = { zoom: number; pan: { x: number; y: number } };
+const openLightboxByChart = new Map<string, PersistedLightbox>();
+
+function clampZoom(value: number): number {
+  return Math.min(3, Math.max(0.5, Number(value.toFixed(2))));
+}
 
 function renderMermaid(
   chart: string,
@@ -93,14 +102,19 @@ interface MermaidDiagramProps {
 }
 
 export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
+  const renderChart = normalizeMermaidChart(chart);
+  const persistKey = renderChart;
+  const persisted = openLightboxByChart.get(persistKey);
+
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [themeRevision, setThemeRevision] = useState(0);
-  const [expanded, setExpanded] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [expanded, setExpanded] = useState(() => openLightboxByChart.has(persistKey));
+  const [zoom, setZoom] = useState(() => persisted?.zoom ?? 1);
+  const [pan, setPan] = useState(() => persisted?.pan ?? { x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const panSessionRef = useRef<{
     startX: number;
@@ -109,7 +123,6 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     originY: number;
   } | null>(null);
   const titleId = useId();
-  const renderChart = normalizeMermaidChart(chart);
 
   const resetView = () => {
     setZoom(1);
@@ -117,11 +130,23 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   };
 
   const closeLightbox = () => {
+    openLightboxByChart.delete(persistKey);
     setExpanded(false);
     setIsPanning(false);
     panSessionRef.current = null;
     resetView();
   };
+
+  const openLightbox = () => {
+    openLightboxByChart.set(persistKey, { zoom, pan });
+    setExpanded(true);
+  };
+
+  useEffect(() => {
+    if (expanded) {
+      openLightboxByChart.set(persistKey, { zoom, pan });
+    }
+  }, [expanded, zoom, pan, persistKey]);
 
   useEffect(() => {
     const observer = new MutationObserver(() =>
@@ -170,7 +195,6 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 
   useEffect(() => {
     if (!expanded) {
-      resetView();
       return;
     }
     closeRef.current?.focus();
@@ -183,11 +207,11 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       }
       if (event.key === '+' || event.key === '=') {
         event.preventDefault();
-        setZoom((value) => Math.min(3, Number((value + 0.25).toFixed(2))));
+        setZoom((value) => clampZoom(value + 0.25));
       }
       if (event.key === '-' || event.key === '_') {
         event.preventDefault();
-        setZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))));
+        setZoom((value) => clampZoom(value - 0.25));
       }
       if (event.key === '0') {
         event.preventDefault();
@@ -199,7 +223,24 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [expanded]);
+  }, [expanded, persistKey]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const delta = event.deltaY > 0 ? -0.1 : 0.1;
+      setZoom((value) => clampZoom(value + delta));
+    };
+
+    viewport.addEventListener('wheel', onWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', onWheel);
+  }, [expanded, svg]);
 
   const handlePanStart = (clientX: number, clientY: number) => {
     panSessionRef.current = {
@@ -226,7 +267,114 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     setIsPanning(false);
   };
 
-  if (error) {
+  const lightbox =
+    expanded &&
+    createPortal(
+      <div
+        className={styles.lightbox}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        data-testid="mermaid-lightbox"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeLightbox();
+        }}
+      >
+        <div className={styles.lightboxCard}>
+          <header className={styles.lightboxHeader}>
+            <div className={styles.lightboxHeading}>
+              <h2 id={titleId} className={styles.lightboxTitle}>
+                Diagram
+              </h2>
+              <p className={styles.lightboxHint}>
+                Drag to pan · Ctrl + scroll to zoom
+              </p>
+            </div>
+            <div className={styles.lightboxControls}>
+              <button
+                type="button"
+                className={styles.zoomButton}
+                onClick={() => setZoom((value) => clampZoom(value - 0.25))}
+                aria-label="Zoom out"
+                title="Zoom out (−)"
+              >
+                −
+              </button>
+              <span className={styles.zoomLabel} aria-live="polite">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                className={styles.zoomButton}
+                onClick={() => setZoom((value) => clampZoom(value + 0.25))}
+                aria-label="Zoom in"
+                title="Zoom in (+)"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className={styles.zoomButton}
+                onClick={resetView}
+                aria-label="Reset zoom"
+                title="Reset zoom and pan (0)"
+              >
+                Reset
+              </button>
+              <button
+                ref={closeRef}
+                type="button"
+                className={styles.closeButton}
+                onClick={closeLightbox}
+                aria-label="Close diagram"
+              >
+                Close
+              </button>
+            </div>
+          </header>
+          <div
+            ref={viewportRef}
+            className={`${styles.lightboxBody}${isPanning ? ` ${styles.lightboxBodyPanning}` : ''}`}
+            data-testid="mermaid-pan-viewport"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              handlePanStart(event.clientX, event.clientY);
+            }}
+            onMouseMove={(event) => handlePanMove(event.clientX, event.clientY)}
+            onMouseUp={endPan}
+            onMouseLeave={endPan}
+            onTouchStart={(event) => {
+              if (event.touches.length !== 1) return;
+              const touch = event.touches[0];
+              handlePanStart(touch.clientX, touch.clientY);
+            }}
+            onTouchMove={(event) => {
+              if (event.touches.length !== 1) return;
+              event.preventDefault();
+              const touch = event.touches[0];
+              handlePanMove(touch.clientX, touch.clientY);
+            }}
+            onTouchEnd={endPan}
+            onTouchCancel={endPan}
+          >
+            {svg ? (
+              <div
+                className={`${styles.lightboxDiagram}${isPanning ? ` ${styles.lightboxDiagramPanning}` : ''}`}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            ) : (
+              <div className={styles.loading}>Rendering diagram…</div>
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+
+  if (error && !expanded) {
     return (
       <div ref={containerRef} className={styles.error}>
         <strong>Unable to render Mermaid diagram.</strong>
@@ -235,152 +383,56 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
       </div>
     );
   }
-  if (!svg)
+
+  if (!svg && !expanded) {
     return (
       <div ref={containerRef} className={styles.loading}>
         Rendering diagram…
       </div>
     );
+  }
 
   return (
     <>
-      <div ref={containerRef} className={styles.diagramWrap}>
-        <div
-          className={styles.diagram}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-        <button
-          type="button"
-          className={styles.expandButton}
-          onClick={() => setExpanded(true)}
-          aria-label="Expand diagram"
-          title="Expand diagram"
-          data-testid="mermaid-expand"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+      {svg ? (
+        <div ref={containerRef} className={styles.diagramWrap}>
+          <div
+            className={styles.diagram}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+          <button
+            type="button"
+            className={styles.expandButton}
+            onClick={openLightbox}
+            aria-label="Expand diagram"
+            title="Expand diagram"
+            data-testid="mermaid-expand"
           >
-            <polyline points="15 3 21 3 21 9" />
-            <polyline points="9 21 3 21 3 15" />
-            <line x1="21" y1="3" x2="14" y2="10" />
-            <line x1="3" y1="21" x2="10" y2="14" />
-          </svg>
-          Expand
-        </button>
-      </div>
-
-      {expanded && (
-        <div
-          className={styles.lightbox}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={titleId}
-          data-testid="mermaid-lightbox"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) closeLightbox();
-          }}
-        >
-          <div className={styles.lightboxCard}>
-            <header className={styles.lightboxHeader}>
-              <div className={styles.lightboxHeading}>
-                <h2 id={titleId} className={styles.lightboxTitle}>
-                  Diagram
-                </h2>
-                <p className={styles.lightboxHint}>Drag to pan · + / − to zoom</p>
-              </div>
-              <div className={styles.lightboxControls}>
-                <button
-                  type="button"
-                  className={styles.zoomButton}
-                  onClick={() =>
-                    setZoom((value) =>
-                      Math.max(0.5, Number((value - 0.25).toFixed(2)))
-                    )
-                  }
-                  aria-label="Zoom out"
-                  title="Zoom out (−)"
-                >
-                  −
-                </button>
-                <span className={styles.zoomLabel} aria-live="polite">
-                  {Math.round(zoom * 100)}%
-                </span>
-                <button
-                  type="button"
-                  className={styles.zoomButton}
-                  onClick={() =>
-                    setZoom((value) =>
-                      Math.min(3, Number((value + 0.25).toFixed(2)))
-                    )
-                  }
-                  aria-label="Zoom in"
-                  title="Zoom in (+)"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
-                  className={styles.zoomButton}
-                  onClick={resetView}
-                  aria-label="Reset zoom"
-                  title="Reset zoom and pan (0)"
-                >
-                  Reset
-                </button>
-                <button
-                  ref={closeRef}
-                  type="button"
-                  className={styles.closeButton}
-                  onClick={closeLightbox}
-                  aria-label="Close diagram"
-                >
-                  Close
-                </button>
-              </div>
-            </header>
-            <div
-              className={`${styles.lightboxBody}${isPanning ? ` ${styles.lightboxBodyPanning}` : ''}`}
-              data-testid="mermaid-pan-viewport"
-              onMouseDown={(event) => {
-                if (event.button !== 0) return;
-                handlePanStart(event.clientX, event.clientY);
-              }}
-              onMouseMove={(event) => handlePanMove(event.clientX, event.clientY)}
-              onMouseUp={endPan}
-              onMouseLeave={endPan}
-              onTouchStart={(event) => {
-                if (event.touches.length !== 1) return;
-                const touch = event.touches[0];
-                handlePanStart(touch.clientX, touch.clientY);
-              }}
-              onTouchMove={(event) => {
-                if (event.touches.length !== 1) return;
-                event.preventDefault();
-                const touch = event.touches[0];
-                handlePanMove(touch.clientX, touch.clientY);
-              }}
-              onTouchEnd={endPan}
-              onTouchCancel={endPan}
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
             >
-              <div
-                className={`${styles.lightboxDiagram}${isPanning ? ` ${styles.lightboxDiagramPanning}` : ''}`}
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                }}
-                dangerouslySetInnerHTML={{ __html: svg }}
-              />
-            </div>
-          </div>
+              <polyline points="15 3 21 3 21 9" />
+              <polyline points="9 21 3 21 3 15" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+            Expand
+          </button>
+        </div>
+      ) : (
+        <div ref={containerRef} className={styles.loading}>
+          Rendering diagram…
         </div>
       )}
+      {lightbox}
     </>
   );
 };

@@ -1,6 +1,6 @@
 export const BRAND_MARK_VIEWBOX = '0 0 96 96';
 
-export const BRAND_SLOGAN = 'Build higher, faster....';
+export const BRAND_SLOGAN = 'Build higher, faster.';
 
 export const BRAND_MARK_SURFACE = {
   x: 10,
