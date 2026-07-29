@@ -300,8 +300,12 @@ group (current dev), both groups resolve to the same resource group.
 | Runner MI | Key Vault Secrets **User** | `var.lt_key_vault_id` (when set) |
 | Apex API (App Service system identity) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
 | Apex API | Storage Blob Data **Reader** | `lt-artifacts` container |
-| Apex staging slot (when enabled) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
-| Apex staging slot (when enabled) | Storage Blob Data **Reader** | `lt-artifacts` container |
+| Apex staging slot (when enabled and `lt_enable_staging_slot_rbac=true`) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
+| Apex staging slot (when enabled and `lt_enable_staging_slot_rbac=true`) | Storage Blob Data **Reader** | `lt-artifacts` container |
+
+Set `lt_enable_staging_slot_rbac = false` when the Terraform apply principal
+cannot manage role assignments or staging does not need to dispatch load tests.
+This leaves the staging slot in place without provisioning its load-test RBAC.
 
 ### Terraform outputs (app config contract for FEAT-007/008)
 

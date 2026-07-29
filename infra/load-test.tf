@@ -205,7 +205,7 @@ resource "azurerm_role_assignment" "lt_api_blob_reader" {
 # as staging_pdf_blob_contributor). Grant Send + Blob Reader so pre-swap smoke
 # and staging-slot deploys can enqueue and read artifacts.
 resource "azurerm_role_assignment" "lt_staging_sb_sender" {
-  count = var.enable_staging_slot ? 1 : 0
+  count = var.enable_staging_slot && var.lt_enable_staging_slot_rbac ? 1 : 0
 
   scope                = azurerm_servicebus_queue.lt_dispatch.id
   role_definition_name = "Azure Service Bus Data Sender"
@@ -213,7 +213,7 @@ resource "azurerm_role_assignment" "lt_staging_sb_sender" {
 }
 
 resource "azurerm_role_assignment" "lt_staging_blob_reader" {
-  count = var.enable_staging_slot ? 1 : 0
+  count = var.enable_staging_slot && var.lt_enable_staging_slot_rbac ? 1 : 0
 
   scope                = azurerm_storage_container.lt_artifacts.resource_manager_id
   role_definition_name = "Storage Blob Data Reader"
