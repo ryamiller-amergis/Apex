@@ -51,8 +51,8 @@ setup('authenticate via Azure AD SSO', async ({ page, browser }) => {
     await saveDeployedStorageState(page.context());
 
     // Confirm a *fresh* context can authenticate with the saved blob. Catches the
-    // failure mode where the setup page looked logged-in but the FileStore session
-    // was already empty/missing (connect.sid sent → /auth/status authenticated:false).
+    // failure mode where the setup page looked logged-in but the server session was
+    // already empty/missing (connect.sid sent → /auth/status authenticated:false).
     try {
       await assertStorageStateAuthenticates(browser);
       lastVerifyError = undefined;

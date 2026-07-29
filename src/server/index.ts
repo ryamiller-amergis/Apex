@@ -2,7 +2,6 @@ import { telemetryClient } from './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
 import passport from 'passport';
@@ -51,11 +50,7 @@ import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
-import { resolveDataRoot } from './utils/dataDir';
-
-type FileStoreFactory = (
-  sessionMiddleware: typeof session,
-) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
+import { createSessionOptions, createSessionStore } from './sessionStore';
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
@@ -103,40 +98,11 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Session configuration — in production use a file store on /home/data so OAuth
-// state and login sessions survive load balancing across App Service instances.
-const sessionCookie = {
-  secure: process.env.NODE_ENV === 'production',
-  httpOnly: true,
-  maxAge: 24 * 60 * 60 * 1000, // 24 hours
-  sameSite: 'lax' as const,
-  path: '/',
-};
-
-const sessionsDir = path.join(resolveDataRoot(), 'sessions');
-fs.mkdirSync(sessionsDir, { recursive: true });
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const createFileStore = require('session-file-store') as FileStoreFactory;
-const FileStore = createFileStore(session);
-const sessionStore = new FileStore({
-  path: sessionsDir,
-  ttl: 86400,
-  // Azure Files + concurrent requests during login can briefly miss a just-written
-  // session file; retries:0 caused express-session to create an empty session for
-  // the same connect.sid and wipe the authenticated passport user (deployed-smoke
-  // then sent a valid cookie but /auth/status returned authenticated:false).
-  retries: 5,
-});
-console.log(`[session] Using file store at ${sessionsDir}`);
-
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
-  store: sessionStore,
-  resave: false,
-  saveUninitialized: true, // required so OAuth state is persisted before the Azure AD redirect
-  name: 'connect.sid',
-  cookie: sessionCookie,
-}));
+// Production sessions default to PostgreSQL so OAuth state and authenticated
+// sessions survive instance recycling. SESSION_STORE=file keeps the established
+// Azure Files-backed store available as an emergency fallback.
+const { store: sessionStore } = createSessionStore();
+app.use(session(createSessionOptions(sessionStore)));
 
 // Initialize Passport
 app.use(passport.initialize());
