@@ -427,13 +427,24 @@ describe('walkthroughService (TBI-002)', () => {
       });
     });
 
-    it('VT-06 — progress DB failure does not claim acknowledgement (DoD)', async () => {
-      mockDb.select.mockImplementation(() => ({
-        from: jest.fn().mockReturnThis(),
-        innerJoin: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
-      }));
+    it('FEAT-006 PBI-007 AC-1 / VT-06 — progress DB failure does not claim acknowledgement (DoD)', async () => {
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall <= 2) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        };
+      });
       mockDb.query.walkthroughs.findFirst.mockResolvedValue(
         definitionRow({
           lifecycle: 'published',
@@ -471,12 +482,23 @@ describe('walkthroughService (TBI-002)', () => {
     });
 
     it('updateOwnProgress derives acknowledged for completed', async () => {
-      mockDb.select.mockImplementation(() => ({
-        from: jest.fn().mockReturnThis(),
-        innerJoin: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
-      }));
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall <= 2) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        };
+      });
       mockDb.query.walkthroughs.findFirst.mockResolvedValue(
         definitionRow({
           lifecycle: 'published',
@@ -507,6 +529,155 @@ describe('walkthroughService (TBI-002)', () => {
       });
       expect(progress.acknowledged).toBe(true);
       expect(progress.userId).toBe('user-1');
+    });
+
+    it('FEAT-006 PBI-007 AC-0 / BR-007 — completed suppresses automatic launch for that revision', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findMany.mockResolvedValue([
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          publishedAt: '2026-07-01T00:00:00Z',
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          progress: [
+            {
+              walkthroughId: 'wt-1',
+              userId: 'user-1',
+              revision: 1,
+              status: 'completed',
+              lastStepId: 'step-1',
+              seenAt: '2026-07-01T00:00:00Z',
+              acknowledgedAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T00:00:00Z',
+            },
+          ],
+        }),
+      ]);
+      expect(await getNextEligible('Apex', 'user-1')).toBeNull();
+    });
+
+    it('FEAT-006 PBI-007 AC-2 / BR-011 — re-show revision may be eligible while earlier progress remains historical', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findMany.mockResolvedValue([
+        definitionRow({
+          lifecycle: 'published',
+          revision: 2,
+          publishedAt: '2026-07-15T00:00:00Z',
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          progress: [
+            {
+              walkthroughId: 'wt-1',
+              userId: 'user-1',
+              revision: 1,
+              status: 'completed',
+              lastStepId: 'step-1',
+              seenAt: '2026-07-01T00:00:00Z',
+              acknowledgedAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T00:00:00Z',
+            },
+          ],
+        }),
+      ]);
+      const next = await getNextEligible('Apex', 'user-1');
+      expect(next?.revision).toBe(2);
+      expect(next?.id).toBe('wt-1');
+    });
+
+    it('FEAT-006 PBI-007 BR-007 / PBI-008 AC-2 — terminal status is not downgraded to seen on replay', async () => {
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall <= 2) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([
+            {
+              walkthroughId: 'wt-1',
+              userId: 'user-1',
+              revision: 1,
+              status: 'dismissed',
+              lastStepId: 'step-1',
+              seenAt: '2026-07-01T00:00:00Z',
+              acknowledgedAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T00:00:00Z',
+            },
+          ]),
+        };
+      });
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+      const values = jest.fn().mockReturnThis();
+      const onConflictDoUpdate = jest.fn().mockReturnThis();
+      const returning = jest.fn().mockResolvedValue([
+        {
+          walkthroughId: 'wt-1',
+          userId: 'user-1',
+          revision: 1,
+          status: 'dismissed',
+          lastStepId: 'step-1',
+          seenAt: '2026-07-01T00:00:00Z',
+          acknowledgedAt: '2026-07-01T00:00:00Z',
+          updatedAt: '2026-07-02T00:00:00Z',
+        },
+      ]);
+      mockDb.insert.mockImplementation(() => ({ values, onConflictDoUpdate, returning }));
+
+      const progress = await updateOwnProgress('Apex', 'wt-1', 'user-1', {
+        status: 'seen',
+        revision: 1,
+        lastStepId: 'step-1',
+      });
+
+      expect(values).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'dismissed' }),
+      );
+      expect(progress.status).toBe('dismissed');
+      expect(progress.acknowledged).toBe(true);
+    });
+
+    it('FEAT-006 PBI-007 AC-3 — inaccessible Walkthrough rejects progress with not found', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'unpublished',
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+      await expect(
+        updateOwnProgress('Apex', 'wt-1', 'user-1', {
+          status: 'completed',
+          revision: 1,
+        }),
+      ).rejects.toMatchObject({ code: 'WALKTHROUGH_NOT_FOUND' });
+      expect(mockDb.insert).not.toHaveBeenCalled();
     });
   });
 

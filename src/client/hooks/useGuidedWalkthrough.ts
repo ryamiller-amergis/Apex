@@ -1,15 +1,17 @@
 /**
- * FEAT-005 — App-shell wiring: eligibility + overlay arbitration + progress/miss mutations.
+ * FEAT-005 + FEAT-006 — App-shell wiring: eligibility + overlay arbitration + progress/miss.
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type {
   UpdateWalkthroughProgressRequest,
   WalkthroughAnchorMiss,
   WalkthroughDefinition,
+  WalkthroughProgressStatus,
   WalkthroughRendererCallbacks,
 } from '../../shared/types/walkthrough';
 import { toWalkthroughRendererDefinition } from '../utils/toWalkthroughRendererDefinition';
 import { useAutomaticOverlayCoordinator } from './useAutomaticOverlayCoordinator';
+import { useUpdateWalkthroughProgress } from './useWalkthroughReplay';
 import { useWalkthroughEligibility } from './useWalkthroughEligibility';
 
 export interface UseGuidedWalkthroughOptions {
@@ -18,25 +20,6 @@ export interface UseGuidedWalkthroughOptions {
   enabled?: boolean;
   whatsNewSettled: boolean;
   whatsNewBlocksWalkthrough: boolean;
-}
-
-async function putProgress(
-  projectId: string,
-  walkthroughId: string,
-  body: UpdateWalkthroughProgressRequest,
-): Promise<void> {
-  const res = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/walkthroughs/${encodeURIComponent(walkthroughId)}/progress`,
-    {
-      method: 'PUT',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(`Progress update failed (${res.status})`);
-  }
 }
 
 async function postAnchorMiss(
@@ -63,11 +46,20 @@ async function postAnchorMiss(
   }
 }
 
+export interface GuidedProgressFailure {
+  walkthroughId: string;
+  body: UpdateWalkthroughProgressRequest;
+}
+
 export interface UseGuidedWalkthroughResult {
   activeDefinition: WalkthroughDefinition | null;
   rendererDefinition: ReturnType<typeof toWalkthroughRendererDefinition> | null;
   rendererCallbacks: WalkthroughRendererCallbacks;
   clearActive: () => void;
+  progressFailure: GuidedProgressFailure | null;
+  progressSubmitting: boolean;
+  retryProgressFailure: () => void;
+  dismissProgressFailureWithoutAck: () => void;
 }
 
 export function useGuidedWalkthrough({
@@ -92,51 +84,57 @@ export function useGuidedWalkthrough({
     enabled,
   });
 
+  const progressMutation = useUpdateWalkthroughProgress(projectId);
+  const [progressFailure, setProgressFailure] = useState<GuidedProgressFailure | null>(null);
+
   const active = coordinator.activeWalkthrough;
   const clearActive = coordinator.clearActiveWalkthrough;
 
-  const persistSeen = useCallback(
-    (walkthroughId: string, revision: number, stepId: string) => {
+  const persistStatus = useCallback(
+    async (
+      walkthroughId: string,
+      status: WalkthroughProgressStatus,
+      revision: number,
+      stepId: string,
+      opts?: { surfaceFailure?: boolean; closeOnSuccess?: boolean },
+    ) => {
       if (!projectId) return;
-      void putProgress(projectId, walkthroughId, {
-        status: 'seen',
+      const body: UpdateWalkthroughProgressRequest = {
+        status,
         revision,
         lastStepId: stepId,
-      }).catch(() => {
-        // Observable failure only — do not eject the user from the Step range.
-      });
+      };
+      try {
+        await progressMutation.mutateAsync({ walkthroughId, body });
+        setProgressFailure(null);
+        if (opts?.closeOnSuccess) clearActive();
+      } catch {
+        if (opts?.surfaceFailure) {
+          setProgressFailure({ walkthroughId, body });
+        }
+      }
     },
-    [projectId],
+    [projectId, progressMutation, clearActive],
   );
 
-  const persistLastStep = useCallback(
-    (walkthroughId: string, revision: number, stepId: string) => {
-      if (!projectId) return;
-      void putProgress(projectId, walkthroughId, {
-        status: 'seen',
-        revision,
-        lastStepId: stepId,
-      }).catch(() => {
-        /* non-blocking */
-      });
-    },
-    [projectId],
-  );
-
-  // Fresh callback object each render — avoids React Compiler memoization mismatch.
   const rendererCallbacks: WalkthroughRendererCallbacks = {
     onSeen: ({ walkthroughId, revision, stepId }) => {
-      persistSeen(walkthroughId, revision, stepId);
+      void persistStatus(walkthroughId, 'seen', revision, stepId);
     },
     onStepChange: ({ walkthroughId, revision, stepId }) => {
-      persistLastStep(walkthroughId, revision, stepId);
+      void persistStatus(walkthroughId, 'seen', revision, stepId);
     },
-    onComplete: () => {
-      // Full complete/dismiss mutation belongs to FEAT-006; close overlay for this load.
-      clearActive();
+    onComplete: ({ walkthroughId, revision, stepId }) => {
+      void persistStatus(walkthroughId, 'completed', revision, stepId, {
+        surfaceFailure: true,
+        closeOnSuccess: true,
+      });
     },
-    onDismiss: () => {
-      clearActive();
+    onDismiss: ({ walkthroughId, revision, stepId }) => {
+      void persistStatus(walkthroughId, 'dismissed', revision, stepId, {
+        surfaceFailure: true,
+        closeOnSuccess: true,
+      });
     },
     onAnchorMiss: (payload) => {
       if (!projectId) return;
@@ -149,10 +147,30 @@ export function useGuidedWalkthrough({
     [active],
   );
 
+  const retryProgressFailure = useCallback(() => {
+    if (!progressFailure) return;
+    void persistStatus(
+      progressFailure.walkthroughId,
+      progressFailure.body.status,
+      progressFailure.body.revision,
+      progressFailure.body.lastStepId ?? '',
+      { surfaceFailure: true, closeOnSuccess: true },
+    );
+  }, [persistStatus, progressFailure]);
+
+  const dismissProgressFailureWithoutAck = useCallback(() => {
+    setProgressFailure(null);
+    clearActive();
+  }, [clearActive]);
+
   return {
     activeDefinition: active,
     rendererDefinition,
     rendererCallbacks,
     clearActive,
+    progressFailure,
+    progressSubmitting: progressMutation.isPending,
+    retryProgressFailure,
+    dismissProgressFailureWithoutAck,
   };
 }

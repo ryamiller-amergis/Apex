@@ -698,7 +698,7 @@ export async function updateOwnProgress(
   body: UpdateWalkthroughProgressRequest,
 ): Promise<WalkthroughProgress> {
   // Caller identity is always the server-derived userId — never accept client userId.
-  const status = assertPersistedProgressStatus(body.status);
+  const requestedStatus = assertPersistedProgressStatus(body.status);
   if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) {
     throw new WalkthroughDomainError('INVALID_PROGRESS', 'revision must be a positive integer');
   }
@@ -718,10 +718,37 @@ export async function updateOwnProgress(
     }
   }
 
+  // FEAT-006 / BR-007: terminal completed|dismissed must not downgrade to seen (replay).
+  const existingRows = await db
+    .select()
+    .from(walkthroughProgress)
+    .where(
+      and(
+        eq(walkthroughProgress.walkthroughId, walkthroughId),
+        eq(walkthroughProgress.userId, userId),
+        eq(walkthroughProgress.revision, body.revision),
+      ),
+    )
+    .limit(1);
+  const existing = existingRows[0];
+  let status = requestedStatus;
+  if (existing) {
+    const prev = assertPersistedProgressStatus(existing.status);
+    if (deriveAcknowledged(prev) && requestedStatus === 'seen') {
+      status = prev;
+    }
+  }
+
   const ts = nowIso();
   const acknowledged = deriveAcknowledged(status);
   const seenAt = status === 'seen' || acknowledged ? ts : null;
-  const acknowledgedAt = acknowledged ? ts : null;
+  // Preserve prior acknowledgement timestamp on non-downgrade / idempotent retry.
+  const acknowledgedAt =
+    acknowledged
+      ? (existing?.acknowledgedAt && deriveAcknowledged(assertPersistedProgressStatus(existing.status))
+          ? existing.acknowledgedAt
+          : ts)
+      : null;
 
   const [row] = await db
     .insert(walkthroughProgress)
@@ -745,7 +772,9 @@ export async function updateOwnProgress(
         status,
         lastStepId: body.lastStepId ?? null,
         seenAt: sql`COALESCE(${walkthroughProgress.seenAt}, ${ts})`,
-        acknowledgedAt,
+        acknowledgedAt: acknowledged
+          ? sql`COALESCE(${walkthroughProgress.acknowledgedAt}, ${ts})`
+          : null,
         updatedAt: ts,
       },
     })

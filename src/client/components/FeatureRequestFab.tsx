@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { AskApexChat } from './AskApexChat';
+import { WalkthroughHelpHost } from './WalkthroughHelpHost';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import styles from './FeatureRequestFab.module.css';
 
@@ -10,7 +11,7 @@ const FAB_MARGIN = 24;
 const FAB_STORAGE_KEY = 'apex-fab-position';
 const DRAG_THRESHOLD = 6;
 const MENU_MIN_WIDTH = 220;
-const MENU_ESTIMATED_HEIGHT = 144;
+const MENU_ESTIMATED_HEIGHT = 192;
 const VIEWPORT_MARGIN = 8;
 const MENU_GAP = 8;
 
@@ -26,6 +27,12 @@ interface ViewportSize {
 
 interface FeatureRequestFabProps {
   onSubmit: (type: WorkItemType) => void;
+  /** Active project — required to open Walkthrough Help / replay. */
+  projectId?: string | null;
+  /** When false, hide feature/issue submission actions (Walkthroughs + Ask Apex remain). */
+  canSubmitWorkItems?: boolean;
+  /** Optional test id for pre-commit / parent composition scans. */
+  'data-testid'?: string;
 }
 
 function clampPosition(pos: Position): Position {
@@ -116,9 +123,36 @@ function computeMenuStyle(
   return { left, top };
 }
 
-export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }) => {
+function readHelpWalkthroughsDeepLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).get('help') === 'walkthroughs';
+  } catch {
+    return false;
+  }
+}
+
+function clearHelpWalkthroughsDeepLink(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('help') !== 'walkthroughs') return;
+    url.searchParams.delete('help');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    // ignore
+  }
+}
+
+export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({
+  onSubmit,
+  projectId = null,
+  canSubmitWorkItems = true,
+  'data-testid': rootTestId = 'apex-feature-request-fab',
+}) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(() => Boolean(projectId) && readHelpWalkthroughsDeepLink());
   const [position, setPosition] = useState<Position | null>(() => {
     if (typeof window === 'undefined') return null;
     return loadStoredPosition() ?? getDefaultPosition();
@@ -183,9 +217,21 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }
     setChatOpen(true);
   }, []);
 
+  const handleOpenWalkthroughs = useCallback(() => {
+    setMenuOpen(false);
+    setHelpOpen(true);
+  }, []);
+
   const handleCloseChat = useCallback(() => {
     setChatOpen(false);
   }, []);
+
+  useEffect(() => {
+    if (!projectId || !readHelpWalkthroughsDeepLink()) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync Help open from ?help=walkthroughs deep link
+    setHelpOpen(true);
+    clearHelpWalkthroughsDeepLink();
+  }, [projectId]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (chatOpen || !position) return;
@@ -309,6 +355,7 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }
       <div
         className={styles.container}
         style={{ left: position.x, top: position.y }}
+        {...{ 'data-testid': rootTestId }}
       >
         {menuOpen && (
           <>
@@ -316,46 +363,69 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }
               className={styles['menu-overlay']}
               onClick={() => setMenuOpen(false)}
               aria-hidden="true"
+              // data-testid-exempt — decorative backdrop; menu items are the actionable controls
             />
             <div
               className={styles.menu}
               ref={menuRef}
               role="menu"
               style={resolvedMenuStyle}
+              {...{ 'data-testid': 'apex-fab-menu' }}
             >
-              <button
-                className={styles['menu-item']}
-                onClick={handleRequestFeature}
-                type="button"
-                role="menuitem"
-              >
-                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1-.85.6V16h-4v-2.3l-.85-.6A4.997 4.997 0 0 1 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.63-.8 3.16-2.15 4.1z" />
-                </svg>
-                Request New Apex Feature
-              </button>
+              {projectId && (
+                <button
+                  className={styles['menu-item']}
+                  onClick={handleOpenWalkthroughs}
+                  type="button"
+                  role="menuitem"
+                  {...{ 'data-testid': 'walkthrough-help-trigger' }}
+                >
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
+                  </svg>
+                  Walkthroughs
+                </button>
+              )}
+              {canSubmitWorkItems && (
+                <button
+                  className={styles['menu-item']}
+                  onClick={handleRequestFeature}
+                  type="button"
+                  role="menuitem"
+                  {...{ 'data-testid': 'apex-fab-request-feature' }}
+                >
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1-.85.6V16h-4v-2.3l-.85-.6A4.997 4.997 0 0 1 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.63-.8 3.16-2.15 4.1z" />
+                  </svg>
+                  Request New Apex Feature
+                </button>
+              )}
               <button
                 className={styles['menu-item']}
                 onClick={handleAskApex}
                 type="button"
                 role="menuitem"
+                {...{ 'data-testid': 'apex-fab-ask-apex' }}
               >
                 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                   <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
                 </svg>
                 Ask Apex
               </button>
-              <button
-                className={styles['menu-item']}
-                onClick={handleReportIssue}
-                type="button"
-                role="menuitem"
-              >
-                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M12 2 1 21h22L12 2zm0 4 7.5 13h-15L12 6zm-1 4v5h2v-5h-2zm0 7v2h2v-2h-2z" />
-                </svg>
-                Report an Issue
-              </button>
+              {canSubmitWorkItems && (
+                <button
+                  className={styles['menu-item']}
+                  onClick={handleReportIssue}
+                  type="button"
+                  role="menuitem"
+                  {...{ 'data-testid': 'apex-fab-report-issue' }}
+                >
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M12 2 1 21h22L12 2zm0 4 7.5 13h-15L12 6zm-1 4v5h2v-5h-2zm0 7v2h2v-2h-2z" />
+                  </svg>
+                  Report an Issue
+                </button>
+              )}
             </div>
           </>
         )}
@@ -373,6 +443,7 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }
             aria-label="Open Apex menu"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
+            {...{ 'data-testid': 'apex-fab-trigger' }}
           >
             <BrandLogo
               variant="mark"
@@ -384,6 +455,14 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({ onSubmit }
       </div>
 
       {chatOpen && <AskApexChat onClose={handleCloseChat} />}
+
+      {projectId && (
+        <WalkthroughHelpHost
+          projectId={projectId}
+          open={helpOpen}
+          onOpenChange={setHelpOpen}
+        />
+      )}
     </>
   );
 };
