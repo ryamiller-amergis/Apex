@@ -34,9 +34,37 @@ function canonicalizeDesignAttachmentName(rawName: string): string | null {
   return null;
 }
 
+/**
+ * Short pack folder ids keep Windows paths under MAX_PATH when nested under
+ * `.ai-pilot/local-dev/.../design-spec/...` (Chromium createWritable uses a
+ * swap suffix that can push long title-slugs over 260 chars).
+ */
+function packIdFromFeatureId(featureId: string): string {
+  const match = featureId.match(/FEAT-(\d+)/i);
+  if (match) return `feat-${match[1]}`;
+  return sanitizeSlug(featureId).slice(0, 24) || 'feature';
+}
+
+function packIdFromWorkItemId(workItemId: number): string {
+  return `wi-${workItemId}`;
+}
+
 function packRoot(slug: string): string {
   return `.ai-pilot/local-dev/${slug}`;
 }
+
+/** Fixed short names inside a local-dev pack (no title slug repeated). */
+const PACK_FILES = {
+  prd: 'prd.md',
+  backlog: 'backlog.json',
+  testCases: 'test-cases.json',
+  workItem: 'work-item.md',
+  designSpecDir: 'design-spec',
+  design: 'design.md',
+  techSpec: 'tech-spec.md',
+  assumptions: 'assumptions.md',
+  prototype: 'prototype.html',
+} as const;
 
 function buildReadme(slug: string, title: string): string {
   return `# Local Development Context — ${title}
@@ -109,7 +137,7 @@ function buildPrompt(args: {
       `- **Artifact root:** \`.ai-pilot/local-dev/${slug}/\` (not \`.ai-pilot/output/\`)`,
       `- **Git:** local Cursor session — do NOT run \`git commit\` or \`git push\` unless explicitly asked.`,
       `- **E2E tests:** author required Playwright specs where acceptance criteria require them; defer *execution* only when a Playwright environment is unavailable.`,
-      `- **Assumption gate:** stop and resolve any ⚠ unresolved items in \`assumptions.md\` that affect behavior, security, or scope before writing code.`,
+      `- **Assumption gate:** stop and resolve any ⚠ unresolved items in \`design-spec/assumptions.md\` that affect behavior, security, or scope before writing code.`,
       `- **Naming:** verify all file/key names against the live repository before implementing.`,
       `- **Stubs:** thin permission-gated route stubs are acceptable for routes that downstream features will replace.`,
       `- **Protected files** (require explicit permission): \`src/server/index.ts\`, \`package.json\`, \`tsconfig*.json\`, \`vite.config.ts\`, \`jest.config.*\`, any CI/CD files.`,
@@ -134,8 +162,9 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
     throw Object.assign(new Error('PRD not found'), { status: 404 });
   }
 
-  const slug = sanitizeSlug(prdRow.title);
+  const slug = packIdFromFeatureId(featureId);
   const root = packRoot(slug);
+  const specDir = `${root}/${PACK_FILES.designSpecDir}`;
   const files: LocalDevContextFile[] = [];
   const filePaths: string[] = [];
   let prototypePath: string | undefined;
@@ -147,17 +176,17 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
   };
 
   if (prdRow.content) {
-    push(`${root}/${slug}.prd.md`, prdRow.content);
+    push(`${root}/${PACK_FILES.prd}`, prdRow.content);
   }
   if (prdRow.backlogJson) {
-    push(`${root}/${slug}.backlog.json`, JSON.stringify(prdRow.backlogJson, null, 2));
+    push(`${root}/${PACK_FILES.backlog}`, JSON.stringify(prdRow.backlogJson, null, 2));
   }
 
   const testCaseRow = await db.query.testCases.findFirst({
     where: eq(testCases.prdId, prdId),
   });
   if (testCaseRow?.testCasesJson) {
-    push(`${root}/${slug}.test-cases.json`, JSON.stringify(testCaseRow.testCasesJson, null, 2));
+    push(`${root}/${PACK_FILES.testCases}`, JSON.stringify(testCaseRow.testCasesJson, null, 2));
   }
 
   const featureIndex = resolveFeatureIndex(prdRow.backlogJson, featureId);
@@ -168,17 +197,15 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
 
     if (docRow) {
       featureTitle = docRow.title || featureTitle;
-      const featureSlug = sanitizeSlug(docRow.title);
-      const specDir = `${root}/${slug}-design-spec`;
 
       if (docRow.designContent) {
-        push(`${specDir}/${featureSlug}-design.md`, docRow.designContent);
+        push(`${specDir}/${PACK_FILES.design}`, docRow.designContent);
       }
       if (docRow.techSpecContent) {
-        push(`${specDir}/${featureSlug}-tech-spec.md`, docRow.techSpecContent);
+        push(`${specDir}/${PACK_FILES.techSpec}`, docRow.techSpecContent);
       }
       if (docRow.assumptionsContent) {
-        push(`${specDir}/${featureSlug}-assumptions.md`, docRow.assumptionsContent);
+        push(`${specDir}/${PACK_FILES.assumptions}`, docRow.assumptionsContent);
       }
 
       let prototypeHtml: string | null = null;
@@ -198,7 +225,7 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
         prototypeHtml = fallback?.mockHtml ?? null;
       }
       if (prototypeHtml) {
-        prototypePath = `${specDir}/${featureSlug}-prototype.html`;
+        prototypePath = `${specDir}/${PACK_FILES.prototype}`;
         push(prototypePath, prototypeHtml);
       }
     }
@@ -264,8 +291,9 @@ async function buildAdoContext(
   );
   const design = normalizeAdoHtml((item.fields['Custom.Design'] as string | undefined) ?? '');
 
-  const slug = sanitizeSlug(title) || `work-item-${workItemId}`;
+  const slug = packIdFromWorkItemId(workItemId);
   const root = packRoot(slug);
+  const specDir = `${root}/${PACK_FILES.designSpecDir}`;
   const files: LocalDevContextFile[] = [];
   const filePaths: string[] = [];
   let prototypePath: string | undefined;
@@ -300,7 +328,7 @@ async function buildAdoContext(
     design || '_No design field._',
     ``,
   ].join('\n');
-  push(`${root}/work-item.md`, workItemMd);
+  push(`${root}/${PACK_FILES.workItem}`, workItemMd);
 
   // Walk to parent Feature for design-doc attachments when needed.
   let targetItem = item;
@@ -317,11 +345,6 @@ async function buildAdoContext(
       }
     }
   }
-
-  const featureTitle =
-    (targetItem.fields['System.Title'] as string | undefined) ?? title;
-  const featureSlug = sanitizeSlug(featureTitle) || slug;
-  const specDir = `${root}/${featureSlug}-design-spec`;
 
   const relations = targetItem.relations ?? [];
   const attachments = relations
@@ -341,7 +364,7 @@ async function buildAdoContext(
       if (content) {
         const path = `${specDir}/${att.canonicalName}`;
         push(path, content);
-        if (att.canonicalName === 'prototype.html') {
+        if (att.canonicalName === PACK_FILES.prototype) {
           prototypePath = path;
         }
       }
