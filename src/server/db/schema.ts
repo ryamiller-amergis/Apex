@@ -47,6 +47,12 @@ import type {
   ThresholdResult,
   ArtifactRef,
 } from '../../shared/types/loadTest';
+import type {
+  WalkthroughAnchorPlacement,
+  WalkthroughLifecycle,
+  WalkthroughProgressStatus,
+  WalkthroughTargetRuleType,
+} from '../../shared/types/walkthrough';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -1665,5 +1671,125 @@ export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
   loadTest: one(loadTests, {
     fields: [loadTestRuns.loadTestId],
     references: [loadTests.id],
+  }),
+}));
+
+// ── Walkthrough Tables (FEAT-001) ─────────────────────────────────────────────
+
+export const walkthroughs = pgTable('walkthroughs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  internalName: text('internal_name').notNull(),
+  userTitle: text('user_title').notNull(),
+  whyItMatters: text('why_it_matters').notNull().default(''),
+  lifecycle: text('lifecycle').$type<WalkthroughLifecycle>().notNull().default('draft'),
+  priority: integer('priority').notNull().default(0),
+  revision: integer('revision').notNull().default(1),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  lifecyclePriorityPublishedIdx: index('idx_walkthroughs_lifecycle_priority_published').on(
+    t.lifecycle,
+    t.priority,
+    t.publishedAt,
+  ),
+}));
+
+export const walkthroughSteps = pgTable('walkthrough_steps', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  ordinal: integer('ordinal').notNull(),
+  heading: text('heading').notNull(),
+  bodyMarkdown: text('body_markdown').notNull().default(''),
+  imageUrl: text('image_url'),
+  ctaLabel: text('cta_label'),
+  ctaRoute: text('cta_route'),
+  /** Flat nullable anchor columns — not a JSONB object (DoD-3). */
+  anchorKey: text('anchor_key'),
+  targetRoute: text('target_route'),
+  placement: text('placement').$type<WalkthroughAnchorPlacement>(),
+}, (t) => ({
+  ordinalUq: unique('uq_walkthrough_steps_ordinal').on(t.walkthroughId, t.ordinal),
+  walkthroughOrdinalIdx: index('idx_walkthrough_steps_walkthrough_ordinal').on(
+    t.walkthroughId,
+    t.ordinal,
+  ),
+}));
+
+export const walkthroughTargetingRules = pgTable('walkthrough_targeting_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  type: text('type').$type<WalkthroughTargetRuleType>().notNull(),
+  value: text('value').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  typeValueIdx: index('idx_walkthrough_targeting_rules_type_value').on(t.type, t.value),
+  walkthroughIdx: index('idx_walkthrough_targeting_rules_walkthrough').on(t.walkthroughId),
+}));
+
+export const walkthroughProgress = pgTable('walkthrough_progress', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  /** Persisted: seen | completed | dismissed only. acknowledged is derived. */
+  status: text('status').$type<WalkthroughProgressStatus>().notNull(),
+  lastStepId: uuid('last_step_id').references(() => walkthroughSteps.id, { onDelete: 'set null' }),
+  seenAt: timestamp('seen_at', { withTimezone: true, mode: 'string' }),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true, mode: 'string' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userRevisionUq: unique('uq_walkthrough_progress_user_revision').on(
+    t.walkthroughId,
+    t.userId,
+    t.revision,
+  ),
+  userWalkthroughRevisionIdx: index('idx_walkthrough_progress_user_walkthrough_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+  walkthroughRevisionIdx: index('idx_walkthrough_progress_walkthrough_revision').on(
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
+export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
+  steps: many(walkthroughSteps),
+  targetingRules: many(walkthroughTargetingRules),
+  progress: many(walkthroughProgress),
+}));
+
+export const walkthroughStepsRelations = relations(walkthroughSteps, ({ one, many }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughSteps.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  progressRows: many(walkthroughProgress),
+}));
+
+export const walkthroughTargetingRulesRelations = relations(walkthroughTargetingRules, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughTargetingRules.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+}));
+
+export const walkthroughProgressRelations = relations(walkthroughProgress, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughProgress.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughProgress.userId],
+    references: [appUsers.oid],
+  }),
+  lastStep: one(walkthroughSteps, {
+    fields: [walkthroughProgress.lastStepId],
+    references: [walkthroughSteps.id],
   }),
 }));

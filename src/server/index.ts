@@ -60,6 +60,7 @@ import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import profileRoutes from './routes/profile';
+import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
@@ -194,6 +195,7 @@ app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
+app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
 // Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 app.use('/api/admin', adminRouter);
