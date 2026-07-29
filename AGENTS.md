@@ -23,7 +23,7 @@ Apex is an internal product-building and project-management platform. It central
 | Calendar & Work Items | — | — | `azureDevOps.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx` |
 | Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
-| My Work (Dev Workbench) | — | — | — | `DevWorkbenchView.tsx`, `DevSessionView.tsx` |
+| My Work (Dev Workbench) | `design-docs/my-work-feature-context-viewer.md` | — | `devWorkbenchFeatureContextService.ts`, `localDevContextService.ts` | `DevWorkbenchView.tsx`, `DevSessionView.tsx`, `FeatureContextModal.tsx`, `StartLocalDevModal.tsx` |
 | Document Approvals | `design-docs/document-approver-assignments.md`, `design-docs/interview-section-owners.md` | — | `documentApprovalService.ts`, `ownerApprovalService.ts` | `ApproverSelectModal.tsx`, `SectionOwnerModal.tsx` |
 | Review Comments | — | — | `reviewCommentService.ts` | `ReviewCommentSidebar.tsx`, `AnnotationLayer.tsx` |
 | Changelog | — | `.cursor/skills/update-changelog/SKILL.md` | `appSettingsService.ts` | `Changelog.tsx`, `ChangelogBanner.tsx` |

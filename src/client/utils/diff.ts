@@ -309,6 +309,12 @@ export function computeDiffHunks(oldText: string, newText: string): DiffHunk[] {
 
     const oldTextHunk = oldLines.join('\n');
     const newTextHunk = newLines.join('\n');
+    // Extra blank lines are not reviewable content. LCS can align repeated
+    // Markdown separator lines in a way that leaves blank-only insert/delete
+    // runs as separate hunks, which otherwise appear as empty wizard steps.
+    if (!oldTextHunk.trim() && !newTextHunk.trim()) {
+      continue;
+    }
     hunks.push({
       id: hashHunkId([String(oldStart), String(oldLines.length), oldTextHunk, newTextHunk]),
       oldStart,

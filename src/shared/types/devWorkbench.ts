@@ -230,3 +230,62 @@ export interface ActiveDevSession {
   prdId?: string | null;
   featureId?: string | null;
 }
+
+/** Normalized PBI/TBI child of a single Apex feature for the context viewer. */
+export interface ApexFeatureContextBacklogItem {
+  id: string;
+  type: string;
+  title: string;
+  status?: string;
+  priority?: string;
+  description?: string;
+  acceptanceCriteria?: string[];
+  definitionOfDone?: string[];
+  dependencies?: string[];
+}
+
+/** Design document artifacts for one feature (null fields mean empty section, not missing doc). */
+export interface ApexFeatureContextDocument {
+  id: string;
+  title: string;
+  status: string;
+  designContent: string;
+  techSpecContent: string;
+  assumptionsContent: string;
+}
+
+/** One sanitized prototype history entry. */
+export interface ApexFeatureContextPrototypeHistoryEntry {
+  version: number;
+  html: string;
+  feedback?: string;
+  createdAt: string;
+}
+
+/** Sanitized design prototype for the context viewer. */
+export interface ApexFeatureContextPrototype {
+  id: string;
+  featureName: string;
+  status: string;
+  mockHtml: string;
+  mockVersion: number;
+  history: ApexFeatureContextPrototypeHistoryEntry[];
+}
+
+/**
+ * Lazy-loaded feature reference context for My Work “View Context”.
+ * `designDocument` / `prototype` are null when not generated; empty strings/arrays
+ * mean the artifact exists but has no content.
+ */
+export interface ApexFeatureContextResponse {
+  prdId: string;
+  prdTitle: string;
+  prdContent: string;
+  epicTitle: string;
+  featureId: string;
+  featureTitle: string;
+  featurePriority: string;
+  backlogItems: ApexFeatureContextBacklogItem[];
+  designDocument: ApexFeatureContextDocument | null;
+  prototype: ApexFeatureContextPrototype | null;
+}

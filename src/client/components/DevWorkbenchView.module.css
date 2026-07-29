@@ -118,9 +118,11 @@
 
 .item-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .active-badge {
@@ -523,6 +525,25 @@
   border-color: var(--accent-color);
   color: var(--accent-color);
   background: var(--bg-secondary);
+}
+
+.view-context-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.view-context-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: var(--bg-primary);
 }
 
 .completed-label {

@@ -102,10 +102,12 @@ import {
   markAsInterviewThread,
   buildMcpServers,
   buildDocumentAssistantEditGuidance,
+  buildAgentRecoveryContext,
   isDocumentAssistant,
+  resumeOrCreateAgent,
   resolveDocumentAssistantType,
 } from '../services/chatAgentService';
-import type { ChatThreadKickoff } from '../../shared/types/chat';
+import type { ChatMessage, ChatThreadKickoff } from '../../shared/types/chat';
 
 const {
   deleteThread: mockPgDeleteThread,
@@ -116,6 +118,97 @@ const {
 };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+
+function chatMessage(
+  id: string,
+  role: ChatMessage['role'],
+  text: string,
+  overrides: Partial<ChatMessage> = {},
+): ChatMessage {
+  return {
+    id,
+    role,
+    text,
+    ts: `2026-07-28T00:00:0${id.length}.000Z`,
+    ...overrides,
+  };
+}
+
+describe('replacement agent recovery', () => {
+  it('builds history from visible user and agent messages only', () => {
+    const recovery = buildAgentRecoveryContext([
+      chatMessage('1', 'user', 'We need guided feature walkthroughs.'),
+      chatMessage('2', 'tool', '→ search_repo_code', { toolName: 'search_repo_code' }),
+      chatMessage('3', 'agent', 'Internal planning snapshot', { toolName: '_reasoning' }),
+      chatMessage('4', 'user', 'Begin.', { hidden: true }),
+      chatMessage('5', 'agent', 'Should walkthroughs remain separate from What’s New?'),
+    ]);
+
+    expect(recovery).not.toBeNull();
+    expect(recovery?.totalMessageCount).toBe(2);
+    expect(recovery?.truncated).toBe(false);
+    expect(recovery?.content).toContain('We need guided feature walkthroughs.');
+    expect(recovery?.content).toContain('Should walkthroughs remain separate from What’s New?');
+    expect(recovery?.content).not.toContain('search_repo_code');
+    expect(recovery?.content).not.toContain('Internal planning snapshot');
+    expect(recovery?.content).not.toContain('Begin.');
+  });
+
+  it('returns no recovery context when only execution noise exists', () => {
+    expect(buildAgentRecoveryContext([
+      chatMessage('1', 'tool', '→ shell', { toolName: 'shell' }),
+      chatMessage('2', 'agent', 'Analyzing', { toolName: '_reasoning' }),
+      chatMessage('3', 'user', 'Begin.', { hidden: true }),
+    ])).toBeNull();
+  });
+
+  it('bounds oversized history while preserving the beginning and latest turn', () => {
+    const recovery = buildAgentRecoveryContext([
+      chatMessage('1', 'user', `BEGINNING_DECISION ${'a'.repeat(700)}`),
+      chatMessage('2', 'agent', `MIDDLE_HISTORY ${'b'.repeat(2_000)}`),
+      chatMessage('3', 'user', `LATEST_TURN ${'c'.repeat(500)}`),
+    ], 1_200);
+
+    expect(recovery?.truncated).toBe(true);
+    expect(recovery?.content).toContain('BEGINNING_DECISION');
+    expect(recovery?.content).toContain('LATEST_TURN');
+    expect(recovery?.content).toContain('middle messages omitted');
+  });
+
+  it('creates a replacement agent when resume fails', async () => {
+    const resumeError = new Error('agent session no longer exists');
+    const resume = jest.fn().mockRejectedValue(resumeError);
+    const create = jest.fn().mockResolvedValue({ agentId: 'replacement-agent' });
+
+    const result = await resumeOrCreateAgent({
+      cursorAgentId: 'disposed-agent',
+      resume,
+      create,
+    });
+
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      agent: { agentId: 'replacement-agent' },
+      mode: 'recreated',
+      resumeError,
+    });
+  });
+
+  it('does not create a replacement when resume succeeds', async () => {
+    const resume = jest.fn().mockResolvedValue({ agentId: 'resumed-agent' });
+    const create = jest.fn();
+
+    const result = await resumeOrCreateAgent({
+      cursorAgentId: 'existing-agent',
+      resume,
+      create,
+    });
+
+    expect(result.mode).toBe('resumed');
+    expect(create).not.toHaveBeenCalled();
+  });
+});
 
 // ── closeThread — thread retention ────────────────────────────────────────────
 

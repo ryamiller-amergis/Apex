@@ -79,6 +79,8 @@ export class PrdReviewPage {
 
   async clickApproveOwner(): Promise<void> {
     await this.approveOwnerButton().click();
+    // Owner approve is async; wait until the control leaves the pending_review chrome.
+    await this.approveOwnerButton().waitFor({ state: 'hidden', timeout: 15_000 });
   }
 
   async clickApproveQa(): Promise<void> {

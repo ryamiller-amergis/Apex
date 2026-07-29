@@ -3,7 +3,7 @@
  *
  * Used by the setup project (fresh session → storageState) and by fixtures when
  * a saved connect.sid is present but the server session is gone/empty
- * (FileStore miss after deploy recycle / concurrent write race).
+ * after a deployment, expiry, or backend reset.
  */
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
@@ -146,7 +146,7 @@ export async function assertStorageStateAuthenticates(browser: Browser): Promise
       throw new Error(
         '[E2E SSO] storageState was written but a fresh context gets ' +
           '/auth/status → authenticated:false (server session missing/empty). ' +
-          'Likely session-file-store race or instance recycle on the target env.',
+          'Likely session expiry, backend reset, or instance recycle on the target env.',
       );
     }
   } finally {

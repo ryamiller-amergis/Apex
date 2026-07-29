@@ -394,6 +394,12 @@ variable "lt_acr_push_principal_ids" {
   default     = []
 }
 
+variable "lt_enable_staging_slot_rbac" {
+  description = "Grant the staging slot identity permission to send load-test jobs and read load-test artifacts. Disable where the Terraform principal cannot manage role assignments or staging load tests are not required."
+  type        = bool
+  default     = true
+}
+
 variable "lt_runner_image" {
   description = "Fully-qualified runner image reference including digest for supply-chain pinning (e.g. <acr>.azurecr.io/apex-lt-k6:<tag>@sha256:<digest>). Placeholder until CI publishes the first image; job image updates from CI are ignored by Terraform lifecycle."
   type        = string

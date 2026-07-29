@@ -18,6 +18,9 @@ async function seedReviewablePrd(
     prdOwnerId: PERSONA_OIDS.ba,
     prdApproverIds: [PERSONA_OIDS.qa],
     testCaseApproverIds: [PERSONA_OIDS.qa],
+    // Keep the approval-state assertions on the PRD page. With the prototype
+    // stage on, owner approve navigates to /backlog/design-plan/:id.
+    prototypeStageEnabled: false,
   });
 
   const prd = await SeedApi.seedPrd(e2eApi, {
@@ -136,7 +139,7 @@ test.describe('Interview flow — PRD review @interview-flow @pipeline', () => {
     await prdPage.goto(prd.id);
     await expect(prdPage.approveOwnerButton()).toBeVisible({ timeout: 10_000 });
     await prdPage.clickApproveOwner();
-    await expect(prdPage.statusBadge()).toContainText(/approved/i, { timeout: 15_000 });
+    await expect(prdPage.statusBadge()).toContainText(/^approved$/i, { timeout: 15_000 });
   });
 
   test('owner reject → revision_requested', async ({ page, loginAsPersona, e2eApi }) => {

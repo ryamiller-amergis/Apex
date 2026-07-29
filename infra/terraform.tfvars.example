@@ -101,6 +101,9 @@ pdf_blob_container_name = "pdf-artifacts"
 # lt_acr_name = null                     # derives acrapexlt{environment}
 # Grant GitHub Actions deploy SP AcrPush (object ID):
 # lt_acr_push_principal_ids = ["00000000-0000-0000-0000-000000000000"]
+# Disable if the apply principal cannot manage staging-slot RBAC or staging
+# load-test dispatch is not required:
+# lt_enable_staging_slot_rbac = false
 
 # VNet subnet for runner egress to non-prod targets (A-007).
 # Required before load tests can reach VNet-peered allowlisted hosts.

@@ -124,6 +124,7 @@ resource "azurerm_linux_web_app" "main" {
     app_setting_names = [
       "AZURE_REDIRECT_URL",
       "APPLICATIONINSIGHTS_CONNECTION_STRING",
+      "LT_APEX_CALLBACK_BASE_URL",
     ]
   }
 

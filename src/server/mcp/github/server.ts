@@ -90,7 +90,10 @@ export function createGitHubMcpServer(): McpServer {
         );
         return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }] };
+        return {
+          content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
+          isError: true,
+        };
       }
     },
   );

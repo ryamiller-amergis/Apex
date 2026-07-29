@@ -74,7 +74,7 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
   );
   const inFlightToolMaxMs = Math.max(
     progressAbortMs,
-    positiveDuration(process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS, 15 * 60_000),
+    positiveDuration(process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS, 6 * 60_000),
   );
   return {
     heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
