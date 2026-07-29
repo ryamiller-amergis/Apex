@@ -165,6 +165,21 @@ export const appUsers = pgTable('app_users', {
   dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
 });
 
+/**
+ * One-to-one personal profile content keyed by Azure AD object ID.
+ * Optional bio and avatar metadata live here — not on app_users (RBAC identity cache).
+ */
+export const userProfiles = pgTable('user_profiles', {
+  userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  bio: text('bio'),
+  avatarBlobKey: text('avatar_blob_key'),
+  avatarUpdatedAt: timestamp('avatar_updated_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userOidIdx: index('idx_user_profiles_user_oid').on(t.userOid),
+}));
+
 export const appRoles = pgTable('app_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').unique().notNull(),
@@ -210,13 +225,24 @@ export const appUserProjectRoles = pgTable('app_user_project_roles', {
 
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
-export const appUsersRelations = relations(appUsers, ({ many }) => ({
+export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   userRoles: many(appUserRoles),
   projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
   featureRequests: many(featureRequests),
+  profile: one(userProfiles, {
+    fields: [appUsers.oid],
+    references: [userProfiles.userOid],
+  }),
+}));
+
+export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [userProfiles.userOid],
+    references: [appUsers.oid],
+  }),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -1255,7 +1281,7 @@ export const featureRequestAdrs = pgTable('feature_request_adrs', {
   featureRequestId: uuid('feature_request_id').notNull()
     .references(() => featureRequests.id, { onDelete: 'cascade' }),
   adrId: uuid('adr_id').notNull()
-    .references(() => adrs.id, { onDelete: 'restrict' }),
+    .references(() => adrs.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.featureRequestId, t.adrId] }),

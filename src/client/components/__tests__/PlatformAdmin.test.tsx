@@ -24,6 +24,14 @@ import {
   useRemoveFlagRule,
   useUpdateFeatureFlag,
 } from '../../hooks/usePlatformAdminFeatureFlags';
+import type {
+  PendingProjectAssignment,
+  PlatformAdminAccessRequest,
+} from '../../../shared/types/platformAdmin';
+
+jest.mock('../UserMenu', () => ({
+  UserMenu: () => <div data-testid="user-menu" />,
+}));
 
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useApproveProjectAccessRequest: jest.fn(),
@@ -72,8 +80,8 @@ const mockUseFlagAudit = useFlagAudit as jest.Mock;
 
 function setupPlatformAdmin(
   projects = [{ id: 'project-1', name: 'MaxView', description: 'Delivery planning' }],
-  accessRequests: any[] = [],
-  pendingAssignmentsByProject: Record<string, any[]> = {},
+  accessRequests: PlatformAdminAccessRequest[] = [],
+  pendingAssignmentsByProject: Record<string, PendingProjectAssignment[]> = {},
 ) {
   const saveAssignments = jest.fn().mockResolvedValue(undefined);
   const approveRequest = jest.fn().mockResolvedValue(undefined);

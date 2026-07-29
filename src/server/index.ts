@@ -64,6 +64,7 @@ import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
+import profileRoutes from './routes/profile';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
@@ -222,6 +223,7 @@ app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
+app.use('/api/profile', ensureAuthenticated, profileRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);

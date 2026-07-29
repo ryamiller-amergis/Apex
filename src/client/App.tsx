@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -6,7 +6,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
 import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
-import { ChangelogBanner } from './components/ChangelogBanner';
+import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
@@ -62,6 +62,7 @@ const AdminNotifications = lazy(() => import('./components/AdminNotifications').
 const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
+const ProfilePage = lazy(() => import('./components/ProfilePage').then(m => ({ default: m.ProfilePage })));
 const DevWorkbenchView = lazy(() => import('./components/DevWorkbenchView').then(m => ({ default: m.DevWorkbenchView })));
 const DevSessionView = lazy(() => import('./components/DevSessionView').then(m => ({ default: m.DevSessionView })));
 const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'));
@@ -137,7 +138,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -157,6 +158,8 @@ function App() {
                     ? 'adr'
                   : location.pathname === '/notifications'
                     ? 'notifications'
+                    : location.pathname === '/profile'
+                    ? 'profile'
                     : location.pathname.startsWith('/admin')
                     ? 'admin'
                     : location.pathname.startsWith('/my-work')
@@ -187,11 +190,10 @@ function App() {
 
   // Close the slide-out panel when landing on the home view — the full-page
   // AgentHome already provides the complete chat experience there.
-  useEffect(() => {
-    if (currentView === 'home') {
-      setChatOpen(false);
-    }
-  }, [currentView]);
+  // Adjust during render (same pattern as AppHeader) to avoid set-state-in-effect.
+  if (currentView === 'home' && chatOpen) {
+    setChatOpen(false);
+  }
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -220,7 +222,11 @@ function App() {
     hasUnreadChangelog,
     showChangelogOnLogin,
     handleMarkChangelogAsRead,
+    handleDismissWhatsNewBanner,
     handleToggleShowChangelogOnLogin,
+    whatsNewLastSeenVersion,
+    whatsNewManualUnavailable,
+    whatsNewCurrentVersion,
     handleLogout,
     selectedProject,
     selectedAreaPath,
@@ -338,9 +344,13 @@ function App() {
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
-  const panelRepo = activeSkillConfig
-    ? { name: activeSkillConfig.skillRepo, defaultBranch: activeSkillConfig.skillBranch }
-    : (skillRepos.find((repo) => repo.name.toLowerCase() === selectedProject.toLowerCase()) ?? skillRepos[0]);
+  const panelRepo = useMemo(
+    () =>
+      activeSkillConfig
+        ? { name: activeSkillConfig.skillRepo, defaultBranch: activeSkillConfig.skillBranch }
+        : (skillRepos.find((repo) => repo.name.toLowerCase() === selectedProject.toLowerCase()) ?? skillRepos[0]),
+    [activeSkillConfig, skillRepos, selectedProject],
+  );
 
   const handleStartPanelChat = useCallback(async () => {
     if (!can('chat:view')) return;
@@ -362,7 +372,7 @@ function App() {
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
@@ -428,8 +438,9 @@ function App() {
           showChangelogOnLogin={showChangelogOnLogin}
           showChangelog={showChangelog}
           onSetShowChangelog={setShowChangelog}
-          onMarkChangelogAsRead={handleMarkChangelogAsRead}
+          onMarkChangelogAsRead={handleDismissWhatsNewBanner}
           onToggleShowChangelogOnLogin={handleToggleShowChangelogOnLogin}
+          whatsNewCurrentVersion={whatsNewCurrentVersion}
           user={authenticatedUser}
           theme={theme}
           onThemeChange={setThemeMode}
@@ -441,6 +452,8 @@ function App() {
           onMarkAsRead={handleMarkChangelogAsRead}
           showOnLogin={showChangelogOnLogin}
           onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+          lastSeenVersion={whatsNewLastSeenVersion}
+          manualUnavailable={whatsNewManualUnavailable}
         />
       </ErrorBoundary>
     );
@@ -548,11 +561,12 @@ function App() {
             onLogout={handleLogout}
             onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
           />
-          {hasUnreadChangelog && showChangelogOnLogin && (
+          {hasUnreadChangelog && (
             <div className="changelog-banner-row">
-              <ChangelogBanner
+              <WhatsNewBanner
+                currentVersion={whatsNewCurrentVersion}
                 onOpenChangelog={() => setShowChangelog(true)}
-                onMarkAsRead={handleMarkChangelogAsRead}
+                onMarkAsRead={handleDismissWhatsNewBanner}
                 onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
               />
             </div>
@@ -676,6 +690,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <NotificationsPage />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'profile' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ProfilePage theme={theme} onThemeChange={setThemeMode} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'admin' && can('admin:roles') ? (
@@ -934,6 +954,8 @@ function App() {
           onMarkAsRead={handleMarkChangelogAsRead}
           showOnLogin={showChangelogOnLogin}
           onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+          lastSeenVersion={whatsNewLastSeenVersion}
+          manualUnavailable={whatsNewManualUnavailable}
         />
         {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
           <BetaAnnouncementModal

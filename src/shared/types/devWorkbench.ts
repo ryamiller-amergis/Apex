@@ -113,11 +113,18 @@ export interface BacklogFeatureItem {
   itemCount: number;
   pbiCount: number;
   tbiCount: number;
+  /**
+   * When this feature entered My Work as Ready (PRD reviewed/approved time).
+   * Used as the Ready status timestamp until Start Local / Start Development / Mark Complete.
+   */
+  readyAt?: string | null;
 }
 
 export interface ApexBacklogGroup {
   prdId: string;
   prdTitle: string;
+  /** When the PRD entered My Work (reviewedAt, else updatedAt). */
+  readyAt?: string | null;
   epics: {
     epicTitle: string;
     features: BacklogFeatureItem[];
@@ -219,6 +226,7 @@ export interface ActiveDevSession {
   status: DevSessionStatus;
   prUrl: string | null;
   createdAt: string;
+  updatedAt?: string | null;
   prdId?: string | null;
   featureId?: string | null;
 }
