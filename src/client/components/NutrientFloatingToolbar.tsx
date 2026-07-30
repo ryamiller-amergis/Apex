@@ -1,7 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { GripVertical, Minus, Plus, House, RotateCw, RotateCcw } from 'lucide-react';
 import type { WorkbenchTool } from '../hooks/useNutrientWorkbench';
 import styles from './NutrientFloatingToolbar.module.css';
+
+/** Tools that show actionable subtype controls — always expand the bar for these. */
+const TOOLS_WITH_SUBTYPES: ReadonlySet<Exclude<WorkbenchTool, null>> = new Set([
+  'text-edit',
+  'highlight',
+  'draw',
+  'pages',
+]);
 
 // ── Sub-option definitions ────────────────────────────────────────────────────
 
@@ -111,11 +120,15 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
 }) => {
   const saved = loadSavedPosition();
   const def = defaultPosition();
+  // Clamp immediately — a prior session can leave the bar off-screen.
+  const initialPos = clampToViewport(
+    saved?.x ?? def.x,
+    saved?.y ?? def.y,
+    400,
+    56
+  );
 
-  const [position, setPosition] = useState<{ x: number; y: number }>({
-    x: saved?.x ?? def.x,
-    y: saved?.y ?? def.y,
-  });
+  const [position, setPosition] = useState<{ x: number; y: number }>(initialPos);
   const [minimized, setMinimized] = useState<boolean>(
     saved?.minimized ?? false
   );
@@ -135,9 +148,18 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
         return clampToViewport(prev.x, prev.y, width, height);
       });
     };
+    // Re-clamp after first paint with real bar dimensions.
+    onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Selecting Highlight / Draw / etc. must show the subtype controls.
+  useEffect(() => {
+    if (activeTool !== null && TOOLS_WITH_SUBTYPES.has(activeTool)) {
+      setMinimized(false);
+    }
+  }, [activeTool]);
 
   useEffect(() => {
     savePosition({ ...position, minimized });
@@ -303,7 +325,8 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
     ? {}
     : { position: 'fixed', left: position.x, top: position.y };
 
-  return (
+  // Portal to body so Nutrient's viewer stacking/overflow cannot hide the bar.
+  const bar = (
     <div
       ref={barRef}
       className={`${styles.bar} ${narrowScreen ? styles.docked : styles.floating} ${minimized ? styles.minimized : ''}`}
@@ -399,4 +422,6 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
       )}
     </div>
   );
+
+  return createPortal(bar, document.body);
 };

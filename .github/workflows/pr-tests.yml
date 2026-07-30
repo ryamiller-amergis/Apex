@@ -245,6 +245,7 @@ jobs:
       - name: Build application
         env:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
+          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
         run: npm run build
 
       - name: Detect migration changes

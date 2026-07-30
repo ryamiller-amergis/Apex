@@ -37,30 +37,35 @@ jest.mock('../../config/env', () => ({
   },
 }));
 
-jest.mock('@nutrient-sdk/viewer', () => ({
-  __esModule: true,
-  default: {
-    defaultToolbarItems: [{ type: 'pager' }],
-    InteractionMode: {
-      PAN: 'PAN',
-      CONTENT_EDITOR: 'CONTENT_EDITOR',
-      TEXT_HIGHLIGHTER: 'TEXT_HIGHLIGHTER',
-      INK: 'INK',
-      TEXT: 'TEXT',
-      COMMENT_MARKER: 'COMMENT_MARKER',
-      FORM_CREATOR: 'FORM_CREATOR',
-      INK_SIGNATURE: 'INK_SIGNATURE',
-      SEARCH: 'SEARCH',
-    },
-    ZoomMode: { FIT_TO_WIDTH: 'FIT_TO_WIDTH' },
-    EventName: {
-      VIEW_STATE_CURRENT_PAGE_INDEX_CHANGE: 'viewState.currentPageIndex.change',
-      VIEW_STATE_CHANGE: 'viewState.change',
-    },
-    load: (...args: unknown[]) => mockLoad(...args),
-    unload: (...args: unknown[]) => mockUnload(...args),
-    preloadWorker: (...args: unknown[]) => mockPreloadWorker(...args),
+const mockSdk = {
+  InteractionMode: {
+    PAN: 'PAN',
+    CONTENT_EDITOR: 'CONTENT_EDITOR',
+    TEXT_HIGHLIGHTER: 'TEXT_HIGHLIGHTER',
+    INK: 'INK',
+    TEXT: 'TEXT',
+    NOTE: 'NOTE',
+    COMMENT_MARKER: 'COMMENT_MARKER',
+    FORM_CREATOR: 'FORM_CREATOR',
+    INK_SIGNATURE: 'INK_SIGNATURE',
+    DOCUMENT_EDITOR: 'DOCUMENT_EDITOR',
+    SEARCH: 'SEARCH',
   },
+  Color: { fromHex: (hex: string) => ({ hex }) },
+  ZoomMode: { FIT_TO_WIDTH: 'FIT_TO_WIDTH' },
+  EventName: {
+    VIEW_STATE_CURRENT_PAGE_INDEX_CHANGE: 'viewState.currentPageIndex.change',
+    VIEW_STATE_CHANGE: 'viewState.change',
+  },
+  Immutable: { List: (arr: number[]) => arr },
+  load: (...args: unknown[]) => mockLoad(...args),
+  unload: (...args: unknown[]) => mockUnload(...args),
+  preloadWorker: (...args: unknown[]) => mockPreloadWorker(...args),
+};
+
+jest.mock('../../lib/nutrientViewer', () => ({
+  getNutrientViewer: jest.fn(async () => mockSdk),
+  getNutrientViewerSync: jest.fn(() => mockSdk),
 }));
 
 import { NutrientWebSdkPoc } from '../NutrientWebSdkPoc';
@@ -70,6 +75,10 @@ function makeInstance() {
     viewState: { currentPageIndex: 0 },
     totalPageCount: 2,
     setViewState: mockSetViewState,
+    setAnnotationPresets: jest.fn((updater: (p: Record<string, unknown>) => unknown) =>
+      updater({ 'text-highlighter': {}, ink: {} })
+    ),
+    setCurrentAnnotationPreset: jest.fn(),
     saveContentEditingSession: mockSaveContentEditingSession,
     discardContentEditingSession: mockDiscardContentEditingSession,
     exportPDF: mockExportPDF,

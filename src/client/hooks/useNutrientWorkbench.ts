@@ -7,10 +7,17 @@
  * Page-structure operations (rotate, merge, reorder) use Nutrient's native
  * applyOperations API now that the Document Editing add-on is licensed.
  * Multi-file open still pre-merges with pdf-lib before the initial load.
+ *
+ * The SDK itself is loaded via CDN UMD script (see lib/nutrientViewer.ts) —
+ * Vite cannot ESM-import the published UMD entry reliably.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import NutrientViewer from '@nutrient-sdk/viewer';
 import { PDFDocument } from 'pdf-lib';
+import {
+  getNutrientViewer,
+  getNutrientViewerSync,
+  type NutrientViewerModule,
+} from '../lib/nutrientViewer';
 
 /** Each tool the Apex rail can activate. */
 export type WorkbenchTool =
@@ -100,22 +107,28 @@ function downloadBuffer(
 }
 
 /** Safely get Immutable.List from the Nutrient bundle. */
-function immutableList(arr: number[]): unknown {
+function immutableList(sdk: NutrientViewerModule, arr: number[]): unknown {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (NutrientViewer.Immutable as any).List(arr);
+  return (sdk.Immutable as any).List(arr);
 }
 
-const INTERACTION_MODES: Record<Exclude<WorkbenchTool, null>, string> = {
+/** null = Nutrient default interaction (required for filling existing AcroForm fields). */
+const INTERACTION_MODES: Record<Exclude<WorkbenchTool, null>, string | null> = {
   pan: 'PAN',
   'text-edit': 'CONTENT_EDITOR',
   highlight: 'TEXT_HIGHLIGHTER',
   draw: 'INK',
   'add-text': 'TEXT',
   comment: 'NOTE',
-  'fill-form': 'FORM_CREATOR',
+  'fill-form': null,
   sign: 'INK_SIGNATURE',
   pages: 'DOCUMENT_EDITOR',
 };
+
+/** Matches NutrientFloatingToolbar yellow swatch — applied when Highlight is activated. */
+const DEFAULT_HIGHLIGHT_HEX = '#FFE066';
+/** Matches NutrientFloatingToolbar "Medium" ink width. */
+const DEFAULT_INK_WIDTH = 3;
 
 export function useNutrientWorkbench({
   licenseKey,
@@ -124,11 +137,15 @@ export function useNutrientWorkbench({
   state: WorkbenchState;
   actions: WorkbenchActions;
 } {
-  type NutrientInstance = Awaited<ReturnType<typeof NutrientViewer.load>>;
+  type NutrientInstance = Awaited<ReturnType<NutrientViewerModule['load']>>;
 
   const instanceRef = useRef<NutrientInstance | null>(null);
+  const sdkRef = useRef<NutrientViewerModule | null>(null);
   const workerPreloadedRef = useRef(false);
   const fileNameRef = useRef<string | null>(null);
+  // Keep latest container for unload — callback-ref containers are null on first render.
+  const containerRef = useRef<HTMLDivElement | null>(containerElement);
+  containerRef.current = containerElement;
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -147,22 +164,26 @@ export function useNutrientWorkbench({
 
   useEffect(() => {
     return () => {
-      if (containerElement) NutrientViewer.unload(containerElement);
+      const el = containerRef.current;
+      const sdk = sdkRef.current ?? getNutrientViewerSync();
+      if (el && sdk) sdk.unload(el);
       instanceRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const subscribeEvents = useCallback((instance: NutrientInstance) => {
+  const subscribeEvents = useCallback((
+    sdk: NutrientViewerModule,
+    instance: NutrientInstance
+  ) => {
     instance.addEventListener(
-      NutrientViewer.EventName.VIEW_STATE_CURRENT_PAGE_INDEX_CHANGE,
+      sdk.EventName.VIEW_STATE_CURRENT_PAGE_INDEX_CHANGE,
       () => {
         const page = instance.viewState.currentPageIndex;
         if (typeof page === 'number') setCurrentPage(page + 1);
       }
     );
     instance.addEventListener(
-      NutrientViewer.EventName.VIEW_STATE_CHANGE,
+      sdk.EventName.VIEW_STATE_CHANGE,
       () => {
         const dirty = instance.hasUnsavedContentEditingChanges?.() ?? false;
         setIsDirty(dirty);
@@ -181,19 +202,22 @@ export function useNutrientWorkbench({
       setActiveTool(null);
       setIsDirty(false);
       try {
+        const sdk = await getNutrientViewer();
+        sdkRef.current = sdk;
+
         const config = {
           document: docBytes,
           useCDN: true as const,
           ...(licenseKey ? { licenseKey } : {}),
         };
         if (!workerPreloadedRef.current) {
-          await NutrientViewer.preloadWorker(config);
+          await sdk.preloadWorker(config);
           workerPreloadedRef.current = true;
         }
-        NutrientViewer.unload(containerElement);
+        sdk.unload(containerElement);
         instanceRef.current = null;
 
-        const instance = await NutrientViewer.load({
+        const instance = await sdk.load({
           container: containerElement,
           ...config,
           enableHistory: true,
@@ -215,7 +239,7 @@ export function useNutrientWorkbench({
         setCurrentPage(1);
         setIsLoaded(true);
         setStatus(`${name} loaded (${pages} page${pages === 1 ? '' : 's'}).`);
-        subscribeEvents(instance);
+        subscribeEvents(sdk, instance);
       } catch (cause) {
         setError(toErrorMessage(cause));
         setStatus('Loading failed.');
@@ -259,24 +283,57 @@ export function useNutrientWorkbench({
     [loadDocument, loadBytes]
   );
 
+  // ── Annotation presets (custom toolbar — must set current preset explicitly) ─
+
+  const applyHighlightColor = useCallback((
+    sdk: NutrientViewerModule,
+    instance: NutrientInstance,
+    hex: string
+  ): void => {
+    const color = sdk.Color.fromHex(hex);
+    instance.setAnnotationPresets((presets) => ({
+      ...presets,
+      'text-highlighter': { ...(presets['text-highlighter'] ?? {}), color },
+    }));
+    instance.setCurrentAnnotationPreset('text-highlighter');
+  }, []);
+
+  const applyInkStrokeWidth = useCallback((
+    instance: NutrientInstance,
+    width: number
+  ): void => {
+    instance.setAnnotationPresets((presets) => ({
+      ...presets,
+      ink: { ...(presets['ink'] ?? {}), lineWidth: width },
+    }));
+    instance.setCurrentAnnotationPreset('ink');
+  }, []);
+
   // ── Tool activation ───────────────────────────────────────────────────────
 
   const setTool = useCallback((tool: WorkbenchTool): void => {
     const instance = instanceRef.current;
-    if (!instance) return;
+    const sdk = sdkRef.current;
+    if (!instance || !sdk) return;
     setError(null);
     try {
       const modeKey = tool ? INTERACTION_MODES[tool] : null;
       const modeValue = modeKey
-        ? (NutrientViewer.InteractionMode as unknown as Record<string, string>)[modeKey] ?? null
+        ? (sdk.InteractionMode as unknown as Record<string, string>)[modeKey] ?? null
         : null;
+      // Vendor toolbar is hidden — activate the matching preset before the mode.
+      if (tool === 'highlight') {
+        applyHighlightColor(sdk, instance, DEFAULT_HIGHLIGHT_HEX);
+      } else if (tool === 'draw') {
+        applyInkStrokeWidth(instance, DEFAULT_INK_WIDTH);
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       instance.setViewState((vs) => vs.set('interactionMode', modeValue as any));
       setActiveTool(tool);
     } catch (cause) {
       setError(toErrorMessage(cause));
     }
-  }, []);
+  }, [applyHighlightColor, applyInkStrokeWidth]);
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -301,12 +358,20 @@ export function useNutrientWorkbench({
   }, []);
 
   const fitPage = useCallback((): void => {
+    const sdk = sdkRef.current;
+    if (!sdk) return;
     instanceRef.current?.setViewState((vs) =>
-      vs.set('zoom', NutrientViewer.ZoomMode.FIT_TO_WIDTH)
+      vs.set('zoom', sdk.ZoomMode.FIT_TO_WIDTH)
     );
   }, []);
 
   // ── Content editing ───────────────────────────────────────────────────────
+
+  const exitContentEditor = useCallback((instance: NutrientInstance): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instance.setViewState((vs) => vs.set('interactionMode', null as any));
+    setActiveTool(null);
+  }, []);
 
   const saveContentEdits = useCallback(async (): Promise<void> => {
     const instance = instanceRef.current;
@@ -314,13 +379,13 @@ export function useNutrientWorkbench({
     setError(null);
     try {
       await instance.saveContentEditingSession();
-      setActiveTool(null);
+      exitContentEditor(instance);
       setIsDirty(false);
       setStatus('Content edits saved.');
     } catch (cause) {
       setError(toErrorMessage(cause));
     }
-  }, []);
+  }, [exitContentEditor]);
 
   const discardContentEdits = useCallback(async (): Promise<void> => {
     const instance = instanceRef.current;
@@ -328,13 +393,13 @@ export function useNutrientWorkbench({
     setError(null);
     try {
       await instance.discardContentEditingSession();
-      setActiveTool(null);
+      exitContentEditor(instance);
       setIsDirty(false);
       setStatus('Content edits discarded.');
     } catch (cause) {
       setError(toErrorMessage(cause));
     }
-  }, []);
+  }, [exitContentEditor]);
 
   // ── Export ────────────────────────────────────────────────────────────────
 
@@ -386,53 +451,49 @@ export function useNutrientWorkbench({
 
   const openSearch = useCallback((): void => {
     const instance = instanceRef.current;
-    if (!instance) return;
+    const sdk = sdkRef.current;
+    if (!instance || !sdk) return;
     instance.setViewState((vs) =>
-      vs.set('interactionMode', NutrientViewer.InteractionMode.SEARCH)
+      vs.set('interactionMode', sdk.InteractionMode.SEARCH)
     );
   }, []);
 
-  // ── Annotation presets ────────────────────────────────────────────────────
+  // ── Annotation presets (toolbar swatches) ─────────────────────────────────
 
   const setHighlightColor = useCallback((hex: string): void => {
     const instance = instanceRef.current;
-    if (!instance) return;
+    const sdk = sdkRef.current;
+    if (!instance || !sdk) return;
     try {
-      const color = NutrientViewer.Color.fromHex(hex);
-      instance.setAnnotationPresets((presets) => ({
-        ...presets,
-        'text-highlighter': { ...(presets['text-highlighter'] ?? {}), color },
-      }));
+      applyHighlightColor(sdk, instance, hex);
     } catch (cause) {
       setError(toErrorMessage(cause));
     }
-  }, []);
+  }, [applyHighlightColor]);
 
   const setInkStrokeWidth = useCallback((width: number): void => {
     const instance = instanceRef.current;
     if (!instance) return;
     try {
-      instance.setAnnotationPresets((presets) => ({
-        ...presets,
-        ink: { ...(presets['ink'] ?? {}), lineWidth: width },
-      }));
+      applyInkStrokeWidth(instance, width);
     } catch (cause) {
       setError(toErrorMessage(cause));
     }
-  }, []);
+  }, [applyInkStrokeWidth]);
 
   // ── Page operations (Document Editing license) ────────────────────────────
 
   const rotateCurrentPageCw = useCallback(async (): Promise<void> => {
     const instance = instanceRef.current;
-    if (!instance) return;
+    const sdk = sdkRef.current;
+    if (!instance || !sdk) return;
     setError(null);
     try {
       await instance.applyOperations([
         {
           type: 'rotatePages',
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          pageIndexes: immutableList([currentPageRef.current - 1]) as any,
+          pageIndexes: immutableList(sdk, [currentPageRef.current - 1]) as any,
           rotateBy: 90,
         },
       ]);
@@ -444,14 +505,15 @@ export function useNutrientWorkbench({
 
   const rotateCurrentPageCcw = useCallback(async (): Promise<void> => {
     const instance = instanceRef.current;
-    if (!instance) return;
+    const sdk = sdkRef.current;
+    if (!instance || !sdk) return;
     setError(null);
     try {
       await instance.applyOperations([
         {
           type: 'rotatePages',
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          pageIndexes: immutableList([currentPageRef.current - 1]) as any,
+          pageIndexes: immutableList(sdk, [currentPageRef.current - 1]) as any,
           rotateBy: 270,
         },
       ]);
