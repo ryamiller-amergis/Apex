@@ -90,4 +90,24 @@ describe('mergeAcceptedUnitsIntoDraft', () => {
     );
     expect(merged.steps[0].imageUrl).toBeNull();
   });
+
+  it('does not keep an empty placeholder as Step 1 when accepting AI steps', () => {
+    const merged = mergeAcceptedUnitsIntoDraft(
+      {
+        internalName: '',
+        userTitle: '',
+        whyItMatters: '',
+        steps: [{ id: 'step-placeholder-0', ordinal: 0, heading: '', bodyMarkdown: '' }],
+      },
+      {
+        'step-s1': { status: 'accepted' },
+        'step-s2': { status: 'accepted' },
+      },
+      [step1, step2],
+    );
+
+    expect(merged.steps.map((s) => s.heading)).toEqual(['One', 'Two']);
+    expect(merged.steps[0].id).toBe('s1');
+    expect(merged.steps[0].bodyMarkdown).toBe('body-1');
+  });
 });

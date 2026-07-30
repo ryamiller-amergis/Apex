@@ -41,7 +41,7 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
               id: 'wt-1',
               userTitle: 'Intro',
               revision: 2,
-              targeting: { project: 'Apex' },
+              targeting: { projects: ['Apex'] },
             },
           ],
           nextCursor: null,
@@ -97,7 +97,7 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
       const url = String(input);
       if (url.includes('lifecycle=published')) {
         return mockJson({
-          items: [{ id: 'wt-1', userTitle: 'Intro', revision: 1, targeting: { project: 'Apex' } }],
+          items: [{ id: 'wt-1', userTitle: 'Intro', revision: 1, targeting: { projects: ['Apex'] } }],
           nextCursor: null,
         });
       }
@@ -124,7 +124,7 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
       const url = String(input);
       if (url.includes('/api/platform-admin/walkthroughs') && !url.includes('/reports/')) {
         return mockJson({
-          items: [{ id: 'wt-1', userTitle: 'Intro', revision: 1, targeting: { project: 'Apex' } }],
+          items: [{ id: 'wt-1', userTitle: 'Intro', revision: 1, targeting: { projects: ['Apex'] } }],
           nextCursor: null,
         });
       }

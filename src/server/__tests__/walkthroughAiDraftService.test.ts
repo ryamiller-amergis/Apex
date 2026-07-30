@@ -7,24 +7,73 @@ import {
   generateProposal,
   getWalkthroughAiTelemetry,
   listPublicWalkthroughAssetPaths,
+  parseGeneratedWalkthroughProposal,
   redoProposalUnit,
   setWalkthroughAiProviderForTests,
   validateProposalUnit,
 } from '../services/walkthroughAiDraftService';
 import { WalkthroughAiError } from '../../shared/types/walkthroughAiDraft';
-import { listWalkthroughAnchors } from '../../shared/walkthroughAnchors';
+import { listWalkthroughAnchors, type WalkthroughAnchorRegistryEntry } from '../../shared/walkthroughAnchors';
+import { listAuthoringAnchorEntries } from '../services/walkthroughAnchorRegistryService';
 
 jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn(async () => ({
-    designPlanBedrockModelId: 'test-model',
-    designPlanBedrockMaxTokens: 2048,
+    developmentModel: 'test-model',
   })),
 }));
+
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: jest.fn(async () => 'test-model'),
+}));
+
+/** Authoring allow-list includes a DB-only key that is not a DOM marker. */
+const AUTHORING_CATALOG = [
+  {
+    key: 'user-menu-trigger',
+    testId: 'user-menu-trigger',
+    label: 'User menu',
+    targetRoute: '/home',
+    allowedPlacements: ['bottom', 'left', 'right', 'top'] as const,
+  },
+  {
+    key: 'db-only-settings-cta',
+    testId: 'db-only-settings-cta',
+    label: 'DB-only Settings CTA',
+    targetRoute: '/profile',
+    allowedPlacements: ['bottom', 'top'] as const,
+  },
+];
+
+jest.mock('../services/walkthroughAnchorRegistryService', () => ({
+  listAuthoringAnchorEntries: jest.fn(async () => [
+    {
+      key: 'user-menu-trigger',
+      testId: 'user-menu-trigger',
+      label: 'User menu',
+      targetRoute: '/home',
+      allowedPlacements: ['bottom', 'left', 'right', 'top'],
+    },
+    {
+      key: 'db-only-settings-cta',
+      testId: 'db-only-settings-cta',
+      label: 'DB-only Settings CTA',
+      targetRoute: '/profile',
+      allowedPlacements: ['bottom', 'top'],
+    },
+  ]),
+  listCatalogRecordsForResolution: jest.fn(async () => []),
+  getAnchorByKey: jest.fn(async () => null),
+}));
+
+const mockedListAuthoring = listAuthoringAnchorEntries as jest.MockedFunction<
+  typeof listAuthoringAnchorEntries
+>;
 
 describe('walkthroughAiDraftService (FEAT-004)', () => {
   beforeEach(() => {
     clearWalkthroughAiTelemetry();
     setWalkthroughAiProviderForTests(null);
+    mockedListAuthoring.mockResolvedValue(AUTHORING_CATALOG as WalkthroughAnchorRegistryEntry[]);
   });
 
   afterEach(() => {
@@ -32,7 +81,7 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
   });
 
   it('AC-0 — generateProposal returns one staged proposal matching Walkthrough draft shape', async () => {
-    const anchor = listWalkthroughAnchors()[0];
+    const anchor = AUTHORING_CATALOG[0];
     const assets = listPublicWalkthroughAssetPaths();
     const image = assets[0] ?? null;
     setWalkthroughAiProviderForTests({
@@ -45,7 +94,9 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
             {
               heading: 'Open Help',
               bodyMarkdown: 'Click Help',
+              route: anchor.targetRoute,
               imageUrl: image,
+              imageAlt: image ? 'Apex product logo' : null,
               anchorKey: anchor.key,
               anchorPlacement: anchor.allowedPlacements[0],
             },
@@ -59,12 +110,89 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
       policyPreset: 'A',
     });
 
+    expect(mockedListAuthoring).toHaveBeenCalled();
     expect(proposal.proposalId).toBeTruthy();
     expect(proposal.walkthroughFields.internalName).toBe('ai-intro');
     expect(proposal.steps).toHaveLength(1);
+    expect(proposal.steps[0].route).toBe(anchor.targetRoute);
+    expect(proposal.steps[0].imageAlt).toBe(image ? 'Apex product logo' : null);
     expect(proposal.units[0].kind).toBe('walkthrough-fields');
     expect(proposal.units[1].kind).toBe('step');
     expect(proposal.policyPreset).toBe('A');
+  });
+
+  it('Phase 6 — generateProposal accepts DB authoring keys that are not DOM markers', async () => {
+    const dbOnly = AUTHORING_CATALOG[1];
+    expect(listWalkthroughAnchors().some((a) => a.key === dbOnly.key)).toBe(false);
+
+    setWalkthroughAiProviderForTests({
+      generateStructuredJson: async () =>
+        JSON.stringify({
+          internalName: 'db-catalog',
+          userTitle: 'Catalog tour',
+          whyItMatters: 'Uses DB allow-list',
+          steps: [
+            {
+              heading: 'Settings CTA',
+              bodyMarkdown: 'Click settings',
+              route: dbOnly.targetRoute,
+              imageUrl: null,
+              imageAlt: null,
+              anchorKey: dbOnly.key,
+              anchorPlacement: dbOnly.allowedPlacements[0],
+            },
+          ],
+        }),
+    });
+
+    const proposal = await generateProposal({
+      projectId: 'Apex',
+      intent: 'Tour the settings CTA from the catalog',
+      policyPreset: 'A',
+    });
+
+    expect(proposal.steps[0].anchor).toMatchObject({
+      key: dbOnly.key,
+      targetRoute: dbOnly.targetRoute,
+      placement: dbOnly.allowedPlacements[0],
+    });
+  });
+
+  it('Phase 6 — parseGeneratedWalkthroughProposal rejects catalog-only keys when falling back to DOM markers', () => {
+    const dbOnly = AUTHORING_CATALOG[1];
+    const assets = listPublicWalkthroughAssetPaths();
+    const raw = JSON.stringify({
+      internalName: 'x',
+      userTitle: 'y',
+      whyItMatters: 'z',
+      steps: [
+        {
+          heading: 'Step',
+          bodyMarkdown: 'body',
+          route: dbOnly.targetRoute,
+          anchorKey: dbOnly.key,
+          anchorPlacement: dbOnly.allowedPlacements[0],
+        },
+      ],
+    });
+
+    // Default 4th-arg fallback is DOM markers only — catalog-only keys must be stripped.
+    const { proposal: withoutCatalog, registryRejectionCount } = parseGeneratedWalkthroughProposal(
+      raw,
+      'A',
+      assets,
+    );
+    expect(withoutCatalog.steps[0].anchor).toBeNull();
+    expect(registryRejectionCount).toBeGreaterThanOrEqual(1);
+
+    // Explicit authoring catalog accepts the same key.
+    const { proposal: withCatalog } = parseGeneratedWalkthroughProposal(
+      raw,
+      'A',
+      assets,
+      AUTHORING_CATALOG,
+    );
+    expect(withCatalog.steps[0].anchor).toMatchObject({ key: dbOnly.key });
   });
 
   it('AC-1 — provider failure yields AI_GENERATION_FAILED and no partial proposal', async () => {
@@ -90,7 +218,10 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
             {
               heading: 'Bad assets',
               bodyMarkdown: 'body',
+              route: '/profile/edit',
               imageUrl: 'https://evil.example/x.png',
+              imageAlt: 'Untrusted image',
+              ctaRoute: '/settings/privacy',
               anchorKey: 'not-a-real-anchor',
             },
           ],
@@ -99,7 +230,10 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
 
     const proposal = await generateProposal({ projectId: 'Apex', intent: 'Intent text' });
     expect(proposal.steps[0].anchor).toBeNull();
+    expect(proposal.steps[0].route).toBeNull();
     expect(proposal.steps[0].imageUrl).toBeNull();
+    expect(proposal.steps[0].imageAlt).toBeNull();
+    expect(proposal.steps[0].ctaRoute).toBeNull();
     const tel = getWalkthroughAiTelemetry().find((e) => e.event === 'walkthrough_ai_generation');
     expect(tel?.registryRejectionCount).toBeGreaterThanOrEqual(2);
   });
@@ -148,7 +282,7 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
     ).rejects.toMatchObject({ code: 'AI_REDO_FAILED' });
   });
 
-  it('PBI-004 AC-0/AC-2 — validateProposalUnit omits image until confirmed', () => {
+  it('PBI-004 AC-0/AC-2 — validateProposalUnit omits image until confirmed', async () => {
     const assets = listPublicWalkthroughAssetPaths();
     const image = assets[0];
     expect(image).toBeTruthy();
@@ -168,7 +302,7 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
       imageCandidatePath: image!,
     };
 
-    const withoutConfirm = validateProposalUnit({
+    const withoutConfirm = await validateProposalUnit({
       projectId: 'Apex',
       unit,
       imageConfirmed: false,
@@ -178,7 +312,7 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
       expect(withoutConfirm.normalizedUnit.value.imageUrl).toBeNull();
     }
 
-    const withConfirm = validateProposalUnit({
+    const withConfirm = await validateProposalUnit({
       projectId: 'Apex',
       unit,
       imageConfirmed: true,
@@ -188,8 +322,8 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
     }
   });
 
-  it('VT-09 — stale registry key yields REGISTRY_VALUE_STALE', () => {
-    try {
+  it('VT-09 — stale registry key yields REGISTRY_VALUE_STALE', async () => {
+    await expect(
       validateProposalUnit({
         projectId: 'Apex',
         imageConfirmed: false,
@@ -208,12 +342,8 @@ describe('walkthroughAiDraftService (FEAT-004)', () => {
             },
           },
         },
-      });
-      throw new Error('expected REGISTRY_VALUE_STALE');
-    } catch (err) {
-      expect(err).toBeInstanceOf(WalkthroughAiError);
-      expect((err as WalkthroughAiError).code).toBe('REGISTRY_VALUE_STALE');
-    }
+      }),
+    ).rejects.toMatchObject({ code: 'REGISTRY_VALUE_STALE' });
   });
 
   it('VT-11 — telemetry never includes intent / markdown markers', async () => {

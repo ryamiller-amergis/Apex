@@ -86,6 +86,7 @@ export function useGuidedWalkthrough({
   });
 
   const progressMutation = useUpdateWalkthroughProgress(projectId);
+  const mutateProgress = progressMutation.mutateAsync;
   const [progressFailure, setProgressFailure] = useState<GuidedProgressFailure | null>(null);
 
   const active = coordinator.activeWalkthrough;
@@ -106,7 +107,7 @@ export function useGuidedWalkthrough({
         lastStepId: stepId,
       };
       try {
-        await progressMutation.mutateAsync({ walkthroughId, body });
+        await mutateProgress({ walkthroughId, body });
         setProgressFailure(null);
         if (opts?.closeOnSuccess) clearActive();
       } catch {
@@ -115,33 +116,36 @@ export function useGuidedWalkthrough({
         }
       }
     },
-    [projectId, progressMutation, clearActive],
+    [projectId, mutateProgress, clearActive],
   );
 
-  const rendererCallbacks: WalkthroughRendererCallbacks = {
-    onSeen: ({ walkthroughId, revision, stepId }) => {
-      void persistStatus(walkthroughId, 'seen', revision, stepId);
-    },
-    onStepChange: ({ walkthroughId, revision, stepId }) => {
-      void persistStatus(walkthroughId, 'seen', revision, stepId);
-    },
-    onComplete: ({ walkthroughId, revision, stepId }) => {
-      void persistStatus(walkthroughId, 'completed', revision, stepId, {
-        surfaceFailure: true,
-        closeOnSuccess: true,
-      });
-    },
-    onDismiss: ({ walkthroughId, revision, stepId }) => {
-      void persistStatus(walkthroughId, 'dismissed', revision, stepId, {
-        surfaceFailure: true,
-        closeOnSuccess: true,
-      });
-    },
-    onAnchorMiss: (payload) => {
-      if (!projectId) return;
-      void postAnchorMiss(projectId, payload);
-    },
-  };
+  const rendererCallbacks: WalkthroughRendererCallbacks = useMemo(
+    () => ({
+      onSeen: ({ walkthroughId, revision, stepId }) => {
+        void persistStatus(walkthroughId, 'seen', revision, stepId);
+      },
+      onStepChange: ({ walkthroughId, revision, stepId }) => {
+        void persistStatus(walkthroughId, 'seen', revision, stepId);
+      },
+      onComplete: ({ walkthroughId, revision, stepId }) => {
+        void persistStatus(walkthroughId, 'completed', revision, stepId, {
+          surfaceFailure: true,
+          closeOnSuccess: true,
+        });
+      },
+      onDismiss: ({ walkthroughId, revision, stepId }) => {
+        void persistStatus(walkthroughId, 'dismissed', revision, stepId, {
+          surfaceFailure: true,
+          closeOnSuccess: true,
+        });
+      },
+      onAnchorMiss: (payload) => {
+        if (!projectId) return;
+        void postAnchorMiss(projectId, payload);
+      },
+    }),
+    [persistStatus, projectId],
+  );
 
   const rendererDefinition = useMemo(
     () => (active ? toWalkthroughRendererDefinition(active) : null),

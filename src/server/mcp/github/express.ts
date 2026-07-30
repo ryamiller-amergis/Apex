@@ -20,7 +20,9 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
       enableJsonResponse: true,
     });
 
-    const server = createGitHubMcpServer();
+    const server = createGitHubMcpServer({
+      enableCodeSearch: req.query.profile !== 'interview',
+    });
     const timeoutMs = resolveMcpHttpTimeoutMs();
 
     try {

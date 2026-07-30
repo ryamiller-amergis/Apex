@@ -4,7 +4,8 @@
  * FEAT-002 adds renderer definition / callback contracts and registry-backed anchor validation.
  */
 
-import { validateRegisteredAnchor } from '../walkthroughAnchors';
+import { validateRegisteredAnchor, type WalkthroughAnchorRegistryEntry } from '../walkthroughAnchors';
+import { isWalkthroughRoute } from '../walkthroughRoutes';
 
 // ── Lifecycle & status ────────────────────────────────────────────────────────
 
@@ -48,11 +49,29 @@ export class WalkthroughDomainError extends Error {
 
 // ── Anchor & Step ─────────────────────────────────────────────────────────────
 
-/** Fully absent, or all three fields present. Partial tuples are invalid. */
+/**
+ * Why an anchored Step cannot use a live coachmark target (Phase 6 catalog cutover).
+ * Surfaced on enriched definitions and miss telemetry.
+ */
+export type WalkthroughAnchorCatalogFallbackReason =
+  | 'missing'
+  | 'inactive'
+  | 'deleted'
+  | 'not_approved';
+
+/**
+ * Fully absent, or key + targetRoute + placement present. Partial tuples are invalid.
+ * Optional enrichment fields are serve-time only (not persisted on steps).
+ */
 export type WalkthroughAnchor = {
   key: string;
   targetRoute: string;
   placement: WalkthroughAnchorPlacement;
+  /** Resolved test ID from approved+active catalog (playback enrichment). */
+  testId?: string | null;
+  /** When true, playback centers immediately instead of waiting on DOM. */
+  useCenteredFallback?: boolean;
+  catalogFallbackReason?: WalkthroughAnchorCatalogFallbackReason;
 } | null;
 
 export interface WalkthroughStepInput {
@@ -61,7 +80,10 @@ export interface WalkthroughStepInput {
   ordinal: number;
   heading: string;
   bodyMarkdown: string;
+  /** First-class destination for this Step, whether anchored or unanchored. */
+  route?: string | null;
   imageUrl?: string | null;
+  imageAlt?: string | null;
   ctaLabel?: string | null;
   ctaRoute?: string | null;
   anchor?: WalkthroughAnchor;
@@ -81,8 +103,25 @@ export interface WalkthroughTargetRule {
 }
 
 export interface WalkthroughTargeting {
-  project: string;
+  /** One or more project names (deduped). Audience is the union of members across these projects. */
+  projects: string[];
+  /**
+   * Optional in-project group filter.
+   * Only allowed when `projects.length === 1` (groups are project-scoped).
+   */
   groupId?: string | null;
+}
+
+export type WalkthroughGenerationProvider = 'cursor' | 'bedrock';
+
+/** Nullable on persisted legacy/manual Walkthroughs. */
+export interface WalkthroughGenerationProvenance {
+  provider: WalkthroughGenerationProvider;
+  model: string;
+  skillPath: string;
+  generatedAt: string;
+  runId?: string | null;
+  threadId?: string | null;
 }
 
 // ── Aggregate definition ──────────────────────────────────────────────────────
@@ -101,6 +140,8 @@ export interface WalkthroughDefinition {
   createdAt: string;
   updatedBy: string;
   updatedAt: string;
+  /** Absent/null means manually authored or legacy provenance was not recorded. */
+  generationProvenance?: WalkthroughGenerationProvenance | null;
   steps: WalkthroughStep[];
   targeting: WalkthroughTargeting;
   targetingRules: WalkthroughTargetRule[];
@@ -134,6 +175,7 @@ export interface CreateWalkthroughCommand {
   userTitle: string;
   whyItMatters: string;
   priority?: number;
+  generationProvenance?: WalkthroughGenerationProvenance | null;
   steps: WalkthroughStepInput[];
   targeting: WalkthroughTargeting;
 }
@@ -143,6 +185,7 @@ export interface UpdateWalkthroughCommand {
   userTitle?: string;
   whyItMatters?: string;
   priority?: number;
+  generationProvenance?: WalkthroughGenerationProvenance | null;
   steps?: WalkthroughStepInput[];
   targeting?: WalkthroughTargeting;
   /** Optimistic concurrency against current revision. */
@@ -321,7 +364,8 @@ export function assertPersistedProgressStatus(value: unknown): WalkthroughProgre
 
 /**
  * Anchor must be fully null/absent or have key + targetRoute + placement.
- * Anchored values must match the curated registry (FEAT-002 / BR-013).
+ * Performs shape validation only. Catalog membership is enforced by the server
+ * (and authoring UI) against an injected approved+active snapshot (Phase 6).
  */
 export function validateAnchor(anchor: unknown): WalkthroughAnchor {
   if (anchor === undefined || anchor === null) return null;
@@ -343,6 +387,12 @@ export function validateAnchor(anchor: unknown): WalkthroughAnchor {
   if (typeof key !== 'string' || !key.trim()) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'Anchor key must be a non-empty string');
   }
+  if (/[#.[\]>+~*=]|^\s*\/\//.test(key) || key.includes(' ')) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'Anchor key must be an exact registry key, not a CSS selector or DOM path',
+    );
+  }
   if (typeof targetRoute !== 'string' || !IN_APP_ROUTE_RE.test(targetRoute)) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'Anchor targetRoute must be an in-app route');
   }
@@ -350,17 +400,30 @@ export function validateAnchor(anchor: unknown): WalkthroughAnchor {
     throw new WalkthroughDomainError('VALIDATION_ERROR', `Unsupported anchor placement: ${String(placement)}`);
   }
 
-  const registered = validateRegisteredAnchor({
+  return {
     key: key.trim(),
     targetRoute,
     placement: placement as WalkthroughAnchorPlacement,
-  });
+  };
+}
+
+/**
+ * Enforce catalog membership for a shape-valid anchor against an injected snapshot.
+ */
+export function assertAnchorInCatalog(
+  anchor: NonNullable<WalkthroughAnchor>,
+  catalog: readonly WalkthroughAnchorRegistryEntry[],
+): NonNullable<WalkthroughAnchor> {
+  const registered = validateRegisteredAnchor(anchor, catalog);
   if (registered.ok === false) {
     const first = registered.errors[0];
     throw new WalkthroughDomainError(
       'VALIDATION_ERROR',
       first?.message ?? 'Invalid registered anchor',
     );
+  }
+  if (registered.anchor === null) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'Invalid registered anchor');
   }
   return registered.anchor;
 }
@@ -372,7 +435,11 @@ export type WalkthroughAnchorMissReason =
   | 'unregistered'
   | 'invalid_route'
   | 'route_mismatch'
-  | 'unsupported_placement';
+  | 'unsupported_placement'
+  | 'missing'
+  | 'inactive'
+  | 'deleted'
+  | 'not_approved';
 
 export interface WalkthroughAnchorMiss {
   walkthroughId: string;
@@ -391,7 +458,9 @@ export interface WalkthroughRendererStep {
   position: number;
   heading: string;
   bodyMarkdown: string;
+  route?: string | null;
   imageUrl?: string | null;
+  imageAlt?: string | null;
   ctaLabel?: string | null;
   ctaRoute?: string | null;
   anchor?: WalkthroughAnchor;
@@ -419,35 +488,56 @@ export interface WalkthroughRendererCallbacks {
 }
 
 /**
- * V1 targeting: exactly one project, optional in-project group.
- * Rejects everyone/user and malformed shapes.
+ * Multi-project targeting: one or more projects; optional group only when a single project is selected.
+ * Rejects everyone/user targeting. Accepts legacy `{ project: string }` payloads and normalizes to `projects`.
  */
 export function validateTargeting(targeting: unknown): WalkthroughTargeting {
   if (!targeting || typeof targeting !== 'object') {
     throw new WalkthroughDomainError('INVALID_TARGET', 'Targeting is required');
   }
   const t = targeting as Record<string, unknown>;
-  if (typeof t.project !== 'string' || !t.project.trim()) {
-    throw new WalkthroughDomainError('INVALID_TARGET', 'A project target is required');
-  }
   if (t.everyone === true || t.type === 'everyone') {
-    throw new WalkthroughDomainError('INVALID_TARGET', 'everyone/global targeting is not supported in v1');
+    throw new WalkthroughDomainError('INVALID_TARGET', 'everyone/global targeting is not supported');
   }
   if (t.userId || t.type === 'user') {
-    throw new WalkthroughDomainError('INVALID_TARGET', 'Individual-user targeting is not supported in v1');
+    throw new WalkthroughDomainError('INVALID_TARGET', 'Individual-user targeting is not supported');
   }
+
+  let projects: string[] = [];
+  if (Array.isArray(t.projects)) {
+    projects = t.projects
+      .filter((p): p is string => typeof p === 'string')
+      .map((p) => p.trim())
+      .filter(Boolean);
+  } else if (typeof t.project === 'string' && t.project.trim()) {
+    // Legacy single-project payload
+    projects = [t.project.trim()];
+  }
+
+  // Dedupe while preserving order
+  projects = [...new Set(projects)];
+  if (projects.length === 0) {
+    throw new WalkthroughDomainError('INVALID_TARGET', 'At least one project target is required');
+  }
+
   let groupId: string | null = null;
   if (t.groupId !== undefined && t.groupId !== null && t.groupId !== '') {
     if (typeof t.groupId !== 'string') {
       throw new WalkthroughDomainError('INVALID_TARGET', 'groupId must be a string UUID');
     }
+    if (projects.length !== 1) {
+      throw new WalkthroughDomainError(
+        'INVALID_TARGET',
+        'A group filter is only allowed when targeting exactly one project',
+      );
+    }
     groupId = t.groupId;
   }
-  return { project: t.project.trim(), groupId };
+  return { projects, groupId };
 }
 
 export function validateTargetRules(rules: WalkthroughTargetRule[]): WalkthroughTargeting {
-  const projects = rules.filter((r) => r.type === 'project');
+  const projectRules = rules.filter((r) => r.type === 'project');
   const groups = rules.filter((r) => r.type === 'group');
   const unsupported = rules.filter((r) => r.type === 'everyone' || r.type === 'user');
   if (unsupported.length > 0) {
@@ -456,18 +546,100 @@ export function validateTargetRules(rules: WalkthroughTargetRule[]): Walkthrough
       `Unsupported target rule type: ${unsupported[0].type}`,
     );
   }
-  if (projects.length !== 1) {
-    throw new WalkthroughDomainError('INVALID_TARGET', 'Exactly one project target rule is required');
+  if (projectRules.length < 1) {
+    throw new WalkthroughDomainError('INVALID_TARGET', 'At least one project target rule is required');
   }
   if (groups.length > 1) {
     throw new WalkthroughDomainError('INVALID_TARGET', 'At most one group target rule is allowed');
   }
-  if (!projects[0].value?.trim()) {
+  const projects = [...new Set(projectRules.map((r) => r.value.trim()).filter(Boolean))];
+  if (projects.length === 0) {
     throw new WalkthroughDomainError('INVALID_TARGET', 'Project target value is required');
   }
+  if (groups.length > 0 && projects.length !== 1) {
+    throw new WalkthroughDomainError(
+      'INVALID_TARGET',
+      'A group filter is only allowed when targeting exactly one project',
+    );
+  }
   return {
-    project: projects[0].value.trim(),
+    projects,
     groupId: groups[0]?.value ?? null,
+  };
+}
+
+const WALKTHROUGH_SKILL_PATH_RE = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
+
+export function validateGenerationProvenance(
+  value: unknown,
+): WalkthroughGenerationProvenance | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance must be an object or null',
+    );
+  }
+  const p = value as Record<string, unknown>;
+  if (p.provider !== 'cursor' && p.provider !== 'bedrock') {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance provider must be cursor or bedrock',
+    );
+  }
+  if (typeof p.model !== 'string' || !p.model.trim()) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance model is required',
+    );
+  }
+  if (typeof p.skillPath !== 'string' || !WALKTHROUGH_SKILL_PATH_RE.test(p.skillPath)) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance skillPath must match .cursor/skills/*/SKILL.md',
+    );
+  }
+  if (
+    typeof p.generatedAt !== 'string' ||
+    !p.generatedAt.trim() ||
+    Number.isNaN(Date.parse(p.generatedAt))
+  ) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance generatedAt must be an ISO timestamp',
+    );
+  }
+  const runId =
+    p.runId === undefined || p.runId === null || p.runId === ''
+      ? null
+      : typeof p.runId === 'string'
+        ? p.runId.trim()
+        : null;
+  const threadId =
+    p.threadId === undefined || p.threadId === null || p.threadId === ''
+      ? null
+      : typeof p.threadId === 'string'
+        ? p.threadId.trim()
+        : null;
+  if ((p.runId != null && typeof p.runId !== 'string') || (p.threadId != null && typeof p.threadId !== 'string')) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance runId and threadId must be strings or null',
+    );
+  }
+  if (!runId && !threadId) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance requires a runId or threadId',
+    );
+  }
+  return {
+    provider: p.provider,
+    model: p.model.trim(),
+    skillPath: p.skillPath,
+    generatedAt: new Date(p.generatedAt).toISOString(),
+    runId,
+    threadId,
   };
 }
 
@@ -498,9 +670,18 @@ export function validateSteps(steps: unknown): WalkthroughStepInput[] {
     if (typeof s.bodyMarkdown !== 'string') {
       throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step bodyMarkdown is required');
     }
+    if (s.route != null && s.route !== '' && !isWalkthroughRoute(s.route)) {
+      throw new WalkthroughDomainError(
+        'VALIDATION_ERROR',
+        'Step route must be in the curated Walkthrough route catalog',
+      );
+    }
     if (s.ctaRoute != null && s.ctaRoute !== '') {
-      if (typeof s.ctaRoute !== 'string' || !IN_APP_ROUTE_RE.test(s.ctaRoute)) {
-        throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step ctaRoute must be an in-app route');
+      if (!isWalkthroughRoute(s.ctaRoute)) {
+        throw new WalkthroughDomainError(
+          'VALIDATION_ERROR',
+          'Step ctaRoute must be in the curated Walkthrough route catalog',
+        );
       }
     }
     if (s.imageUrl != null && s.imageUrl !== '') {
@@ -508,13 +689,28 @@ export function validateSteps(steps: unknown): WalkthroughStepInput[] {
         throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step imageUrl must be a path or http(s) URL');
       }
     }
+    if (s.imageAlt != null && typeof s.imageAlt !== 'string') {
+      throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step imageAlt must be a string or null');
+    }
     const anchor = validateAnchor(s.anchor);
+    const route =
+      typeof s.route === 'string' && s.route
+        ? s.route
+        : anchor?.targetRoute ?? null;
+    if (anchor && route !== anchor.targetRoute) {
+      throw new WalkthroughDomainError(
+        'VALIDATION_ERROR',
+        'Step route must match the registered anchor route',
+      );
+    }
     normalized.push({
       id: typeof s.id === 'string' ? s.id : undefined,
       ordinal: s.ordinal,
       heading: s.heading.trim(),
       bodyMarkdown: s.bodyMarkdown,
+      route,
       imageUrl: (s.imageUrl as string | null | undefined) ?? null,
+      imageAlt: (s.imageAlt as string | null | undefined) ?? null,
       ctaLabel: (s.ctaLabel as string | null | undefined) ?? null,
       ctaRoute: (s.ctaRoute as string | null | undefined) ?? null,
       anchor,
@@ -546,13 +742,19 @@ export function validateCreateCommand(body: unknown): CreateWalkthroughCommand {
     userTitle: b.userTitle.trim(),
     whyItMatters: b.whyItMatters,
     priority,
+    ...(b.generationProvenance !== undefined
+      ? { generationProvenance: validateGenerationProvenance(b.generationProvenance) }
+      : {}),
     steps: validateSteps(b.steps ?? []),
     targeting: validateTargeting(b.targeting),
   };
 }
 
 export function targetingToRules(targeting: WalkthroughTargeting): WalkthroughTargetRule[] {
-  const rules: WalkthroughTargetRule[] = [{ type: 'project', value: targeting.project }];
+  const rules: WalkthroughTargetRule[] = targeting.projects.map((project) => ({
+    type: 'project' as const,
+    value: project,
+  }));
   if (targeting.groupId) {
     rules.push({ type: 'group', value: targeting.groupId });
   }

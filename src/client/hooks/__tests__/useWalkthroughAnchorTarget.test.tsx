@@ -1,5 +1,5 @@
 /**
- * TBI-004 — useWalkthroughAnchorTarget
+ * TBI-004 — useWalkthroughAnchorTarget (Phase 6 catalog enrichment)
  * VT-06, VT-07, VT-09, VT-10 / DoD-1, DoD-2
  */
 import React from 'react';
@@ -32,8 +32,8 @@ function createWrapper(initialPath = '/other') {
   return { Wrapper, getPath: () => latestPath };
 }
 
-describe('useWalkthroughAnchorTarget (TBI-004)', () => {
-  it('DoD-1 / VT-06: navigates to registry route and resolves mounted target', async () => {
+describe('useWalkthroughAnchorTarget (TBI-004 / Phase 6)', () => {
+  it('DoD-1 / VT-06: navigates using enriched testId and resolves mounted target', async () => {
     const target = document.createElement('button');
     target.setAttribute('data-testid', 'user-menu-trigger');
     document.body.appendChild(target);
@@ -51,6 +51,8 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
+            useCenteredFallback: false,
           },
         }),
       { wrapper: Wrapper },
@@ -83,6 +85,7 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         }),
       { wrapper: Wrapper },
@@ -108,6 +111,7 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         }),
       {
@@ -116,7 +120,6 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
       },
     );
 
-    // Cancel step-a wait immediately by activating step-b.
     rerender({ activationKey: 'step-b', stepId: 'b' });
 
     await waitFor(() => {
@@ -149,7 +152,7 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
     });
   });
 
-  it('VT-10: mismatched route falls back defensively', async () => {
+  it('Phase 6: inactive catalog enrichment falls back immediately with inactive reason', async () => {
     const { Wrapper } = createWrapper('/home');
     const { result } = renderHook(
       () =>
@@ -157,10 +160,39 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
           walkthroughId: 'wt-1',
           revision: 1,
           stepId: 's1',
-          activationKey: 'mismatch',
+          activationKey: 'inactive',
+          waitMs: 200,
           anchor: {
             key: 'user-menu-trigger',
-            targetRoute: '/somewhere-else',
+            targetRoute: '/home',
+            placement: 'bottom',
+            useCenteredFallback: true,
+            catalogFallbackReason: 'inactive',
+            testId: null,
+          },
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('fallback');
+      expect(result.current.missReason).toBe('inactive');
+    });
+  });
+
+  it('Phase 6: missing enrichment (no testId) falls back without waiting', async () => {
+    const { Wrapper } = createWrapper('/home');
+    const { result } = renderHook(
+      () =>
+        useWalkthroughAnchorTarget({
+          walkthroughId: 'wt-1',
+          revision: 1,
+          stepId: 's1',
+          activationKey: 'no-testid',
+          waitMs: 200,
+          anchor: {
+            key: 'user-menu-trigger',
+            targetRoute: '/home',
             placement: 'bottom',
           },
         }),
@@ -169,7 +201,36 @@ describe('useWalkthroughAnchorTarget (TBI-004)', () => {
 
     await waitFor(() => {
       expect(result.current.status).toBe('fallback');
-      expect(['route_mismatch', 'invalid_route']).toContain(result.current.missReason);
+      expect(result.current.missReason).toBe('missing');
+    });
+  });
+
+  it('Phase 6/8: soft-deleted catalog enrichment falls back immediately with deleted reason', async () => {
+    const { Wrapper } = createWrapper('/home');
+    const { result } = renderHook(
+      () =>
+        useWalkthroughAnchorTarget({
+          walkthroughId: 'wt-historical',
+          revision: 1,
+          stepId: 's1',
+          activationKey: 'soft-deleted',
+          waitMs: 200,
+          anchor: {
+            key: 'legacy-soft-deleted-anchor',
+            targetRoute: '/home',
+            placement: 'bottom',
+            useCenteredFallback: true,
+            catalogFallbackReason: 'deleted',
+            testId: null,
+          },
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('fallback');
+      expect(result.current.missReason).toBe('deleted');
     });
   });
 });
+

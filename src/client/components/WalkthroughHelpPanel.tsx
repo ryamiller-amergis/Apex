@@ -39,7 +39,10 @@ export const WalkthroughHelpPanel: React.FC<WalkthroughHelpPanelProps> = ({
   useEffect(() => {
     if (!open) return;
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const timer = window.setTimeout(() => headingRef.current?.focus(), 0);
+    const timer = window.setTimeout(
+      () => headingRef.current?.focus({ preventScroll: true }),
+      0,
+    );
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -56,10 +59,10 @@ export const WalkthroughHelpPanel: React.FC<WalkthroughHelpPanelProps> = ({
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
 
@@ -67,7 +70,7 @@ export const WalkthroughHelpPanel: React.FC<WalkthroughHelpPanelProps> = ({
     return () => {
       window.clearTimeout(timer);
       document.removeEventListener('keydown', onKeyDown);
-      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current?.focus?.({ preventScroll: true });
     };
   }, [open, onClose]);
 

@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types/walkthrough';
 import type { WalkthroughAnchorRegistryEntry } from '../../shared/walkthroughAnchors';
 import { WALKTHROUGH_REGISTRY_PLACEMENTS } from '../../shared/walkthroughAnchors';
+import { getAssetDescription } from '../../shared/walkthroughAssets';
 import {
   useArchiveWalkthrough,
   useCreateWalkthrough,
@@ -21,11 +22,12 @@ import {
 import { usePlatformAdminGroups, usePlatformAdminProjects } from '../hooks/usePlatformAdmin';
 import {
   createEmptyStep,
+  createWalkthroughDraftFormSchema,
   draftFormToCreateCommand,
-  walkthroughDraftFormSchema,
   type WalkthroughDraftFormValues,
 } from '../utils/walkthroughAuthoringValidation';
 import { WalkthroughAiDraftPanel } from './WalkthroughAiDraftPanel';
+import { NumberStepper } from './NumberStepper';
 import styles from './WalkthroughAuthoring.module.css';
 
 interface ManualWalkthroughEditorProps {
@@ -36,8 +38,8 @@ interface ManualWalkthroughEditorProps {
 
 interface WalkthroughLifecycleDialogProps {
   walkthrough: WalkthroughDefinition;
-  /** Current form project target — used for publish validation (may differ from last saved). */
-  targetProject: string;
+  /** Current form project targets — used for publish validation (may differ from last saved). */
+  targetProjects: string[];
   isOpen: boolean;
   isPending: boolean;
   onClose: () => void;
@@ -52,14 +54,15 @@ function definitionToFormValues(walkthrough: WalkthroughDefinition): Walkthrough
     userTitle: walkthrough.userTitle,
     whyItMatters: walkthrough.whyItMatters,
     priority: walkthrough.priority,
-    project: walkthrough.targeting.project,
+    projects: [...walkthrough.targeting.projects],
     groupId: walkthrough.targeting.groupId ?? null,
     steps: walkthrough.steps.map((step) => ({
       id: step.id,
       heading: step.heading,
       bodyMarkdown: step.bodyMarkdown,
+      route: step.route ?? step.anchor?.targetRoute ?? null,
       imageUrl: step.imageUrl ?? null,
-      imageAlt: '',
+      imageAlt: step.imageAlt ?? '',
       ctaLabel: step.ctaLabel ?? null,
       ctaRoute: step.ctaRoute ?? null,
       anchorKey: step.anchor?.key ?? '',
@@ -71,7 +74,7 @@ function definitionToFormValues(walkthrough: WalkthroughDefinition): Walkthrough
 
 export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProps> = ({
   walkthrough,
-  targetProject,
+  targetProjects,
   isOpen,
   isPending,
   onClose,
@@ -109,8 +112,8 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
   if (!isOpen) return null;
 
   const handlePublish = () => {
-    if (!targetProject?.trim()) {
-      setLifecycleError('A valid project target is required before publishing.');
+    if (!targetProjects.length) {
+      setLifecycleError('Select at least one project target before publishing.');
       return;
     }
     setLifecycleError(null);
@@ -138,7 +141,7 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
           Current status: <strong>{walkthrough.lifecycle}</strong>
           {isPublished
             ? ' Choose silent update to keep acknowledgements, or re-show to increment revision and re-arm the live audience.'
-            : ' Publishing makes this Walkthrough available only to the live project (and optional group) audience.'}
+            : ' Publishing makes this Walkthrough available to members of the selected project(s) (and optional group when a single project is selected).'}
         </p>
 
         {canFreshPublish && (
@@ -284,7 +287,7 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
       userTitle: '',
       whyItMatters: '',
       priority: 0,
-      project: '',
+      projects: [],
       groupId: null,
       steps: [createEmptyStep(0)],
     }),
@@ -300,18 +303,55 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     setValue,
     formState: { errors, isDirty },
   } = useForm<WalkthroughDraftFormValues>({
-    resolver: zodResolver(walkthroughDraftFormSchema),
+    resolver: (values, context, options) =>
+      zodResolver(createWalkthroughDraftFormSchema(anchorsQuery.data ?? []))(
+        values,
+        context,
+        options,
+      ),
     defaultValues,
   });
 
-  const { fields, append, remove, move } = useFieldArray({ control, name: 'steps' });
-  const watchedProject = watch('project');
+  const { fields, append, remove, move, replace } = useFieldArray({ control, name: 'steps' });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- RHF watch() identity; projectGroups must follow form projects
+  const watchedProjects = watch('projects') ?? [];
   const watchedSteps = watch('steps');
+  const watchedPriority = watch('priority');
 
   const projectGroups = useMemo(
-    () => (groupsQuery.data ?? []).filter((group) => group.project === watchedProject),
-    [groupsQuery.data, watchedProject],
+    () =>
+      watchedProjects.length === 1
+        ? (groupsQuery.data ?? []).filter((group) => group.project === watchedProjects[0])
+        : [],
+    [groupsQuery.data, watchedProjects],
   );
+
+  const catalogProjects = projectsQuery.data ?? [];
+
+  const toggleProject = (projectName: string) => {
+    const selected = new Set(watchedProjects);
+    if (selected.has(projectName)) selected.delete(projectName);
+    else selected.add(projectName);
+    const next = catalogProjects.map((p) => p.name).filter((name) => selected.has(name));
+    setValue('projects', next, { shouldDirty: true, shouldValidate: true });
+    if (next.length !== 1) {
+      setValue('groupId', null, { shouldDirty: true });
+    }
+  };
+
+  const selectAllProjects = () => {
+    setValue(
+      'projects',
+      catalogProjects.map((p) => p.name),
+      { shouldDirty: true, shouldValidate: true },
+    );
+    setValue('groupId', null, { shouldDirty: true });
+  };
+
+  const clearAllProjects = () => {
+    setValue('projects', [], { shouldDirty: true, shouldValidate: true });
+    setValue('groupId', null, { shouldDirty: true });
+  };
 
   const anchors = anchorsQuery.data ?? [];
 
@@ -349,7 +389,9 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
         ordinal: number;
         heading: string;
         bodyMarkdown: string;
+        route?: string | null;
         imageUrl?: string | null;
+        imageAlt?: string | null;
         ctaLabel?: string | null;
         ctaRoute?: string | null;
         anchor?: {
@@ -370,15 +412,16 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
       setValue('internalName', next.internalName, { shouldDirty: true });
       setValue('userTitle', next.userTitle, { shouldDirty: true });
       setValue('whyItMatters', next.whyItMatters, { shouldDirty: true });
-      setValue(
-        'steps',
+      // useFieldArray requires replace() — setValue('steps') leaves stale field rows (empty Step 1).
+      replace(
         next.steps.length > 0
           ? next.steps.map((step, index) => ({
               id: step.id ?? `ai-${index}`,
               heading: step.heading,
               bodyMarkdown: step.bodyMarkdown,
+              route: step.route ?? step.anchor?.targetRoute ?? null,
               imageUrl: step.imageUrl ?? null,
-              imageAlt: '',
+              imageAlt: step.imageAlt ?? '',
               ctaLabel: step.ctaLabel ?? null,
               ctaRoute: step.ctaRoute ?? null,
               anchorKey: step.anchor?.key ?? '',
@@ -386,10 +429,9 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
               anchorPlacement: step.anchor?.placement ?? '',
             }))
           : [createEmptyStep(0)],
-        { shouldDirty: true },
       );
     },
-    [setValue],
+    [replace, setValue],
   );
 
   const onSaveDraft = handleSubmit(async (values) => {
@@ -452,6 +494,24 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
       }
     }
   };
+
+  // Auto-populate imageAlt from curated asset registry when imageUrl is set but alt is empty
+  const prevImageUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (!watchedSteps) return;
+    const currentUrls = watchedSteps.map((s) => s?.imageUrl?.trim() ?? '');
+    const prev = prevImageUrlsRef.current;
+    prevImageUrlsRef.current = currentUrls;
+    for (let i = 0; i < currentUrls.length; i++) {
+      const url = currentUrls[i];
+      if (url && url !== (prev[i] ?? '') && !watchedSteps[i]?.imageAlt?.trim()) {
+        const desc = getAssetDescription(url);
+        if (desc) {
+          setValue(`steps.${i}.imageAlt`, desc, { shouldDirty: true });
+        }
+      }
+    }
+  }, [watchedSteps, setValue]);
 
   if (walkthroughId && detailQuery.isLoading) {
     return <p className={styles.statusMessage}>Loading walkthrough…</p>;
@@ -521,42 +581,6 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
         </div>
       )}
 
-      <WalkthroughAiDraftPanel
-        {...{ 'data-testid': 'walkthrough-ai-draft-panel' }}
-        projectId={watchedProject}
-        currentDraft={{
-          internalName: watch('internalName') || '',
-          userTitle: watch('userTitle') || '',
-          whyItMatters: watch('whyItMatters') || '',
-          steps: (watchedSteps ?? []).map((step, index) => ({
-            id: step.id,
-            ordinal: index,
-            heading: step.heading || '',
-            bodyMarkdown: step.bodyMarkdown || '',
-            imageUrl: step.imageUrl,
-            ctaLabel: step.ctaLabel,
-            ctaRoute: step.ctaRoute,
-            anchor:
-              step.anchorKey && step.anchorTargetRoute && step.anchorPlacement
-                ? {
-                    key: step.anchorKey,
-                    targetRoute: step.anchorTargetRoute,
-                    placement: step.anchorPlacement as
-                      | 'top'
-                      | 'bottom'
-                      | 'left'
-                      | 'right'
-                      | 'top-start'
-                      | 'top-end'
-                      | 'bottom-start'
-                      | 'bottom-end',
-                  }
-                : null,
-          })),
-        }}
-        onMergeDraft={handleAiMergeDraft}
-      />
-
       <section className={styles.section} aria-labelledby="walkthrough-metadata-title">
         <h3 id="walkthrough-metadata-title" className={styles.sectionTitle}>
           Metadata
@@ -584,11 +608,15 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
           </div>
           <div className={styles.field}>
             <label className={styles.label} htmlFor="priority">Priority</label>
-            <input
+            <NumberStepper
               id="priority"
-              type="number"
-              className={styles.input}
-              {...register('priority', { valueAsNumber: true })}
+              className={styles.priorityStepper}
+              aria-label="Walkthrough priority"
+              value={Number.isFinite(watchedPriority) ? watchedPriority : 0}
+              min={0}
+              max={999}
+              step={1}
+              onChange={(next) => setValue('priority', next, { shouldDirty: true, shouldValidate: true })}
               {...{ 'data-testid': 'walkthrough-priority' }}
             />
           </div>
@@ -610,21 +638,60 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
         </h3>
         <div className={styles.fieldGrid}>
           <div className={styles.field}>
-            <label className={styles.label} htmlFor="project">Project</label>
-            <select
-              id="project"
-              className={styles.select}
-              {...register('project')}
+            <span className={styles.label} id="walkthrough-projects-label">
+              Projects
+            </span>
+            <div
+              className={styles.projectPicker}
+              role="group"
+              aria-labelledby="walkthrough-projects-label"
               {...{ 'data-testid': 'walkthrough-project-target' }}
             >
-              <option value="">Select project…</option>
-              {(projectsQuery.data ?? []).map((project) => (
-                <option key={project.id} value={project.name}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-            {errors.project && <p className={styles.fieldError}>{errors.project.message}</p>}
+              <div className={styles.projectPickerActions}>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={selectAllProjects}
+                  disabled={catalogProjects.length === 0}
+                  {...{ 'data-testid': 'walkthrough-projects-select-all' }}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={clearAllProjects}
+                  disabled={watchedProjects.length === 0}
+                  {...{ 'data-testid': 'walkthrough-projects-clear' }}
+                >
+                  Clear
+                </button>
+              </div>
+              <ul className={styles.projectPickerList}>
+                {catalogProjects.map((project) => {
+                  const checked = watchedProjects.includes(project.name);
+                  return (
+                    <li key={project.id}>
+                      <label className={styles.projectPickerOption}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleProject(project.name)}
+                          {...{ 'data-testid': `walkthrough-project-option-${project.name}` }}
+                        />
+                        <span>{project.name}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              {catalogProjects.length === 0 && (
+                <p className={styles.projectPickerHint}>No projects available.</p>
+              )}
+            </div>
+            {errors.projects && (
+              <p className={styles.fieldError}>{errors.projects.message ?? 'Select at least one project'}</p>
+            )}
           </div>
           <div className={styles.field}>
             <label className={styles.label} htmlFor="groupId">Group (optional)</label>
@@ -633,18 +700,64 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
               className={styles.select}
               {...register('groupId')}
               {...{ 'data-testid': 'walkthrough-group-target' }}
-              disabled={!watchedProject}
+              disabled={watchedProjects.length !== 1}
             >
-              <option value="">All project users</option>
+              <option value="">
+                {watchedProjects.length === 1 ? 'All project users' : 'Select a single project to filter by group'}
+              </option>
               {projectGroups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
                 </option>
               ))}
             </select>
+            {errors.groupId && <p className={styles.fieldError}>{errors.groupId.message}</p>}
+            {watchedProjects.length > 1 && (
+              <p className={styles.projectPickerHint}>
+                Group filters apply only when exactly one project is selected.
+              </p>
+            )}
           </div>
         </div>
       </section>
+
+      <WalkthroughAiDraftPanel
+        {...{ 'data-testid': 'walkthrough-ai-draft-panel' }}
+        projectId={watchedProjects[0] ?? ''}
+        currentDraft={{
+          internalName: watch('internalName') || '',
+          userTitle: watch('userTitle') || '',
+          whyItMatters: watch('whyItMatters') || '',
+          steps: (watchedSteps ?? []).map((step, index) => ({
+            id: step.id,
+            ordinal: index,
+            heading: step.heading || '',
+            bodyMarkdown: step.bodyMarkdown || '',
+            route: step.route,
+            imageUrl: step.imageUrl,
+            imageAlt: step.imageAlt,
+            ctaLabel: step.ctaLabel,
+            ctaRoute: step.ctaRoute,
+            anchor:
+              step.anchorKey && step.anchorTargetRoute && step.anchorPlacement
+                ? {
+                    key: step.anchorKey,
+                    targetRoute: step.anchorTargetRoute,
+                    placement: step.anchorPlacement as
+                      | 'top'
+                      | 'bottom'
+                      | 'left'
+                      | 'right'
+                      | 'top-start'
+                      | 'top-end'
+                      | 'bottom-start'
+                      | 'bottom-end',
+                  }
+                : null,
+          })),
+        }}
+        onMergeDraft={handleAiMergeDraft}
+      />
 
       <section className={styles.section} aria-labelledby="walkthrough-steps-title">
         <div className={styles.stepHeader}>
@@ -846,7 +959,7 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
         // data-testid-exempt — dialog root already exposes walkthrough-lifecycle-dialog when open
         <WalkthroughLifecycleDialog
           walkthrough={currentWalkthrough}
-          targetProject={watch('project') || ''}
+          targetProjects={watchedProjects}
           isOpen={lifecycleOpen}
           isPending={lifecyclePending}
           onClose={() => setLifecycleOpen(false)}
@@ -856,8 +969,8 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
               id: currentWalkthrough.id,
               mode,
               targeting: {
-                project: values.project,
-                groupId: values.groupId || null,
+                projects: values.projects,
+                groupId: values.projects.length === 1 ? values.groupId || null : null,
               },
               expectedUpdatedAt: currentWalkthrough.updatedAt,
             });

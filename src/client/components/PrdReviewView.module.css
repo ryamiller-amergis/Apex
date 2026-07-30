@@ -114,6 +114,159 @@
   color: var(--text-secondary);
 }
 
+.workflowSummary {
+  position: relative;
+  display: inline-flex;
+}
+
+.workflowBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.workflowBadge:hover,
+.workflowBadge[aria-expanded='true'] {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-primary));
+}
+
+.workflowBadge:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.workflowBadgeLabel {
+  font-weight: 650;
+}
+
+.workflowBadge svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+
+.workflowBadge[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.workflowPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 70;
+  width: min(360px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 12px 30px var(--shadow-md);
+}
+
+.workflowPopoverHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.workflowPopoverHeader strong {
+  font-size: 0.82rem;
+}
+
+.workflowPopoverHeader span {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+.workflowPath {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+.workflowPathSkipped {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.workflowStageList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflowStage {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflowStage > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workflowStage strong {
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+
+.workflowStage > div > span {
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  line-height: 1.35;
+}
+
+.workflowIncluded,
+.workflowSkipped {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.workflowIncluded {
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+  color: var(--success-color);
+}
+
+.workflowSkipped {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
 .title {
   font-size: 1.05rem;
   font-weight: 650;

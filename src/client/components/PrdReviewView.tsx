@@ -249,6 +249,113 @@ function statusLabel(status: PrdStatus): string {
   }
 }
 
+function workflowSummaryLabel(testCasesRequired: boolean, prototypeStageEnabled: boolean): string {
+  if (testCasesRequired && prototypeStageEnabled) return 'QA + Prototype';
+  if (testCasesRequired) return 'QA + Direct design docs';
+  if (prototypeStageEnabled) return 'Prototype only';
+  return 'Direct design docs';
+}
+
+const WorkflowSummaryBadge: React.FC<{
+  testCasesRequired: boolean;
+  prototypeStageEnabled: boolean;
+}> = ({ testCasesRequired, prototypeStageEnabled }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const summary = workflowSummaryLabel(testCasesRequired, prototypeStageEnabled);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (containerRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className={styles.workflowSummary} ref={containerRef}>
+      <button
+        type="button"
+        className={styles.workflowBadge}
+        aria-expanded={open}
+        aria-controls="prd-workflow-details"
+        onClick={() => setOpen((current) => !current)}
+      {...{ 'data-testid': 'prd-workflow-summary-toggle' }}>
+        <span className={styles.workflowBadgeLabel}>Workflow:</span> {summary}
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 4.5l3 3 3-3" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          id="prd-workflow-details"
+          className={styles.workflowPopover}
+          role="region"
+          aria-label="PRD workflow details"
+        >
+          <div className={styles.workflowPopoverHeader}>
+            <strong>PRD workflow</strong>
+            <span>Selected at interview kickoff</span>
+          </div>
+
+          <div className={styles.workflowPath} aria-label="PRD delivery path">
+            <span>PRD</span>
+            <span aria-hidden="true">→</span>
+            <span className={!testCasesRequired ? styles.workflowPathSkipped : undefined}>
+              {testCasesRequired ? 'Test cases' : 'No QA'}
+            </span>
+            <span aria-hidden="true">→</span>
+            <span>Approval</span>
+            <span aria-hidden="true">→</span>
+            <span className={!prototypeStageEnabled ? styles.workflowPathSkipped : undefined}>
+              {prototypeStageEnabled ? 'Prototype' : 'Direct'}
+            </span>
+            <span aria-hidden="true">→</span>
+            <span>Design docs</span>
+          </div>
+
+          <div className={styles.workflowStageList}>
+            <div className={styles.workflowStage}>
+              <div>
+                <strong>Test case generation</strong>
+                <span>Validates acceptance criteria and coverage before approval.</span>
+              </div>
+              <span className={testCasesRequired ? styles.workflowIncluded : styles.workflowSkipped}>
+                {testCasesRequired ? 'Included' : 'Skipped'}
+              </span>
+            </div>
+            <div className={styles.workflowStage}>
+              <div>
+                <strong>Prototype generation</strong>
+                <span>
+                  {prototypeStageEnabled
+                    ? 'Validates UX and user flows before design docs.'
+                    : 'Design docs are generated directly after PRD approval.'}
+                </span>
+              </div>
+              <span className={prototypeStageEnabled ? styles.workflowIncluded : styles.workflowSkipped}>
+                {prototypeStageEnabled ? 'Included' : 'Skipped'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short',
@@ -313,7 +420,7 @@ const PrdReadinessPanel: React.FC<{
   return (
     <div
       className={`${styles.readinessBanner} ${readinessBannerClass(readiness.severity)} ${expanded ? '' : styles.readinessBannerCollapsed}`}
-      data-testid="prd-readiness-panel"
+      {...{ 'data-testid': 'prd-readiness-panel' }}
     >
       <button
         type="button"
@@ -321,7 +428,7 @@ const PrdReadinessPanel: React.FC<{
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={expanded ? 'Collapse PRD readiness' : 'Expand PRD readiness'}
-      >
+      {...{ 'data-testid': 'prd-readiness-toggle' }}>
         <svg
           className={`${styles.readinessChevron} ${expanded ? styles.readinessChevronExpanded : ''}`}
           viewBox="0 0 16 16"
@@ -1117,6 +1224,7 @@ export const PrdReviewView: React.FC = () => {
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on prd id/fixBaseline/thread fields, not full prd
   }, [prd?.id, prd?.fixBaseline, prd?.prdAssistantThreadId, prdFixFlow.phase, finalizePrdFixCompletion]);
 
   // Poll the assistant thread until Apex finishes applying validation/coverage fixes.
@@ -1222,6 +1330,7 @@ export const PrdReviewView: React.FC = () => {
     void cancelPrdValidation.mutateAsync(id).catch(() => {
       /* non-fatal — server also guards auto-start while fixBaseline is set */
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on prd status/fixBaseline, not full prd
   }, [id, prd?.status, prd?.fixBaseline, prdFixFlow.phase, cancelPrdValidation]);
 
   // Clear bulk comment fix session once proposed changes land.
@@ -1511,7 +1620,7 @@ export const PrdReviewView: React.FC = () => {
               className={styles.sectionEditBtn}
               aria-label="Edit section"
               onClick={() => handleEditSection(index)}
-            >
+            {...{ 'data-testid': 'prd-section-edit-btn' }}>
               {pencilIcon}
             </button>
           </div>
@@ -1565,14 +1674,14 @@ export const PrdReviewView: React.FC = () => {
     ) : null;
 
   return (
-    <div className={styles.container} data-testid="prd-review">
+    <div className={styles.container} {...{ 'data-testid': 'prd-review' }}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
           <button
             className={styles.backBtn}
             onClick={() => navigate('/backlog?tab=prds')}
             type="button"
-          >
+          {...{ 'data-testid': 'prd-review-back-btn' }}>
             ←
           </button>
           <div className={styles.headerInfo}>
@@ -1580,7 +1689,7 @@ export const PrdReviewView: React.FC = () => {
               <h1 className={styles.title}>{prd.title}</h1>
               <span
                 className={`${styles.statusBadge} ${statusBadgeClass(prd.status)}`}
-                data-testid="prd-status-badge"
+                {...{ 'data-testid': 'prd-status-badge' }}
               >
                 {statusLabel(prd.status)}
               </span>
@@ -1652,6 +1761,10 @@ export const PrdReviewView: React.FC = () => {
                   <span className={styles.metaValue}>{prd.model}</span>
                 </span>
               )}
+              <WorkflowSummaryBadge
+                testCasesRequired={testCasesRequired}
+                prototypeStageEnabled={prototypeStageEnabled}
+              {...{ 'data-testid': 'prd-workflow-summary' }}/>
             </div>
             {sourceInterview && (
               <div className={styles.parentLinks}>
@@ -1662,7 +1775,7 @@ export const PrdReviewView: React.FC = () => {
                   }
                   type="button"
                   title={`View Interview: ${sourceInterview.title}`}
-                >
+                {...{ 'data-testid': 'prd-parent-interview-link' }}>
                   <svg
                     viewBox="0 0 14 14"
                     fill="none"
@@ -1703,7 +1816,7 @@ export const PrdReviewView: React.FC = () => {
             disabled={!prd.content && !prd.backlogJson}
             type="button"
             title="Download PRD Markdown and backlog JSON"
-          >
+          {...{ 'data-testid': 'prd-download-btn' }}>
             <svg
               viewBox="0 0 16 16"
               fill="none"
@@ -1725,7 +1838,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void generateTestCases.mutateAsync(prd.id)}
               disabled={generateTestCases.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generate-test-cases-btn' }}>
               {readiness.state === 'test_case_generation_failed' ? 'Regenerate Test Cases' : 'Generate Test Cases'}
             </button>
           )}
@@ -1736,7 +1849,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void recalculateTestCaseCoverage.mutateAsync(prd.id)}
               disabled={recalculateTestCaseCoverage.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-recalculate-coverage-btn' }}>
               {recalculateTestCaseCoverage.isPending
                 ? 'Re-evaluating Coverage…'
                 : 'Re-evaluate Coverage'}
@@ -1751,7 +1864,7 @@ export const PrdReviewView: React.FC = () => {
               title="Apex Assistant"
               aria-label="Apex Assistant"
               aria-expanded={assistantOpen}
-            >
+            {...{ 'data-testid': 'prd-assistant-toggle-btn' }}>
               <svg
                 viewBox="0 0 16 16"
                 fill="none"
@@ -1773,7 +1886,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void cancelPrdValidation.mutateAsync(prd.id)}
               disabled={cancelPrdValidation.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-cancel-validation-btn' }}>
               Cancel Validation
             </button>
           )}
@@ -1795,7 +1908,7 @@ export const PrdReviewView: React.FC = () => {
                     : undefined
               }
               type="button"
-              data-testid="submit-review-btn"
+              {...{ 'data-testid': 'submit-review-btn' }}
             >
               Submit for Review
             </button>
@@ -1823,7 +1936,7 @@ export const PrdReviewView: React.FC = () => {
                           : undefined
                     }
                     type="button"
-                    data-testid="approve-prd-btn"
+                    {...{ 'data-testid': 'approve-prd-btn' }}
                   >
                     Approve PRD
                   </button>
@@ -1844,7 +1957,7 @@ export const PrdReviewView: React.FC = () => {
                     onClick={() => void handleQaApprove()}
                     disabled={reviewTestCases.isPending}
                     type="button"
-                    data-testid="approve-qa-btn"
+                    {...{ 'data-testid': 'approve-qa-btn' }}
                   >
                     Approve QA
                   </button>
@@ -1864,7 +1977,7 @@ export const PrdReviewView: React.FC = () => {
                     ? 'Reviewers must approve the PRD before owner approval'
                     : undefined}
                   type="button"
-                  data-testid="approve-owner-btn"
+                  {...{ 'data-testid': 'approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
@@ -1886,7 +1999,7 @@ export const PrdReviewView: React.FC = () => {
                     : 'Create work items in Azure DevOps'
                 }
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-create-ado-items-btn' }}>
                 {createAdoItems.isPending ? 'Creating…' : 'Create in ADO'}
               </button>
             )}
@@ -1900,7 +2013,7 @@ export const PrdReviewView: React.FC = () => {
                 aria-haspopup="menu"
                 aria-expanded={actionMenuOpen}
                 aria-label="More actions"
-              >
+              {...{ 'data-testid': 'prd-actions-menu-btn' }}>
                 More
                 <svg
                   viewBox="0 0 16 16"
@@ -1930,7 +2043,7 @@ export const PrdReviewView: React.FC = () => {
                       }}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-approvals-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <rect x="2" y="2" width="12" height="12" rx="2" />
@@ -1951,7 +2064,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={createPrdValidationThread.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-validate-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <circle cx="8" cy="8" r="6" />
@@ -1971,7 +2084,7 @@ export const PrdReviewView: React.FC = () => {
                       }}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-edit-btn' }}>
                       <span className={styles.actionMenuIcon}>{pencilIcon}</span>
                       <span className={styles.actionMenuLabel}>Edit</span>
                     </button>
@@ -1987,7 +2100,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={withdrawPrd.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-withdraw-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M4 8h8" />
@@ -2012,7 +2125,7 @@ export const PrdReviewView: React.FC = () => {
                           ? `Reviewers: ${reviewerDisplayNames.join(', ')}`
                           : 'Assign reviewers'
                       }
-                    >
+                    {...{ 'data-testid': 'prd-actions-reassign-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <circle cx="6" cy="5" r="2.5" />
@@ -2038,7 +2151,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={deletePrd.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-delete-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <polyline points="2 4 4 4 14 4" />
@@ -2063,7 +2176,7 @@ export const PrdReviewView: React.FC = () => {
           subtitle={apexFixRunningBanner.subtitle}
           hint={apexFixRunningBanner.hint}
           onCancel={apexFixRunningBanner.showCancel ? handleFixValidationCancel : undefined}
-        />
+        {...{ 'data-testid': 'prd-apex-fix-running-banner' }}/>
       )}
 
       {/* Unified Option-A strip while Fix-with-Apex reviewing + baseline diffs exist */}
@@ -2130,7 +2243,7 @@ export const PrdReviewView: React.FC = () => {
                         onClick={() => void handleStartFixValidation()}
                         disabled={fixPrdValidation.isPending}
                         type="button"
-                      >
+                      {...{ 'data-testid': 'prd-start-fix-btn' }}>
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
                           <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
@@ -2144,7 +2257,7 @@ export const PrdReviewView: React.FC = () => {
                         onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
                         disabled={createPrdValidationThread.isPending}
                         type="button"
-                      >
+                      {...{ 'data-testid': 'prd-revalidate-btn' }}>
                         Re-run
                       </button>
                     )}
@@ -2255,7 +2368,7 @@ export const PrdReviewView: React.FC = () => {
                     </div>
                   );
                 })()}
-              />
+              {...{ 'data-testid': 'prd-readiness-panel-mount' }}/>
             )}
           </>
         );
@@ -2275,6 +2388,7 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => navigate(`/backlog/design-plan/${id}`)}
               type="button"
+              {...{ 'data-testid': 'prd-design-plan-link' }}
             >
               View Design Plan →
             </button>
@@ -2294,7 +2408,7 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-design-prototypes-link' }}>
               View Design Prototypes →
             </button>
           </div>
@@ -2315,7 +2429,7 @@ export const PrdReviewView: React.FC = () => {
               }}
               disabled={generatePrototypes.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generate-prototypes-btn' }}>
               {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
             </button>
           </div>
@@ -2347,7 +2461,7 @@ export const PrdReviewView: React.FC = () => {
                       onClick={() => navigate(`/backlog/design-doc/${doc.id}`)}
                       type="button"
                       title={`View Design Doc: ${doc.title}`}
-                    >
+                    {...{ 'data-testid': 'prd-design-doc-link' }}>
                       <svg
                         viewBox="0 0 14 14"
                         fill="none"
@@ -2368,7 +2482,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.showMoreChip}
                       onClick={() => setShowAllDocs(true)}
                       type="button"
-                    >
+                    {...{ 'data-testid': 'prd-show-all-docs-btn' }}>
                       +{hiddenCount} more
                     </button>
                   )}
@@ -2377,7 +2491,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.showMoreChip}
                       onClick={() => setShowAllDocs(false)}
                       type="button"
-                    >
+                    {...{ 'data-testid': 'prd-show-fewer-docs-btn' }}>
                       Show less
                     </button>
                   )}
@@ -2401,7 +2515,7 @@ export const PrdReviewView: React.FC = () => {
               }}
               disabled={createDesignDoc.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-create-design-doc-btn' }}>
               {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Docs'}
             </button>
           </div>
@@ -2472,10 +2586,10 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${styles.active}`}
               disabled
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generating-tab-preview' }}>
               Preview
             </button>
-            <button className={styles.tab} disabled type="button">
+            <button className={styles.tab} disabled type="button" {...{ 'data-testid': 'prd-generating-tab-backlog' }}>
               Backlog
             </button>
           </div>
@@ -2586,7 +2700,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
               onClick={() => setActiveTab('preview')}
               type="button"
-              data-testid="prd-tab-preview"
+              {...{ 'data-testid': 'prd-tab-preview' }}
             >
               Preview
             </button>
@@ -2594,7 +2708,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'backlog' ? styles.active : ''}`}
               onClick={() => setActiveTab('backlog')}
               type="button"
-              data-testid="prd-tab-backlog"
+              {...{ 'data-testid': 'prd-tab-backlog' }}
             >
               Backlog
             </button>
@@ -2603,7 +2717,7 @@ export const PrdReviewView: React.FC = () => {
                 className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
                 onClick={() => setActiveTab('validation')}
                 type="button"
-                data-testid="prd-tab-validation"
+                {...{ 'data-testid': 'prd-tab-validation' }}
               >
                 Validation
               </button>
@@ -2614,7 +2728,7 @@ export const PrdReviewView: React.FC = () => {
               type="button"
               title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
               aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            >
+            {...{ 'data-testid': 'prd-tab-fullscreen-btn' }}>
               {isFullscreen ? (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
@@ -2969,7 +3083,7 @@ export const PrdReviewView: React.FC = () => {
                         disabled={refreshPrdValidation.isPending}
                         type="button"
                         style={{ marginTop: '0.5rem' }}
-                      >
+                      {...{ 'data-testid': 'prd-refresh-validation-btn' }}>
                         Refresh
                       </button>
                     </div>
@@ -2994,10 +3108,11 @@ export const PrdReviewView: React.FC = () => {
           isPending={overridePrdReadiness.isPending}
           onConfirm={(reason) => void handleOverrideReadiness(reason)}
           onCancel={() => setShowOverrideModal(false)}
-        />
+        {...{ 'data-testid': 'prd-override-readiness-modal' }}/>
       )}
 
       {showEditModal && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -3006,7 +3121,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Edit PRD"
-        >
+        {...{ 'data-testid': 'prd-edit-modal' }}>
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Edit PRD</h3>
             <textarea
@@ -3014,21 +3129,21 @@ export const PrdReviewView: React.FC = () => {
               value={editModalContent}
               onChange={(e) => setEditModalContent(e.target.value)}
               placeholder="Write your PRD in Markdown…"
-            />
+            {...{ 'data-testid': 'prd-edit-modal-textarea' }}/>
             <div className={styles.editActions}>
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveEditModal()}
                 disabled={updateContent.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-edit-modal-save-btn' }}>
                 {updateContent.isPending ? 'Saving…' : 'Save'}
               </button>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setShowEditModal(false)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-edit-modal-cancel-btn' }}>
                 Cancel
               </button>
             </div>
@@ -3038,6 +3153,7 @@ export const PrdReviewView: React.FC = () => {
 
       {/* ── Section edit modal ──────────────────────────────────────────────── */}
       {editingSectionIndex !== null && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -3046,6 +3162,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Edit section"
+          {...{ 'data-testid': 'prd-section-edit-modal' }}
         >
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Edit Section</h3>
@@ -3054,21 +3171,21 @@ export const PrdReviewView: React.FC = () => {
               value={sectionEditContent}
               onChange={(e) => setSectionEditContent(e.target.value)}
               placeholder="Section content in Markdown…"
-            />
+            {...{ 'data-testid': 'prd-section-edit-textarea' }}/>
             <div className={styles.editActions}>
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveSectionEdit()}
                 disabled={updateContent.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-section-edit-save-btn' }}>
                 {updateContent.isPending ? 'Saving…' : 'Save section'}
               </button>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setEditingSectionIndex(null)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-section-edit-cancel-btn' }}>
                 Cancel
               </button>
             </div>
@@ -3088,10 +3205,11 @@ export const PrdReviewView: React.FC = () => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
-        />
+        {...{ 'data-testid': 'prd-delete-confirm-modal' }}/>
       )}
 
       {pendingSelector && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.commentModal}
           onClick={(e) => {
@@ -3099,7 +3217,7 @@ export const PrdReviewView: React.FC = () => {
           }}
           role="dialog"
           aria-modal="true"
-        >
+        {...{ 'data-testid': 'prd-comment-modal' }}>
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle}>Add Comment</h3>
             <blockquote className={styles.commentModalQuote}>
@@ -3111,14 +3229,15 @@ export const PrdReviewView: React.FC = () => {
               onChange={(e) => setNewCommentBody(e.target.value)}
               placeholder="Write your comment…"
               rows={3}
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- focus comment body when opening add-comment dialog
               autoFocus
-            />
+            {...{ 'data-testid': 'prd-comment-modal-textarea' }}/>
             <div className={styles.commentModalActions}>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setPendingSelector(null)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-comment-modal-cancel-btn' }}>
                 Cancel
               </button>
               <button
@@ -3126,7 +3245,7 @@ export const PrdReviewView: React.FC = () => {
                 onClick={() => void handleSubmitComment()}
                 disabled={!newCommentBody.trim() || createComment.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-comment-modal-submit-btn' }}>
                 {createComment.isPending ? 'Posting…' : 'Post Comment'}
               </button>
             </div>
@@ -3143,7 +3262,7 @@ export const PrdReviewView: React.FC = () => {
             createAdoItems.mutateAsync({ prdId: prd.id, ...req })
           }
           onCancel={() => setShowAdoModal(false)}
-        />
+        {...{ 'data-testid': 'prd-create-ado-modal' }}/>
       )}
 
       {showReassignModal && prd && (
@@ -3162,10 +3281,11 @@ export const PrdReviewView: React.FC = () => {
           onConfirm={(selections) => void handleReassignConfirm(selections)}
           onCancel={() => setShowReassignModal(false)}
           isSubmitting={reassignApprovers.isPending}
-        />
+        {...{ 'data-testid': 'prd-reassign-approvers-modal' }}/>
       )}
 
       {showApprovalsModal && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -3174,7 +3294,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Approvals"
-        >
+        {...{ 'data-testid': 'prd-approvals-modal' }}>
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Approvals</h3>
             <ReviewerApprovalChecklist groups={approvalChecklistGroups} />
@@ -3183,7 +3303,7 @@ export const PrdReviewView: React.FC = () => {
                 className={styles.btnSecondary}
                 onClick={() => setShowApprovalsModal(false)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-approvals-modal-close-btn' }}>
                 Close
               </button>
             </div>
@@ -3196,7 +3316,7 @@ export const PrdReviewView: React.FC = () => {
         open={assistantOpen}
         onClose={() => setAssistantOpen(false)}
         existingThreadId={prd.prdAssistantThreadId}
-      />
+      {...{ 'data-testid': 'prd-assistant-panel' }}/>
     </div>
   );
 };

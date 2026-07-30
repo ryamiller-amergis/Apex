@@ -104,7 +104,7 @@ describe('useCreateWalkthrough', () => {
         userTitle: 'Welcome',
         whyItMatters: 'Because',
         steps: [{ ordinal: 0, heading: 'Step 1', bodyMarkdown: 'Hello' }],
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
       });
     });
 

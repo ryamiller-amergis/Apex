@@ -48,12 +48,85 @@ jest.mock('../services/telemetry', () => ({
   trackEvent: jest.fn(),
 }));
 
+jest.mock('../services/walkthroughAnchorRegistryService', () => ({
+  getAnchorByKey: jest.fn().mockImplementation(async (key: string) => {
+    const known = [
+      'user-menu-trigger',
+      'whats-new-modal',
+      'user-menu-profile',
+      'profile-identity',
+      'profile-bio',
+      'profile-theme',
+      'profile-notifications',
+    ];
+    if (!known.includes(key)) return null;
+    return {
+      id: `id-${key}`,
+      anchorKey: key,
+      testId: key === 'profile-identity' ? 'profile-identity-section' : key,
+      label: key,
+      suggestedRoute: null,
+      approvedRoute: key.startsWith('profile') ? '/profile' : '/home',
+      allowedPlacements: ['bottom', 'top', 'left', 'right'],
+      smartTags: [],
+      sourceKind: 'explicit',
+      sourceLocations: [],
+      sourceHash: `mock:${key}`,
+      reviewStatus: 'approved',
+      isActive: true,
+      lastSeenAt: null,
+      missingSince: null,
+      deletedAt: null,
+      aiProvenance: null,
+      createdBy: 'system',
+      createdAt: '2026-07-28T00:00:00.000Z',
+      updatedBy: 'system',
+      updatedAt: '2026-07-28T00:00:00.000Z',
+    };
+  }),
+  listAuthoringAnchorEntries: jest.fn().mockResolvedValue([
+    {
+      key: 'user-menu-trigger',
+      testId: 'user-menu-trigger',
+      label: 'User menu',
+      targetRoute: '/home',
+      allowedPlacements: ['bottom', 'left', 'right', 'top'],
+    },
+  ]),
+  listCatalogRecordsForResolution: jest.fn().mockResolvedValue([
+    {
+      id: 'id-user-menu-trigger',
+      anchorKey: 'user-menu-trigger',
+      testId: 'user-menu-trigger',
+      label: 'User menu',
+      suggestedRoute: null,
+      approvedRoute: '/home',
+      allowedPlacements: ['bottom', 'left', 'right', 'top'],
+      smartTags: [],
+      sourceKind: 'explicit',
+      sourceLocations: [],
+      sourceHash: 'mock:user-menu-trigger',
+      reviewStatus: 'approved',
+      isActive: true,
+      lastSeenAt: null,
+      missingSince: null,
+      deletedAt: null,
+      aiProvenance: null,
+      createdBy: 'system',
+      createdAt: '2026-07-28T00:00:00.000Z',
+      updatedBy: 'system',
+      updatedAt: '2026-07-28T00:00:00.000Z',
+    },
+  ]),
+}));
+
 import {
   archiveWalkthrough,
   createWalkthrough,
   getAccessibleDefinition,
   getAcknowledgementReport,
   getNextEligible,
+  getWalkthroughAdmin,
   listAnchorMisses,
   listReplay,
   publishWalkthrough,
@@ -91,7 +164,9 @@ function stepRow(overrides: Record<string, unknown> = {}) {
     ordinal: 0,
     heading: 'Welcome',
     bodyMarkdown: 'Hello',
+    route: null,
     imageUrl: null,
+    imageAlt: null,
     ctaLabel: null,
     ctaRoute: null,
     anchorKey: null,
@@ -116,6 +191,7 @@ function definitionRow(overrides: Record<string, unknown> = {}) {
     createdAt: '2026-07-01T00:00:00Z',
     updatedBy: 'admin-1',
     updatedAt: '2026-07-01T00:00:00Z',
+    generationProvenance: null,
     steps: [stepRow()],
     targetingRules: [{ id: 'r1', type: 'project', value: 'Apex', walkthroughId: 'wt-1', createdAt: '2026-07-01T00:00:00Z' }],
     progress: [],
@@ -161,7 +237,7 @@ describe('walkthroughService (TBI-002)', () => {
             internalName: 'x',
             userTitle: 'X',
             whyItMatters: 'y',
-            targeting: { project: 'Apex' },
+            targeting: { projects: ['Apex'] },
             steps: [{ ordinal: 0, heading: 'A', bodyMarkdown: 'a' }],
           },
           actor,
@@ -174,11 +250,43 @@ describe('walkthroughService (TBI-002)', () => {
         internalName: 'ai',
         userTitle: 'AI',
         whyItMatters: 'w',
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
         steps: [{ ordinal: 0, heading: 'A', bodyMarkdown: 'a' }],
       });
       expect(result.valid).toBe(true);
       expect(result.draft.internalName).toBe('ai');
+    });
+
+    it('maps Step destination, image alt, and generation provenance from storage', async () => {
+      const generationProvenance = {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        skillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+        generatedAt: '2026-07-30T01:00:00.000Z',
+        runId: 'run-1',
+        threadId: 'thread-1',
+      };
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          generationProvenance,
+          steps: [
+            stepRow({
+              route: '/profile',
+              imageUrl: '/brand-lockup.svg',
+              imageAlt: 'Apex logo',
+            }),
+          ],
+        }),
+      );
+
+      const walkthrough = await getWalkthroughAdmin('wt-1');
+      expect(walkthrough.generationProvenance).toEqual(generationProvenance);
+      expect(walkthrough.steps[0]).toMatchObject({
+        route: '/profile',
+        imageUrl: '/brand-lockup.svg',
+        imageAlt: 'Apex logo',
+        anchor: null,
+      });
     });
 
     it('VT-11 — silent publish preserves revision; reshow increments (DoD)', async () => {
@@ -194,7 +302,7 @@ describe('walkthroughService (TBI-002)', () => {
 
       const silent = await publishWalkthrough(
         'wt-1',
-        { mode: 'silent', targeting: { project: 'Apex' } },
+        { mode: 'silent', targeting: { projects: ['Apex'] } },
         actor,
       );
       expect(silent.revision).toBe(2);
@@ -206,7 +314,7 @@ describe('walkthroughService (TBI-002)', () => {
 
       const reshow = await publishWalkthrough(
         'wt-1',
-        { mode: 'reshow', targeting: { project: 'Apex' } },
+        { mode: 'reshow', targeting: { projects: ['Apex'] } },
         actor,
       );
       expect(reshow.revision).toBe(3);
@@ -658,6 +766,71 @@ describe('walkthroughService (TBI-002)', () => {
         expect.objectContaining({ status: 'dismissed' }),
       );
       expect(progress.status).toBe('dismissed');
+      expect(progress.acknowledged).toBe(true);
+    });
+
+    it('keeps completed sticky when replay dismisses', async () => {
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall <= 2) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([
+            {
+              walkthroughId: 'wt-1',
+              userId: 'user-1',
+              revision: 1,
+              status: 'completed',
+              lastStepId: 'step-1',
+              seenAt: '2026-07-01T00:00:00Z',
+              acknowledgedAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T00:00:00Z',
+            },
+          ]),
+        };
+      });
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+      const values = jest.fn().mockReturnThis();
+      const onConflictDoUpdate = jest.fn().mockReturnThis();
+      const returning = jest.fn().mockResolvedValue([
+        {
+          walkthroughId: 'wt-1',
+          userId: 'user-1',
+          revision: 1,
+          status: 'completed',
+          lastStepId: 'step-1',
+          seenAt: '2026-07-01T00:00:00Z',
+          acknowledgedAt: '2026-07-01T00:00:00Z',
+          updatedAt: '2026-07-02T00:00:00Z',
+        },
+      ]);
+      mockDb.insert.mockImplementation(() => ({ values, onConflictDoUpdate, returning }));
+
+      const progress = await updateOwnProgress('Apex', 'wt-1', 'user-1', {
+        status: 'dismissed',
+        revision: 1,
+        lastStepId: 'step-1',
+      });
+
+      expect(values).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
+      expect(progress.status).toBe('completed');
       expect(progress.acknowledged).toBe(true);
     });
 

@@ -12,6 +12,42 @@ const mockGenerate = jest.fn();
 const mockRedo = jest.fn();
 const mockValidate = jest.fn();
 
+jest.mock('../../hooks/useProjectSkillConfig', () => ({
+  useAvailableModels: () => ({
+    data: [
+      { id: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet' },
+      { id: 'gpt-4o', displayName: 'GPT-4o' },
+    ],
+    isLoading: false,
+  }),
+  useProjectSkillConfig: () => ({
+    data: {
+      skillRepo: 'Apex',
+      skillBranch: 'main',
+      skillProvider: 'github',
+    },
+    isLoading: false,
+  }),
+}));
+
+jest.mock('../../hooks/useChatThreads', () => ({
+  useSkillRepos: () => ({
+    data: [{ id: 'repo-1', name: 'Apex', defaultBranch: 'main' }],
+    isLoading: false,
+  }),
+  useSkillList: () => ({
+    data: [
+      {
+        id: 'skill-1',
+        name: 'Custom generation',
+        description: 'Custom walkthrough generation',
+        path: '.cursor/skills/custom/SKILL.md',
+      },
+    ],
+    isLoading: false,
+  }),
+}));
+
 jest.mock('../../hooks/useWalkthroughAiDraft', () => ({
   useWalkthroughAiPolicyPresets: () => ({
     data: {
@@ -167,6 +203,84 @@ describe('WalkthroughAiDraftPanel', () => {
     });
     expect(screen.getByTestId('walkthrough-proposal-step-s1')).toBeInTheDocument();
     expect(screen.getByText('Step One')).toBeInTheDocument();
+  });
+
+  it('renders Cursor model and skill selectors', () => {
+    renderPanel();
+    expect(screen.getByTestId('walkthrough-ai-cursor-model')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-ai-skill-path')).toBeInTheDocument();
+    const modelSelect = screen.getByTestId('walkthrough-ai-cursor-model') as HTMLSelectElement;
+    expect(modelSelect.options.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('walkthrough-ai-skill-path')).toHaveValue(
+      '.cursor/skills/walkthrough-generation/SKILL.md',
+    );
+    expect(screen.queryByText(/Bedrock/i)).not.toBeInTheDocument();
+  });
+
+  it('displays provenance after generation', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [{ id: 's1', ordinal: 0, heading: 'Step', bodyMarkdown: 'Body' }];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: '2026-07-29T00:00:00Z',
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+        generationProvenance: {
+          provider: 'cursor',
+          model: 'claude-3-5-sonnet',
+          skillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+          generatedAt: '2026-07-29T00:00:00Z',
+          runId: 'run-123',
+        },
+      },
+    });
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Generate');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('walkthrough-ai-provenance')).toBeInTheDocument();
+    });
+    const provenance = screen.getByTestId('walkthrough-ai-provenance');
+    expect(provenance).toHaveTextContent('Provider: cursor');
+    expect(provenance).toHaveTextContent('Model: claude-3-5-sonnet');
+    expect(provenance).toHaveTextContent('Skill: .cursor/skills/walkthrough-generation/SKILL.md');
+  });
+
+  it('passes model and skillPath overrides to generate', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'T', whyItMatters: 'W' };
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps: [],
+        units: buildProposalUnits(fields, []),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+
+    renderPanel();
+    await user.selectOptions(screen.getByTestId('walkthrough-ai-cursor-model'), 'gpt-4o');
+    await user.selectOptions(
+      screen.getByTestId('walkthrough-ai-skill-path'),
+      '.cursor/skills/custom/SKILL.md',
+    );
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Test');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+
+    await waitFor(() => expect(mockGenerate).toHaveBeenCalled());
+    const call = mockGenerate.mock.calls[0][0];
+    expect(call.model).toBe('gpt-4o');
+    expect(call.skillPath).toBe('.cursor/skills/custom/SKILL.md');
   });
 
   it('PBI-004 AC-0/AC-3 — accept fields and reject step then merge only accepted', async () => {

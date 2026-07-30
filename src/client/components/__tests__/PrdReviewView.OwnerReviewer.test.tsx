@@ -234,6 +234,54 @@ describe('Owner display in header', () => {
   });
 });
 
+describe('PRD workflow summary', () => {
+  it('shows the compact workflow and explains included QA and prototype stages', () => {
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        testCasesRequired: true,
+        prototypeStageEnabled: true,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    const workflowButton = screen.getByRole('button', { name: 'Workflow: QA + Prototype' });
+    expect(workflowButton).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(workflowButton);
+
+    expect(workflowButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('region', { name: 'PRD workflow details' })).toBeInTheDocument();
+    expect(screen.getByText('Selected at interview kickoff')).toBeInTheDocument();
+    expect(screen.getByText('Validates acceptance criteria and coverage before approval.')).toBeInTheDocument();
+    expect(screen.getByText('Validates UX and user flows before design docs.')).toBeInTheDocument();
+    expect(screen.getAllByText('Included')).toHaveLength(2);
+  });
+
+  it('labels a workflow with both optional stages disabled as direct design docs', () => {
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        testCasesRequired: false,
+        prototypeStageEnabled: false,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    const workflowButton = screen.getByRole('button', { name: 'Workflow: Direct design docs' });
+    fireEvent.click(workflowButton);
+
+    expect(screen.getByText('Design docs are generated directly after PRD approval.')).toBeInTheDocument();
+    expect(screen.getAllByText('Skipped')).toHaveLength(2);
+  });
+});
+
 describe('Submit for review', () => {
   it('auto-submits with kickoff reviewers when readiness is complete — no Submit button', async () => {
     mockUseAppShell.mockReturnValue({

@@ -17,7 +17,7 @@ test.describe('Platform Admin Walkthrough lifecycle @walkthroughs', () => {
     await page.getByLabel(/internal name/i).fill('feat-003-lifecycle');
     await page.getByLabel(/user title/i).fill('Lifecycle Walkthrough');
     await page.getByLabel(/why it matters/i).fill('Teaches lifecycle controls');
-    await page.getByTestId('walkthrough-project-target').selectOption({ label: /./ });
+    await page.getByTestId('walkthrough-project-target').locator('input[type="checkbox"]').first().check();
     await page.getByLabel(/^heading$/i).first().fill('Intro');
     await page.getByLabel(/markdown body/i).first().fill('Body');
     await page.getByTestId('walkthrough-save-draft').click();

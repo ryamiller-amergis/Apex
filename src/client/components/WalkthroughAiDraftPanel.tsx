@@ -12,14 +12,24 @@ import {
   type WalkthroughAiProposalUnit,
   type WalkthroughAiUnitDecision,
 } from '../../shared/types/walkthroughAiDraft';
-import { listWalkthroughAnchors } from '../../shared/walkthroughAnchors';
+import type { WalkthroughGenerationProvenance } from '../../shared/types/walkthrough';
 import {
   useGenerateWalkthroughAiDraft,
   useRedoWalkthroughAiUnit,
   useValidateWalkthroughAiUnit,
   useWalkthroughAiPolicyPresets,
 } from '../hooks/useWalkthroughAiDraft';
+import { useWalkthroughAnchors } from '../hooks/usePlatformAdminWalkthroughs';
+import {
+  useAvailableModels,
+  useProjectSkillConfig,
+} from '../hooks/useProjectSkillConfig';
+import { useSkillList, useSkillRepos } from '../hooks/useChatThreads';
 import styles from './WalkthroughAiDraft.module.css';
+
+const DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH =
+  '.cursor/skills/walkthrough-generation/SKILL.md';
+const APEX_REPOSITORY_PROJECT = 'Apex';
 
 interface WalkthroughAiDraftPanelProps {
   projectId: string;
@@ -32,6 +42,8 @@ interface WalkthroughAiDraftPanelProps {
 interface IntentFormValues {
   intent: string;
   policyPreset: WalkthroughAiPolicyPresetId;
+  cursorModel: string;
+  skillPath: string;
 }
 
 function unitTitle(unit: WalkthroughAiProposalUnit): string {
@@ -39,11 +51,6 @@ function unitTitle(unit: WalkthroughAiProposalUnit): string {
     return 'Walkthrough fields';
   }
   return unit.value.heading || 'Step';
-}
-
-function anchorLabel(key: string | undefined): string | null {
-  if (!key) return null;
-  return listWalkthroughAnchors().find((a) => a.key === key)?.label ?? key;
 }
 
 export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = ({
@@ -56,6 +63,35 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const generateMutation = useGenerateWalkthroughAiDraft();
   const redoMutation = useRedoWalkthroughAiUnit();
   const validateMutation = useValidateWalkthroughAiUnit();
+  const anchorsQuery = useWalkthroughAnchors();
+
+  const anchorLabel = (key: string | undefined): string | null => {
+    if (!key) return null;
+    return anchorsQuery.data?.find((a) => a.key === key)?.label ?? key;
+  };
+  const modelsQuery = useAvailableModels();
+  const skillConfigQuery = useProjectSkillConfig(APEX_REPOSITORY_PROJECT);
+  const skillConfig = skillConfigQuery.data;
+  const skillReposQuery = useSkillRepos(
+    APEX_REPOSITORY_PROJECT,
+    skillConfig?.skillProvider,
+  );
+  const skillRepo =
+    skillConfig?.skillRepo ||
+    skillReposQuery.data?.find(
+      (repo) => repo.name.toLowerCase() === APEX_REPOSITORY_PROJECT.toLowerCase(),
+    )?.name ||
+    skillReposQuery.data?.[0]?.name ||
+    null;
+  const skillBranch =
+    skillConfig?.skillBranch ||
+    skillReposQuery.data?.find((repo) => repo.name === skillRepo)?.defaultBranch;
+  const skillsQuery = useSkillList(
+    APEX_REPOSITORY_PROJECT,
+    skillRepo,
+    skillBranch,
+    skillConfig?.skillProvider,
+  );
 
   const [proposal, setProposal] = useState<WalkthroughAiProposal | null>(null);
   const [decisions, setDecisions] = useState<Record<string, WalkthroughAiUnitDecision>>({});
@@ -63,6 +99,7 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const [statusMessage, setStatusMessage] = useState('');
   const [unitErrors, setUnitErrors] = useState<Record<string, string>>({});
   const [redoingUnitId, setRedoingUnitId] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<WalkthroughGenerationProvenance | null>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const [policyPreset, setPolicyPreset] = useState<WalkthroughAiPolicyPresetId>(
@@ -82,6 +119,8 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
             `Intent must be at most ${selectedPolicy.maxIntentLength} characters`,
           ),
         policyPreset: z.enum(['A', 'B', 'C']),
+        cursorModel: z.string(),
+        skillPath: z.string(),
       }),
     [selectedPolicy.maxIntentLength],
   );
@@ -96,6 +135,8 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
     defaultValues: {
       intent: '',
       policyPreset: DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
+      cursorModel: '',
+      skillPath: DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
     },
   });
 
@@ -107,7 +148,7 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
 
   const onGenerate = handleSubmit(async (values) => {
     if (!projectId.trim()) {
-      setStatusMessage('Select a project target before generating an AI draft.');
+      setStatusMessage('Select at least one project target before generating an AI draft.');
       return;
     }
     setStatusMessage('Generating draft…');
@@ -117,6 +158,8 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
         projectId,
         intent: values.intent,
         policyPreset: values.policyPreset,
+        ...(values.cursorModel?.trim() ? { model: values.cursorModel.trim() } : {}),
+        ...(values.skillPath?.trim() ? { skillPath: values.skillPath.trim() } : {}),
         existingDraft: {
           internalName: currentDraft.internalName,
           userTitle: currentDraft.userTitle,
@@ -125,6 +168,7 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
         },
       });
       setProposal(result.proposal);
+      setProvenance(result.proposal.generationProvenance ?? null);
       const initial: Record<string, WalkthroughAiUnitDecision> = {};
       for (const unit of result.proposal.units) {
         initial[unit.unitId] = { status: 'pending', imageConfirmed: false };
@@ -286,8 +330,54 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
           <p className={styles.panelHint}>
             Limits for this run: intent {selectedPolicy.maxIntentLength} chars · redo feedback{' '}
             {selectedPolicy.maxRedoFeedbackLength} chars · timeout {selectedPolicy.timeoutMs / 1000}s
-            · auto-retries {selectedPolicy.retries}. Default is Balanced (A). Uses project Bedrock
-            model settings.
+            · auto-retries {selectedPolicy.retries}. Default is Balanced (A).
+          </p>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="walkthrough-ai-cursor-model">
+            Cursor model (optional)
+          </label>
+          <select
+            id="walkthrough-ai-cursor-model"
+            className={styles.select}
+            {...register('cursorModel')}
+            disabled={generateMutation.isPending}
+            {...{ 'data-testid': 'walkthrough-ai-cursor-model' }}
+          >
+            <option value="">Project/default Cursor model</option>
+            {(modelsQuery.data ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="walkthrough-ai-skill-path">
+            Skill
+          </label>
+          <select
+            id="walkthrough-ai-skill-path"
+            className={styles.select}
+            {...register('skillPath')}
+            disabled={generateMutation.isPending || skillsQuery.isLoading}
+            {...{ 'data-testid': 'walkthrough-ai-skill-path' }}
+          >
+            <option value={DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH}>
+              Walkthrough generation (default)
+            </option>
+            {(skillsQuery.data ?? [])
+              .filter((skill) => skill.path !== DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH)
+              .map((skill) => (
+                <option key={skill.id} value={skill.path}>
+                  {skill.name}
+                </option>
+              ))}
+          </select>
+          <p className={styles.panelHint}>
+            Choose from the skills available through the Apex project repository connection.
           </p>
         </div>
 
@@ -325,6 +415,23 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
       >
         {statusMessage || 'Provide an intent to generate a staged proposal.'}
       </p>
+
+      {provenance && (
+        <div
+          className={styles.unitCard}
+          {...{ 'data-testid': 'walkthrough-ai-provenance' }}
+        >
+          <strong>Generation provenance</strong>
+          <div className={styles.proposedBlock}>
+            <div>Provider: {provenance.provider}</div>
+            <div>Model: {provenance.model}</div>
+            <div>Skill: {provenance.skillPath}</div>
+            <div>Generated: {new Date(provenance.generatedAt).toLocaleString()}</div>
+            {provenance.runId && <div>Run ID: {provenance.runId}</div>}
+            {provenance.threadId && <div>Thread ID: {provenance.threadId}</div>}
+          </div>
+        </div>
+      )}
 
       {proposal ? (
         <div

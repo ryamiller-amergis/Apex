@@ -49,10 +49,18 @@ import type {
 } from '../../shared/types/loadTest';
 import type {
   WalkthroughAnchorPlacement,
+  WalkthroughGenerationProvenance,
   WalkthroughLifecycle,
   WalkthroughProgressStatus,
   WalkthroughTargetRuleType,
 } from '../../shared/types/walkthrough';
+import type {
+  WalkthroughAnchorAiProvenance,
+  WalkthroughAnchorReviewStatus,
+  WalkthroughAnchorSourceKind,
+  WalkthroughAnchorSourceLocation,
+} from '../../shared/types/walkthroughAnchorRegistry';
+import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -1694,6 +1702,7 @@ export const walkthroughs = pgTable('walkthroughs', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedBy: text('updated_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  generationProvenance: jsonb('generation_provenance').$type<WalkthroughGenerationProvenance>(),
 }, (t) => ({
   lifecyclePriorityPublishedIdx: index('idx_walkthroughs_lifecycle_priority_published').on(
     t.lifecycle,
@@ -1708,12 +1717,14 @@ export const walkthroughSteps = pgTable('walkthrough_steps', {
   ordinal: integer('ordinal').notNull(),
   heading: text('heading').notNull(),
   bodyMarkdown: text('body_markdown').notNull().default(''),
+  /** First-class Step destination; existing DB column retained for compatibility. */
+  route: text('target_route'),
   imageUrl: text('image_url'),
+  imageAlt: text('image_alt'),
   ctaLabel: text('cta_label'),
   ctaRoute: text('cta_route'),
-  /** Flat nullable anchor columns — not a JSONB object (DoD-3). */
+  /** Flat nullable anchor columns — route is shared with the Step destination. */
   anchorKey: text('anchor_key'),
-  targetRoute: text('target_route'),
   placement: text('placement').$type<WalkthroughAnchorPlacement>(),
 }, (t) => ({
   ordinalUq: unique('uq_walkthrough_steps_ordinal').on(t.walkthroughId, t.ordinal),
@@ -1732,6 +1743,11 @@ export const walkthroughTargetingRules = pgTable('walkthrough_targeting_rules', 
 }, (t) => ({
   typeValueIdx: index('idx_walkthrough_targeting_rules_type_value').on(t.type, t.value),
   walkthroughIdx: index('idx_walkthrough_targeting_rules_walkthrough').on(t.walkthroughId),
+  walkthroughTypeValueUq: unique('uq_walkthrough_targeting_rules_walkthrough_type_value').on(
+    t.walkthroughId,
+    t.type,
+    t.value,
+  ),
 }));
 
 export const walkthroughProgress = pgTable('walkthrough_progress', {
@@ -1813,6 +1829,54 @@ export const walkthroughNotificationDeliveries = pgTable('walkthrough_notificati
     t.walkthroughId,
     t.revision,
   ),
+}));
+
+/** Smart Anchor Management — approved+active rows are the runtime catalog. */
+export const walkthroughAnchorRegistry = pgTable('walkthrough_anchor_registry', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  anchorKey: text('anchor_key').notNull(),
+  testId: text('test_id').notNull(),
+  label: text('label').notNull(),
+  suggestedRoute: text('suggested_route'),
+  approvedRoute: text('approved_route'),
+  allowedPlacements: jsonb('allowed_placements')
+    .$type<WalkthroughRegistryPlacement[]>()
+    .notNull()
+    .default(['bottom']),
+  smartTags: jsonb('smart_tags').$type<string[]>().notNull().default([]),
+  sourceKind: text('source_kind').$type<WalkthroughAnchorSourceKind>().notNull(),
+  sourceLocations: jsonb('source_locations')
+    .$type<WalkthroughAnchorSourceLocation[]>()
+    .notNull()
+    .default([]),
+  sourceHash: text('source_hash'),
+  reviewStatus: text('review_status')
+    .$type<WalkthroughAnchorReviewStatus>()
+    .notNull()
+    .default('pending'),
+  isActive: boolean('is_active').notNull().default(false),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+  missingSince: timestamp('missing_since', { withTimezone: true, mode: 'string' }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  aiProvenance: jsonb('ai_provenance').$type<WalkthroughAnchorAiProvenance>(),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  anchorKeyUq: uniqueIndex('uq_walkthrough_anchor_registry_anchor_key')
+    .on(t.anchorKey)
+    .where(sql`${t.deletedAt} IS NULL`),
+  testIdUq: uniqueIndex('uq_walkthrough_anchor_registry_test_id')
+    .on(t.testId)
+    .where(sql`${t.deletedAt} IS NULL`),
+  smartTagsGinIdx: index('idx_walkthrough_anchor_registry_smart_tags').using('gin', t.smartTags),
+  activeRouteStatusIdx: index('idx_walkthrough_anchor_registry_active_route_status')
+    .on(t.isActive, t.approvedRoute, t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
+  reviewStatusIdx: index('idx_walkthrough_anchor_registry_review_status')
+    .on(t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
 }));
 
 export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({

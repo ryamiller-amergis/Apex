@@ -112,3 +112,12 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubun
 ## Spacing & Sizing
 
 Align spacing with existing components — avoid arbitrary magic numbers. Prefer values from the existing scale (4, 8, 12, 16, 24, 32 px).
+
+## Data grids (admin tables)
+
+For tabular list views with filters and search, use the shared **Data Grid** pattern — do not invent a one-off layout.
+
+- Components: `DataGridToolbar`, `DataGridFilterPills`, styles in `DataGrid.module.css`
+- Layout: filter pills (default) or `DataGridFilterSelect` dropdowns when appropriate on the **left**, search on the **right** (same as Interviews)
+- Table: dedicated **Actions** column with ghost buttons; primary identifier column is **not** clickable
+- Procedure: load `.cursor/skills/data-grid-ui/SKILL.md` when adding or substantially changing a data grid

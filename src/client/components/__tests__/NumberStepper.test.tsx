@@ -13,10 +13,24 @@ describe('NumberStepper', () => {
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
     expect(screen.getByTestId('number-stepper-value')).toHaveTextContent('5');
 
-    await user.click(screen.getByRole('button', { name: 'Increase' }));
+    await user.click(screen.getByTestId('number-stepper-increase'));
     expect(onChange).toHaveBeenLastCalledWith(6);
 
     rerender(<NumberStepper value={1} min={1} max={10} step={1} onChange={onChange} />);
-    expect(screen.getByRole('button', { name: 'Decrease' })).toBeDisabled();
+    expect(screen.getByTestId('number-stepper-decrease')).toBeDisabled();
+  });
+
+  it('supports a custom data-testid prefix', () => {
+    render(
+      <NumberStepper
+        value={3}
+        min={0}
+        max={10}
+        onChange={jest.fn()}
+        {...{ 'data-testid': 'walkthrough-priority' }}
+      />,
+    );
+    expect(screen.getByTestId('walkthrough-priority')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-priority-value')).toHaveTextContent('3');
   });
 });

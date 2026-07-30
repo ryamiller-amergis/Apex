@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   UpdateWalkthroughProgressRequest,
   WalkthroughDefinition,
+  WalkthroughProgress,
   WalkthroughProgressStatus,
   WalkthroughReplayEntry,
 } from '../../shared/types/walkthrough';
@@ -32,6 +33,14 @@ function stepIndexFromProgress(
   if (!lastStepId) return 0;
   const idx = definition.steps.findIndex((s) => s.id === lastStepId);
   return idx >= 0 ? idx : 0;
+}
+
+export function initialStepIndexForReplay(
+  definition: WalkthroughDefinition,
+  progress: Pick<WalkthroughProgress, 'status' | 'lastStepId'> | null | undefined,
+): number {
+  if (progress?.status === 'completed') return 0;
+  return stepIndexFromProgress(definition, progress?.lastStepId);
 }
 
 export const WalkthroughHelpHost: React.FC<WalkthroughHelpHostProps> = ({
@@ -89,9 +98,7 @@ export const WalkthroughHelpHost: React.FC<WalkthroughHelpHostProps> = ({
     if (!definitionQuery.data) return;
 
     const fromList = listQuery.data?.items.find((i) => i.walkthrough.id === selectedId);
-    setInitialStepIndex(
-      stepIndexFromProgress(definitionQuery.data, fromList?.progress?.lastStepId),
-    );
+    setInitialStepIndex(initialStepIndexForReplay(definitionQuery.data, fromList?.progress));
     setReplaySessionId(`replay-${selectedId}-${Date.now()}`);
     setReplayDefinition(definitionQuery.data);
     setSelectedId(null);

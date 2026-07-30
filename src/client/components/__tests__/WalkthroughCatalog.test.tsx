@@ -44,7 +44,7 @@ const sampleWalkthrough = {
     { id: 's1', walkthroughId: 'wt-1', ordinal: 0, heading: 'Start', bodyMarkdown: 'Hello' },
     { id: 's2', walkthroughId: 'wt-1', ordinal: 1, heading: 'Next', bodyMarkdown: 'More' },
   ],
-  targeting: { project: 'Apex', groupId: null },
+  targeting: { projects: ['Apex'], groupId: null },
   targetingRules: [{ type: 'project' as const, value: 'Apex' }],
 };
 
@@ -59,20 +59,34 @@ describe('WalkthroughCatalog', () => {
       hasNextPage: false,
       isFetchingNextPage: false,
       fetchNextPage: jest.fn(),
-    } as any);
+    } as unknown as ReturnType<typeof mockHooks.useWalkthroughCatalog>);
+    mockHooks.useArchiveWalkthrough.mockReturnValue({
+      mutateAsync: jest.fn().mockResolvedValue({ ...sampleWalkthrough, lifecycle: 'archived' }),
+      isPending: false,
+    } as unknown as ReturnType<typeof mockHooks.useArchiveWalkthrough>);
   });
 
-  it('AC-0 — renders catalog rows with step count and opens editor', async () => {
+  it('AC-0 — renders catalog rows with step count and opens editor from actions', async () => {
     const user = userEvent.setup();
     renderCatalog();
 
     expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-catalog-row-wt-1')).toHaveTextContent('Onboarding');
     expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-catalog-search')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-catalog-filter-lifecycle-all')).toBeInTheDocument();
 
-    await user.click(screen.getByTestId('walkthrough-catalog-row-wt-1'));
+    await user.click(screen.getByTestId('walkthrough-catalog-edit-wt-1'));
 
     expect(screen.getByTestId('walkthrough-editor')).toBeInTheDocument();
+  });
+
+  it('filters catalog rows by search text', async () => {
+    const user = userEvent.setup();
+    renderCatalog();
+
+    await user.type(screen.getByTestId('walkthrough-catalog-search'), 'zzz-no-match');
+    expect(screen.getByTestId('walkthrough-catalog-empty')).toBeInTheDocument();
   });
 
   it('AC-2 — shows load more when next cursor is available', async () => {
@@ -85,7 +99,7 @@ describe('WalkthroughCatalog', () => {
       hasNextPage: true,
       isFetchingNextPage: false,
       fetchNextPage,
-    } as any);
+    } as unknown as ReturnType<typeof mockHooks.useWalkthroughCatalog>);
 
     const user = userEvent.setup();
     renderCatalog();

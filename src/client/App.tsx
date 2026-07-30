@@ -140,7 +140,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -184,7 +184,7 @@ function App() {
                     ? 'design-module'
                     : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
-                    : 'calendar';
+                    : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
@@ -462,7 +462,7 @@ function App() {
         <GuidedWalkthroughHost
           projectId={selectedProject}
           userId={userId}
-          enabled={isAuthenticated === true && permissionsLoaded && Boolean(selectedProject)}
+          enabled={false}
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
@@ -485,6 +485,18 @@ function App() {
             onLogout={handleLogout}
           />
         </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  if (currentView === 'not-found') {
+    return (
+      <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+        <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
+          <h1>Page not found</h1>
+          <p>The requested Apex page does not exist.</p>
+          <button type="button" onClick={() => navigate('/')} {...{ 'data-testid': 'route-not-found-home-btn' }}>Return to projects</button>
+        </div>
       </ErrorBoundary>
     );
   }

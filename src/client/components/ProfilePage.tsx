@@ -14,6 +14,10 @@ import {
   containsMarkupLikeInput,
   normalizeAndValidateBio,
 } from '../../shared/types/profile';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -56,11 +60,11 @@ const SectionError: React.FC<SectionErrorProps> = ({ section, message, onRetry }
   <div
     className={styles.sectionError}
     role="alert"
-    data-testid={`profile-section-error-${section}`}
+    {...{ 'data-testid': `profile-section-error-${section}` }}
   >
     <div>{message}</div>
     {onRetry && (
-      <button type="button" className={styles.retryButton} onClick={onRetry}>
+      <button type="button" className={styles.retryButton} onClick={onRetry} {...{ 'data-testid': `profile-section-retry-${section}` }}>
         Retry
       </button>
     )}
@@ -74,10 +78,10 @@ export const ProfileIdentitySection: React.FC = () => {
   return (
     <section
       className={`${styles.card} ${styles.spanFull}`}
-      data-testid="profile-identity-section"
+      {...anchorTestIdProps(WalkthroughAnchorKeys.PROFILE_IDENTITY)}
       aria-labelledby="profile-identity-heading"
     >
-      <h2 id="profile-identity-heading" className={styles.cardHeading}>
+      <h2 id="profile-identity-heading" className={styles.cardHeading} data-walkthrough-focus>
         Identity
       </h2>
       {isLoading && (
@@ -100,7 +104,7 @@ export const ProfileIdentitySection: React.FC = () => {
       )}
       {!isLoading && !isError && data && (
         <div className={styles.identityLayout}>
-          <div className={styles.avatarColumn} data-testid="profile-avatar-section">
+          <div className={styles.avatarColumn} {...{ 'data-testid': 'profile-avatar-section' }}>
             <AvatarEditor
               key={`${data.userOid}-${data.avatar.version ?? 'none'}`}
               userOid={data.userOid}
@@ -119,13 +123,13 @@ export const ProfileIdentitySection: React.FC = () => {
           <dl className={styles.identityList}>
             <div className={styles.identityRow}>
               <dt className={styles.identityLabel}>Display name</dt>
-              <dd className={styles.identityValue} data-testid="profile-identity-name">
+              <dd className={styles.identityValue} {...{ 'data-testid': 'profile-identity-name' }}>
                 {data.displayName}
               </dd>
             </div>
             <div className={styles.identityRow}>
               <dt className={styles.identityLabel}>Email</dt>
-              <dd className={styles.identityValue} data-testid="profile-identity-email">
+              <dd className={styles.identityValue} {...{ 'data-testid': 'profile-identity-email' }}>
                 {data.email?.trim() ? data.email : 'Email unavailable'}
               </dd>
             </div>
@@ -134,13 +138,13 @@ export const ProfileIdentitySection: React.FC = () => {
                 <div className={styles.orgDivider} role="presentation" />
                 <div className={styles.identityRow}>
                   <dt className={styles.identityLabel}>Job title</dt>
-                  <dd className={styles.identityValue} data-testid="profile-org-job-title">
+                  <dd className={styles.identityValue} {...{ 'data-testid': 'profile-org-job-title' }}>
                     {data.org.jobTitle ?? 'Not set in directory'}
                   </dd>
                 </div>
                 <div className={styles.identityRow}>
                   <dt className={styles.identityLabel}>Department</dt>
-                  <dd className={styles.identityValue} data-testid="profile-org-department">
+                  <dd className={styles.identityValue} {...{ 'data-testid': 'profile-org-department' }}>
                     {data.org.department ?? 'Not set in directory'}
                   </dd>
                 </div>
@@ -149,7 +153,7 @@ export const ProfileIdentitySection: React.FC = () => {
                     <dt className={styles.identityLabel}>
                       {data.org.officeLocation ? 'Office' : 'Company'}
                     </dt>
-                    <dd className={styles.identityValue} data-testid="profile-org-location">
+                    <dd className={styles.identityValue} {...{ 'data-testid': 'profile-org-location' }}>
                       {[data.org.officeLocation, data.org.companyName]
                         .filter(Boolean)
                         .join(' · ')}
@@ -159,7 +163,7 @@ export const ProfileIdentitySection: React.FC = () => {
                 {data.org.directReports.length > 0 && (
                   <div className={styles.identityRow}>
                     <dt className={styles.identityLabel}>Direct reports</dt>
-                    <dd className={styles.identityValue} data-testid="profile-org-reports">
+                    <dd className={styles.identityValue} {...{ 'data-testid': 'profile-org-reports' }}>
                       <ul className={styles.reportsList}>
                         {data.org.directReports.map((report) => (
                           <li key={report.userOid} className={styles.reportsItem}>
@@ -239,8 +243,8 @@ export const ProfileBioSection: React.FC = () => {
   });
 
   return (
-    <section className={`${styles.card} ${styles.cardFill}`} data-testid="profile-bio-section" aria-labelledby="profile-bio-heading">
-      <h2 id="profile-bio-heading" className={styles.cardHeading}>
+    <section className={`${styles.card} ${styles.cardFill}`} {...anchorTestIdProps(WalkthroughAnchorKeys.PROFILE_BIO)} aria-labelledby="profile-bio-heading">
+      <h2 id="profile-bio-heading" className={styles.cardHeading} data-walkthrough-focus>
         Bio
       </h2>
       {isLoading && <div className={`${styles.skeleton} ${styles.skeletonLong}`} />}
@@ -254,13 +258,13 @@ export const ProfileBioSection: React.FC = () => {
         />
       )}
       {!isLoading && !isError && (
-        <form className={styles.bioForm} onSubmit={onSubmit} noValidate>
+        <form className={styles.bioForm} onSubmit={onSubmit} noValidate {...{ 'data-testid': 'profile-bio-form' }}>
           <p id="profile-bio-helper" className={styles.helperText}>
             Optional plain-text bio (up to 500 characters). HTML and rich formatting are not supported.
           </p>
           <textarea
             className={styles.bioTextarea}
-            data-testid="profile-bio-input"
+            {...{ 'data-testid': 'profile-bio-input' }}
             aria-describedby="profile-bio-helper profile-bio-counter profile-bio-error profile-bio-status"
             aria-invalid={Boolean(errors.bio)}
             {...register('bio')}
@@ -268,7 +272,7 @@ export const ProfileBioSection: React.FC = () => {
           <div className={styles.bioMeta}>
             <span
               id="profile-bio-counter"
-              data-testid="profile-bio-counter"
+              {...{ 'data-testid': 'profile-bio-counter' }}
               className={`${styles.bioCounter} ${codePoints > PROFILE_BIO_MAX_CODE_POINTS ? styles.bioCounterOver : ''}`}
             >
               {codePoints}/{PROFILE_BIO_MAX_CODE_POINTS}
@@ -276,7 +280,7 @@ export const ProfileBioSection: React.FC = () => {
             <button
               type="submit"
               className={styles.bioSave}
-              data-testid="profile-bio-save"
+              {...{ 'data-testid': 'profile-bio-save' }}
               disabled={saveDisabled}
             >
               {updateProfile.isPending ? 'Saving…' : 'Save'}
@@ -291,7 +295,7 @@ export const ProfileBioSection: React.FC = () => {
             id="profile-bio-status"
             className={styles.statusMessage}
             role={status?.kind === 'error' ? 'alert' : 'status'}
-            data-testid="profile-bio-status"
+            {...{ 'data-testid': 'profile-bio-status' }}
           >
             {status?.text ?? ''}
           </div>
@@ -327,8 +331,8 @@ export const ProfileThemeSection: React.FC<ProfileThemeSectionProps> = ({ theme,
   };
 
   return (
-    <section className={`${styles.card} ${styles.cardFill}`} data-testid="profile-theme-section" aria-labelledby="profile-theme-heading">
-      <h2 id="profile-theme-heading" className={styles.cardHeading}>
+    <section className={`${styles.card} ${styles.cardFill}`} {...anchorTestIdProps(WalkthroughAnchorKeys.PROFILE_THEME)} aria-labelledby="profile-theme-heading">
+      <h2 id="profile-theme-heading" className={styles.cardHeading} data-walkthrough-focus>
         Theme
       </h2>
       <div className={styles.themeGrid} role="radiogroup" aria-label="Theme">
@@ -343,7 +347,7 @@ export const ProfileThemeSection: React.FC<ProfileThemeSectionProps> = ({ theme,
               role="radio"
               aria-checked={isActive}
               aria-label={`${option.label}: ${option.description}`}
-              data-testid={`profile-theme-option-${option.value}`}
+              {...{ 'data-testid': `profile-theme-option-${option.value}` }}
               style={{ '--theme-preview': option.preview } as React.CSSProperties}
             >
               <span className={styles.themePreview} aria-hidden="true">
@@ -376,10 +380,10 @@ export const ProfileThemeSection: React.FC<ProfileThemeSectionProps> = ({ theme,
 export const ProfileNotificationSection: React.FC = () => (
   <section
     className={`${styles.card} ${styles.spanFull}`}
-    data-testid="profile-notification-section"
+    {...anchorTestIdProps(WalkthroughAnchorKeys.PROFILE_NOTIFICATIONS)}
     aria-labelledby="profile-notification-heading"
   >
-    <h2 id="profile-notification-heading" className={styles.cardHeading}>
+    <h2 id="profile-notification-heading" className={styles.cardHeading} data-walkthrough-focus>
       Notification Preferences
     </h2>
     <NotificationPreferences showContainedErrors />
@@ -387,7 +391,7 @@ export const ProfileNotificationSection: React.FC = () => (
 );
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({ theme, onThemeChange }) => (
-  <div className={styles.page} data-testid="profile-page">
+  <div className={styles.page} {...{ 'data-testid': 'profile-page' }}>
     <h1 className={styles.title}>Profile</h1>
     <p className={styles.subtitle}>
       Manage your Apex identity, avatar, bio, theme, and notification preferences.

@@ -1,0 +1,24 @@
+import React from 'react';
+
+interface DynamicIdsProps {
+  itemId: string;
+  variant: string;
+}
+
+/** Dynamic / expression test IDs — not stable runtime anchor targets. */
+export const DynamicIds: React.FC<DynamicIdsProps> = ({ itemId, variant }) => (
+  <div>
+    <button type="button" {...{ 'data-testid': `work-item-${itemId}` }}>
+      Item
+    </button>
+    <button type="button" {...{ 'data-testid': `pref-${variant}-toggle` }}>
+      Pref
+    </button>
+    <button type="button" {...{ 'data-testid': variant }}>
+      Expr
+    </button>
+    <button type="button" data-testid={`row-${itemId}`}>
+      Legacy dynamic
+    </button>
+  </div>
+);

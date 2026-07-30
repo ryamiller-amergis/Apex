@@ -33,8 +33,12 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
-jest.mock('../WalkthroughCatalog', () => ({
-  WalkthroughCatalog: () => <div data-testid="walkthrough-catalog" />,
+jest.mock('../WalkthroughsAdminPanel', () => ({
+  WalkthroughsAdminPanel: () => (
+    <div data-testid="walkthroughs-admin-panel">
+      <div data-testid="walkthrough-catalog" />
+    </div>
+  ),
 }));
 
 jest.mock('../../hooks/usePlatformAdmin', () => ({

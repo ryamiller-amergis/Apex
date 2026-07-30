@@ -3,7 +3,11 @@
  * Proposals are ephemeral; accepted units merge into the shared WalkthroughDraft model.
  */
 
-import type { WalkthroughAnchor, WalkthroughStepInput } from './walkthrough';
+import type {
+  WalkthroughAnchor,
+  WalkthroughGenerationProvenance,
+  WalkthroughStepInput,
+} from './walkthrough';
 
 // ── Policy presets (Platform Admin selectable; server is source of truth) ─────
 
@@ -99,7 +103,9 @@ export interface WalkthroughAiStepProposal {
   ordinal: number;
   heading: string;
   bodyMarkdown: string;
+  route?: string | null;
   imageUrl?: string | null;
+  imageAlt?: string | null;
   /** Same-origin allow-listed path suggested for confirmation (may equal imageUrl). */
   imageCandidatePath?: string | null;
   ctaLabel?: string | null;
@@ -131,12 +137,17 @@ export interface WalkthroughAiProposal {
   /** Opaque server context version for redo isolation. */
   generationContextVersion: string;
   policyPreset: WalkthroughAiPolicyPresetId;
+  generationProvenance?: WalkthroughGenerationProvenance | null;
 }
 
 export interface GenerateWalkthroughAiDraftRequest {
   projectId: string;
   intent: string;
   policyPreset?: WalkthroughAiPolicyPresetId;
+  /** Run-only Cursor override; never persisted as project configuration. */
+  model?: string;
+  /** Run-only Cursor override constrained to one .cursor/skills directory. */
+  skillPath?: string;
   existingDraft?: {
     internalName?: string;
     userTitle?: string;
@@ -181,6 +192,7 @@ export interface WalkthroughAiEditableDraftSlice {
   internalName: string;
   userTitle: string;
   whyItMatters: string;
+  generationProvenance?: WalkthroughGenerationProvenance | null;
   steps: WalkthroughStepInput[];
 }
 
@@ -197,6 +209,7 @@ export function mergeAcceptedUnitsIntoDraft(
     internalName: base.internalName,
     userTitle: base.userTitle,
     whyItMatters: base.whyItMatters,
+    generationProvenance: base.generationProvenance ?? null,
     steps: base.steps.map((s) => ({ ...s, anchor: s.anchor ?? null })),
   };
 
@@ -227,7 +240,16 @@ export function mergeAcceptedUnitsIntoDraft(
     return next;
   }
 
-  const byId = new Map(next.steps.map((s) => [s.id ?? '', s]));
+  const acceptedStepIds = new Set(acceptedSteps.map((u) => u.value.id));
+  // Drop blank editor placeholders (common on new drafts) so they do not become Step 1
+  // ahead of newly accepted AI steps that use different ids.
+  const seedSteps = next.steps.filter((s) => {
+    const isBlank = !(s.heading ?? '').trim() && !(s.bodyMarkdown ?? '').trim();
+    if (!isBlank) return true;
+    return Boolean(s.id && acceptedStepIds.has(s.id));
+  });
+
+  const byId = new Map(seedSteps.map((s) => [s.id ?? '', s]));
   for (const unit of acceptedSteps) {
     const decision = decisions[unit.unitId];
     const imageConfirmed = decision?.imageConfirmed === true;
@@ -243,7 +265,9 @@ export function mergeAcceptedUnitsIntoDraft(
       ordinal: unit.value.ordinal,
       heading: unit.value.heading,
       bodyMarkdown: unit.value.bodyMarkdown,
+      route: unit.value.route ?? unit.value.anchor?.targetRoute ?? null,
       imageUrl,
+      imageAlt: imageUrl ? unit.value.imageAlt ?? null : null,
       ctaLabel: unit.value.ctaLabel ?? null,
       ctaRoute: unit.value.ctaRoute ?? null,
       anchor: unit.value.anchor ?? null,
@@ -266,9 +290,14 @@ export function mergeAcceptedUnitsIntoDraft(
         ordinal: mergedSteps.length,
         heading: unit.value.heading,
         bodyMarkdown: unit.value.bodyMarkdown,
+        route: unit.value.route ?? unit.value.anchor?.targetRoute ?? null,
         imageUrl:
           imageConfirmed && (unit.value.imageCandidatePath || unit.value.imageUrl)
             ? (unit.value.imageCandidatePath ?? unit.value.imageUrl ?? null)
+            : null,
+        imageAlt:
+          imageConfirmed && (unit.value.imageCandidatePath || unit.value.imageUrl)
+            ? unit.value.imageAlt ?? null
             : null,
         ctaLabel: unit.value.ctaLabel ?? null,
         ctaRoute: unit.value.ctaRoute ?? null,

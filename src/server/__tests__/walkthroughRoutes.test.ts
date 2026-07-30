@@ -57,7 +57,7 @@ const sampleDefinition = {
   updatedBy: 'admin',
   updatedAt: '2026-07-01T00:00:00Z',
   steps: [],
-  targeting: { project: 'Apex', groupId: null },
+  targeting: { projects: ['Apex'], groupId: null },
   targetingRules: [{ type: 'project' as const, value: 'Apex' }],
 };
 

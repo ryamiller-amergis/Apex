@@ -142,7 +142,7 @@ test.describe('Platform Admin Walkthrough AI authoring @walkthroughs', () => {
     await expect(page.getByTestId('walkthrough-proposal-step-s1')).toBeVisible();
 
     await page.getByTestId('walkthrough-ai-apply-accepted').click();
-    await page.getByTestId('walkthrough-project-target').selectOption({ label: /./ });
+    await page.getByTestId('walkthrough-project-target').locator('input[type="checkbox"]').first().check();
     await page.getByTestId('walkthrough-save-draft').click();
 
     await expect(page.getByTestId('walkthrough-catalog')).toBeVisible();

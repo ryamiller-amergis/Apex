@@ -64,11 +64,13 @@ export const UserMenu: React.FC<UserMenuProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      itemRefs.current[0]?.focus();
+      // Opening the dropdown must not scroll the app shell. The header lives
+      // inside the app's scroll container, so a normal focus() can shift it.
+      itemRefs.current[0]?.focus({ preventScroll: true });
       return;
     }
     if (restoreFocusRef.current) {
-      triggerRef.current?.focus();
+      triggerRef.current?.focus({ preventScroll: true });
       restoreFocusRef.current = false;
     }
   }, [isOpen]);
@@ -86,7 +88,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
   const focusItem = (index: number) => {
     const count = MENU_ACTIONS.length;
     const next = ((index % count) + count) % count;
-    itemRefs.current[next]?.focus();
+    itemRefs.current[next]?.focus({ preventScroll: true });
   };
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -244,7 +246,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
             type="button"
             role="menuitem"
             className={styles['user-menu-item']}
-            data-testid="user-menu-profile"
+            {...anchorTestIdProps(WalkthroughAnchorKeys.USER_MENU_PROFILE)}
             onClick={handleProfile}
           >
             <span className={styles['menu-item-icon']} aria-hidden="true">

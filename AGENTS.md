@@ -4,12 +4,13 @@ This file is the first-stop reference for AI agents operating within the Apex co
 
 ## Application Summary
 
-Apex is an internal product-building and project-management platform. It centralizes AI-guided design interviews, automated PRD/design doc generation, review workflows, daily standups, planning analytics, Azure DevOps integration, feature request triage, and cloud cost tracking into a single React + Express + PostgreSQL application.
+Apex is an internal product-building and project-management platform. It centralizes AI-guided design interviews, automated PRD/design doc generation, review workflows, daily standups, planning analytics, Azure DevOps integration, feature request triage, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, PDF assembly, AI cost analytics, and design-module scoping into a single React + Express + PostgreSQL application.
 
 ## Feature Map
 
 | Feature | Design Docs | Skills | Key Services | Key Components |
 |---------|------------|--------|-------------|----------------|
+| Agent Home | `design-docs/chat-history-from-home-page.md`, `design-docs/chat-thread-history.md` | — | `chatAgentService.ts`, `chatThreadRepository.ts` | `AgentHome.tsx`, `ThreadHistorySidebar.tsx`, `ChatAgentPanel.tsx` |
 | Design Interviews | `design-docs/interview-prd-workflow.md` | `.cursor/skills/kick-off/SKILL.md`, `.cursor/skills/grill-with-docs/SKILL.md`, `.cursor/skills/grill-design/SKILL.md` | `interviewService.ts` | `InterviewChatView.tsx`, `InterviewsDashboard.tsx` |
 | Architecture Decision Records | — | `.cursor/skills/adr-interview/SKILL.md`, `.cursor/skills/adr-finalize/SKILL.md`, `.cursor/skills/azure-async-infra/SKILL.md` (messaging/storage/workers), `.cursor/skills/terraform-infra/SKILL.md` (Terraform changes) | `adrService.ts` | `AdrChatView.tsx`, `AdrsDashboard.tsx` |
 | PRD Generation & Review | `design-docs/interview-prd-workflow.md`, `design-docs/prd-spec-review.md`, `design-docs/prd-generation-ux.md` | `.cursor/skills/to-prd/SKILL.md`, `.cursor/skills/prd-spec-review/SKILL.md`, `.cursor/skills/create-test-case/SKILL.md` | `prdService.ts`, `chatAgentService.ts` | `PrdReviewView.tsx`, `PrdAssistantPanel.tsx`, `BacklogViewer.tsx` |
@@ -20,7 +21,13 @@ Apex is an internal product-building and project-management platform. It central
 | Feature Flags | `design-docs/feature_flags_system_84747609.plan.md` | `.cursor/skills/feature-flags/SKILL.md` | `featureFlagService.ts` | `PlatformAdmin.tsx`, `FeatureFlagDemo.tsx` |
 | Feature Requests | `design-docs/feature-requests.md` | `.cursor/skills/feature-request-analysis/SKILL.md` | `featureRequestService.ts`, `featureRequestAnalysisService.ts` | `FeatureRequestsView.tsx`, `FeatureRequestModal.tsx`, `FeatureRequestFab.tsx` |
 | RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md`, `design-docs/per-user-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
-| Calendar & Work Items | — | — | `azureDevOps.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx` |
+| Calendar & Work Items | `design-docs/calendar-work-item-assistant.md` | — | `azureDevOps.ts`, `calendarWorkItemAssistantService.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx`, `CalendarWorkItemAssistantPanel.tsx` |
+| Guided Walkthroughs | — | `.cursor/skills/walkthrough-generation/SKILL.md`, `.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md` | `walkthroughService.ts`, `walkthroughGenerationService.ts`, `walkthroughAiDraftService.ts`, `walkthroughAnchorRegistryService.ts`, `walkthroughAnchorSmartTaggingService.ts`, `walkthroughNotificationService.ts` | `WalkthroughCatalog.tsx`, `WalkthroughRenderer.tsx`, `GuidedWalkthroughHost.tsx`, `WalkthroughHelpPanel.tsx`, `ManualWalkthroughEditor.tsx`, `WalkthroughAnchorManagement.tsx` |
+| UI Lab | — | `.cursor/skills/ui-lab/SKILL.md` | `uiLabService.ts` | `UiLabView.tsx` |
+| PDF Assembly | `design-docs/pdf-assembly-three-panel-ux.md` | — | `pdfAssemblyService.ts`, `documentConversionService.ts` | `PdfAssemblyView.tsx`, `PdfDocumentSidebar.tsx` |
+| AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
+| Design Module | — | `.cursor/skills/design-module-scoping/SKILL.md`, `.cursor/skills/design-module-doc/SKILL.md` | `designModuleScopingService.ts` | `DesignModuleView.tsx`, `DesignModuleFormModal.tsx`, `DesignModuleFileTree.tsx` |
+| Load Testing | — | `.cursor/skills/k6-load-test-generation/SKILL.md` | `loadTestService.ts`, `loadTestAiGenerationService.ts` | `LoadTestsListPage.tsx`, `LoadTestDefinitionBuilderView.tsx`, `LoadTestRunDetailView.tsx` |
 | Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
 | My Work (Dev Workbench) | `design-docs/my-work-feature-context-viewer.md` | — | `devWorkbenchFeatureContextService.ts`, `localDevContextService.ts` | `DevWorkbenchView.tsx`, `DevSessionView.tsx`, `FeatureContextModal.tsx`, `StartLocalDevModal.tsx` |
@@ -29,7 +36,8 @@ Apex is an internal product-building and project-management platform. It central
 | Changelog | — | `.cursor/skills/update-changelog/SKILL.md` | `appSettingsService.ts` | `Changelog.tsx`, `ChangelogBanner.tsx` |
 | Project Settings | `design-docs/project-settings-redesign.md`, `design-docs/project-skill-settings.md` | — | `projectSettingsService.ts` | `AdminProjectSettings.tsx` |
 | ADO Export | — | — | `azureDevOps.ts` | `CreateAdoItemsModal.tsx` |
-| Ask Apex (this agent) | — | — | `askApexService.ts` | `AskApexChat.tsx` |
+| Ask Apex (this agent) | — | `.cursor/skills/app-knowledge/SKILL.md` | `askApexService.ts` | `AskApexChat.tsx` |
+| User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
 
 ## Key Terminology
 
@@ -46,12 +54,18 @@ Apex is an internal product-building and project-management platform. It central
 | **TBI** | Technical Backlog Item (Azure DevOps work item type) |
 | **RBAC** | Role-Based Access Control — permissions assigned to roles; users may have global roles or project-specific roles that override global roles for that project |
 | **Super Admin** | A platform-level administrator who bypasses all menu visibility and most permission checks |
-| **Platform Admin** | The admin panel for cross-project settings: access management, menu visibility, feature flags |
+| **Platform Admin** | The admin panel for cross-project settings: access management, menu visibility, feature flags, and walkthrough authoring/reporting |
 | **Project Admin** | Per-project admin panel for roles, users, groups, project settings, and notifications |
 | **Apex (project)** | The virtual project representing the AI-Pilot platform itself; feature request review is scoped to this project |
 | **Feature Flag** | A runtime toggle that gates feature access by user, project, or group without redeploying |
 | **SSE** | Server-Sent Events — used for real-time notification delivery and chat streaming |
 | **Facilitator** | The standup agent that summarizes team updates after all participants submit or the deadline is reached |
+| **Walkthrough** | A guided, multi-step in-app tour (modal or coachmark) that teaches users a workflow; authored in Platform Admin and targeted by project, user, or group |
+| **Coachmark** | A walkthrough step anchored to an approved+active DB catalog key (resolved at serve time to a `data-testid`) rather than shown as a centered modal |
+| **Anchor catalog** | DB registry of walkthrough UI anchors (`walkthrough_anchor_registry`); authoring/runtime allow-list is approved+active rows; DOM markers in `walkthroughAnchors.ts` remain for scanners/opt-in |
+| **Smart tags** | AI-suggested classification metadata (tags, route, placements, confidence) applied only to newly discovered pending anchors during sync review |
+| **Design Module** | A project-scoped slice of the repository (source globs + docs) used to ground AI agents on a specific area of the codebase |
+| **Load Test Definition** | A k6 script and threshold profile stored per project; runs are executed against allowlisted targets with prod-safety guards |
 
 ## Directory Structure
 
@@ -69,8 +83,10 @@ src/
 │   ├── db/                  # Drizzle ORM setup and schema
 │   ├── middleware/           # Auth, RBAC, error handling
 │   └── index.ts             # Server entry point
-├── shared/                  # Shared TypeScript types
-│   └── types/               # Type definitions used by both client and server
+├── shared/                  # Shared TypeScript types and walkthrough registries
+│   ├── types/               # Type definitions used by both client and server
+│   ├── walkthroughRoutes.ts # Curated routes valid for walkthrough steps
+│   └── walkthroughAnchors.ts # DOM markers + validation helpers (catalog allow-list is DB)
 ├── .cursor/
 │   ├── skills/              # Agent skill definitions
 │   └── rules/               # Cursor rules for coding standards
@@ -113,6 +129,13 @@ src/
 | How do I review design specs? | `.cursor/skills/design-spec-review/SKILL.md` — quality gate before implementation |
 | How do I create test cases from a backlog? | `.cursor/skills/create-test-case/SKILL.md` — QA test suite from `/to-prd` output |
 | How does automated design doc validation work? | `.cursor/skills/design-doc-validation/SKILL.md` — auto-scores design docs via `documentValidationService` |
+| How do guided walkthroughs work? | `walkthroughService.ts`, `src/shared/walkthroughRoutes.ts`, Platform Admin → Walkthroughs (catalog + Anchor Management) |
+| How are walkthroughs AI-generated? | `.cursor/skills/walkthrough-generation/SKILL.md` via `walkthroughGenerationService.ts` (ranked DB catalog anchors only) |
+| How does Anchor Management / sync work? | `walkthroughAnchorRegistryService.ts`, `WalkthroughAnchorManagement.tsx`, Platform Admin → Walkthroughs → Anchor Management |
+| How does the calendar work-item assistant work? | `design-docs/calendar-work-item-assistant.md`, `calendarWorkItemAssistantService.ts` |
+| How do load tests work? | `loadTestService.ts`, `.cursor/skills/k6-load-test-generation/SKILL.md`, Admin → Load Test Targets |
+| What walkthrough routes and anchors exist? | `src/shared/walkthroughRoutes.ts`; anchors: DB catalog via `/api/platform-admin/walkthroughs/anchors` (DOM markers in `walkthroughAnchors.ts`) |
+| How is AI usage cost tracked? | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `/ai-cost` view |
 
 ## Agent Guidelines
 

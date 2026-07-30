@@ -64,22 +64,54 @@ jest.mock('../services/walkthroughAiDraftService', () => {
   const actual = jest.requireActual('../services/walkthroughAiDraftService');
   return {
     ...actual,
-    generateProposal: jest.fn(),
     redoProposalUnit: jest.fn(),
     validateProposalUnit: jest.fn(),
   };
 });
+jest.mock('../services/walkthroughGenerationService', () => ({
+  startGeneration: jest.fn(),
+  getGenerationResult: jest.fn(),
+  cancelGeneration: jest.fn(),
+}));
+jest.mock('../services/walkthroughAnchorRegistryService', () => ({
+  listAuthoringAnchorEntries: jest.fn().mockResolvedValue([
+    {
+      key: 'user-menu-trigger',
+      testId: 'user-menu-trigger',
+      label: 'User menu',
+      targetRoute: '/home',
+      allowedPlacements: ['bottom', 'left', 'right', 'top'],
+    },
+  ]),
+  listAnchors: jest.fn(),
+  getAnchorById: jest.fn(),
+  getAnchorByKey: jest.fn(),
+  getAnchorByTestId: jest.fn(),
+  createManualAnchor: jest.fn(),
+  updateAnchor: jest.fn(),
+  bulkUpdateAnchors: jest.fn(),
+  updateMissingState: jest.fn(),
+  softDeleteAnchor: jest.fn(),
+  syncExtractAndPersistAnchors: jest.fn(),
+  parseBulkAction: jest.fn(),
+  parseReviewStatusFilter: jest.fn(),
+  parseSourceKindFilter: jest.fn(),
+}));
 jest.mock('../middleware/rbac', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
   requireSuperAdmin: jest.fn((_req: any, _res: any, next: any) => next()),
 }));
 
 const mockWt = walkthroughService as jest.Mocked<typeof walkthroughService>;
-const mockAi = jest.requireMock('../services/walkthroughAiDraftService') as {
-  generateProposal: jest.Mock;
+const _mockAi = jest.requireMock('../services/walkthroughAiDraftService') as {
   redoProposalUnit: jest.Mock;
   validateProposalUnit: jest.Mock;
   listWalkthroughAiPolicyPresets: typeof import('../services/walkthroughAiDraftService').listWalkthroughAiPolicyPresets;
+};
+const mockGeneration = jest.requireMock('../services/walkthroughGenerationService') as {
+  startGeneration: jest.Mock;
+  getGenerationResult: jest.Mock;
+  cancelGeneration: jest.Mock;
 };
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
@@ -127,14 +159,14 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
         internalName: 'n',
         userTitle: 't',
         whyItMatters: 'w',
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
         steps: [],
       });
     expect(res.status).toBe(201);
     expect(mockWt.createWalkthrough).toHaveBeenCalled();
   });
 
-  it('GET anchors returns curated registry entries', async () => {
+  it('GET anchors returns approved catalog authoring entries', async () => {
     const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/anchors');
     expect(res.status).toBe(200);
     expect(res.body.anchors).toEqual(
@@ -184,7 +216,7 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
     expect(
       (await request(buildApp()).post('/api/platform-admin/walkthroughs/wt-1/publish').send({
         mode: 'fresh',
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
       })).status,
     ).toBe(200);
     expect(
@@ -245,7 +277,7 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
         userTitle: 't',
         whyItMatters: 'w',
         steps: [],
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
       },
     });
     const res = await request(buildApp())
@@ -254,37 +286,38 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
         internalName: 'n',
         userTitle: 't',
         whyItMatters: 'w',
-        targeting: { project: 'Apex' },
+        targeting: { projects: ['Apex'] },
         steps: [],
       });
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(true);
   });
 
-  it('PBI-003 AC-3 — POST ai-drafts/generate returns 403 when Super Admin middleware denies', async () => {
+  it('PBI-003 AC-3 — POST ai-drafts/generate/start returns 403 when Super Admin middleware denies', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
     mockRequireSuperAdmin.mockImplementation((_req: any, res: any) => {
       res.status(403).json({ error: 'Forbidden' });
     });
     const res = await request(buildApp())
-      .post('/api/platform-admin/walkthroughs/ai-drafts/generate')
+      .post('/api/platform-admin/walkthroughs/ai-drafts/generate/start')
       .send({ projectId: 'Apex', intent: 'Introduce feature' });
     expect(res.status).toBe(403);
-    expect(mockAi.generateProposal).not.toHaveBeenCalled();
+    expect(mockGeneration.startGeneration).not.toHaveBeenCalled();
   });
 
-  it('POST ai-drafts/generate delegates to service and ignores client allow-lists', async () => {
-    mockAi.generateProposal.mockResolvedValue({
-      proposalId: 'p1',
-      walkthroughFields: { internalName: 'n', userTitle: 't', whyItMatters: 'w' },
-      steps: [],
-      units: [],
-      generatedAt: new Date().toISOString(),
-      generationContextVersion: 'v1',
-      policyPreset: 'A',
+  it('POST ai-drafts/generate/start delegates to Cursor generation and ignores client allow-lists', async () => {
+    mockGeneration.startGeneration.mockResolvedValue({
+      threadId: 'thread-1',
+      provenance: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        skillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+        generatedAt: new Date().toISOString(),
+        threadId: 'thread-1',
+      },
     });
     const res = await request(buildApp())
-      .post('/api/platform-admin/walkthroughs/ai-drafts/generate')
+      .post('/api/platform-admin/walkthroughs/ai-drafts/generate/start')
       .send({
         projectId: 'Apex',
         intent: 'Introduce feature',
@@ -293,14 +326,15 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
         anchors: [{ key: 'fake' }],
       });
     expect(res.status).toBe(200);
-    expect(mockAi.generateProposal).toHaveBeenCalledWith(
+    expect(mockGeneration.startGeneration).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: 'Apex',
         intent: 'Introduce feature',
         policyPreset: 'A',
       }),
+      'super-admin',
     );
-    expect(mockAi.generateProposal.mock.calls[0][0].assetAllowList).toBeUndefined();
+    expect(mockGeneration.startGeneration.mock.calls[0][0].assetAllowList).toBeUndefined();
   });
 
   it('GET ai-drafts/policy-presets returns A/B/C with default A', async () => {

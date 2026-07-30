@@ -310,7 +310,11 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  /* This element owns the shell scrollbar and contains AppHeader. Always reserve
+     the scrollbar track so mounting overlays cannot change the header width. */
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
   transition: margin-left 0.2s ease;
 }
 
@@ -345,6 +349,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px 20px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
@@ -435,6 +442,8 @@ body {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .selector-group {

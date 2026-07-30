@@ -6,8 +6,11 @@ import type {
   ValidateWalkthroughAiUnitRequest,
   ValidateWalkthroughAiUnitSuccess,
   WalkthroughAiPolicyPreset,
+  WalkthroughAiProposal,
   WalkthroughAiProposalUnit,
 } from '../../shared/types/walkthroughAiDraft';
+import { resolveWalkthroughAiPolicyPreset } from '../../shared/types/walkthroughAiDraft';
+import type { WalkthroughGenerationProvenance } from '../../shared/types/walkthrough';
 
 async function aiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -35,12 +38,42 @@ export function useWalkthroughAiPolicyPresets() {
 
 export function useGenerateWalkthroughAiDraft() {
   return useMutation<GenerateWalkthroughAiDraftResponse, Error, GenerateWalkthroughAiDraftRequest>({
-    mutationFn: (body) =>
-      aiFetch('/api/platform-admin/walkthroughs/ai-drafts/generate', {
+    mutationFn: async (body) => {
+      const started = await aiFetch<{
+        threadId: string;
+        provenance: WalkthroughGenerationProvenance;
+      }>('/api/platform-admin/walkthroughs/ai-drafts/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }),
+      });
+      const policy = resolveWalkthroughAiPolicyPreset(body.policyPreset);
+      const deadline = Date.now() + policy.timeoutMs + 30_000;
+
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        const result = await aiFetch<{
+          status: 'pending' | 'ready' | 'failed' | 'cancelled';
+          proposal?: WalkthroughAiProposal;
+          error?: string;
+        }>(
+          `/api/platform-admin/walkthroughs/ai-drafts/generate/status/${encodeURIComponent(started.threadId)}`,
+        );
+        if (result.status === 'ready' && result.proposal) {
+          return { proposal: result.proposal };
+        }
+        if (result.status === 'failed' || result.status === 'cancelled') {
+          throw new Error(result.error || `Walkthrough generation ${result.status}.`);
+        }
+      }
+
+      await aiFetch('/api/platform-admin/walkthroughs/ai-drafts/generate/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId: started.threadId }),
+      }).catch(() => undefined);
+      throw new Error('Walkthrough generation timed out. Try again.');
+    },
   });
 }
 

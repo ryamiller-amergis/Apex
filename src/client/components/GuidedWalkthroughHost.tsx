@@ -33,13 +33,11 @@ export const GuidedWalkthroughHost: React.FC<GuidedWalkthroughHostProps> = ({
   return (
     <>
       {guided.rendererDefinition ? (
-        <div {...{ 'data-testid': 'guided-walkthrough-host' }}>
-          <WalkthroughRenderer
-            definition={guided.rendererDefinition}
-            open
-            {...guided.rendererCallbacks}
-          />
-        </div>
+        <WalkthroughRenderer
+          definition={guided.rendererDefinition}
+          open
+          {...guided.rendererCallbacks}
+        />
       ) : null}
       <WalkthroughProgressError
         open={Boolean(guided.progressFailure)}

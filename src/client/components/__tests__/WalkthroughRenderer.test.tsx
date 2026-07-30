@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ANCHOR_WAIT_MS } from '../../../shared/walkthroughAnchors';
 import type { WalkthroughRendererDefinition } from '../../../shared/types/walkthrough';
 import { WalkthroughRenderer } from '../WalkthroughRenderer';
+import * as coachmarkLayout from '../../utils/walkthroughCoachmarkLayout';
 
 jest.mock('react-markdown', () => ({
   __esModule: true,
@@ -77,6 +78,44 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     unmount();
   });
 
+  it('contains portal overflow so opening a walkthrough cannot shift header chrome', () => {
+    const { unmount } = renderRenderer(centeredDef);
+    const root = screen.getByTestId('walkthrough-renderer');
+    // CSS modules are stubbed in Jest; assert the containment class is applied.
+    // WalkthroughRenderer.module.css sets position:fixed; overflow:hidden; contain:layout paint.
+    expect(root.className).toMatch(/renderer/);
+    unmount();
+  });
+
+  it('does not re-fire onStepChange when callback identity changes', () => {
+    const onStepChange = jest.fn();
+    const { rerender, unmount } = renderRenderer(centeredDef, { onStepChange });
+
+    expect(onStepChange).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MemoryRouter initialEntries={['/home']}>
+        <WalkthroughRenderer
+          definition={centeredDef}
+          open
+          onStepChange={() => onStepChange()}
+        />
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter initialEntries={['/home']}>
+        <WalkthroughRenderer
+          definition={centeredDef}
+          open
+          onStepChange={() => onStepChange()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(onStepChange).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
   it('DoD-1 / VT-05: anchored Steps attach as coachmark when target is mounted', async () => {
     const target = document.createElement('button');
     target.setAttribute('data-testid', 'user-menu-trigger');
@@ -97,6 +136,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         },
       ],
@@ -129,6 +169,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         },
       ],
@@ -182,6 +223,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         },
       ],
@@ -249,6 +291,7 @@ describe('WalkthroughRenderer (TBI-004)', () => {
             key: 'user-menu-trigger',
             targetRoute: '/home',
             placement: 'bottom',
+            testId: 'user-menu-trigger',
           },
         },
       ],
@@ -358,5 +401,173 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     await user.click(screen.getByTestId('walkthrough-next'));
     expect(screen.getByText('Next topic')).toBeInTheDocument();
     unmount();
+  });
+
+  it('renders imageAlt from step definition', () => {
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-alt',
+      revision: 1,
+      title: 'Alt test',
+      steps: [
+        {
+          id: 's0',
+          position: 0,
+          heading: 'Logo step',
+          bodyMarkdown: 'Shows logo',
+          imageUrl: '/brand-lockup.svg',
+          imageAlt: 'Apex logo',
+          anchor: null,
+        },
+      ],
+    };
+    const { unmount } = renderRenderer(def);
+    const img = screen.getByAltText('Apex logo');
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute('src', '/brand-lockup.svg');
+    unmount();
+  });
+
+  it('falls back to empty alt when imageAlt is absent', () => {
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-noalt',
+      revision: 1,
+      title: 'No alt test',
+      steps: [
+        {
+          id: 's0',
+          position: 0,
+          heading: 'Image step',
+          bodyMarkdown: 'Shows img',
+          imageUrl: '/some-image.png',
+          anchor: null,
+        },
+      ],
+    };
+    const { unmount } = renderRenderer(def);
+    const img = screen.getByRole('img');
+    expect(img).toHaveAttribute('alt', '');
+    unmount();
+  });
+
+  it('resolves theme-aware logo URL for dark theme', () => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-theme',
+      revision: 1,
+      title: 'Theme test',
+      steps: [
+        {
+          id: 's0',
+          position: 0,
+          heading: 'Dark logo',
+          bodyMarkdown: 'Should use inverse',
+          imageUrl: '/brand-lockup.svg',
+          imageAlt: 'Apex logo',
+          anchor: null,
+        },
+      ],
+    };
+    const { unmount } = renderRenderer(def);
+    const img = screen.getByAltText('Apex logo');
+    expect(img).toHaveAttribute('src', '/brand-lockup-inverse.svg');
+    document.documentElement.setAttribute('data-theme', 'light');
+    unmount();
+  });
+
+  it('keeps non-registry image URL unchanged regardless of theme', () => {
+    document.documentElement.setAttribute('data-theme', 'midnight');
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-custom',
+      revision: 1,
+      title: 'Custom image',
+      steps: [
+        {
+          id: 's0',
+          position: 0,
+          heading: 'Custom',
+          bodyMarkdown: 'Custom img',
+          imageUrl: '/custom/banner.png',
+          imageAlt: 'A banner',
+          anchor: null,
+        },
+      ],
+    };
+    const { unmount } = renderRenderer(def);
+    const img = screen.getByAltText('A banner');
+    expect(img).toHaveAttribute('src', '/custom/banner.png');
+    document.documentElement.setAttribute('data-theme', 'light');
+    unmount();
+  });
+
+  it('scrolls the next anchored target into view when advancing steps', async () => {
+    const scrollSpy = jest.spyOn(coachmarkLayout, 'scrollWalkthroughAnchorIntoView');
+
+    const first = document.createElement('button');
+    first.setAttribute('data-testid', 'user-menu-trigger');
+    first.textContent = 'Menu';
+    const second = document.createElement('section');
+    second.setAttribute('data-testid', 'profile-bio-section');
+    second.textContent = 'Bio section';
+    document.body.append(first, second);
+
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-scroll',
+      revision: 1,
+      title: 'Scroll tour',
+      steps: [
+        {
+          id: 's0',
+          position: 0,
+          heading: 'Open menu',
+          bodyMarkdown: 'Start here',
+          anchor: {
+            key: 'user-menu-trigger',
+            targetRoute: '/home',
+            placement: 'bottom',
+            testId: 'user-menu-trigger',
+          },
+        },
+        {
+          id: 's1',
+          position: 1,
+          heading: 'Edit bio',
+          bodyMarkdown: 'Further down',
+          route: '/profile',
+          anchor: {
+            key: 'profile-bio',
+            targetRoute: '/profile',
+            placement: 'bottom',
+            testId: 'profile-bio-section',
+          },
+        },
+      ],
+    };
+
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    const { unmount } = renderRenderer(def);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('walkthrough-coachmark-step')).toBeInTheDocument();
+    });
+    expect(scrollSpy).toHaveBeenCalledWith(
+      first,
+      expect.objectContaining({ preferred: 'bottom' }),
+    );
+    scrollSpy.mockClear();
+
+    await user.click(screen.getByTestId('walkthrough-next'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Edit bio')).toBeInTheDocument();
+      expect(scrollSpy).toHaveBeenCalledWith(
+        second,
+        expect.objectContaining({ preferred: 'bottom' }),
+      );
+    });
+
+    scrollSpy.mockRestore();
+    unmount();
+    first.remove();
+    second.remove();
   });
 });

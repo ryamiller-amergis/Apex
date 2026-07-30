@@ -58,6 +58,14 @@ import {
   type MyWorkLogContext,
   type MyWorkLogLevel,
 } from './myWorkSessionLogger';
+import { resolveAgentMcpToolTimeoutMs } from '../mcp/mcpTimeout';
+import {
+  clearToolInFlight,
+  findExpiredMcpTool,
+  markToolInFlight,
+  type InFlightToolCall,
+} from './inFlightToolTracker';
+import { buildRepositoryContextPack } from './repositoryContextPack';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -397,7 +405,11 @@ export function resolveDocumentAssistantType(
 export function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
-  options?: { maxviewEnabled?: boolean; calendarSessionId?: string },
+  options?: {
+    maxviewEnabled?: boolean;
+    calendarSessionId?: string;
+    restrictRepoSearch?: boolean;
+  },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
@@ -418,7 +430,9 @@ export function buildMcpServers(
   // (e.g. Design Module scoping against the connected skill repo).
   if (kickoff.skillProvider === 'github') {
     servers['github-repo'] = {
-      url: `http://localhost:${port}/mcp/github-repo`,
+      url: `http://localhost:${port}/mcp/github-repo${
+        options?.restrictRepoSearch ? '?profile=interview' : ''
+      }`,
     };
   }
 
@@ -427,7 +441,13 @@ export function buildMcpServers(
   // GitHub-backed document assistants — those tools only touch Postgres and do
   // not require ADO credentials.
   if (kickoff.skillProvider !== 'github' || resolveDocumentAssistantType(kickoff)) {
-    servers['ado-skills'] = { url: adoSkillsUrl };
+    servers['ado-skills'] = {
+      url: `${adoSkillsUrl}${
+        options?.restrictRepoSearch
+          ? `${adoSkillsUrl.includes('?') ? '&' : '?'}profile=interview`
+          : ''
+      }`,
+    };
   }
 
   if (kickoff.mcpPill) {
@@ -966,7 +986,10 @@ function buildCalendarWorkItemAssistantPrompt(kickoff: ChatThreadKickoff): strin
   ].join('\n');
 }
 
-function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
+function buildInitialPrompt(
+  kickoff: ChatThreadKickoff,
+  options?: { repoSearchEnabled?: boolean },
+): string {
   if (kickoff.assistantType === 'calendar-work-item') {
     return buildCalendarWorkItemAssistantPrompt(kickoff);
   }
@@ -988,6 +1011,7 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
 
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
+  const repoSearchEnabled = options?.repoSearchEnabled ?? true;
   const parts: string[] = [
     `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
@@ -1007,7 +1031,9 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
       slashIdx > 0 ? kickoff.repo.slice(slashIdx + 1) : kickoff.repo;
     parts.push(
       `# MCP tools (github-repo server)`,
-      `- \`search_repo_code\` — search code by keyword in the connected GitHub repo`,
+      ...(repoSearchEnabled
+        ? [`- \`search_repo_code\` — last-resort search when no known path applies`]
+        : [`- Broad \`search_repo_code\` is intentionally unavailable for this interview`]),
       `- \`list_repo_dir\`    — browse directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
       `- \`list_skills\`      — list SKILL.md files`,
@@ -1020,25 +1046,28 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
-      `The skill content has been pre-loaded below. Follow its instructions exactly and completely.`,
-      `When the skill requires exploring or verifying repository files, use the github-repo MCP tools with the coordinates above.`,
+      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`,
+      `For additional repository verification, use known paths with list_repo_dir/get_skill_file.`,
+      repoSearchEnabled
+        ? `Use search_repo_code only when no known path applies.`
+        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`,
     );
   } else {
     parts.push(
       `# MCP tools (ado-skills server)`,
-      `- \`get_skill\`        — load a SKILL.md from the repo`,
       `- \`list_repo_dir\`    — browse repo directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
-      `- \`search_repo_code\` — search code in the repo`,
+      ...(repoSearchEnabled
+        ? [`- \`search_repo_code\` — last-resort search when no known path applies`]
+        : [`- Broad \`search_repo_code\` is intentionally unavailable for this interview`]),
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
-      `Call \`get_skill\` with the following parameters to load the skill:`,
-      `  project: "${kickoff.project}"`,
-      `  repo:    "${kickoff.repo}"`,
-      `  path:    "${kickoff.skillPath}"`,
-      `  branch:  "${branch}"`,
-      ``,
+      `The selected skill and core repository context are pre-loaded below when available.`,
+      `For additional repository verification, use known paths with list_repo_dir/get_skill_file.`,
+      repoSearchEnabled
+        ? `Use search_repo_code only when no known path applies.`
+        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`,
     );
   }
 
@@ -1219,35 +1248,74 @@ async function buildNewAgentTurnPrompt(
   promptText: string,
   maxviewEnabled: boolean,
   recoveryContext?: AgentRecoveryContext | null,
+  options?: {
+    preloadRepositoryContext?: boolean;
+    repoSearchEnabled?: boolean;
+  },
 ): Promise<string> {
-  let initialPrompt = buildInitialPrompt(kickoff);
+  let initialPrompt = buildInitialPrompt(kickoff, {
+    repoSearchEnabled: options?.repoSearchEnabled,
+  });
+  const provider = kickoff.skillProvider ?? 'ado';
+  const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
+  let skillContent: string | null = null;
+  let skillSource: 'ado' | 'github' | 'local' | null = null;
+  let contextContent: string | null = null;
+  let agentsContent: string | null = null;
 
-  // For projects with a skill path, pre-fetch the skill content and inject it
-  // into the system prompt. GitHub skills are fetched from the remote; if that
-  // fails (or provider is ADO), fall back to the local Apex checkout so new
-  // platform skills work before they are published to the connected repo.
+  // Fetch independent bootstrap documents concurrently. A partial context pack
+  // is still useful; failed exact reads remain available through MCP at runtime.
+  if (kickoff.skillPath || options?.preloadRepositoryContext) {
+    try {
+      const { getSkillFile } = await import('./skillCatalogFacade');
+      const requests: Array<{
+        key: 'skill' | 'context' | 'agents';
+        path: string;
+      }> = [];
+      if (kickoff.skillPath) requests.push({ key: 'skill', path: kickoff.skillPath });
+      if (options?.preloadRepositoryContext) {
+        requests.push(
+          { key: 'context', path: 'context.md' },
+          { key: 'agents', path: 'AGENTS.md' },
+        );
+      }
+
+      const results = await Promise.allSettled(
+        requests.map((request) =>
+          getSkillFile(
+            kickoff.project,
+            kickoff.repo,
+            request.path,
+            resolvedBranch,
+            provider,
+          ),
+        ),
+      );
+      results.forEach((result, index) => {
+        const request = requests[index];
+        if (result.status === 'rejected') {
+          console.warn(
+            `[chat] Failed to pre-fetch ${request.path} from ${provider}:`,
+            result.reason instanceof Error ? result.reason.message : String(result.reason),
+          );
+          return;
+        }
+        if (request.key === 'skill') {
+          skillContent = result.value;
+          skillSource = provider;
+        } else if (request.key === 'context') {
+          contextContent = result.value;
+        } else {
+          agentsContent = result.value;
+        }
+      });
+    } catch (err) {
+      console.error('[chat] Failed to initialize repository context pre-fetch:', (err as Error).message);
+    }
+  }
+
   if (kickoff.skillPath) {
     const skillPathNorm = kickoff.skillPath.replace(/^\//, '');
-    let skillContent: string | null = null;
-    let skillSource: 'github' | 'local' | null = null;
-
-    if (kickoff.skillProvider === 'github') {
-      try {
-        const { getSkillFile } = await import('./skillCatalogFacade');
-        const resolvedSkillBranch = kickoff.skillBranch ?? kickoff.branch;
-        skillContent = await getSkillFile(
-          kickoff.project,
-          kickoff.repo,
-          kickoff.skillPath,
-          resolvedSkillBranch,
-          'github',
-        );
-        skillSource = 'github';
-      } catch (err) {
-        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
-      }
-    }
-
     if (!skillContent) {
       const localPath = path.join(process.cwd(), skillPathNorm);
       if (fs.existsSync(localPath)) {
@@ -1262,12 +1330,36 @@ async function buildNewAgentTurnPrompt(
     }
 
     if (skillContent) {
-      initialPrompt += `\n\n# Pre-loaded skill content (${skillPathNorm}${skillSource === 'local' ? ', local fallback' : ''})\n\n${skillContent}`;
       initialPrompt +=
-        '\n\nThe skill content above is already loaded. Do not call `get_skill` for this path — execute it now.';
-    } else if (kickoff.skillProvider === 'github') {
+        `\n\n# Pre-loaded skill content (${skillPathNorm}; source: ${skillSource})` +
+        `\n\n${skillContent}`;
       initialPrompt +=
-        '\n\n# Skill pre-fetch failed\nCould not load skill from GitHub or the local checkout. Inform the user that the skill file is missing.';
+        '\n\nThe skill content above is already loaded. Do not call `get_skill` or `get_skill_file` for this path — execute it now.';
+    } else {
+      initialPrompt +=
+        `\n\n# Skill pre-fetch failed\nCould not load ${kickoff.skillPath} from ${provider} or the local checkout. Inform the user that the skill file is missing.`;
+    }
+  }
+
+  if (options?.preloadRepositoryContext) {
+    const contextPack = buildRepositoryContextPack({
+      project: kickoff.project,
+      repo: kickoff.repo,
+      branch: resolvedBranch,
+      provider,
+      contextContent,
+      agentsContent,
+    });
+    if (contextPack) {
+      initialPrompt += `\n\n${contextPack}`;
+    } else {
+      initialPrompt += [
+        '',
+        '',
+        '# Repository context pre-fetch unavailable',
+        'Apex could not preload context.md or AGENTS.md. Read them by exact path with get_skill_file.',
+        'Do not use broad repository search as a substitute.',
+      ].join('\n');
     }
   }
 
@@ -1853,6 +1945,11 @@ export function isThreadIdle(threadId: string): boolean {
   const state = threads.get(threadId);
   if (!state) return false;
   return state.thread.status !== 'running';
+}
+
+/** True when this process still has the thread in the in-memory map. */
+export function isThreadLoaded(threadId: string): boolean {
+  return threads.has(threadId);
 }
 
 // ── Health stats ──────────────────────────────────────────────────────────────
@@ -2594,7 +2691,11 @@ export async function sendMessage(
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
     ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
     : undefined;
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, { maxviewEnabled, calendarSessionId });
+  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, {
+    maxviewEnabled,
+    calendarSessionId,
+    restrictRepoSearch: state.isInterviewThread,
+  });
   console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),
@@ -2660,6 +2761,10 @@ export async function sendMessage(
         promptText,
         maxviewEnabled,
         recoveryContext,
+        {
+          preloadRepositoryContext: state.isInterviewThread,
+          repoSearchEnabled: !state.isInterviewThread,
+        },
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
@@ -2741,6 +2846,10 @@ export async function sendMessage(
           promptText,
           maxviewEnabled,
           recoveryContext,
+          {
+            preloadRepositoryContext: state.isInterviewThread,
+            repoSearchEnabled: !state.isInterviewThread,
+          },
         );
       }
     }
@@ -2842,16 +2951,11 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
     const thinkingPhase = new ThinkingPhaseCoalescer();
-    // Keep tool ids until a terminal tool event arrives. progressAt is deliberately
-    // NOT refreshed by the heartbeat: its timestamp must remain the true tool-start
-    // age so inFlightToolMaxMs is an actual wall-clock cap rather than cap + refresh.
-    const inFlightToolCallIds = new Set<string>();
-    const markToolInFlight = (id: string): void => {
-      inFlightToolCallIds.add(id);
-    };
-    const clearToolInFlight = (id: string): void => {
-      inFlightToolCallIds.delete(id);
-    };
+    // Keep one run-local registry of tool starts. The existing heartbeat loop
+    // checks MCP deadlines, avoiding another interval/timer per tool. progressAt
+    // remains the true tool-start age for the slower cross-instance reaper.
+    const inFlightToolCalls = new Map<string, InFlightToolCall>();
+    const mcpToolTimeoutMs = resolveAgentMcpToolTimeoutMs();
     const flushThinkingPhase = async (): Promise<void> => {
       const phaseEvent = thinkingPhase.flush();
       if (!phaseEvent) return;
@@ -2907,8 +3011,28 @@ export async function sendMessage(
 
     // Background heartbeat — bumps every 30s unconditionally so long thinking
     // phases that emit no stream events don't trigger the reaper's expiry threshold.
+    // It also enforces the owner-side MCP deadline without creating another timer.
     // If the run was reaped/cancelled, do NOT swallow the error — abort the stream.
     backgroundHeartbeatId = setInterval(() => {
+      const expiredMcpTool = findExpiredMcpTool(
+        inFlightToolCalls,
+        Date.now(),
+        mcpToolTimeoutMs,
+      );
+      if (expiredMcpTool) {
+        const detail =
+          `${expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName} exceeded owner deadline ` +
+          `after ${Math.round(expiredMcpTool.elapsedMs / 1000)}s`;
+        console.warn(`[chat] ${detail} (threadId=${threadId}, runId=${agentRunId})`);
+        logMyWork('run.mcp_tool_timeout', {
+          runId: agentRunId,
+          toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+          elapsedMs: expiredMcpTool.elapsedMs,
+          timeoutMs: mcpToolTimeoutMs,
+        }, 'warn');
+        abortInFlightRun(detail);
+        return;
+      }
       lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
       bumpHeartbeat().catch((err: unknown) => {
         const cancelled =
@@ -2961,8 +3085,13 @@ export async function sendMessage(
                   const toolUseId =
                     typeof (block as { id?: unknown }).id === 'string'
                       ? (block as { id: string }).id
-                      : `tool_use:${block.name}:${inFlightToolCallIds.size}`;
-                  markToolInFlight(toolUseId);
+                      : `tool_use:${block.name}:${inFlightToolCalls.size}`;
+                  markToolInFlight(
+                    inFlightToolCalls,
+                    toolUseId,
+                    block.name,
+                    block.input,
+                  );
 
                   const toolMsg: ChatMessage = {
                     id: uuidv4(),
@@ -3026,16 +3155,19 @@ export async function sendMessage(
                 tc.status === 'completed' || tc.status === 'error' ? tc.status : 'running';
               const toolCallKey = tc.call_id || tc.name || 'unknown';
               if (toolStatus === 'running') {
-                markToolInFlight(toolCallKey);
+                markToolInFlight(
+                  inFlightToolCalls,
+                  toolCallKey,
+                  tc.name ?? 'unknown',
+                  tc.args,
+                );
               } else {
-                clearToolInFlight(toolCallKey);
-                // Assistant tool_use ids may differ from tool_call call_id — clear
-                // any anon keys for this tool name once the call finishes.
-                for (const key of [...inFlightToolCallIds]) {
-                  if (key === toolCallKey || key.startsWith(`tool_use:${tc.name ?? ''}:`)) {
-                    clearToolInFlight(key);
-                  }
-                }
+                clearToolInFlight(
+                  inFlightToolCalls,
+                  toolCallKey,
+                  tc.name ?? 'unknown',
+                  tc.args,
+                );
               }
               logMyWork('run.tool_status', {
                 runId: agentRunId,

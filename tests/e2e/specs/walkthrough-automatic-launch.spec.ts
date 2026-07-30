@@ -25,7 +25,7 @@ const eligibleWalkthrough = {
   createdAt: '2026-07-28T00:00:00Z',
   updatedBy: 'admin',
   updatedAt: '2026-07-28T00:00:00Z',
-  targeting: { project: 'Apex', groupId: null },
+  targeting: { projects: ['Apex'], groupId: null },
   targetingRules: [{ type: 'project', value: 'Apex' }],
   steps: [
     {

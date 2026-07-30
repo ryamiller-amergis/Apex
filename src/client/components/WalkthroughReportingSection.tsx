@@ -108,7 +108,7 @@ export const WalkthroughReportingSection: React.FC = () => {
               )}
               {catalogItems.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.userTitle} · rev {item.revision} · {item.targeting.project}
+                  {item.userTitle} · rev {item.revision} · {item.targeting.projects.join(', ')}
                 </option>
               ))}
             </select>

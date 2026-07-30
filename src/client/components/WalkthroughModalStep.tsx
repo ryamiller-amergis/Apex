@@ -40,7 +40,9 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
       const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
       );
-      focusable?.[0]?.focus();
+      // preventScroll: focusing the dialog must not scroll the underlying app shell
+      // (that shifts the fixed header/menu inward when a document scrollbar appears).
+      focusable?.[0]?.focus({ preventScroll: true });
     }, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -58,10 +60,10 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
 
@@ -69,7 +71,7 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
     return () => {
       window.clearTimeout(focusTimer);
       document.removeEventListener('keydown', onKeyDown);
-      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current?.focus?.({ preventScroll: true });
     };
   }, [allowEscapeDismiss, onDismiss, step.id]);
 

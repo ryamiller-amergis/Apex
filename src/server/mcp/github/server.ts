@@ -21,7 +21,9 @@ function toolErrorMessage(err: unknown): string {
  * stuck GitHub call or ignored AbortSignal still returns a completed tool
  * result to the Cursor SDK instead of hanging the interview turn.
  */
-export function createGitHubMcpServer(): McpServer {
+export function createGitHubMcpServer(
+  options?: { enableCodeSearch?: boolean },
+): McpServer {
   const server = new McpServer({
     name: 'github-repo',
     version: '1.0.0',
@@ -72,31 +74,33 @@ export function createGitHubMcpServer(): McpServer {
     },
   );
 
-  server.tool(
-    'search_repo_code',
-    'Search code in the GitHub repo by keyword. Returns matching file paths with text snippets. ' +
-    'Use this to find where a feature, component, or concept is implemented.',
-    {
-      repo: z.string().describe('Repository name'),
-      query: z.string().describe('Search query (keywords, symbol name, or phrase)'),
-      branch: z.string().optional().describe('Branch name (best-effort)'),
-      org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
-      limit: z.number().int().min(1).max(30).optional().describe('Maximum results (default 10)'),
-    },
-    async ({ repo, query, branch, org, limit }) => {
-      try {
-        const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
-          searchRepoCode(repo, query, branch, org, limit ?? 10),
-        );
-        return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
-      } catch (err) {
-        return {
-          content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
-          isError: true,
-        };
-      }
-    },
-  );
+  if (options?.enableCodeSearch !== false) {
+    server.tool(
+      'search_repo_code',
+      'Search code in the GitHub repo by keyword. Returns matching file paths with text snippets. ' +
+      'Use this to find where a feature, component, or concept is implemented.',
+      {
+        repo: z.string().describe('Repository name'),
+        query: z.string().describe('Search query (keywords, symbol name, or phrase)'),
+        branch: z.string().optional().describe('Branch name (best-effort)'),
+        org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
+        limit: z.number().int().min(1).max(30).optional().describe('Maximum results (default 10)'),
+      },
+      async ({ repo, query, branch, org, limit }) => {
+        try {
+          const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
+            searchRepoCode(repo, query, branch, org, limit ?? 10),
+          );
+          return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
   server.tool(
     'list_skills',

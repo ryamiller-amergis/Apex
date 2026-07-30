@@ -18,17 +18,8 @@ import {
 } from '../db/schema';
 import { getUserGroupIdsForProject } from './featureFlagService';
 import { trackEvent } from './telemetry';
-import { getWalkthroughAnchor } from '../../shared/walkthroughAnchors';
 import {
-  assertPersistedProgressStatus,
-  canTransitionLifecycle,
-  deriveAcknowledged,
-  rulesToTargeting,
-  targetingToRules,
-  validateCreateCommand,
-  validateTargeting,
-  validateSteps,
-  WalkthroughDomainError,
+  assertAnchorInCatalog,
   type ListAnchorMissesQuery,
   type PublishWalkthroughCommand,
   type RecordAnchorMissRequest,
@@ -45,10 +36,29 @@ import {
   type WalkthroughProgress,
   type WalkthroughReplayPage,
   type WalkthroughStep,
+  type WalkthroughStepInput,
   type WalkthroughTargetRule,
   type WalkthroughTargeting,
   type ValidatedWalkthroughDraft,
+  canTransitionLifecycle,
+  deriveAcknowledged,
+  rulesToTargeting,
+  targetingToRules,
+  validateCreateCommand,
+  validateGenerationProvenance,
+  validateTargeting,
+  validateSteps,
+  WalkthroughDomainError,
+  assertPersistedProgressStatus,
 } from '../../shared/types/walkthrough';
+import {
+  enrichStepAnchorFromCatalog,
+} from './walkthroughAnchorCatalogResolution';
+import {
+  getAnchorByKey,
+  listAuthoringAnchorEntries,
+  listCatalogRecordsForResolution,
+} from './walkthroughAnchorRegistryService';
 
 const CATALOG_DEFAULT_LIMIT = 50;
 const CATALOG_MAX_LIMIT = 50;
@@ -71,12 +81,18 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function dbStepRoute(step: DbStepRow): string | null {
+  // Legacy test/data adapters may still expose the Drizzle property as targetRoute.
+  return step.route ?? (step as DbStepRow & { targetRoute?: string | null }).targetRoute ?? null;
+}
+
 function mapAnchor(step: DbStepRow): WalkthroughStep['anchor'] {
-  if (!step.anchorKey && !step.targetRoute && !step.placement) return null;
+  const route = dbStepRoute(step);
+  if (!step.anchorKey || !route || !step.placement) return null;
   return {
-    key: step.anchorKey!,
-    targetRoute: step.targetRoute!,
-    placement: step.placement!,
+    key: step.anchorKey,
+    targetRoute: route,
+    placement: step.placement,
   };
 }
 
@@ -87,7 +103,9 @@ function mapStep(row: DbStepRow): WalkthroughStep {
     ordinal: row.ordinal,
     heading: row.heading,
     bodyMarkdown: row.bodyMarkdown,
+    route: dbStepRoute(row),
     imageUrl: row.imageUrl,
+    imageAlt: row.imageAlt,
     ctaLabel: row.ctaLabel,
     ctaRoute: row.ctaRoute,
     anchor: mapAnchor(row),
@@ -115,10 +133,70 @@ function mapDefinition(row: DefinitionRow): WalkthroughDefinition {
     createdAt: row.createdAt,
     updatedBy: row.updatedBy,
     updatedAt: row.updatedAt,
+    generationProvenance: row.generationProvenance ?? null,
     steps,
     targeting: rulesToTargeting(targetingRules),
     targetingRules,
   };
+}
+
+/** Enrich step anchors with catalog testId / centered-fallback signals (Phase 6). */
+export function enrichDefinitionAnchorsFromRecords(
+  definition: WalkthroughDefinition,
+  records: Parameters<typeof enrichStepAnchorFromCatalog>[0],
+): WalkthroughDefinition {
+  return {
+    ...definition,
+    steps: definition.steps.map((step) => {
+      if (!step.anchor) return step;
+      const result = enrichStepAnchorFromCatalog(records, step.anchor);
+      if (result.status === 'resolved') {
+        return {
+          ...step,
+          anchor: {
+            key: result.enriched.key,
+            targetRoute: result.enriched.targetRoute,
+            placement: result.enriched.placement as NonNullable<WalkthroughStep['anchor']>['placement'],
+            testId: result.enriched.testId,
+            useCenteredFallback: false,
+            catalogFallbackReason: undefined,
+          },
+        };
+      }
+      return {
+        ...step,
+        anchor: {
+          ...step.anchor,
+          testId: null,
+          useCenteredFallback: true,
+          catalogFallbackReason: result.reason,
+        },
+      };
+    }),
+  };
+}
+
+async function mapDefinitionEnriched(row: DefinitionRow): Promise<WalkthroughDefinition> {
+  const definition = mapDefinition(row);
+  const records = await listCatalogRecordsForResolution();
+  return enrichDefinitionAnchorsFromRecords(definition, records);
+}
+
+function enrichMappedDefinition(
+  row: DefinitionRow,
+  records: Parameters<typeof enrichStepAnchorFromCatalog>[0],
+): WalkthroughDefinition {
+  return enrichDefinitionAnchorsFromRecords(mapDefinition(row), records);
+}
+
+async function assertStepsAgainstAuthoringCatalog(
+  steps: readonly WalkthroughStepInput[],
+): Promise<void> {
+  const catalog = await listAuthoringAnchorEntries();
+  for (const step of steps) {
+    if (!step.anchor) continue;
+    assertAnchorInCatalog(step.anchor, catalog);
+  }
 }
 
 function mapProgress(row: DbProgressRow): WalkthroughProgress {
@@ -165,7 +243,7 @@ async function assertGroupBelongsToProject(groupId: string, project: string): Pr
 async function validateTargetingAgainstDb(targeting: WalkthroughTargeting): Promise<WalkthroughTargeting> {
   const normalized = validateTargeting(targeting);
   if (normalized.groupId) {
-    await assertGroupBelongsToProject(normalized.groupId, normalized.project);
+    await assertGroupBelongsToProject(normalized.groupId, normalized.projects[0]);
   }
   return normalized;
 }
@@ -187,11 +265,12 @@ async function replaceStepsAndRules(
         ordinal: s.ordinal,
         heading: s.heading,
         bodyMarkdown: s.bodyMarkdown,
+        route: s.route ?? s.anchor?.targetRoute ?? null,
         imageUrl: s.imageUrl ?? null,
+        imageAlt: s.imageAlt ?? null,
         ctaLabel: s.ctaLabel ?? null,
         ctaRoute: s.ctaRoute ?? null,
         anchorKey: s.anchor?.key ?? null,
-        targetRoute: s.anchor?.targetRoute ?? null,
         placement: s.anchor?.placement ?? null,
       })),
     );
@@ -207,10 +286,16 @@ async function replaceStepsAndRules(
   );
 }
 
-function emitLifecycle(walkthroughId: string, project: string, transition: string, revision: number): void {
+function emitLifecycle(
+  walkthroughId: string,
+  projects: string[],
+  transition: string,
+  revision: number,
+): void {
   trackEvent('walkthrough.lifecycle.changed', {
     walkthroughId,
-    project,
+    project: projects.join(','),
+    projectCount: String(projects.length),
     transition,
     revision: String(revision),
   });
@@ -265,6 +350,7 @@ export async function createWalkthrough(
   actor: { id: string },
 ): Promise<WalkthroughDefinition> {
   const command = validateCreateCommand(input);
+  await assertStepsAgainstAuthoringCatalog(command.steps);
   const targeting = await validateTargetingAgainstDb(command.targeting);
   const ts = nowIso();
 
@@ -282,6 +368,7 @@ export async function createWalkthrough(
         updatedBy: actor.id,
         createdAt: ts,
         updatedAt: ts,
+        generationProvenance: command.generationProvenance ?? null,
       })
       .returning({ id: walkthroughs.id });
 
@@ -291,8 +378,8 @@ export async function createWalkthrough(
 
   const loaded = await loadDefinition(id);
   if (!loaded) throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found after create');
-  emitLifecycle(id, targeting.project, 'created', 1);
-  return mapDefinition(loaded);
+  emitLifecycle(id, targeting.projects, 'created', 1);
+  return mapDefinitionEnriched(loaded);
 }
 
 export async function updateWalkthrough(
@@ -315,10 +402,17 @@ export async function updateWalkthrough(
   }
 
   const steps = input.steps !== undefined ? validateSteps(input.steps) : existing.steps.map(mapStep);
+  if (input.steps !== undefined) {
+    await assertStepsAgainstAuthoringCatalog(steps);
+  }
   const targeting =
     input.targeting !== undefined
       ? await validateTargetingAgainstDb(input.targeting)
       : rulesToTargeting(mapRules(existing.targetingRules));
+  const generationProvenance =
+    input.generationProvenance !== undefined
+      ? validateGenerationProvenance(input.generationProvenance)
+      : existing.generationProvenance;
   const ts = nowIso();
 
   await db.transaction(async (tx) => {
@@ -329,6 +423,7 @@ export async function updateWalkthrough(
         userTitle: input.userTitle?.trim() ?? existing.userTitle,
         whyItMatters: input.whyItMatters ?? existing.whyItMatters,
         priority: input.priority ?? existing.priority,
+        generationProvenance,
         updatedBy: actor.id,
         updatedAt: ts,
       })
@@ -342,7 +437,9 @@ export async function updateWalkthrough(
         ordinal: s.ordinal,
         heading: s.heading,
         bodyMarkdown: s.bodyMarkdown,
+        route: s.route ?? s.anchor?.targetRoute ?? null,
         imageUrl: s.imageUrl ?? null,
+        imageAlt: s.imageAlt ?? null,
         ctaLabel: s.ctaLabel ?? null,
         ctaRoute: s.ctaRoute ?? null,
         anchor: s.anchor ?? null,
@@ -353,7 +450,7 @@ export async function updateWalkthrough(
 
   const loaded = await loadDefinition(id);
   if (!loaded) throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
-  return mapDefinition(loaded);
+  return mapDefinitionEnriched(loaded);
 }
 
 // ── Admin: lifecycle ──────────────────────────────────────────────────────────
@@ -429,10 +526,10 @@ export async function publishWalkthrough(
     );
   });
 
-  emitLifecycle(id, targeting.project, `publish:${mode}`, nextRevision);
+  emitLifecycle(id, targeting.projects, `publish:${mode}`, nextRevision);
   const loaded = await loadDefinition(id);
   if (!loaded) throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
-  return mapDefinition(loaded);
+  return mapDefinitionEnriched(loaded);
 }
 
 export async function unpublishWalkthrough(
@@ -464,10 +561,10 @@ export async function unpublishWalkthrough(
     .where(eq(walkthroughs.id, id));
 
   const targeting = rulesToTargeting(mapRules(existing.targetingRules));
-  emitLifecycle(id, targeting.project, 'unpublish', existing.revision);
+  emitLifecycle(id, targeting.projects, 'unpublish', existing.revision);
   const loaded = await loadDefinition(id);
   if (!loaded) throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
-  return mapDefinition(loaded);
+  return mapDefinitionEnriched(loaded);
 }
 
 export async function archiveWalkthrough(
@@ -500,10 +597,10 @@ export async function archiveWalkthrough(
     .where(eq(walkthroughs.id, id));
 
   const targeting = rulesToTargeting(mapRules(existing.targetingRules));
-  emitLifecycle(id, targeting.project, 'archive', existing.revision);
+  emitLifecycle(id, targeting.projects, 'archive', existing.revision);
   const loaded = await loadDefinition(id);
   if (!loaded) throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
-  return mapDefinition(loaded);
+  return mapDefinitionEnriched(loaded);
 }
 
 export function validateAiDraft(input: unknown): ValidatedWalkthroughDraft {
@@ -532,7 +629,7 @@ async function userMatchesTargeting(
   projectId: string,
   targeting: WalkthroughTargeting,
 ): Promise<boolean> {
-  if (targeting.project !== projectId) return false;
+  if (!targeting.projects.includes(projectId)) return false;
   const hasProject = await userHasProjectAccess(userId, projectId);
   if (!hasProject) return false;
   if (!targeting.groupId) return true;
@@ -580,6 +677,8 @@ export async function getNextEligible(
       orderBy: [desc(walkthroughs.priority), desc(walkthroughs.publishedAt)],
     });
 
+    const catalogRecords = await listCatalogRecordsForResolution();
+
     for (const row of published as Array<DefinitionRow & { progress: DbProgressRow[] }>) {
       let targeting: WalkthroughTargeting;
       try {
@@ -587,7 +686,7 @@ export async function getNextEligible(
       } catch {
         continue;
       }
-      if (targeting.project !== projectId) continue;
+      if (!targeting.projects.includes(projectId)) continue;
       if (targeting.groupId && !groupIds.includes(targeting.groupId)) continue;
 
       const currentProgress = row.progress.find((p) => p.revision === row.revision);
@@ -606,7 +705,7 @@ export async function getNextEligible(
       trackEvent('walkthrough.eligibility.duration_ms', { project: projectId }, {
         duration_ms: Date.now() - started,
       });
-      return mapDefinition(row);
+      return enrichMappedDefinition(row, catalogRecords);
     }
 
     trackEvent('walkthrough.eligibility.result', {
@@ -648,6 +747,7 @@ export async function listReplay(
     orderBy: [desc(walkthroughs.priority), desc(walkthroughs.publishedAt)],
   });
 
+  const catalogRecords = await listCatalogRecordsForResolution();
   const items = [];
   for (const row of published as Array<DefinitionRow & { progress: DbProgressRow[] }>) {
     let targeting: WalkthroughTargeting;
@@ -656,13 +756,13 @@ export async function listReplay(
     } catch {
       continue;
     }
-    if (targeting.project !== projectId) continue;
+    if (!targeting.projects.includes(projectId)) continue;
     if (targeting.groupId && !groupIds.includes(targeting.groupId)) continue;
 
     const current = row.progress.find((p) => p.revision === row.revision) ?? null;
     const acknowledged = current ? deriveAcknowledged(assertPersistedProgressStatus(current.status)) : false;
     items.push({
-      walkthrough: mapDefinition(row),
+      walkthrough: enrichMappedDefinition(row, catalogRecords),
       progress: current ? mapProgress(current) : null,
       state: (acknowledged ? 'acknowledged' : 'new') as 'new' | 'acknowledged',
     });
@@ -698,7 +798,7 @@ export async function getAccessibleDefinition(
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
   }
 
-  return mapDefinition(row);
+  return mapDefinitionEnriched(row);
 }
 
 export async function updateOwnProgress(
@@ -728,7 +828,9 @@ export async function updateOwnProgress(
     }
   }
 
-  // FEAT-006 / BR-007: terminal completed|dismissed must not downgrade to seen (replay).
+  // FEAT-006 / BR-007: never downgrade terminal progress on replay.
+  // - completed is sticky (dismiss/seen on replay must not rewrite metrics)
+  // - dismissed must not fall back to seen; may upgrade to completed
   const existingRows = await db
     .select()
     .from(walkthroughProgress)
@@ -744,8 +846,10 @@ export async function updateOwnProgress(
   let status = requestedStatus;
   if (existing) {
     const prev = assertPersistedProgressStatus(existing.status);
-    if (deriveAcknowledged(prev) && requestedStatus === 'seen') {
-      status = prev;
+    if (prev === 'completed') {
+      status = 'completed';
+    } else if (prev === 'dismissed' && requestedStatus === 'seen') {
+      status = 'dismissed';
     }
   }
 
@@ -848,9 +952,9 @@ export async function recordAnchorMiss(
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'targetRoute must match the published Step');
   }
 
-  const registered = getWalkthroughAnchor(body.anchorKey.trim());
+  const registered = await getAnchorByKey(body.anchorKey.trim(), { includeDeleted: true });
   if (!registered) {
-    throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is not in the curated registry');
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is not in the anchor catalog');
   }
 
   const occurrenceId = body.occurrenceId.trim();
@@ -865,7 +969,7 @@ export async function recordAnchorMiss(
         userId,
         revision: body.revision,
         projectSnapshot: projectId,
-        anchorKey: registered.key,
+        anchorKey: registered.anchorKey,
         targetRoute: step.anchor.targetRoute,
         occurrenceId,
         occurredAt,
@@ -893,7 +997,7 @@ export async function recordAnchorMiss(
     walkthroughId,
     stepId,
     revision: String(body.revision),
-    anchorKey: registered.key,
+    anchorKey: registered.anchorKey,
     targetRoute: step.anchor.targetRoute,
     project: projectId,
     reason: typeof body.reason === 'string' ? body.reason : 'timeout',
@@ -1101,6 +1205,7 @@ async function loadAudienceUserIdsTx(
   targeting: WalkthroughTargeting,
 ): Promise<string[]> {
   if (targeting.groupId) {
+    const project = targeting.projects[0];
     const rows = (await tx
       .select({ userId: appGroupMembers.userId })
       .from(appGroupMembers)
@@ -1108,7 +1213,7 @@ async function loadAudienceUserIdsTx(
       .where(
         and(
           eq(appGroupMembers.groupId, targeting.groupId),
-          eq(userProjectAssignments.project, targeting.project),
+          eq(userProjectAssignments.project, project),
         ),
       )) as Array<{ userId: string }>;
     return [...new Set(rows.map((r) => r.userId))];
@@ -1117,8 +1222,8 @@ async function loadAudienceUserIdsTx(
   const rows = (await tx
     .select({ userId: userProjectAssignments.userId })
     .from(userProjectAssignments)
-    .where(eq(userProjectAssignments.project, targeting.project))) as Array<{ userId: string }>;
-  return rows.map((r) => r.userId);
+    .where(inArray(userProjectAssignments.project, targeting.projects))) as Array<{ userId: string }>;
+  return [...new Set(rows.map((r) => r.userId))];
 }
 
 async function loadAudienceUserIds(targeting: WalkthroughTargeting): Promise<string[]> {
@@ -1163,7 +1268,7 @@ export async function listPublishedForUserInProject(
     } catch {
       continue;
     }
-    if (targeting.project !== projectId) continue;
+    if (!targeting.projects.includes(projectId)) continue;
     if (targeting.groupId && !groupIds.includes(targeting.groupId)) continue;
     out.push({ id: row.id, revision: row.revision, userTitle: row.userTitle });
   }
@@ -1176,5 +1281,5 @@ export async function getWalkthroughAdmin(id: string): Promise<WalkthroughDefini
   if (!row) {
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
   }
-  return mapDefinition(row);
+  return mapDefinitionEnriched(row);
 }

@@ -25,8 +25,8 @@ import {
   useRemoveFlagRule,
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
-import { WalkthroughCatalog } from './WalkthroughCatalog';
 import { WalkthroughReportingSection } from './WalkthroughReportingSection';
+import { WalkthroughsAdminPanel } from './WalkthroughsAdminPanel';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
@@ -232,7 +232,8 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
 
   useEffect(() => {
     if (selectedMenuProject && projectNames.includes(selectedMenuProject)) return;
-    setSelectedMenuProject(projectNames[0] ?? '');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- keep selection valid when project list changes
+        setSelectedMenuProject(projectNames[0] ?? '');
   }, [projectNames, selectedMenuProject]);
 
   return (
@@ -432,7 +433,8 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-labelledby="platform-admin-tab-walkthroughs"
               className={styles.tabPanel}
             >
-              <WalkthroughCatalog />
+              {/* data-testid-exempt — host sets walkthroughs-admin-panel */}
+              <WalkthroughsAdminPanel />
             </div>
           )}
           {activeTab === 'walkthrough-reports' && (
@@ -590,7 +592,8 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
   const pendingDisplayCount = pendingAssignments.length + importedPendingEmails.length;
 
   useEffect(() => {
-    setSelectedUserIds(currentUserIds);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset member editor when group membership snapshot changes
+        setSelectedUserIds(currentUserIds);
     setSearchQuery('');
     setImportMessage(null);
     setImportedPendingEmails([]);
@@ -883,6 +886,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
     defaultValues: { enabledViews },
   });
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch() is intentionally unmemoizable
   const watchedViews = watch('enabledViews') ?? [];
 
   useEffect(() => {
@@ -1330,7 +1334,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
   );
 
   useEffect(() => {
-    setSelectedTargets([]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear targets when rule type changes
+        setSelectedTargets([]);
   }, [ruleType]);
 
   const targetOptions = useMemo<TypeaheadOption[]>(() => {
@@ -1480,7 +1485,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
 
       <div className={styles.flagControls}>
         <div className={styles.flagField}>
-          <label className={styles.label}>Lifecycle</label>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- adjacent select is the control; structure preserved */}
+                    <label className={styles.label}>Lifecycle</label>
           <select
             className={styles.input}
             value={flag.lifecycle}

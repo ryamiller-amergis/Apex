@@ -24,7 +24,7 @@ const publishedNew = {
   createdAt: '2026-07-28T00:00:00Z',
   updatedBy: 'admin',
   updatedAt: '2026-07-28T00:00:00Z',
-  targeting: { project: 'Apex', groupId: null },
+  targeting: { projects: ['Apex'], groupId: null },
   targetingRules: [{ type: 'project', value: 'Apex' }],
   steps: [
     {
@@ -229,7 +229,7 @@ test.describe('Walkthrough progress + Help replay @feat-006', () => {
     // Dismiss closes replay; suppression must remain (server non-downgrade).
     await page.keyboard.press('Escape');
     await page.reload();
-    await expect(page.getByTestId('guided-walkthrough-host')).toHaveCount(0);
+    await expect(page.getByTestId('walkthrough-renderer')).toHaveCount(0);
     void progressBodies;
   });
 

@@ -1,18 +1,18 @@
 /**
- * FEAT-002 / TBI-004 — Resolve a curated walkthrough anchor target.
- * Validates registry membership, navigates to targetRoute, waits up to ANCHOR_WAIT_MS
- * via immediate query + MutationObserver, and cancels on step/close/unmount.
+ * FEAT-002 / TBI-004 — Resolve a walkthrough anchor target from enriched catalog metadata.
+ * Prefers serve-time `testId` / `useCenteredFallback` on the step anchor so playback
+ * does not need a separate catalog request. Falls back to centered modal + miss
+ * telemetry for inactive/deleted/missing/unregistered keys.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ANCHOR_WAIT_MS,
-  getWalkthroughAnchor,
   isValidInAppWalkthroughRoute,
-  validateRegisteredAnchor,
 } from '../../shared/walkthroughAnchors';
 import type {
   WalkthroughAnchor,
+  WalkthroughAnchorCatalogFallbackReason,
   WalkthroughAnchorMissReason,
 } from '../../shared/types/walkthrough';
 
@@ -29,6 +29,8 @@ export interface UseWalkthroughAnchorTargetArgs {
   revision: number;
   stepId: string;
   anchor: WalkthroughAnchor | null | undefined;
+  /** First-class step destination (unanchored steps). Falls back to anchor.targetRoute. */
+  stepRoute?: string | null;
   /** Bumps when the active step or walkthrough playback changes. */
   activationKey: string;
   enabled?: boolean;
@@ -53,11 +55,22 @@ function queryByTestId(testId: string): Element | null {
   return document.querySelector(`[data-testid="${escaped}"]`);
 }
 
+function looksLikeSelectorSyntax(value: string): boolean {
+  return /[#.[\]>+~*=]|^\s*\/\//.test(value) || value.includes(' ');
+}
+
+function catalogFallbackToMissReason(
+  reason: WalkthroughAnchorCatalogFallbackReason,
+): WalkthroughAnchorMissReason {
+  return reason;
+}
+
 export function useWalkthroughAnchorTarget({
   walkthroughId: _walkthroughId,
   revision: _revision,
   stepId: _stepId,
   anchor,
+  stepRoute,
   activationKey,
   enabled = true,
   waitMs = ANCHOR_WAIT_MS,
@@ -73,6 +86,29 @@ export function useWalkthroughAnchorTarget({
   const anchorKey = anchor?.key ?? null;
   const anchorRoute = anchor?.targetRoute ?? null;
   const anchorPlacement = anchor?.placement ?? null;
+  const enrichedTestId = anchor?.testId ?? null;
+  const useCenteredFallback = anchor?.useCenteredFallback === true;
+  const catalogFallbackReason = anchor?.catalogFallbackReason ?? null;
+  const effectiveStepRoute = stepRoute ?? null;
+
+  // Route-first navigation for unanchored steps that carry a route destination.
+  useEffect(() => {
+    if (!enabled || anchorKey || !effectiveStepRoute) return;
+    if (!isValidInAppWalkthroughRoute(effectiveStepRoute)) return;
+    if (location.pathname === effectiveStepRoute) return;
+    setStatus('navigating');
+    navigate(effectiveStepRoute);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activationKey, enabled, anchorKey, effectiveStepRoute, navigate]);
+
+  // Settle navigating → idle once the path matches for unanchored route-only steps.
+  useEffect(() => {
+    if (!enabled || anchorKey || !effectiveStepRoute) return;
+    if (status !== 'navigating') return;
+    if (location.pathname === effectiveStepRoute) {
+      setStatus('idle');
+    }
+  }, [enabled, anchorKey, effectiveStepRoute, status, location.pathname]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -87,46 +123,52 @@ export function useWalkthroughAnchorTarget({
       return;
     }
 
-    const anchorValue: NonNullable<WalkthroughAnchor> = {
-      key: anchorKey,
-      targetRoute: anchorRoute,
-      placement: anchorPlacement,
-    };
-
     setStatus('validating');
-    const validated = validateRegisteredAnchor(anchorValue);
-    if (!validated.ok) {
-      const code = validated.errors[0]?.code;
-      let reason: WalkthroughAnchorMissReason = 'unregistered';
-      if (code === 'INVALID_ROUTE' || code === 'ROUTE_REQUIRED') reason = 'invalid_route';
-      else if (code === 'ROUTE_MISMATCH') reason = 'route_mismatch';
-      else if (code === 'UNSUPPORTED_PLACEMENT') reason = 'unsupported_placement';
+
+    if (looksLikeSelectorSyntax(anchorKey)) {
       if (isStale()) return;
-      setMissReason(reason);
+      setMissReason('unregistered');
       setStatus('fallback');
       return;
     }
-    if (validated.anchor === null) {
+
+    if (useCenteredFallback) {
       if (isStale()) return;
-      setStatus('idle');
+      setMissReason(
+        catalogFallbackReason
+          ? catalogFallbackToMissReason(catalogFallbackReason)
+          : 'missing',
+      );
+      setStatus('fallback');
       return;
     }
 
-    const entry = validated.entry;
-    if (!isValidInAppWalkthroughRoute(validated.anchor.targetRoute)) {
+    if (!isValidInAppWalkthroughRoute(anchorRoute)) {
       if (isStale()) return;
       setMissReason('invalid_route');
       setStatus('fallback');
       return;
     }
 
-    setTestId(entry.testId);
+    const resolvedTestId = typeof enrichedTestId === 'string' && enrichedTestId.trim()
+      ? enrichedTestId.trim()
+      : null;
+
+    if (!resolvedTestId) {
+      // No serve-time enrichment — treat as missing catalog resolution.
+      if (isStale()) return;
+      setMissReason('missing');
+      setStatus('fallback');
+      return;
+    }
+
+    setTestId(resolvedTestId);
 
     const currentPath = location.pathname;
-    const needsNav = currentPath !== entry.targetRoute;
+    const needsNav = currentPath !== anchorRoute;
     if (needsNav) {
       setStatus('navigating');
-      navigate(entry.targetRoute);
+      navigate(anchorRoute);
     }
 
     setStatus('waiting');
@@ -145,7 +187,7 @@ export function useWalkthroughAnchorTarget({
       setStatus('fallback');
     };
 
-    const immediate = queryByTestId(entry.testId);
+    const immediate = queryByTestId(resolvedTestId);
     if (immediate) {
       finishResolved(immediate);
       return;
@@ -157,7 +199,7 @@ export function useWalkthroughAnchorTarget({
     if (typeof MutationObserver !== 'undefined') {
       observer = new MutationObserver(() => {
         if (isStale()) return;
-        const found = queryByTestId(entry.testId);
+        const found = queryByTestId(resolvedTestId);
         if (found) {
           observer?.disconnect();
           if (timerId != null) window.clearTimeout(timerId);
@@ -179,22 +221,31 @@ export function useWalkthroughAnchorTarget({
     // location.pathname intentionally omitted — navigation is initiated here;
     // remount/activationKey drives re-resolution after route change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activationKey, anchorKey, anchorRoute, anchorPlacement, enabled, navigate, waitMs]);
+  }, [
+    activationKey,
+    anchorKey,
+    anchorRoute,
+    anchorPlacement,
+    enrichedTestId,
+    useCenteredFallback,
+    catalogFallbackReason,
+    enabled,
+    navigate,
+    waitMs,
+  ]);
 
   // After navigation completes, re-query once path matches (without resetting generation).
   useEffect(() => {
     if (status !== 'waiting' && status !== 'navigating') return;
-    if (!testId || !anchorKey) return;
-    const entry = getWalkthroughAnchor(anchorKey);
-    if (!entry) return;
-    if (location.pathname !== entry.targetRoute) return;
+    if (!testId || !anchorKey || !anchorRoute) return;
+    if (location.pathname !== anchorRoute) return;
     const found = queryByTestId(testId);
     if (found) {
       setTargetElement(found);
       setMissReason(null);
       setStatus('resolved');
     }
-  }, [location.pathname, status, testId, anchorKey]);
+  }, [location.pathname, status, testId, anchorKey, anchorRoute]);
 
   const locating = status === 'validating' || status === 'navigating' || status === 'waiting';
 
@@ -206,3 +257,4 @@ export function useWalkthroughAnchorTarget({
     locating,
   };
 }
+

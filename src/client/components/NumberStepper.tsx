@@ -11,9 +11,11 @@ export interface NumberStepperProps {
   /** Optional unit label shown under the value (e.g. "min", "VUs"). */
   unit?: string;
   disabled?: boolean;
+  className?: string;
   'aria-label'?: string;
   'aria-describedby'?: string;
   'aria-invalid'?: boolean;
+  'data-testid'?: string;
 }
 
 /**
@@ -30,9 +32,11 @@ export const NumberStepper: React.FC<NumberStepperProps> = ({
   step = 1,
   unit,
   disabled = false,
+  className,
   'aria-label': ariaLabel,
   'aria-describedby': ariaDescribedBy,
   'aria-invalid': ariaInvalid,
+  'data-testid': testId = 'number-stepper',
 }) => {
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
   const atMin = value <= min;
@@ -40,13 +44,13 @@ export const NumberStepper: React.FC<NumberStepperProps> = ({
 
   return (
     <div
-      className={styles.stepper}
+      className={[styles.stepper, className].filter(Boolean).join(' ')}
       id={id}
       role="group"
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
       data-invalid={ariaInvalid || undefined}
-      data-testid="number-stepper"
+      {...{ 'data-testid': testId }}
     >
       <button
         type="button"
@@ -54,11 +58,12 @@ export const NumberStepper: React.FC<NumberStepperProps> = ({
         onClick={() => onChange(clamp(value - step))}
         disabled={disabled || atMin}
         aria-label="Decrease"
+        {...{ 'data-testid': `${testId}-decrease` }}
       >
         −
       </button>
       <div className={styles.valueWrap}>
-        <span className={styles.value} data-testid="number-stepper-value">
+        <span className={styles.value} {...{ 'data-testid': `${testId}-value` }}>
           {value}
         </span>
         {unit ? <span className={styles.unit}>{unit}</span> : null}
@@ -69,6 +74,7 @@ export const NumberStepper: React.FC<NumberStepperProps> = ({
         onClick={() => onChange(clamp(value + step))}
         disabled={disabled || atMax}
         aria-label="Increase"
+        {...{ 'data-testid': `${testId}-increase` }}
       >
         +
       </button>

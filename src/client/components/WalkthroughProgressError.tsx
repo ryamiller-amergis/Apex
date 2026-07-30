@@ -26,7 +26,7 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
     if (!open) return;
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
     const timer = window.setTimeout(() => {
-      dialogRef.current?.querySelector<HTMLElement>('button')?.focus();
+      dialogRef.current?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
     }, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -44,10 +44,10 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
 
@@ -55,7 +55,7 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
     return () => {
       window.clearTimeout(timer);
       document.removeEventListener('keydown', onKeyDown);
-      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current?.focus?.({ preventScroll: true });
     };
   }, [open, onCloseWithoutAcknowledgement]);
 

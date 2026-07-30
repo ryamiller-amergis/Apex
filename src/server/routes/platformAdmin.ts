@@ -26,18 +26,37 @@ import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfig
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
 import * as walkthroughService from '../services/walkthroughService';
 import {
-  generateProposal,
   listWalkthroughAiPolicyPresets,
   redoProposalUnit,
   validateProposalUnit,
 } from '../services/walkthroughAiDraftService';
-import { listWalkthroughAnchors } from '../../shared/walkthroughAnchors';
 import {
   WalkthroughDomainError,
   type PublishWalkthroughCommand,
   type UpdateWalkthroughCommand,
 } from '../../shared/types/walkthrough';
 import { WalkthroughAiError } from '../../shared/types/walkthroughAiDraft';
+import {
+  WalkthroughAnchorRegistryError,
+  type BulkWalkthroughAnchorCommand,
+  type CreateManualWalkthroughAnchorCommand,
+  type UpdateWalkthroughAnchorCommand,
+  type UpdateWalkthroughAnchorMissingStateCommand,
+  type WalkthroughAnchorSyncCommand,
+} from '../../shared/types/walkthroughAnchorRegistry';
+
+import {
+  startGeneration as startWalkthroughGeneration,
+  getGenerationResult as getWalkthroughGenerationResult,
+  cancelGeneration as cancelWalkthroughGeneration,
+} from '../services/walkthroughGenerationService';
+import {
+  startSmartTagging,
+  getSmartTaggingResult,
+  cancelSmartTagging,
+  WalkthroughAnchorSmartTaggingOrchestrationError,
+} from '../services/walkthroughAnchorSmartTaggingService';
+import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -57,6 +76,43 @@ function mapWalkthroughError(err: unknown, res: Response): boolean {
     case 'VALIDATION_ERROR':
     case 'INACCESSIBLE':
       res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    default:
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+  }
+}
+
+function mapWalkthroughAnchorRegistryError(err: unknown, res: Response): boolean {
+  if (!(err instanceof WalkthroughAnchorRegistryError)) return false;
+  switch (err.code) {
+    case 'NOT_FOUND':
+      res.status(404).json({ error: err.message, code: err.code, details: err.details });
+      return true;
+    case 'DUPLICATE':
+      res.status(409).json({ error: err.message, code: err.code, details: err.details });
+      return true;
+    case 'ACTIVE_REQUIRES_APPROVED':
+    case 'VALIDATION_ERROR':
+      res.status(400).json({ error: err.message, code: err.code, details: err.details });
+      return true;
+    default:
+      res.status(400).json({ error: err.message, code: err.code, details: err.details });
+      return true;
+  }
+}
+
+function mapSmartTaggingOrchestrationError(err: unknown, res: Response): boolean {
+  if (!(err instanceof WalkthroughAnchorSmartTaggingOrchestrationError)) return false;
+  switch (err.code) {
+    case 'NOT_FOUND':
+      res.status(404).json({ error: err.message, code: err.code });
+      return true;
+    case 'INVALID_REQUEST':
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    case 'AI_FAILED':
+      res.status(502).json({ error: err.message, code: err.code });
       return true;
     default:
       res.status(400).json({ error: err.message, code: err.code });
@@ -428,8 +484,309 @@ router.post('/walkthroughs', async (req: Request, res: Response): Promise<void> 
 });
 
 router.get('/walkthroughs/anchors', async (_req: Request, res: Response): Promise<void> => {
-  res.json({ anchors: listWalkthroughAnchors() });
+  try {
+    const anchors = await walkthroughAnchorRegistryService.listAuthoringAnchorEntries();
+    res.json({ anchors });
+  } catch (err) {
+    console.error('[platform-admin] list authoring anchors failed', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+// ── Smart Anchor Management catalog (Phase 2) ─────────────────────────────────
+// Static paths must stay above /walkthroughs/:id.
+
+router.get('/walkthroughs/anchor-registry', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const approvedRoute =
+      typeof req.query.approvedRoute === 'string' ? req.query.approvedRoute : undefined;
+    const reviewStatus = walkthroughAnchorRegistryService.parseReviewStatusFilter(
+      req.query.reviewStatus,
+    );
+    const sourceKind = walkthroughAnchorRegistryService.parseSourceKindFilter(req.query.sourceKind);
+    const isActive =
+      req.query.isActive === 'true' ? true : req.query.isActive === 'false' ? false : undefined;
+    const missingOnly =
+      req.query.missingOnly === 'true'
+        ? true
+        : req.query.missingOnly === 'false'
+          ? false
+          : undefined;
+    const includeDeleted = req.query.includeDeleted === 'true';
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
+    const smartTagsRaw = typeof req.query.smartTags === 'string' ? req.query.smartTags : undefined;
+    const smartTags = smartTagsRaw
+      ? smartTagsRaw.split(',').map((t) => t.trim()).filter(Boolean)
+      : undefined;
+
+    if (req.query.reviewStatus != null && req.query.reviewStatus !== '' && reviewStatus == null) {
+      res.status(400).json({ error: 'Invalid reviewStatus filter', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    if (req.query.sourceKind != null && req.query.sourceKind !== '' && sourceKind == null) {
+      res.status(400).json({ error: 'Invalid sourceKind filter', code: 'VALIDATION_ERROR' });
+      return;
+    }
+
+    const page = await walkthroughAnchorRegistryService.listAnchors({
+      search,
+      approvedRoute,
+      reviewStatus,
+      sourceKind,
+      isActive,
+      missingOnly,
+      includeDeleted,
+      smartTags,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor,
+    });
+    res.json(page);
+  } catch (err) {
+    if (mapWalkthroughAnchorRegistryError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get(
+  '/walkthroughs/anchor-registry/module-coverage',
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const coverage = await walkthroughAnchorRegistryService.getModuleCoverage();
+      res.json(coverage);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/walkthroughs/anchor-registry/by-key/:anchorKey',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const record = await walkthroughAnchorRegistryService.getAnchorByKey(req.params.anchorKey);
+      if (!record) {
+        res.status(404).json({ error: 'Anchor not found', code: 'NOT_FOUND' });
+        return;
+      }
+      res.json(record);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/walkthroughs/anchor-registry/by-test-id/:testId',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const record = await walkthroughAnchorRegistryService.getAnchorByTestId(req.params.testId);
+      if (!record) {
+        res.status(404).json({ error: 'Anchor not found', code: 'NOT_FOUND' });
+        return;
+      }
+      res.json(record);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post('/walkthroughs/anchor-registry/bulk', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req) };
+    const body = req.body as BulkWalkthroughAnchorCommand;
+    const items = await walkthroughAnchorRegistryService.bulkUpdateAnchors(body, actor);
+    res.json({ items });
+  } catch (err) {
+    if (mapWalkthroughAnchorRegistryError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post(
+  '/walkthroughs/anchor-registry/missing',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const actor = { id: getUserId(req) };
+      const body = req.body as UpdateWalkthroughAnchorMissingStateCommand;
+      const items = await walkthroughAnchorRegistryService.updateMissingState(body, actor);
+      res.json({ items });
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+/**
+ * Wave 2 Track A — Super Admin scanner sync (extract + persist).
+ * Returns full sync result for the Sync review modal (Track C).
+ * AI smart-tagging (Track B) consumes persistence.newCandidateIdsForSmartTagging only.
+ */
+router.post(
+  '/walkthroughs/anchor-registry/sync',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const actor = { id: getUserId(req) };
+      const body = (req.body ?? {}) as WalkthroughAnchorSyncCommand;
+      const provider = body.provider ?? 'local';
+      if (provider !== 'local' && provider !== 'github' && provider !== 'ado') {
+        res.status(400).json({ error: 'Invalid sync provider', code: 'VALIDATION_ERROR' });
+        return;
+      }
+      if ((provider === 'github' || provider === 'ado') && !Array.isArray(body.files)) {
+        res.status(400).json({
+          error: `Provider "${provider}" requires a files array until remote tree wiring is complete`,
+          code: 'VALIDATION_ERROR',
+        });
+        return;
+      }
+      const result = await walkthroughAnchorRegistryService.syncExtractAndPersistAnchors(
+        {
+          provider,
+          repositoryRoot: body.repositoryRoot,
+          clientRelativeRoot: body.clientRelativeRoot,
+          files: body.files,
+        },
+        actor,
+      );
+      res.json(result);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      const message = err instanceof Error ? err.message : 'Internal server error';
+      if (typeof message === 'string' && message.includes('requires pre-fetched files')) {
+        res.status(400).json({ error: message, code: 'VALIDATION_ERROR' });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post('/walkthroughs/anchor-registry', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actor = { id: getUserId(req) };
+    const created = await walkthroughAnchorRegistryService.createManualAnchor(
+      req.body as CreateManualWalkthroughAnchorCommand,
+      actor,
+    );
+    res.status(201).json(created);
+  } catch (err) {
+    if (mapWalkthroughAnchorRegistryError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get(
+  '/walkthroughs/anchor-registry/:id',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const record = await walkthroughAnchorRegistryService.getAnchorById(req.params.id);
+      if (!record) {
+        res.status(404).json({ error: 'Anchor not found', code: 'NOT_FOUND' });
+        return;
+      }
+      res.json(record);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.patch(
+  '/walkthroughs/anchor-registry/:id',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const actor = { id: getUserId(req) };
+      const updated = await walkthroughAnchorRegistryService.updateAnchor(
+        req.params.id,
+        req.body as UpdateWalkthroughAnchorCommand,
+        actor,
+      );
+      res.json(updated);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.delete(
+  '/walkthroughs/anchor-registry/:id',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const actor = { id: getUserId(req) };
+      const deleted = await walkthroughAnchorRegistryService.softDeleteAnchor(req.params.id, actor);
+      res.json(deleted);
+    } catch (err) {
+      if (mapWalkthroughAnchorRegistryError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+// ── Async Cursor SDK Smart Tagging (newly discovered anchors) ────────────────
+
+router.post(
+  '/walkthroughs/anchor-registry/smart-tagging/start',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const body = req.body ?? {};
+      const result = await startSmartTagging(
+        {
+          candidates: body.candidates,
+          model: body.cursorModel ?? body.model,
+          skillPath: body.skillPath,
+        },
+        userId,
+      );
+      res.json(result);
+    } catch (err) {
+      if (mapSmartTaggingOrchestrationError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/walkthroughs/anchor-registry/smart-tagging/status/:threadId',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const result = await getSmartTaggingResult(req.params.threadId, userId);
+      res.json(result);
+    } catch (err) {
+      if (mapSmartTaggingOrchestrationError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/walkthroughs/anchor-registry/smart-tagging/cancel',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = getUserId(req);
+      const { threadId } = req.body ?? {};
+      if (!threadId || typeof threadId !== 'string') {
+        res.status(400).json({ error: 'threadId is required' });
+        return;
+      }
+      await cancelSmartTagging(threadId, userId);
+      res.json({ status: 'cancelled' });
+    } catch (err) {
+      if (mapSmartTaggingOrchestrationError(err, res)) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.get('/walkthroughs/ai-drafts/policy-presets', async (_req: Request, res: Response): Promise<void> => {
   res.json({
@@ -553,23 +910,6 @@ router.post('/walkthroughs/ai-drafts/validate', async (req: Request, res: Respon
   }
 });
 
-router.post('/walkthroughs/ai-drafts/generate', async (req: Request, res: Response): Promise<void> => {
-  try {
-    // Never trust client-supplied allow-lists — strip if present.
-    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
-    const proposal = await generateProposal({
-      projectId: body.projectId,
-      intent: body.intent,
-      policyPreset: body.policyPreset,
-      existingDraft: body.existingDraft,
-    });
-    res.json({ proposal });
-  } catch (err) {
-    if (mapWalkthroughAiError(err, res)) return;
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 router.post('/walkthroughs/ai-drafts/redo', async (req: Request, res: Response): Promise<void> => {
   try {
     const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
@@ -591,11 +931,62 @@ router.post('/walkthroughs/ai-drafts/redo', async (req: Request, res: Response):
 router.post('/walkthroughs/ai-drafts/validate-unit', async (req: Request, res: Response): Promise<void> => {
   try {
     const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
-    const result = validateProposalUnit({
+    const result = await validateProposalUnit({
       projectId: body.projectId,
       unit: body.unit,
       imageConfirmed: Boolean(body.imageConfirmed),
     });
+    res.json(result);
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Async Cursor SDK Walkthrough Generation ────────────────────────────────────
+
+router.post('/walkthroughs/ai-drafts/generate/start', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
+    const userId = getUserId(req);
+    const result = await startWalkthroughGeneration(
+      {
+        projectId: body.projectId,
+        intent: body.intent,
+        policyPreset: body.policyPreset,
+        model: body.cursorModel ?? body.model,
+        skillPath: body.skillPath,
+        existingDraft: body.existingDraft,
+      },
+      userId,
+    );
+    res.json(result);
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/walkthroughs/ai-drafts/generate/status/:threadId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const result = await getWalkthroughGenerationResult(req.params.threadId, userId);
+    res.json(result);
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/generate/cancel', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { threadId } = req.body ?? {};
+    if (!threadId || typeof threadId !== 'string') {
+      res.status(400).json({ error: 'threadId is required' });
+      return;
+    }
+    const result = await cancelWalkthroughGeneration(threadId, userId);
     res.json(result);
   } catch (err) {
     if (mapWalkthroughAiError(err, res)) return;

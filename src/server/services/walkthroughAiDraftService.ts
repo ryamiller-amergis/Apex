@@ -1,12 +1,17 @@
 /**
  * FEAT-004 — AI Walkthrough draft generation / redo / unit validation.
- * Bedrock-backed; provider details stay server-side. Proposals are never persisted here.
+ * Cursor-backed; provider details stay server-side. Proposals are never persisted here.
  */
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { listWalkthroughAnchors, validateRegisteredAnchor } from '../../shared/walkthroughAnchors';
+import {
+  listWalkthroughAnchors,
+  validateRegisteredAnchor,
+  type WalkthroughAnchorRegistryEntry,
+} from '../../shared/walkthroughAnchors';
+import { isWalkthroughRoute, listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
 import {
   buildProposalUnits,
   resolveWalkthroughAiPolicyPreset,
@@ -23,10 +28,10 @@ import {
   type WalkthroughAiWalkthroughFields,
 } from '../../shared/types/walkthroughAiDraft';
 import type { WalkthroughAnchor } from '../../shared/types/walkthrough';
+import { listAuthoringAnchorEntries } from './walkthroughAnchorRegistryService';
 
 export interface WalkthroughAiProviderCallOptions {
   modelId?: string;
-  maxTokens?: number;
   timeoutMs: number;
 }
 
@@ -62,7 +67,6 @@ function emitTelemetry(event: WalkthroughAiTelemetryEvent): void {
   telemetryBuffer.push(event);
 }
 
-const IN_APP_ROUTE_RE = /^\/[A-Za-z0-9/_-]*$/;
 const IMAGE_EXT = /\.(svg|png|jpe?g|webp|gif)$/i;
 
 let providerOverride: WalkthroughAiProvider | null = null;
@@ -107,28 +111,50 @@ function extractJsonObject(text: string): unknown {
   }
 }
 
-async function resolveModelConfig(projectId: string): Promise<{ modelId?: string; maxTokens?: number }> {
+async function resolveCursorModel(projectId: string): Promise<string> {
   try {
     const { resolveSkillConfig } = await import('./projectSettingsService');
+    const { getDefaultModel } = await import('./appSettingsService');
     const skillConfig = await resolveSkillConfig({ project: projectId });
-    return {
-      modelId: skillConfig?.designPlanBedrockModelId ?? undefined,
-      maxTokens: skillConfig?.designPlanBedrockMaxTokens ?? undefined,
-    };
+    return skillConfig?.developmentModel || skillConfig?.defaultModel || (await getDefaultModel());
   } catch {
-    return {};
+    const { getDefaultModel } = await import('./appSettingsService');
+    return getDefaultModel();
   }
 }
 
 async function defaultProvider(): Promise<WalkthroughAiProvider> {
   return {
     async generateStructuredJson(prompt, options) {
-      const { generateWalkthroughAiJsonFromBedrock } = await import('./bedrockService');
-      return generateWalkthroughAiJsonFromBedrock(prompt, {
-        modelId: options.modelId,
-        maxTokens: options.maxTokens,
-        timeoutMs: options.timeoutMs,
+      const { Agent } = await import('@cursor/sdk');
+      const apiKey = process.env.CURSOR_API_KEY;
+      if (!apiKey) {
+        throw new Error('CURSOR_API_KEY is required for Walkthrough AI generation');
+      }
+
+      const agent = await Agent.create({
+        apiKey,
+        ...(options.modelId ? { model: { id: options.modelId } } : {}),
       });
+
+      const run = await agent.send(prompt);
+      let output = '';
+      if (run.supports('stream')) {
+        for await (const event of run.stream()) {
+          if (event.type === 'assistant') {
+            for (const block of event.message.content) {
+              if (block.type === 'text') {
+                output += block.text;
+              }
+            }
+          }
+        }
+      }
+
+      if (!output.trim()) {
+        throw new Error('Cursor SDK returned empty output');
+      }
+      return output;
     },
   };
 }
@@ -142,7 +168,6 @@ async function callProviderWithRetries(
   prompt: string,
   policy: WalkthroughAiPolicyPreset,
   modelId: string | undefined,
-  maxTokens: number | undefined,
 ): Promise<string> {
   let lastError: unknown;
   const attempts = 1 + Math.max(0, policy.retries);
@@ -150,7 +175,6 @@ async function callProviderWithRetries(
     try {
       return await provider.generateStructuredJson(prompt, {
         modelId,
-        maxTokens,
         timeoutMs: policy.timeoutMs,
       });
     } catch (err) {
@@ -200,7 +224,8 @@ function sanitizeFeedback(
 function buildGenerationPrompt(input: {
   intent: string;
   projectId: string;
-  anchors: ReturnType<typeof listWalkthroughAnchors>;
+  anchors: readonly WalkthroughAnchorRegistryEntry[];
+  routes: ReturnType<typeof listWalkthroughRoutes>;
   assets: string[];
   existingDraft?: GenerateWalkthroughAiDraftRequest['existingDraft'];
 }): string {
@@ -216,9 +241,11 @@ function buildGenerationPrompt(input: {
           {
             heading: 'string',
             bodyMarkdown: 'string',
+            route: 'optional curated in-app Step destination or null',
             imageUrl: 'optional allow-listed path or null',
+            imageAlt: 'required descriptive text when imageUrl is set',
             ctaLabel: 'optional',
-            ctaRoute: 'optional in-app route starting with /',
+            ctaRoute: 'optional curated in-app route',
             anchorKey: 'optional curated registry key or null',
             anchorPlacement: 'optional top|right|bottom|left',
           },
@@ -237,11 +264,12 @@ function buildGenerationPrompt(input: {
         allowedPlacements: a.allowedPlacements,
       })),
     )}`,
+    `Curated routes: ${JSON.stringify(input.routes)}`,
     `Allow-listed image paths: ${JSON.stringify(input.assets)}`,
     input.existingDraft
       ? `Existing draft context (optional guidance): ${JSON.stringify(input.existingDraft)}`
       : '',
-    'Rules: use only listed anchors and image paths; omit invalid ones; at most 20 steps; routes must be in-app.',
+    'Rules: use only listed routes, anchors, and image paths; omit invalid ones; at most 20 steps.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -250,17 +278,19 @@ function buildGenerationPrompt(input: {
 function buildRedoPrompt(input: {
   unit: WalkthroughAiProposalUnit;
   feedback?: string;
-  anchors: ReturnType<typeof listWalkthroughAnchors>;
+  anchors: readonly WalkthroughAnchorRegistryEntry[];
+  routes: ReturnType<typeof listWalkthroughRoutes>;
   assets: string[];
 }): string {
   return [
     'Regenerate ONE Walkthrough proposal unit as JSON only.',
     input.unit.kind === 'walkthrough-fields'
       ? 'Return { "kind":"walkthrough-fields", "internalName":"...", "userTitle":"...", "whyItMatters":"..." }'
-      : 'Return { "kind":"step", "heading":"...", "bodyMarkdown":"...", "imageUrl":null|"/path", "ctaLabel":null, "ctaRoute":null, "anchorKey":null, "anchorPlacement":null }',
+      : 'Return { "kind":"step", "heading":"...", "bodyMarkdown":"...", "route":null|"/curated-path", "imageUrl":null|"/path", "imageAlt":null|"description", "ctaLabel":null, "ctaRoute":null, "anchorKey":null, "anchorPlacement":null }',
     `Current unit: ${JSON.stringify(input.unit)}`,
     input.feedback ? `Admin feedback: ${input.feedback}` : 'No additional feedback.',
     `Curated anchors: ${JSON.stringify(input.anchors.map((a) => ({ key: a.key, targetRoute: a.targetRoute, allowedPlacements: a.allowedPlacements })))}`,
+    `Curated routes: ${JSON.stringify(input.routes)}`,
     `Allow-listed images: ${JSON.stringify(input.assets)}`,
   ].join('\n\n');
 }
@@ -269,14 +299,15 @@ function normalizeAnchor(
   rawKey: unknown,
   rawPlacement: unknown,
   registryRejection: { count: number },
+  catalog: readonly WalkthroughAnchorRegistryEntry[],
 ): WalkthroughAnchor {
   if (rawKey === undefined || rawKey === null || rawKey === '') return null;
   if (typeof rawKey !== 'string') {
     registryRejection.count += 1;
     return null;
   }
-  const entry = listWalkthroughAnchors().find((a) => a.key === rawKey.trim());
-  if (!entry) {
+  const entry = catalog.find((a) => a.key === rawKey.trim());
+  if (!entry || !entry.targetRoute) {
     registryRejection.count += 1;
     return null;
   }
@@ -284,11 +315,14 @@ function normalizeAnchor(
     typeof rawPlacement === 'string' && entry.allowedPlacements.includes(rawPlacement as never)
       ? rawPlacement
       : entry.allowedPlacements[0];
-  const validated = validateRegisteredAnchor({
-    key: entry.key,
-    targetRoute: entry.targetRoute,
-    placement: placement as NonNullable<WalkthroughAnchor>['placement'],
-  });
+  const validated = validateRegisteredAnchor(
+    {
+      key: entry.key,
+      targetRoute: entry.targetRoute,
+      placement: placement as NonNullable<WalkthroughAnchor>['placement'],
+    },
+    catalog,
+  );
   if (validated.ok === false) {
     registryRejection.count += 1;
     return null;
@@ -314,16 +348,16 @@ function normalizeImage(
   return value;
 }
 
-function normalizeCtaRoute(raw: unknown): string | null {
+function normalizeRoute(raw: unknown): string | null {
   if (raw === undefined || raw === null || raw === '') return null;
-  if (typeof raw !== 'string' || !IN_APP_ROUTE_RE.test(raw)) return null;
-  return raw;
+  return isWalkthroughRoute(raw) ? raw : null;
 }
 
-function parseFullProposal(
+export function parseGeneratedWalkthroughProposal(
   rawText: string,
   policyPreset: WalkthroughAiPolicyPresetId,
   assets: string[],
+  catalog: readonly WalkthroughAnchorRegistryEntry[] = listWalkthroughAnchors(),
 ): { proposal: WalkthroughAiProposal; registryRejectionCount: number } {
   const parsed = extractJsonObject(rawText) as Record<string, unknown>;
   const registryRejection = { count: 0 };
@@ -358,17 +392,24 @@ function parseFullProposal(
       s.anchorKey ?? nestedAnchor?.key,
       s.anchorPlacement ?? nestedAnchor?.placement,
       registryRejection,
+      catalog,
     );
     const id = typeof s.id === 'string' && s.id.trim() ? s.id.trim() : randomUUID();
+    const route = anchor?.targetRoute ?? normalizeRoute(s.route);
     return {
       id,
       ordinal: index,
       heading,
       bodyMarkdown,
+      route,
       imageUrl: imagePath,
+      imageAlt:
+        imagePath && typeof s.imageAlt === 'string' && s.imageAlt.trim()
+          ? s.imageAlt.trim()
+          : null,
       imageCandidatePath: imagePath,
       ctaLabel: typeof s.ctaLabel === 'string' ? s.ctaLabel : null,
-      ctaRoute: normalizeCtaRoute(s.ctaRoute),
+      ctaRoute: normalizeRoute(s.ctaRoute),
       anchor,
     };
   });
@@ -394,6 +435,7 @@ function parseRedoUnit(
   rawText: string,
   previous: WalkthroughAiProposalUnit,
   assets: string[],
+  catalog: readonly WalkthroughAnchorRegistryEntry[] = listWalkthroughAnchors(),
 ): { unit: WalkthroughAiProposalUnit; registryRejectionCount: number } {
   const parsed = extractJsonObject(rawText) as Record<string, unknown>;
   const registryRejection = { count: 0 };
@@ -423,6 +465,7 @@ function parseRedoUnit(
     parsed.anchorKey ?? (parsed.anchor as { key?: unknown } | undefined)?.key,
     parsed.anchorPlacement ?? (parsed.anchor as { placement?: unknown } | undefined)?.placement,
     registryRejection,
+    catalog,
   );
   const value: WalkthroughAiStepProposal = {
     id: previous.value.id,
@@ -433,10 +476,15 @@ function parseRedoUnit(
         : previous.value.heading,
     bodyMarkdown:
       typeof parsed.bodyMarkdown === 'string' ? parsed.bodyMarkdown : previous.value.bodyMarkdown,
+    route: anchor?.targetRoute ?? normalizeRoute(parsed.route),
     imageUrl: imagePath,
+    imageAlt:
+      imagePath && typeof parsed.imageAlt === 'string' && parsed.imageAlt.trim()
+        ? parsed.imageAlt.trim()
+        : null,
     imageCandidatePath: imagePath,
     ctaLabel: typeof parsed.ctaLabel === 'string' ? parsed.ctaLabel : null,
-    ctaRoute: normalizeCtaRoute(parsed.ctaRoute),
+    ctaRoute: normalizeRoute(parsed.ctaRoute),
     anchor,
   };
   return {
@@ -462,20 +510,26 @@ export async function generateProposal(
     }
     // Ignore any client-supplied allow-lists if present on the raw body.
     const intent = sanitizeIntent(request.intent, policy);
-    const anchors = listWalkthroughAnchors();
+    const anchors = await listAuthoringAnchorEntries();
+    const routes = listWalkthroughRoutes();
     const assets = listPublicWalkthroughAssetPaths();
-    const { modelId: resolvedModel, maxTokens } = await resolveModelConfig(request.projectId.trim());
-    modelId = resolvedModel;
+    modelId = request.model?.trim() || (await resolveCursorModel(request.projectId.trim()));
     const prompt = buildGenerationPrompt({
       intent,
       projectId: request.projectId.trim(),
       anchors,
+      routes,
       assets,
       existingDraft: request.existingDraft,
     });
     const provider = await getProvider();
-    const raw = await callProviderWithRetries(provider, prompt, policy, modelId, maxTokens);
-    const { proposal, registryRejectionCount } = parseFullProposal(raw, policy.id, assets);
+    const raw = await callProviderWithRetries(provider, prompt, policy, modelId);
+    const { proposal, registryRejectionCount } = parseGeneratedWalkthroughProposal(
+      raw,
+      policy.id,
+      assets,
+      anchors,
+    );
     emitTelemetry({
       event: 'walkthrough_ai_generation',
       durationMs: Date.now() - started,
@@ -523,14 +577,14 @@ export async function redoProposalUnit(
       throw new WalkthroughAiError('AI_REDO_FAILED', 'A valid proposal unit is required');
     }
     const feedback = sanitizeFeedback(request.feedback, policy);
-    const anchors = listWalkthroughAnchors();
+    const anchors = await listAuthoringAnchorEntries();
+    const routes = listWalkthroughRoutes();
     const assets = listPublicWalkthroughAssetPaths();
-    const resolved = await resolveModelConfig(request.projectId.trim());
-    modelId = resolved.modelId;
-    const prompt = buildRedoPrompt({ unit: request.unit, feedback, anchors, assets });
+    modelId = await resolveCursorModel(request.projectId.trim());
+    const prompt = buildRedoPrompt({ unit: request.unit, feedback, anchors, routes, assets });
     const provider = await getProvider();
-    const raw = await callProviderWithRetries(provider, prompt, policy, modelId, resolved.maxTokens);
-    const { unit, registryRejectionCount } = parseRedoUnit(raw, request.unit, assets);
+    const raw = await callProviderWithRetries(provider, prompt, policy, modelId);
+    const { unit, registryRejectionCount } = parseRedoUnit(raw, request.unit, assets, anchors);
     emitTelemetry({
       event: 'walkthrough_ai_redo',
       durationMs: Date.now() - started,
@@ -558,15 +612,16 @@ export async function redoProposalUnit(
   }
 }
 
-export function validateProposalUnit(
+export async function validateProposalUnit(
   request: ValidateWalkthroughAiUnitRequest,
-): ValidateWalkthroughAiUnitSuccess {
+): Promise<ValidateWalkthroughAiUnitSuccess> {
   const started = Date.now();
   try {
     if (!request.unit || (request.unit.kind !== 'walkthrough-fields' && request.unit.kind !== 'step')) {
       throw new WalkthroughAiError('PROPOSAL_UNIT_INVALID', 'Proposal unit is required');
     }
     const assets = new Set(listPublicWalkthroughAssetPaths());
+    const catalog = await listAuthoringAnchorEntries();
 
     if (request.unit.kind === 'walkthrough-fields') {
       const { internalName, userTitle, whyItMatters } = request.unit.value;
@@ -598,7 +653,7 @@ export function validateProposalUnit(
 
     let anchor: WalkthroughAnchor = null;
     if (step.anchor) {
-      const validated = validateRegisteredAnchor(step.anchor);
+      const validated = validateRegisteredAnchor(step.anchor, catalog);
       if (validated.ok === false) {
         throw new WalkthroughAiError(
           'REGISTRY_VALUE_STALE',
@@ -621,8 +676,24 @@ export function validateProposalUnit(
       imageUrl = candidate;
     }
 
-    if (step.ctaRoute && !IN_APP_ROUTE_RE.test(step.ctaRoute)) {
-      throw new WalkthroughAiError('PROPOSAL_UNIT_INVALID', 'Step ctaRoute must be an in-app route');
+    const route = step.route ?? anchor?.targetRoute ?? null;
+    if (route && !isWalkthroughRoute(route)) {
+      throw new WalkthroughAiError(
+        'PROPOSAL_UNIT_INVALID',
+        'Step route must be in the curated Walkthrough route catalog',
+      );
+    }
+    if (anchor && route !== anchor.targetRoute) {
+      throw new WalkthroughAiError(
+        'REGISTRY_VALUE_STALE',
+        'Step route must match the registered anchor route',
+      );
+    }
+    if (step.ctaRoute && !isWalkthroughRoute(step.ctaRoute)) {
+      throw new WalkthroughAiError(
+        'PROPOSAL_UNIT_INVALID',
+        'Step ctaRoute must be in the curated Walkthrough route catalog',
+      );
     }
 
     const normalizedUnit: WalkthroughAiProposalUnit = {
@@ -632,8 +703,10 @@ export function validateProposalUnit(
         ...step,
         heading: step.heading.trim(),
         bodyMarkdown: step.bodyMarkdown,
+        route,
         anchor,
         imageUrl,
+        imageAlt: imageUrl ? step.imageAlt ?? null : null,
         imageCandidatePath: candidate && assets.has(candidate) ? candidate : null,
       },
       imageCandidatePath: candidate && assets.has(candidate) ? candidate : null,

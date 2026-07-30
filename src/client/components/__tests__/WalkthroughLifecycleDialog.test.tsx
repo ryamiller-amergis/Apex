@@ -36,7 +36,7 @@ function baseWalkthrough(overrides: Partial<WalkthroughDefinition> = {}): Walkth
         bodyMarkdown: 'Body',
       },
     ],
-    targeting: { project: 'Apex', groupId: null },
+    targeting: { projects: ['Apex'], groupId: null },
     targetingRules: [{ type: 'project', value: 'Apex' }],
     ...overrides,
   };
@@ -49,7 +49,7 @@ describe('WalkthroughLifecycleDialog (PBI-002)', () => {
     render(
       <WalkthroughLifecycleDialog
         walkthrough={baseWalkthrough({ lifecycle: 'draft' })}
-        targetProject="Apex"
+        targetProjects={['Apex']}
         isOpen
         isPending={false}
         onClose={jest.fn()}
@@ -69,8 +69,8 @@ describe('WalkthroughLifecycleDialog (PBI-002)', () => {
     const onPublish = jest.fn();
     render(
       <WalkthroughLifecycleDialog
-        walkthrough={baseWalkthrough({ targeting: { project: '', groupId: null } })}
-        targetProject=""
+        walkthrough={baseWalkthrough({ targeting: { projects: [], groupId: null } })}
+        targetProjects={[]}
         isOpen
         isPending={false}
         onClose={jest.fn()}
@@ -95,7 +95,7 @@ describe('WalkthroughLifecycleDialog (PBI-002)', () => {
           revision: 2,
           publishedAt: '2026-07-28T00:00:00Z',
         })}
-        targetProject="Apex"
+        targetProjects={['Apex']}
         isOpen
         isPending={false}
         onClose={jest.fn()}
@@ -123,7 +123,7 @@ describe('WalkthroughLifecycleDialog (PBI-002)', () => {
     render(
       <WalkthroughLifecycleDialog
         walkthrough={baseWalkthrough({ lifecycle: 'published', revision: 1 })}
-        targetProject="Apex"
+        targetProjects={['Apex']}
         isOpen
         isPending={false}
         onClose={jest.fn()}

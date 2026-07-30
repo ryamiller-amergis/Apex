@@ -22,7 +22,7 @@ test.describe('Platform Admin Walkthrough authoring @walkthroughs', () => {
 
     await page.getByLabel(/internal name/i).fill('feat-003-authoring');
     await page.getByLabel(/user title/i).fill('Welcome to Walkthroughs');
-    await page.getByTestId('walkthrough-project-target').selectOption({ label: /./ });
+    await page.getByTestId('walkthrough-project-target').locator('input[type="checkbox"]').first().check();
 
     await page.getByLabel(/^heading$/i).first().fill('Step One');
     await page.getByTestId('walkthrough-step-add').click();
@@ -53,5 +53,40 @@ test.describe('Platform Admin Walkthrough authoring @walkthroughs', () => {
     await page.goto('/platform-admin');
     await expect(page).not.toHaveURL(/\/platform-admin/);
     await expect(page.getByTestId('walkthrough-catalog')).toHaveCount(0);
+  });
+
+  test.skip('AC-4 — Anchor Management sync opens review modal for new candidates', async ({
+    page,
+  }) => {
+    // DEFERRED: Playwright env unavailable for Super Admin platform-admin journeys in this local run.
+    await page.goto('/platform-admin');
+    await page.getByRole('tab', { name: /walkthroughs/i }).click();
+    await page.getByTestId('walkthroughs-admin-tab-anchors').click();
+    await expect(page.getByTestId('walkthrough-anchor-management')).toBeVisible();
+
+    await page.getByTestId('walkthrough-anchor-sync').click();
+    await expect(page.getByTestId('walkthrough-anchor-sync-modal')).toBeVisible();
+    await expect(page.getByTestId('walkthrough-anchor-counts')).toBeVisible();
+  });
+
+  test.skip('AC-5 — catalog-driven coachmark authoring picks approved+active anchors only', async ({
+    page,
+  }) => {
+    // DEFERRED: Playwright env unavailable for Super Admin platform-admin journeys in this local run.
+    await page.goto('/platform-admin');
+    await page.getByRole('tab', { name: /walkthroughs/i }).click();
+    await page.getByTestId('walkthroughs-admin-tab-walkthroughs').click();
+    await page.getByTestId('walkthrough-create').click();
+    await expect(page.getByTestId('walkthrough-editor')).toBeVisible();
+
+    const step = page.locator('[data-testid^="walkthrough-step-"]').first();
+    const stepId =
+      (await step.getAttribute('data-testid'))?.replace('walkthrough-step-', '') ?? '';
+    const anchorSelect = page.getByTestId(`walkthrough-anchor-key-${stepId}`);
+    await expect(anchorSelect).toBeVisible();
+    await expect(anchorSelect.locator('option').first()).toHaveText(/No anchor \(centered\)/i);
+    // Approved+active catalog keys appear as options; pending/rejected/soft-deleted do not.
+    const optionCount = await anchorSelect.locator('option').count();
+    expect(optionCount).toBeGreaterThan(1);
   });
 });

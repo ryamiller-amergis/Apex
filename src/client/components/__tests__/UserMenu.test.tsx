@@ -135,6 +135,7 @@ describe('UserMenu — TBI-008 DoD-0 / PBI-008 AC-0 / VT-01', () => {
 
 describe('UserMenu — TBI-008 DoD-3 / PBI-008 AC-2 / VT-02', () => {
   it('sets aria-expanded and focuses What\'s New on open', () => {
+    const focusSpy = jest.spyOn(HTMLElement.prototype, 'focus');
     renderMenu();
     const trigger = screen.getByTestId('user-menu-trigger');
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
@@ -143,6 +144,8 @@ describe('UserMenu — TBI-008 DoD-3 / PBI-008 AC-2 / VT-02', () => {
     openMenu();
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('user-menu-whats-new')).toHaveFocus();
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    focusSpy.mockRestore();
   });
 });
 

@@ -63,6 +63,21 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   const [stepIndex, setStepIndex] = useState(clampedInitial);
   const seenRef = useRef(false);
   const missKeysRef = useRef(new Set<string>());
+  const lastStepChangeKeyRef = useRef<string | null>(null);
+
+  // Keep latest callbacks in refs so step effects do not re-fire when parents recreate closures.
+  const onSeenRef = useRef(onSeen);
+  const onStepChangeRef = useRef(onStepChange);
+  const onCompleteRef = useRef(onComplete);
+  const onDismissRef = useRef(onDismiss);
+  const onAnchorMissRef = useRef(onAnchorMiss);
+  /* eslint-disable react-hooks/refs -- keep latest callbacks without retriggering step effects */
+  onSeenRef.current = onSeen;
+  onStepChangeRef.current = onStepChange;
+  onCompleteRef.current = onComplete;
+  onDismissRef.current = onDismiss;
+  onAnchorMissRef.current = onAnchorMiss;
+  /* eslint-enable react-hooks/refs */
 
   useEffect(() => {
     // Reset playback-local UI state when the walkthrough identity or session changes.
@@ -70,6 +85,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     setStepIndex(clampedInitial);
     seenRef.current = false;
     missKeysRef.current = new Set();
+    lastStepChangeKeyRef.current = null;
   }, [definition.id, definition.revision, playbackSessionId, clampedInitial]);
 
   const step = steps[stepIndex] ?? null;
@@ -80,33 +96,37 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     revision: definition.revision,
     stepId: step?.id ?? '',
     anchor: step?.anchor ?? null,
+    stepRoute: step?.route ?? null,
     activationKey,
-    enabled: open && !!step?.anchor,
+    enabled: open && (!!step?.anchor || !!step?.route),
   });
 
   useEffect(() => {
     if (!open || !step || seenRef.current) return;
     seenRef.current = true;
     safeCall(() =>
-      onSeen?.({
+      onSeenRef.current?.({
         walkthroughId: definition.id,
         revision: definition.revision,
         stepId: step.id,
       }),
     );
-  }, [open, step, definition.id, definition.revision, onSeen]);
+  }, [open, step, definition.id, definition.revision]);
 
   useEffect(() => {
     if (!open || !step) return;
+    const key = `${definition.id}:${definition.revision}:${step.id}:${stepIndex}`;
+    if (lastStepChangeKeyRef.current === key) return;
+    lastStepChangeKeyRef.current = key;
     safeCall(() =>
-      onStepChange?.({
+      onStepChangeRef.current?.({
         walkthroughId: definition.id,
         revision: definition.revision,
         stepId: step.id,
         stepIndex,
       }),
     );
-  }, [open, step, stepIndex, definition.id, definition.revision, onStepChange]);
+  }, [open, step, stepIndex, definition.id, definition.revision]);
 
   useEffect(() => {
     if (!open || !step?.anchor) return;
@@ -124,7 +144,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
       clientTimestamp: new Date().toISOString(),
       occurrenceId: createOccurrenceId(),
     };
-    safeCall(() => onAnchorMiss?.(payload));
+    safeCall(() => onAnchorMissRef.current?.(payload));
   }, [
     open,
     step,
@@ -133,7 +153,6 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     definition.id,
     definition.revision,
     playbackSessionId,
-    onAnchorMiss,
   ]);
 
   if (!open || stepCount === 0 || !step) return null;
@@ -146,7 +165,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   const handleNext = () => goTo(stepIndex + 1);
   const handleComplete = () => {
     safeCall(() =>
-      onComplete?.({
+      onCompleteRef.current?.({
         walkthroughId: definition.id,
         revision: definition.revision,
         stepId: step.id,
@@ -155,7 +174,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   };
   const handleDismiss = () => {
     safeCall(() =>
-      onDismiss?.({
+      onDismissRef.current?.({
         walkthroughId: definition.id,
         revision: definition.revision,
         stepId: step.id,
@@ -173,7 +192,9 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     (anchorResult.status === 'fallback' ||
       (!!anchorResult.missReason && anchorResult.status !== 'resolved'));
 
-  const locating = !!step.anchor && anchorResult.locating;
+  const locating =
+    (!!step.anchor && anchorResult.locating) ||
+    (!step.anchor && !!step.route && anchorResult.status === 'navigating');
 
   const announcement = locating
     ? 'Preparing guide…'
