@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 build/
+# Generated from @pdftron/webviewer during dev/build.
+public/apryse-webviewer/
 
 # Environment variables
 .env

@@ -24,7 +24,7 @@ jest.mock('../../hooks/useExportSession', () => ({
 }));
 
 function renderButton(
-  props: Partial<React.ComponentProps<typeof ExportSelectedButton>> = {},
+  props: Partial<React.ComponentProps<typeof ExportSelectedButton>> = {}
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -40,7 +40,7 @@ function renderButton(
         onBeforeExport={props.onBeforeExport}
         onExportComplete={props.onExportComplete}
       />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -79,13 +79,30 @@ describe('ExportSelectedButton', () => {
     });
   });
 
+  it('omits filename when no override is provided', async () => {
+    renderButton({
+      selectedCount: 2,
+      selectedPageIndices: [2, 0],
+      filename: '',
+    });
+
+    fireEvent.click(screen.getByTestId('pdf-export-selected-btn'));
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledWith({
+        sessionId: 'session-123',
+        pages: [0, 2],
+      });
+    });
+  });
+
   it('awaits onBeforeExport before calling mutate', async () => {
     let resolveBefore!: () => void;
     const onBeforeExport = jest.fn(
       () =>
         new Promise<void>((resolve) => {
           resolveBefore = resolve;
-        }),
+        })
     );
 
     renderButton({ onBeforeExport });
@@ -105,15 +122,17 @@ describe('ExportSelectedButton', () => {
   });
 
   it('shows an error and skips mutate when onBeforeExport fails', async () => {
-    const onBeforeExport = jest.fn().mockRejectedValue(new Error('Save failed'));
+    const onBeforeExport = jest
+      .fn()
+      .mockRejectedValue(new Error('Save failed'));
 
     renderButton({ onBeforeExport });
 
     fireEvent.click(screen.getByTestId('pdf-export-selected-btn'));
 
-    expect(await screen.findByTestId('pdf-export-selected-error')).toHaveTextContent(
-      'Save failed',
-    );
+    expect(
+      await screen.findByTestId('pdf-export-selected-error')
+    ).toHaveTextContent('Save failed');
     expect(mockMutate).not.toHaveBeenCalled();
   });
 

@@ -2,6 +2,7 @@ import { Worker } from 'worker_threads';
 import path from 'path';
 import fs from 'fs';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
+import type { ConversionOutputFormat } from './documentConversionWorker';
 
 // ── Error types ─────────────────────────────────────────────────────────────────
 
@@ -36,13 +37,14 @@ const CONVERSION_TIMEOUT_MS = resolveConversionTimeoutMs();
 interface QueuedRequest {
   buffer: Buffer;
   filename: string;
+  outputFormat: ConversionOutputFormat;
   resolve: (result: Buffer) => void;
   reject: (error: Error) => void;
 }
 
 interface WorkerResult {
   success: boolean;
-  pdfBuffer?: Buffer;
+  outputBuffer?: Buffer;
   error?: string;
 }
 
@@ -53,9 +55,18 @@ export class DocumentConversionService {
   private busy = false;
   private queue: QueuedRequest[] = [];
 
-  async convert(buffer: Buffer, originalFilename: string): Promise<Buffer> {
+  /**
+   * Convert a document buffer using LibreOffice WASM.
+   * - `outputFormat: 'pdf'` (default) — converts DOCX → PDF (existing callers unchanged).
+   * - `outputFormat: 'docx'` — converts PDF → DOCX.
+   */
+  async convert(
+    buffer: Buffer,
+    originalFilename: string,
+    outputFormat: ConversionOutputFormat = 'pdf',
+  ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
-      this.queue.push({ buffer, filename: originalFilename, resolve, reject });
+      this.queue.push({ buffer, filename: originalFilename, outputFormat, resolve, reject });
       this.processQueue();
     });
   }
@@ -81,7 +92,7 @@ export class DocumentConversionService {
 
     const request = this.queue.shift()!;
 
-    this.executeConversion(request.buffer, request.filename, false)
+    this.executeConversion(request.buffer, request.filename, request.outputFormat, false)
       .then((result) => request.resolve(result))
       .catch((err) => request.reject(err))
       .finally(() => {
@@ -93,6 +104,7 @@ export class DocumentConversionService {
   private async executeConversion(
     buffer: Buffer,
     filename: string,
+    outputFormat: ConversionOutputFormat,
     isRetry: boolean,
   ): Promise<Buffer> {
     const worker = this.ensureWorker();
@@ -107,7 +119,7 @@ export class DocumentConversionService {
         this.terminateWorker();
         reject(
           new ConversionError(
-            'This Word document took too long to convert. Try saving it as PDF from Word directly.',
+            'The document took too long to convert. Try a smaller file or export as PDF directly.',
             PDF_ERROR_CODES.CONVERSION_TIMEOUT,
           ),
         );
@@ -118,12 +130,12 @@ export class DocumentConversionService {
         settled = true;
         cleanup();
 
-        if (msg.success && msg.pdfBuffer) {
-          resolve(Buffer.from(msg.pdfBuffer));
+        if (msg.success && msg.outputBuffer) {
+          resolve(Buffer.from(msg.outputBuffer));
         } else {
           reject(
             new ConversionError(
-              'This Word document could not be converted. Try saving it as PDF from Word directly and uploading the PDF.',
+              'The document could not be converted. Please check the source file and try again.',
               PDF_ERROR_CODES.CONVERSION_FAILED,
             ),
           );
@@ -137,7 +149,7 @@ export class DocumentConversionService {
         this.worker = null;
 
         if (!isRetry) {
-          this.executeConversion(buffer, filename, true)
+          this.executeConversion(buffer, filename, outputFormat, true)
             .then(resolve)
             .catch(reject);
         } else {
@@ -158,7 +170,7 @@ export class DocumentConversionService {
 
       worker.on('message', onMessage);
       worker.on('error', onError);
-      worker.postMessage({ buffer, filename });
+      worker.postMessage({ buffer, filename, outputFormat });
     });
   }
 

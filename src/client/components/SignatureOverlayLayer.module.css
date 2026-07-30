@@ -1,0 +1,77 @@
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Must be above OverlayTextLayer (z-index: 2) and PdfFormFieldLayer (z-index: 3) */
+  z-index: 4;
+}
+
+.overlay {
+  position: absolute;
+  pointer-events: all;
+  cursor: pointer;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  border-radius: 2px;
+  transition: border-color 0.15s ease;
+  user-select: none;
+}
+
+.overlaySelected {
+  border-color: var(--color-primary, #2563eb);
+  outline: 2px solid rgba(37, 99, 235, 0.25);
+  cursor: move;
+}
+
+.overlay:focus {
+  outline: 2px solid var(--color-primary, #2563eb);
+  outline-offset: 1px;
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.deleteBtn {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--color-danger, #dc2626);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  z-index: 1;
+}
+
+.deleteBtn:hover {
+  opacity: 0.85;
+}
+
+.resizeHandle {
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  width: 14px;
+  height: 14px;
+  background: var(--color-primary, #2563eb);
+  border: 2px solid #fff;
+  border-radius: 3px;
+  cursor: nwse-resize;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  z-index: 1;
+}

@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "nodemon --watch src/server --ext ts --exec \"ts-node -P tsconfig.server.json src/server/index.ts\"",
-    "dev:client": "vite",
+    "dev:client": "npm run webviewer:assets && vite",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json",
-    "build:client": "tsc -p tsconfig.client.json && vite build",
+    "build:client": "npm run webviewer:assets && tsc -p tsconfig.client.json && vite build",
+    "webviewer:assets": "node scripts/copy-webviewer-assets.mjs",
     "start": "node dist/server/index.js",
     "test": "jest",
     "test:e2e": "playwright test",
@@ -69,6 +70,10 @@
     "@matbee/libreoffice-converter": "^2.7.0",
     "@microsoft/applicationinsights-web": "^3.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nutrient-sdk/viewer": "^1.18.0",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@pdftron/pdfnet-node": "^12.0.0",
+    "@pdftron/webviewer": "^12.0.1",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@types/express-session": "^1.18.2",
@@ -84,6 +89,7 @@
     "encoding": "^0.1.13",
     "express": "^4.18.2",
     "express-session": "^1.18.2",
+    "lucide-react": "^1.27.0",
     "mammoth": "^1.12.0",
     "mermaid": "^11.15.0",
     "multer": "^2.2.0",
@@ -161,5 +167,8 @@
     "@azure/core-rest-pipeline": "1.24.0",
     "@azure/core-xml": "1.5.0",
     "@typespec/ts-http-runtime": "0.3.4"
+  },
+  "allowScripts": {
+    "@pdftron/pdfnet-node@12.0.0": true
   }
 }

@@ -3,24 +3,38 @@ import os from 'os';
 import request from 'supertest';
 
 const mockQueuePdfExport = jest.fn();
+const mockGetApryseStatus = jest.fn();
 
 jest.mock('../middleware/auth', () => ({
-  ensureAuthenticated: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+  ensureAuthenticated: (
+    req: express.Request,
+    _res: express.Response,
+    next: express.NextFunction
+  ) => {
     req.user = { profile: { oid: 'user-1' } } as any;
     next();
   },
 }));
 
 jest.mock('../middleware/rbac', () => ({
-  requirePermission: () =>
-    (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+  requirePermission:
+    () =>
+    (
+      _req: express.Request,
+      _res: express.Response,
+      next: express.NextFunction
+    ) =>
+      next(),
 }));
 
 jest.mock('../services/pdfConversionJobService', () => {
   class PdfQueueSaturatedError extends Error {
     status = 429;
     code = 'PDF_QUEUE_SATURATED';
-    constructor(message: string, public retryAfterSeconds = 5) {
+    constructor(
+      message: string,
+      public retryAfterSeconds = 5
+    ) {
       super(message);
     }
   }
@@ -32,6 +46,12 @@ jest.mock('../services/pdfConversionJobService', () => {
 
 jest.mock('../services/pdfArtifactStore', () => ({
   getPdfArtifactStore: jest.fn(),
+}));
+
+jest.mock('../services/aprysePdfEditingService', () => ({
+  aprysePdfEditingService: {
+    getStatus: (...args: unknown[]) => mockGetApryseStatus(...args),
+  },
 }));
 
 jest.mock('../services/pdfAssemblyService', () => ({
@@ -59,6 +79,28 @@ describe('PDF export queue routes', () => {
     jest.clearAllMocks();
   });
 
+  test('returns Apryse POC capability status without exposing the key', async () => {
+    mockGetApryseStatus.mockResolvedValue({
+      configured: true,
+      sdkAvailable: true,
+      findReplaceAvailable: true,
+      message:
+        'Apryse FindReplace API is available; license entitlement is validated during export.',
+    });
+
+    const response = await request(app).get('/api/pdf/apryse/status');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      configured: true,
+      sdkAvailable: true,
+      findReplaceAvailable: true,
+      message:
+        'Apryse FindReplace API is available; license entitlement is validated during export.',
+    });
+    expect(JSON.stringify(response.body)).not.toContain('demo-key');
+  });
+
   test('returns 202 with queue status for accepted exports', async () => {
     mockQueuePdfExport.mockResolvedValue({
       jobId: 'job-1',
@@ -72,16 +114,40 @@ describe('PDF export queue routes', () => {
       .send({ filename: 'report.pdf' });
 
     expect(response.status).toBe(202);
-    expect(response.body).toEqual(expect.objectContaining({
-      jobId: 'job-1',
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        jobId: 'job-1',
+        status: 'queued',
+        queuePosition: 2,
+      })
+    );
+  });
+
+  test('passes an absent filename override through to queuePdfExport', async () => {
+    mockQueuePdfExport.mockResolvedValue({
+      jobId: 'job-2',
       status: 'queued',
-      queuePosition: 2,
-    }));
+      queuePosition: 1,
+      statusUrl: '/api/pdf/jobs/job-2',
+    });
+
+    const response = await request(app)
+      .post('/api/pdf/sessions/session-1/export')
+      .send({ pages: [0] });
+
+    expect(response.status).toBe(202);
+    expect(mockQueuePdfExport).toHaveBeenCalledWith(
+      'session-1',
+      'user-1',
+      undefined,
+      [0],
+      'pdf'
+    );
   });
 
   test('returns 429 and Retry-After when queue back-pressure triggers', async () => {
     mockQueuePdfExport.mockRejectedValue(
-      new PdfQueueSaturatedError('PDF processing is busy.', 7),
+      new PdfQueueSaturatedError('PDF processing is busy.', 7)
     );
 
     const response = await request(app)
