@@ -43,6 +43,7 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     integritySha256:     row.integritySha256 ?? null,
     contractApiVersion:  row.contractApiVersion,
     selectedSkills:      (row.selectedSkills as string[]) ?? [],
+    targetProjects:      (row.targetProjects as string[]) ?? [],
     manifestSnapshot:    (row.manifestSnapshot as Record<string, unknown>) ?? null,
     releaseNotes:        row.releaseNotes ?? null,
     breakingChanges:     row.breakingChanges ?? null,
@@ -54,6 +55,19 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     createdAt:           row.createdAt,
     updatedAt:           row.updatedAt,
   };
+}
+
+/**
+ * Returns true if `release` is visible to the given Apex project name.
+ * An empty `targetProjects` array means the release is visible to all projects.
+ */
+export function isReleaseVisibleToProject(
+  release: FoundationSkillRelease,
+  apexProject: string | null | undefined,
+): boolean {
+  if (!release.targetProjects || release.targetProjects.length === 0) return true;
+  if (!apexProject) return false;
+  return release.targetProjects.includes(apexProject);
 }
 
 async function appendAudit(
@@ -93,15 +107,24 @@ export async function getRelease(id: string): Promise<FoundationSkillRelease | n
   return rows[0] ? mapRow(rows[0]) : null;
 }
 
-/** Get the latest published release, or null when none exists. */
-export async function getLatestPublishedRelease(): Promise<FoundationSkillRelease | null> {
+/**
+ * Get the latest published release visible to the given Apex project, or null.
+ * When `apexProject` is omitted the first published release is returned (admin use).
+ */
+export async function getLatestPublishedRelease(
+  apexProject?: string | null,
+): Promise<FoundationSkillRelease | null> {
   const rows = await db
     .select()
     .from(foundationSkillReleases)
     .where(eq(foundationSkillReleases.status, 'published'))
-    .orderBy(desc(foundationSkillReleases.publishedAt))
-    .limit(1);
-  return rows[0] ? mapRow(rows[0]) : null;
+    .orderBy(desc(foundationSkillReleases.publishedAt));
+
+  for (const row of rows) {
+    const release = mapRow(row);
+    if (isReleaseVisibleToProject(release, apexProject ?? null)) return release;
+  }
+  return null;
 }
 
 /**
@@ -121,6 +144,7 @@ export async function createRelease(
         artifactFeed:        input.artifactFeed ?? null,
         integritySha256:     input.integritySha256 ?? null,
         selectedSkills:      input.selectedSkills,
+        targetProjects:      input.targetProjects ?? [],
         manifestSnapshot:    input.manifestSnapshot ?? null,
         releaseNotes:        input.releaseNotes ?? null,
         breakingChanges:     input.breakingChanges ?? null,
@@ -197,7 +221,10 @@ export async function publishRelease(
       action:         'published',
       actorId:        actor.id,
       actorEmail:     actor.email ?? null,
-      details:        { artifactVersion: existing.artifactVersion },
+      details:        {
+        artifactVersion: existing.artifactVersion,
+        targetProjects: existing.targetProjects,
+      },
     });
 
     return mapRow(updated);
@@ -267,6 +294,56 @@ export async function deleteDraftRelease(
       details:        { reason: 'draft deleted by Platform Admin' },
     });
     await tx.delete(foundationSkillReleases).where(eq(foundationSkillReleases.id, id));
+  });
+}
+
+/** Update release notes and/or breaking changes for any release status. */
+export interface UpdateReleaseInput {
+  releaseNotes?:    string | null;
+  breakingChanges?: string | null;
+  targetProjects?:  string[];
+  /** Only allowed for draft releases */
+  version?:         string;
+  artifactVersion?: string;
+  artifactFeed?:    string | null;
+}
+
+export async function updateRelease(
+  id: string,
+  actor: { id: string; email?: string | null },
+  input: UpdateReleaseInput,
+): Promise<FoundationSkillRelease> {
+  const existing = await getRelease(id);
+  if (!existing) throw new Error(`Release not found: ${id}`);
+
+  if ((input.version !== undefined || input.artifactVersion !== undefined || input.artifactFeed !== undefined)
+      && existing.status !== 'draft') {
+    throw new Error(`Version and artifact fields can only be changed on draft releases`);
+  }
+
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(foundationSkillReleases)
+      .set({
+        ...(input.releaseNotes    !== undefined && { releaseNotes:    input.releaseNotes    ?? null }),
+        ...(input.breakingChanges !== undefined && { breakingChanges: input.breakingChanges ?? null }),
+        ...(input.targetProjects  !== undefined && { targetProjects:  input.targetProjects }),
+        ...(input.version         !== undefined && { version:         input.version }),
+        ...(input.artifactVersion !== undefined && { artifactVersion: input.artifactVersion }),
+        ...(input.artifactFeed    !== undefined && { artifactFeed:    input.artifactFeed    ?? null }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(foundationSkillReleases.id, id))
+      .returning();
+    await tx.insert(foundationSkillReleaseAudit).values({
+      releaseId:      id,
+      releaseVersion: existing.version,
+      action:         'published',
+      actorId:        actor.id,
+      actorEmail:     actor.email ?? null,
+      details:        { action: 'release_edited', fields: Object.keys(input) },
+    });
+    return mapRow(updated);
   });
 }
 

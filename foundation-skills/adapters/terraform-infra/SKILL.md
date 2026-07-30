@@ -1,9 +1,9 @@
 ---
 name: terraform-infra
-description: APEX adapter for terraform-infra. Supplies APEX's infra/ module structure, state config, and provider versions.
+description: Project adapter for terraform-infra. Customize for your project.
 ---
 
-# terraform-infra — APEX Adapter
+# terraform-infra — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/terraform-infra/SKILL.md -->
 

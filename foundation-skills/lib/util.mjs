@@ -5,6 +5,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+
+/**
+ * Returns the git repository root containing `startDir`, or `startDir`
+ * itself if not inside a git repo. Always safe to use as `repoRoot`.
+ */
+export function findGitRoot(startDir = process.cwd()) {
+  const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: startDir,
+    encoding: 'utf8',
+    shell: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (result.status === 0 && result.stdout?.trim()) {
+    return path.resolve(result.stdout.trim());
+  }
+  return path.resolve(startDir);
+}
 
 /** Normalize a path to forward slashes so lockfile keys are OS-independent. */
 export function toPosix(p) {

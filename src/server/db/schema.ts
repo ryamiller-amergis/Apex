@@ -1550,6 +1550,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   integritySha256:     text('integrity_sha256'),
   contractApiVersion:  integer('contract_api_version').notNull().default(1),
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
+  targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
   manifestSnapshot:    jsonb('manifest_snapshot').$type<Record<string, unknown>>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),

@@ -1,14 +1,14 @@
 ---
 name: in-app-notifications
-description: APEX adapter for in-app-notifications. Binds to APEX's notification service, SSE delivery, and UI components.
+description: Project adapter for in-app-notifications. Customize for your project.
 ---
 
-# in-app-notifications — APEX Adapter
+# in-app-notifications — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/in-app-notifications/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Service: `src/server/services/notificationService.ts`, `aiCompletionNotifier.ts`
-- Delivery: SSE (Server-Sent Events)
-- UI: `NotificationBell.tsx`, `NotificationCenter.tsx`, `ToastContainer.tsx`
-- Context: `src/client/contexts/NotificationContext.tsx`
+- Service: project's notification service (see {{slot:agentsFile}} Feature Map)
+- Delivery: project's notification delivery mechanism (see {{slot:agentsFile}} Feature Map)
+- UI: project's notification UI components (see {{slot:agentsFile}} Feature Map)
+- Context: project's notification context/store (see {{slot:agentsFile}} Feature Map)

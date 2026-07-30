@@ -57,7 +57,15 @@ function renderSlot(slotName, directive, idx, explain) {
       return String(all.length);
     }
     case 'list': {
-      const items = limitList(all, directive.limit);
+      let filtered = all;
+      if (directive.keyPrefix) {
+        filtered = filtered.filter((e) => String(e.key).startsWith(directive.keyPrefix));
+      }
+      if (directive.keyExclude) {
+        const excl = directive.keyExclude;
+        filtered = filtered.filter((e) => !String(e.key).startsWith(excl));
+      }
+      const items = limitList(filtered, directive.limit);
       if (items.length === 0) {
         record(false, []);
         return todo(slotName, `no ${directive.detector} evidence`);

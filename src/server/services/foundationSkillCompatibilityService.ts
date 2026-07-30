@@ -102,10 +102,10 @@ export async function checkCompatibility(
   const branch = req.branch ?? 'main';
   const now = new Date().toISOString();
 
-  // Resolve candidate version
+  // Resolve candidate version — respect project targeting when auto-resolving
   let candidateVersion: string | null | undefined = req.candidateVersion;
   if (!candidateVersion) {
-    const latest = await getLatestPublishedRelease();
+    const latest = await getLatestPublishedRelease(req.apexProject ?? null);
     candidateVersion = latest?.version ?? null;
   }
 

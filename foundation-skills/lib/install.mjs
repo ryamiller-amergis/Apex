@@ -4,7 +4,8 @@
  * For each selected skill:
  *   - vendor the generic foundation into .apex/foundation/<skill>/ (managed, replaced)
  *   - scaffold a pre-filled adapter into .cursor/skills/<skill>/ ONLY if absent
- *     (never clobber a pre-existing team adapter)
+ *     (never clobber a pre-existing team adapter unless opts.fill is true)
+ *   - with opts.fill: re-run bootstrap and overwrite the adapter from the template
  *   - record versions, contract range, and file hashes in apex-skills.lock.json
  *
  * Aborts before writing on: unknown skill, unsupported contract range, path
@@ -73,22 +74,34 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
       vendored[destRel] = { text, hash: sha256(text) };
     }
 
-    // Adapter: scaffold only if absent.
+    // Adapter: scaffold if absent; re-fill only when opts.fill is explicitly set.
     const adapterDest = repoAdapterDir(repoRoot, name);
     const adapterExists = fs.existsSync(adapterDest) && fs.readdirSync(adapterDest).length > 0;
+    const shouldScaffold = !adapterExists;
+    const shouldFill = Boolean(opts.fill) && adapterExists;
     let adapterFiles = {};
-    if (!adapterExists) {
+    if (shouldScaffold || shouldFill) {
       const boot = bootstrapSkill(pkgRoot, repoRoot, name, opts);
       for (const [rel, text] of Object.entries(boot.files)) {
         const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
         assertWithin(repoRoot, destRel);
         adapterFiles[destRel] = text;
       }
+      if (shouldFill) {
+        warnings.push(`Adapter for "${name}" re-filled from template (--fill)`);
+      }
     } else {
       warnings.push(`Adapter for "${name}" already exists — left untouched`);
     }
 
-    actions.push({ skill: name, vendored, adapterFiles, adapterScaffolded: !adapterExists, contract });
+    actions.push({
+      skill: name,
+      vendored,
+      adapterFiles,
+      adapterScaffolded: shouldScaffold,
+      adapterFilled: shouldFill,
+      contract,
+    });
   }
 
   return { catalog, actions, errors, warnings };
@@ -117,7 +130,7 @@ export function executeInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
       vendoredHashes[destRel] = hash;
       wrote.push(destRel);
     }
-    if (action.adapterScaffolded) {
+    if (action.adapterScaffolded || action.adapterFilled) {
       for (const [destRel, text] of Object.entries(action.adapterFiles)) {
         writeTextFile(path.join(repoRoot, destRel), text);
         wrote.push(destRel);
@@ -126,7 +139,10 @@ export function executeInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
     lock.skills[action.skill] = {
       contractRange: action.contract?.foundation?.range ?? null,
       vendored: vendoredHashes,
-      adapterScaffolded: action.adapterScaffolded || Boolean(lock.skills[action.skill]?.adapterScaffolded),
+      adapterScaffolded:
+        action.adapterScaffolded
+        || action.adapterFilled
+        || Boolean(lock.skills[action.skill]?.adapterScaffolded),
     };
   }
 

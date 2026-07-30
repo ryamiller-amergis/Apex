@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: Project adapter for issue-analysis. Loads the generic foundation and binds it to this project's context/output locations and product framing.
+description: Project adapter for issue-analysis. Customize for your project.
 ---
 
 # Issue Analysis — Project Adapter
@@ -9,8 +9,8 @@ description: Project adapter for issue-analysis. Loads the generic foundation an
 Applies the generic issue-analysis method to this project.
 
 - Project: {{slot:projectName}}
-- Input context: `.ai-pilot/kickoff-context.md` (title + description + focus guidance)
-- Output: `.ai-pilot/output/issue-analysis.json`
+- Input context: `{{slot:aiPilotDir}}kickoff-context.md` (title + description + focus guidance)
+- Output: `{{slot:aiPilotDir}}output/issue-analysis.json`
 
 Weigh impact against this project's core workflows and operational surface:
 

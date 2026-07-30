@@ -214,9 +214,12 @@ POST /api/platform-admin/foundation-skills/update-repo
 3. In Platform Admin → APEX Skills → **Create Draft**, enter the same version and
    artifact version as the CI-published candidate. Add release notes and mark any
    breaking changes.
-4. Click **Publish** — this promotes the tarball from Local to Release view and
-   records the SHA-256 integrity.
-5. Consumer repos see the update notice in AgentHome.
+4. **Select audience** — choose **All projects** (default) or **Specific projects**
+   (searchable picker; e.g. select `MaxView` for a targeted rollout). Empty allowlist
+   means every Apex project will see the update; a non-empty list restricts visibility.
+5. Click **Publish** — promotes the tarball from Local to Release view and records SHA-256.
+6. Only Apex projects in the allowlist (or all, if unrestricted) see the update
+   notice in Agent Home.
 
 ---
 
@@ -227,7 +230,7 @@ Teams adopt updates on their own schedule — nothing is ever applied automatica
 ### Option A — CLI (recommended)
 
 ```bash
-# Check what version is available
+# Check what version is available (only reports versions visible to your Apex project)
 npx @apex/skills check
 
 # Update foundations (never overwrites adapter files)
@@ -252,6 +255,101 @@ A Platform Admin can open a PR on your behalf:
 The PR updates `.apex/foundation/` and `apex-skills.lock.json`. Your adapter
 files in `.cursor/skills/` are never touched. Review, run
 `npx @apex/skills validate`, and merge.
+
+---
+
+## 7a. MaxView — first-time install and update playbook
+
+### Prerequisites
+
+- Node.js 18+ LTS: `node -v` (must be `>= 18`)
+- Git 2.x: `git --version`
+- Azure Artifacts `.npmrc` + PAT when using the published package (see §3 and §5).
+  For local branch testing, substitute the local CLI path:
+
+  ```bash
+  CLI="node /path/to/Apex/foundation-skills/bin/apex-skills.mjs"
+  ```
+
+### Step 1 — Verify prerequisites
+
+```bash
+$CLI doctor
+```
+
+### Step 2 — Install foundations in the MaxView repo
+
+```bash
+cd /path/to/MaxView
+
+$CLI install ui-lab to-prd grill-with-docs
+```
+
+This creates:
+- `.apex/foundation/<skill>/SKILL.md` — managed, do not edit
+- `.cursor/skills/<skill>/SKILL.md` — your team adapter (safe to edit)
+- `apex-skills.lock.json` — version + file hashes
+
+### Step 3 — Review adapters
+
+Adapter files include auto-detected tokens, components, and routes. Fields
+the scanner could not determine are marked:
+
+```html
+<!-- TODO(designTokens): no css-variables evidence — fill in manually -->
+```
+
+Re-run the bootstrapper after filling in MaxView CSS files:
+
+```bash
+$CLI bootstrap ui-lab --explain
+```
+
+### Step 4 — Commit
+
+```bash
+git add .apex/ .cursor/skills/ apex-skills.lock.json
+git commit -m "chore: install @apex/skills foundation skills"
+```
+
+### Step 5 — Day-to-day rules
+
+- Edit only `.cursor/skills/**` adapters.
+- Never edit `.apex/foundation/**` — drift blocks future installs.
+- Run `$CLI validate` to verify no drift.
+
+### Step 6 — Receiving a targeted update from APEX
+
+When APEX publishes a release targeted at MaxView:
+
+1. Agent Home → `MaxView` project shows the **Skills update** banner.
+2. Click the `npx @apex/skills update` command to copy it, then run:
+
+   ```bash
+   cd /path/to/MaxView
+   $CLI check        # verify the available version
+   $CLI update       # re-vendors foundation files; adapters untouched
+   $CLI validate     # confirm clean state
+   git add .apex/ apex-skills.lock.json
+   git commit -m "chore: update @apex/skills to vX.Y.Z"
+   ```
+
+3. Open Agent Home on a project that is **not** in the allowlist → no banner.
+
+### Step 7 — Seeding Consumer Repos status (Platform Admin)
+
+In Platform Admin → APEX Skills → **Consumer Repos**, fill in the
+"Run compatibility check" form:
+
+| Field | Value |
+|---|---|
+| Apex project name | `MaxView` |
+| Provider | Azure DevOps |
+| ADO project | `MaxView` |
+| Skill repo name | `MaxView` |
+
+Click **Check compatibility**. The row now appears in the table and
+`updateAvailable` drives the banner on Agent Home for MaxView users.
 
 ---
 

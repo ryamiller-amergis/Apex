@@ -15,6 +15,7 @@ import {
   deprecateRelease,
   deleteDraftRelease,
   getReleaseAudit,
+  updateRelease,
 } from '../services/foundationSkillReleaseService';
 import {
   checkCompatibility,
@@ -128,6 +129,25 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
   }
 });
 
+router.patch('/releases/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { releaseNotes, breakingChanges, targetProjects, version, artifactVersion, artifactFeed } = req.body;
+    const release = await updateRelease(req.params.id, actor(req), {
+      ...(releaseNotes    !== undefined && { releaseNotes }),
+      ...(breakingChanges !== undefined && { breakingChanges }),
+      ...(targetProjects  !== undefined && { targetProjects }),
+      ...(version         !== undefined && { version }),
+      ...(artifactVersion !== undefined && { artifactVersion }),
+      ...(artifactFeed    !== undefined && { artifactFeed }),
+    });
+    res.json({ release });
+  } catch (err: any) {
+    if (err.message?.includes('not found')) { res.status(404).json({ error: 'Release not found' }); return; }
+    if (err.message?.includes('draft')) { res.status(409).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message ?? 'Failed to update release' });
+  }
+});
+
 router.get('/releases/:id/audit', async (req: Request, res: Response): Promise<void> => {
   try {
     const entries = await getReleaseAudit(req.params.id);
@@ -156,7 +176,7 @@ router.get('/repo-statuses', async (_req: Request, res: Response): Promise<void>
  * Body: { project, repo, provider?, defaultBranch?, releaseId?, selectedSkills? }
  */
 router.post('/update-repo', async (req: Request, res: Response): Promise<void> => {
-  const { project, repo, provider, defaultBranch, releaseId, selectedSkills } = req.body;
+  const { project, repo, provider, defaultBranch, releaseId, selectedSkills, apexProject } = req.body;
   if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
   if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
 
@@ -181,6 +201,7 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
         defaultBranch: defaultBranch ?? 'main',
         releaseId,
         selectedSkills: Array.isArray(selectedSkills) ? selectedSkills : undefined,
+        apexProject: apexProject ?? null,
         actor: { id: actorInfo.id, email: actorInfo.email },
       },
       adoService,
@@ -194,12 +215,12 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
 
 router.post('/check-compatibility', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { provider, project, repo, branch, candidateVersion } = req.body;
+    const { provider, project, repo, branch, candidateVersion, apexProject } = req.body;
     if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
     if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
 
     const report = await checkCompatibility(
-      { provider: provider ?? 'ado', project, repo, branch, candidateVersion },
+      { provider: provider ?? 'ado', project, repo, branch, candidateVersion, apexProject: apexProject ?? null },
       { id: getUserId(req) },
     );
     res.json({ report });

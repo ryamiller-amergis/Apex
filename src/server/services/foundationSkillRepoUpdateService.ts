@@ -40,7 +40,7 @@ import {
 import { resolveGitRemote } from './repoCacheService';
 import { AzureDevOpsService } from './azureDevOps';
 import * as githubCatalog from './skillCatalogGitHub';
-import { getRelease, getLatestPublishedRelease } from './foundationSkillReleaseService';
+import { getRelease, getLatestPublishedRelease, isReleaseVisibleToProject } from './foundationSkillReleaseService';
 import { checkCompatibility } from './foundationSkillCompatibilityService';
 import { git, safeArgs, LONG_TIMEOUT_MS } from '../utils/asyncGit';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -59,6 +59,8 @@ export interface UpdateRepoOptions {
   releaseId?: string;
   /** Override which skills to install; defaults to the release's selectedSkills */
   selectedSkills?: string[];
+  /** Apex project name — used to filter releases by targetProjects allowlist */
+  apexProject?: string | null;
   /** Actor for PR attribution */
   actor?: { id?: string | null; email?: string | null; displayName?: string | null };
 }
@@ -200,7 +202,7 @@ export async function updateRepoWithFoundationSkills(
   try {
     release = opts.releaseId
       ? await getRelease(opts.releaseId)
-      : await getLatestPublishedRelease();
+      : await getLatestPublishedRelease(opts.apexProject ?? null);
   } catch (e: unknown) {
     errors.push(`Failed to resolve release: ${(e as Error).message}`);
   }
@@ -210,6 +212,10 @@ export async function updateRepoWithFoundationSkills(
   }
   if (release.status !== 'published') {
     errors.push(`Release ${release.id} is not published (status: ${release.status})`);
+    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
+  }
+  if (opts.apexProject && !isReleaseVisibleToProject(release, opts.apexProject)) {
+    errors.push(`Release ${release.version} is not targeted at Apex project "${opts.apexProject}" — update the release targeting or use a different release`);
     return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
   }
 

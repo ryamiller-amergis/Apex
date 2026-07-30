@@ -16,7 +16,7 @@ test('install vendors foundation, scaffolds adapter, writes lockfile', () => {
     assert.ok(fs.existsSync(path.join(repo, 'apex-skills.lock.json')));
 
     const lock = readLockfile(repo);
-    assert.equal(lock.suiteVersion, '0.1.0');
+    assert.equal(lock.suiteVersion, '0.2.0');
     assert.ok(lock.skills['ui-lab'].vendored['.apex/foundation/ui-lab/SKILL.md']);
     assert.equal(lock.skills['ui-lab'].adapterScaffolded, true);
     // Integrity is reproducible.
@@ -94,6 +94,29 @@ test('plan reports actions without writing', () => {
     assert.equal(plan.errors.length, 0);
     assert.equal(plan.actions.length, 1);
     assert.equal(fs.existsSync(path.join(repo, 'apex-skills.lock.json')), false);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('install --fill rewrites an existing adapter from current evidence', () => {
+  const repo = makeRepo({ 'package.json': JSON.stringify({ name: 'bare' }) });
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
+    assert.match(fs.readFileSync(adapterPath, 'utf8'), /TODO\(designTokens\)/);
+
+    fs.mkdirSync(path.join(repo, 'src/styles'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, 'src/styles/theme.css'),
+      ':root { --color-primary: #112233; }\n',
+    );
+
+    const res = executeInstall(PKG_ROOT, repo, ['ui-lab'], { fill: true });
+    const after = fs.readFileSync(adapterPath, 'utf8');
+    assert.match(after, /--color-primary/);
+    assert.doesNotMatch(after, /TODO\(designTokens\)/);
+    assert.ok(res.warnings.some((w) => /re-filled/.test(w)));
   } finally {
     cleanup(repo);
   }

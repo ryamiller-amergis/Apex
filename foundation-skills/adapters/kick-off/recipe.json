@@ -1,12 +1,15 @@
 {
   "skill": "kick-off",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json", "**/context.md", "**/AGENTS.md"],
-  "detectors": ["stack", "routes", "dir-conventions"],
+  "targetedGlobs": ["package.json", "**/context.md", "**/CONTEXT.md", "**/AGENTS.md"],
+  "detectors": ["stack", "routes", "dir-conventions", "repo-docs"],
   "capFiles": 800,
   "capMs": 45000,
   "slots": {
     "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
-    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 15 }
+    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 15 },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "skillsDir": { "type": "value", "detector": "repo-docs", "key": "skillsDir" }
   }
 }

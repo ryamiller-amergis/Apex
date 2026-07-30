@@ -1,14 +1,14 @@
 ---
 name: daily-standup
-description: APEX adapter for daily-standup. Binds to APEX's standup service, SSE delivery, and project settings.
+description: Project adapter for daily-standup. Customize for your project.
 ---
 
-# daily-standup — APEX Adapter
+# daily-standup — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/daily-standup/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Service: `src/server/services/standupService.ts`, `standupScheduler.ts`
-- Delivery: SSE via `src/server/services/aiCompletionNotifier.ts`
-- Components: `StandupCeremonyView.tsx`, `StandupManageView.tsx`, `StandupSummaryView.tsx`
+- Service: project's standup service (see {{slot:agentsFile}} Feature Map)
+- Delivery: project's notification delivery (see {{slot:agentsFile}} Feature Map)
+- Components: project's standup UI components (see {{slot:agentsFile}} Feature Map)
 - Output: stored via standup service; summary posted to project notification channel

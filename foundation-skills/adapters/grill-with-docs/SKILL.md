@@ -1,21 +1,19 @@
 ---
 name: grill-with-docs
-description: APEX adapter for grill-with-docs. Binds to APEX's context sources, terminology, and codebase conventions.
+description: Project adapter for grill-with-docs. Customize for your project.
 ---
 
-# grill-with-docs — APEX Adapter
+# grill-with-docs — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/grill-with-docs/SKILL.md -->
 
 **Invocation:** `/grill-with-docs`
 
 - Project: {{slot:projectName}}
-- Context sources: `context.md`, `AGENTS.md`, existing `design-docs/`, `.cursor/skills/`
-- Glossary: Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, Backlog, Epic, Feature, RBAC, SSE, Facilitator
+- Context sources: `{{slot:contextFile}}`, `{{slot:agentsFile}}`, existing `{{slot:designDocsDir}}`, `{{slot:skillsDir}}`
 
-APEX is a product-building and project-management platform using React + Express +
-PostgreSQL. Stress-test plans against APEX's existing feature map and service
-boundaries (see AGENTS.md).
+Stress-test plans against this project's existing feature map and service
+boundaries (see {{slot:agentsFile}}).
 
 ## Active glossary terms from this repo
 

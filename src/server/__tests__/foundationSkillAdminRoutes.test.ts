@@ -129,7 +129,7 @@ const sampleRelease: FoundationSkillRelease = {
   id: 'rel-1', version: '1.0.0', status: 'published',
   artifactPackage: '@apex/skills', artifactVersion: '1.0.0',
   artifactFeed: null, integritySha256: 'abc123', contractApiVersion: 1,
-  selectedSkills: ['ui-lab', 'to-prd'], manifestSnapshot: null,
+  selectedSkills: ['ui-lab', 'to-prd'], targetProjects: [], manifestSnapshot: null,
   releaseNotes: 'Initial release', breakingChanges: null,
   publishedBy: 'admin-1', publishedAt: '2026-07-28T00:00:00.000Z',
   deprecatedBy: null, deprecatedAt: null,
@@ -345,18 +345,27 @@ describe('Foundation Skills Consumer Endpoints (skills router)', () => {
   });
 
   describe('GET /api/skills/foundation-releases/latest', () => {
-    it('returns the latest published release', async () => {
+    it('returns the latest published release without ?project', async () => {
       mockRelease.getLatestPublishedRelease.mockResolvedValue(sampleRelease);
       const res = await request(buildSkillsApp())
         .get('/api/skills/foundation-releases/latest');
       expect(res.status).toBe(200);
       expect(res.body.release.version).toBe('1.0.0');
+      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith(null);
     });
 
-    it('returns null when no published release exists', async () => {
+    it('passes ?project to the service for targeted filtering', async () => {
+      mockRelease.getLatestPublishedRelease.mockResolvedValue(sampleRelease);
+      const res = await request(buildSkillsApp())
+        .get('/api/skills/foundation-releases/latest?project=MaxView');
+      expect(res.status).toBe(200);
+      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith('MaxView');
+    });
+
+    it('returns null when no published release is visible to the project', async () => {
       mockRelease.getLatestPublishedRelease.mockResolvedValue(null);
       const res = await request(buildSkillsApp())
-        .get('/api/skills/foundation-releases/latest');
+        .get('/api/skills/foundation-releases/latest?project=SomeOtherProject');
       expect(res.status).toBe(200);
       expect(res.body.release).toBeNull();
     });

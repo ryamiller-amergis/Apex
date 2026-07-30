@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { bootstrapSkill } from '../lib/bootstrap.mjs';
 import { collectEvidence, gatherFiles, globToRegExp } from '../lib/evidence.mjs';
+import { cmdBootstrap } from '../lib/commands.mjs';
+import { executeInstall } from '../lib/install.mjs';
 import { PKG_ROOT, makeRepo, cleanup, SAMPLE_REPO } from './helpers.mjs';
 
 test('globToRegExp handles **, *, and {a,b}', () => {
@@ -88,6 +92,38 @@ test('file-count cap degrades gracefully with capHit flag', () => {
     assert.equal(capHit, true);
     const res = collectEvidence(repo, recipe);
     assert.equal(res.meta.capHit, true);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap command writes filled adapter content to disk', () => {
+  const repo = makeRepo({ 'package.json': JSON.stringify({ name: 'bare' }) });
+  const logs = [];
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
+    assert.match(fs.readFileSync(adapterPath, 'utf8'), /TODO\(designTokens\)/);
+
+    fs.mkdirSync(path.join(repo, 'src/client/components'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, 'src/client/App.css'),
+      ':root { --color-primary: #0b5fff; --bg-primary: #ffffff; }\n',
+    );
+    fs.writeFileSync(
+      path.join(repo, 'src/client/components/Button.tsx'),
+      'export const Button = () => null;\n',
+    );
+
+    const code = cmdBootstrap({ _: ['ui-lab'], explain: true, package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
+    assert.equal(code, 0);
+
+    const after = fs.readFileSync(adapterPath, 'utf8');
+    assert.match(after, /--color-primary/);
+    assert.match(after, /Button/);
+    assert.doesNotMatch(after, /TODO\(designTokens\)/);
+    assert.doesNotMatch(after, /TODO\(components\)/);
+    assert.ok(logs.some((l) => /wrote \d+ file/.test(l)));
   } finally {
     cleanup(repo);
   }

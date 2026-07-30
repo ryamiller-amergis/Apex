@@ -2,14 +2,15 @@ import { useQuery } from '@tanstack/react-query';
 import type { FoundationSkillRelease, FoundationSkillRepoStatus } from '../../shared/types/foundationSkills';
 
 /**
- * Fetches the latest published foundation skills release.
- * Used by team-facing update notices — authenticated read, no admin guard.
+ * Fetches the latest published foundation skills release visible to the given
+ * Apex project. Pass `null`/`undefined` to get the global latest (admin use).
  */
-export function useLatestFoundationSkillRelease() {
+export function useLatestFoundationSkillRelease(apexProject?: string | null) {
   return useQuery<FoundationSkillRelease | null>({
-    queryKey: ['foundation-skill-release', 'latest'],
+    queryKey: ['foundation-skill-release', 'latest', apexProject ?? null],
     queryFn: async () => {
-      const res = await fetch('/api/skills/foundation-releases/latest', { credentials: 'include' });
+      const params = apexProject ? `?project=${encodeURIComponent(apexProject)}` : '';
+      const res = await fetch(`/api/skills/foundation-releases/latest${params}`, { credentials: 'include' });
       if (!res.ok) return null;
       const data = await res.json() as { release: FoundationSkillRelease | null };
       return data.release ?? null;

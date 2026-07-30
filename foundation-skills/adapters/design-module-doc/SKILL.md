@@ -1,16 +1,16 @@
 ---
 name: design-module-doc
-description: APEX adapter for design-module-doc. Binds to APEX's source structure and design-docs directory.
+description: Project adapter for design-module-doc. Customize for your project.
 ---
 
-# design-module-doc — APEX Adapter
+# design-module-doc — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/design-module-doc/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Context: `context.md`, `AGENTS.md`
-- Output: `design-docs/{module-name}.md`
-- Source roots: `src/server/services/`, `src/server/routes/`, `src/client/components/`
+- Context: `{{slot:contextFile}}`, `{{slot:agentsFile}}`
+- Output: `{{slot:designDocsDir}}{module-name}.md`
+- Source roots: see {{slot:agentsFile}} Directory Structure section
 
 ## Source modules in this repo
 

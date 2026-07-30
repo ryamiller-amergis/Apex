@@ -7,6 +7,8 @@ import { bootstrapSkill } from './bootstrap.mjs';
 import { runDoctor, formatDoctor } from './doctor.mjs';
 import { validatePackage } from './validatePackage.mjs';
 import { loadCatalog } from './catalog.mjs';
+import { writeTextFile, assertWithin, toPosix } from './util.mjs';
+import { ADAPTER_DIR } from './layout.mjs';
 
 /** The package root is two levels up from lib/commands.mjs. */
 export function defaultPackageRoot() {
@@ -43,7 +45,11 @@ export function cmdInstall(opts, log) {
 
   const skills = opts._.length ? opts._ : allSkillNames(pkgRoot);
   try {
-    const result = executeInstall(pkgRoot, repoRoot, skills, { dryRun: opts.dryRun, enrich: opts.enrich });
+    const result = executeInstall(pkgRoot, repoRoot, skills, {
+      dryRun: opts.dryRun,
+      enrich: opts.enrich,
+      fill: opts.fill,
+    });
     for (const w of result.warnings) log(`WARN  ${w}`);
     if (result.dryRun) {
       log(`[dry-run] would write ${countWrites(result.actions)} files for: ${skills.join(', ')}`);
@@ -81,7 +87,8 @@ export function cmdBootstrap(opts, log) {
   const skills = opts._.length ? opts._ : allSkillNames(pkgRoot);
   for (const name of skills) {
     const boot = bootstrapSkill(pkgRoot, repoRoot, name, { enrich: opts.enrich });
-    log(`Bootstrapped "${name}": ${boot.meta.filesScanned} files scanned, capHit=${boot.meta.capHit}.`);
+    const wrote = writeBootstrapFiles(repoRoot, name, boot.files);
+    log(`Bootstrapped "${name}": ${boot.meta.filesScanned} files scanned, capHit=${boot.meta.capHit}, wrote ${wrote.length} file(s).`);
     if (opts.explain) {
       for (const [file, explain] of Object.entries(boot.explain)) {
         for (const [slot, info] of Object.entries(explain)) {
@@ -92,6 +99,18 @@ export function cmdBootstrap(opts, log) {
     }
   }
   return 0;
+}
+
+/** Persist rendered adapter files from bootstrapSkill into the consumer repo. */
+function writeBootstrapFiles(repoRoot, skill, files) {
+  const wrote = [];
+  for (const [rel, text] of Object.entries(files)) {
+    const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
+    assertWithin(repoRoot, destRel);
+    writeTextFile(path.join(repoRoot, destRel), text);
+    wrote.push(destRel);
+  }
+  return wrote;
 }
 
 function allSkillNames(pkgRoot) {
@@ -106,7 +125,7 @@ function countWrites(actions) {
   let n = 0;
   for (const a of actions) {
     n += Object.keys(a.vendored).length;
-    if (a.adapterScaffolded) n += Object.keys(a.adapterFiles).length;
+    if (a.adapterScaffolded || a.adapterFilled) n += Object.keys(a.adapterFiles).length;
   }
   return n + 1; // lockfile
 }

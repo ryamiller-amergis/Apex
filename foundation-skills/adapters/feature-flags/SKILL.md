@@ -1,14 +1,14 @@
 ---
 name: feature-flags
-description: APEX adapter for feature-flags. Binds to APEX's featureFlagService and flag evaluation hook.
+description: Project adapter for feature-flags. Customize for your project.
 ---
 
-# feature-flags — APEX Adapter
+# feature-flags — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/feature-flags/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Service: `src/server/services/featureFlagService.ts`
-- Client hook: `src/client/hooks/useFeatureFlag.ts`
-- Admin UI: `src/client/components/PlatformAdmin.tsx` → Feature Flags tab
-- Flag names registry: `src/shared/types/featureFlags.ts` (or equivalent constants file)
+- Service: project's feature flag service (see {{slot:agentsFile}} Feature Map)
+- Client hook: project's feature flag hook (see {{slot:agentsFile}} Feature Map)
+- Admin UI: project's feature flag admin panel (see {{slot:agentsFile}} Feature Map)
+- Flag names registry: project's feature flag constants file (see {{slot:agentsFile}} Feature Map)

@@ -1,12 +1,15 @@
 {
   "skill": "design-module-doc",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json", "**/context.md", "**/AGENTS.md"],
-  "detectors": ["stack", "dir-conventions"],
+  "targetedGlobs": ["package.json", "**/context.md", "**/CONTEXT.md", "**/AGENTS.md"],
+  "detectors": ["stack", "dir-conventions", "repo-docs"],
   "capFiles": 500,
   "capMs": 45000,
   "slots": {
     "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
-    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" }
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "designDocsDir": { "type": "value", "detector": "repo-docs", "key": "designDocsDir" }
   }
 }

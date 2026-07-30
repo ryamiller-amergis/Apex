@@ -1,28 +1,25 @@
 ---
 name: design-spec-review
-description: APEX adapter for design-spec-review. Supplies APEX rubric tables for design/tech-spec/assumptions artifacts, terminology enums, and file paths.
+description: Project adapter for design-spec-review. Customize for your project.
 ---
 
-# design-spec-review — APEX Adapter
+# design-spec-review — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/prd-spec-review/SKILL.md -->
 
 **Invocation:** `/design-spec-review {slug}`
 
 - Project: {{slot:projectName}}
-- Inputs: all `*-design.md`, `*-tech-spec.md`, `*-assumptions.md` under `.ai-pilot/output/{slug}-design-spec/`; also `context.md`, the three prd-design-spec templates, and `.ai-pilot/output/{slug}.backlog.json`
-- Outputs: `.ai-pilot/output/{slug}-design-spec/review-scorecard.json` and `review-scorecard.md`
+- Inputs: all `*-design.md`, `*-tech-spec.md`, `*-assumptions.md` under `{{slot:aiPilotDir}}output/{slug}-design-spec/`; also `{{slot:contextFile}}`, the three prd-design-spec templates, and `{{slot:aiPilotDir}}output/{slug}.backlog.json`
+- Outputs: `{{slot:aiPilotDir}}output/{slug}-design-spec/review-scorecard.json` and `review-scorecard.md`
 - Formula: per-Feature score = design 35% + tech-spec 45% + assumptions 20%; overall = unweighted average across Features
 
-## APEX enums (use ONLY these)
+## Personas and canonical terms
 
-- Persona: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
-- Target surface: `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`
-- Canonical terms: `Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`
-
-APEX is a product-building platform — NOT a timeclock, staffing, or healthcare app.
-The 5 Apex ownership questions are about Express services, routes, React components,
-shared types, and DB migrations — never about external project names.
+Use this project's own persona, surface, and term vocabulary where defined (see
+{{slot:agentsFile}} Key Terminology section). Ownership questions should reference
+the project's own source layer locations (see {{slot:agentsFile}} Directory
+Structure section) — never external project names.
 
 ## Section rubrics and cross-cutting checks
 

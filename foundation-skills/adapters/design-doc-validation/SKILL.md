@@ -1,35 +1,32 @@
 ---
 name: design-doc-validation
-description: APEX adapter for design-doc-validation. Loads the generic scoring-engine foundation and supplies APEX's section rubric tables, canonical enums, file weights, and documentValidationService integration.
+description: Project adapter for design-doc-validation. Customize for your project.
 ---
 
-# design-doc-validation — APEX Adapter
+# design-doc-validation — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/design-doc-validation/SKILL.md -->
-Binds the generic scoring engine to APEX. Runs automatically — the
-`documentValidationService` launches it as an AI agent thread when a design doc
-transitions to `validating`. No user interaction.
+Binds the generic scoring engine to this project. Runs automatically — the
+`documentValidationService` (or equivalent) launches it as an AI agent thread when
+a design doc transitions to `validating`. No user interaction.
 
 - Project: {{slot:projectName}}
-- Output: `.ai-pilot/output/review-scorecard.json` and `review-scorecard.md`
-- Consumer interface: `ValidationScorecard` (parsed by `documentValidationService`) — match exactly.
+- Output: `{{slot:aiPilotDir}}output/review-scorecard.json` and `review-scorecard.md`
+- Consumer interface: `ValidationScorecard` (parsed by the validation service) — match exactly.
 
 ## Input context
 
-Injected by `designDocService.autoStartValidation`: `doc_id`, Source PRD, Design,
+Injected by the validation service: `doc_id`, Source PRD, Design,
 Tech Spec, Assumptions. If Design, Tech Spec, and Assumptions are all empty,
 write a scorecard with `overall_score: 0`, `is_ready: false`,
 `verdict: "significant_gaps"` and stop.
 
-## Canonical APEX enums (use ONLY these)
+## Canonical enums
 
-- Persona names: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
-- Target surfaces: `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`
-- Glossary terms: `Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`, `RBAC`, `SSE`, `Facilitator`
-- System Boundary ownership questions: Express service in `src/server/services/`? Route in `src/server/routes/`? React component in `src/client/components/`? Shared type in `src/shared/types/`? DB migration needed?
-
-APEX is a product-building platform — NOT a timeclock, staffing, or healthcare
-application. Do not apply terms from other products.
+Use this project's own persona, surface, and term vocabulary where defined (see
+{{slot:agentsFile}} Key Terminology section). Ownership questions should reference
+the project's own source layer locations (see {{slot:agentsFile}} Directory
+Structure section). Answer only questions about THIS repository and project.
 
 ## Section rubrics and file weights
 

@@ -39,6 +39,7 @@ export interface FoundationSkillRelease {
   integritySha256: string | null;
   contractApiVersion: number;
   selectedSkills: string[];     // skill names included in this release
+  targetProjects: string[];     // [] = all projects; non-empty = allowlist of Apex project names
   manifestSnapshot: Record<string, unknown> | null; // catalog.json at publish time
   releaseNotes: string | null;
   breakingChanges: string | null;
@@ -94,6 +95,7 @@ export interface CreateFoundationSkillReleaseRequest {
   artifactFeed?: string | null;
   integritySha256?: string | null;
   selectedSkills: string[];
+  targetProjects?: string[];    // [] or omit = all projects; non-empty = Apex project allowlist
   manifestSnapshot?: Record<string, unknown> | null;
   releaseNotes?: string | null;
   breakingChanges?: string | null;
@@ -145,7 +147,8 @@ export interface CheckCompatibilityRequest {
   project: string;
   repo: string;
   branch?: string;
-  candidateVersion?: string; // defaults to latest published
+  candidateVersion?: string; // defaults to latest published visible to apexProject
+  apexProject?: string | null; // Apex project name for targeted-release filtering
 }
 
 // ── Azure Artifacts ───────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ import styles from './AgentHome.module.css';
 interface AgentHomeProps {
   selectedProject: string;
   selectedSkillSettingsId?: string | null;
+  isAdmin?: boolean;
 }
 
 interface SpeechRecognitionAlternativeLike {
@@ -436,7 +437,7 @@ function MessageBubble({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedSkillSettingsId }) => {
+export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedSkillSettingsId, isAdmin = false }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [input, setInput] = useState('');
@@ -1120,24 +1121,25 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           project={selectedProject}
         />
       )}
-      {isCompose ? (
-        <div className={styles.compose}>
-          <button
-            className={styles.historyToggleBtn}
+      {/* Column wrapper so the banner stacks above the compose/chat area */}
+      <div className={styles.mainCol}>
+        {isAdmin && resolvedRepoName && (
+          <FoundationSkillUpdateBanner
+            project={selectedProject || null}
+            repo={resolvedRepoName}
+            provider={skillConfig?.skillProvider ?? 'ado'}
+            branch={defaultBranch}
+          />
+        )}
+        {isCompose ? (
+          <div className={styles.compose}>
+            <button
+              className={styles.historyToggleBtn}
             onClick={() => setShowHistory((v) => !v)}
             type="button"
           >
             {showHistory ? '← Hide History' : '⏱ History'}
           </button>
-          {/* Foundation skills optional update notice — shown only when update is available */}
-          {resolvedRepoName && (
-            <FoundationSkillUpdateBanner
-              project={selectedProject || null}
-              repo={resolvedRepoName}
-              provider={skillConfig?.skillProvider ?? 'ado'}
-              branch={defaultBranch}
-            />
-          )}
           <div className={styles.composeInner}>
             <div className={styles.composeLogo}>
               <BrandLogo />
@@ -1327,6 +1329,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           onClose={() => setShowPrdPreview(false)}
         />
       )}
+      </div>{/* end mainCol */}
     </div>
   );
 };

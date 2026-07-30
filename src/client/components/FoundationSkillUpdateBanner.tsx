@@ -1,38 +1,39 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useLatestFoundationSkillRelease, useFoundationSkillRepoStatus } from '../hooks/useFoundationSkillUpdateStatus';
 import styles from './FoundationSkillUpdateBanner.module.css';
 
 interface FoundationSkillUpdateBannerProps {
-  /** ADO project or GitHub org for the current project's skill repo */
   project: string | null | undefined;
-  /** Skill repo name */
   repo: string | null | undefined;
   provider?: 'ado' | 'github';
   branch?: string;
 }
 
-/**
- * A compact, optional banner shown to authenticated team users when a newer
- * foundation skills release is available for their configured skill repo.
- *
- * Shows only when:
- *   - A published release exists
- *   - The repo status record exists and `updateAvailable` is true
- *   - The latest release version is newer than the installed version
- *
- * Never shows Platform Admin controls or applies updates automatically.
- */
+const FIRST_TIME_STEPS = [
+  { cmd: 'npx @apex/skills doctor',    label: 'Check prerequisites (Node 18+, Cursor project, feed auth)' },
+  { cmd: 'npx @apex/skills install',   label: 'Install all 30 foundation skill files into your repo' },
+  { cmd: 'npx @apex/skills bootstrap', label: 'Teach skills your repo — scans codebase and fills adapter templates with your ADO org, team names, and project structure' },
+];
+
+const UPDATE_STEPS = [
+  { cmd: 'npx @apex/skills update',    label: 'Pull latest foundation files (your adapters are never overwritten)' },
+  { cmd: 'npx @apex/skills bootstrap', label: 'Refresh adapters with updated repo knowledge, then review and commit' },
+];
+
 export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerProps> = ({
   project,
   repo,
   provider = 'ado',
   branch = 'main',
 }) => {
-  const { data: latest }     = useLatestFoundationSkillRelease();
-  const { data: repoStatus } = useFoundationSkillRepoStatus(provider, project, repo, branch);
+  const [dismissed, setDismissed]   = useState(false);
+  const [notesOpen, setNotesOpen]   = useState(false);
+  const [stepsOpen, setStepsOpen]   = useState(false);
+  const { data: latest }            = useLatestFoundationSkillRelease(project);
+  const { data: repoStatus }        = useFoundationSkillRepoStatus(provider, project, repo, branch);
 
-  // Only show when there is genuinely an update the team can act on
   const shouldShow =
+    !dismissed &&
     !!latest &&
     !!repoStatus &&
     repoStatus.updateAvailable &&
@@ -41,39 +42,114 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
 
   if (!shouldShow || !latest) return null;
 
-  const cliCmd = `npx @apex/skills update`;
-  const slashCmd = `/apex-skills update`;
+  const isFirstInstall = !repoStatus.installedVersion;
+  const hasBreaking    = !!latest.breakingChanges;
+  const steps          = isFirstInstall ? FIRST_TIME_STEPS : UPDATE_STEPS;
+  const stepsLabel     = isFirstInstall ? 'Getting started ▼' : 'How to update ▼';
+
+  function copy(text: string) {
+    navigator.clipboard?.writeText(text).catch(() => undefined);
+  }
 
   return (
-    <div className={styles.banner} role="note" aria-label="Foundation skills update available">
-      <div className={styles.content}>
-        <span className={styles.badge}>Skills update</span>
+    <div
+      className={`${styles.strip} ${hasBreaking ? styles.stripWarning : ''}`}
+      role="note"
+      aria-label="Foundation skills update available"
+    >
+      {/* ── Main row ── */}
+      <div className={styles.mainRow}>
+        <span className={styles.badge}>{isFirstInstall ? 'Skills available' : 'Skills update'}</span>
+
         <span className={styles.text}>
-          APEX foundation skills&nbsp;
-          <strong>v{latest.version}</strong> is available
-          {repoStatus.installedVersion ? ` (installed: v${repoStatus.installedVersion})` : ''}.
-          {latest.breakingChanges ? ' ⚠️ Breaking changes — review before updating.' : ''}
+          APEX foundation skills <strong>v{latest.version}</strong>
+          {isFirstInstall
+            ? ' is available for your project.'
+            : ` is available (installed: v${repoStatus.installedVersion}).`}
+          {hasBreaking ? ' ⚠ Breaking changes — review before updating.' : ''}
         </span>
-        <div className={styles.actions}>
-          <button
-            className={styles.codeBtn}
-            title="Copy CLI update command"
-            onClick={() => navigator.clipboard?.writeText(cliCmd).catch(() => undefined)}
-            type="button"
-          >
-            <code>{cliCmd}</code>
-          </button>
-          <span className={styles.or}>or</span>
-          <button
-            className={styles.codeBtn}
-            title="Copy Cursor slash command"
-            onClick={() => navigator.clipboard?.writeText(slashCmd).catch(() => undefined)}
-            type="button"
-          >
-            <code>{slashCmd}</code>
-          </button>
-        </div>
+
+        <button
+          className={styles.notesToggle}
+          type="button"
+          onClick={() => setStepsOpen(v => !v)}
+          aria-expanded={stepsOpen}
+        >
+          {stepsOpen ? 'Hide ▲' : stepsLabel}
+        </button>
+
+        <button
+          className={styles.notesToggle}
+          type="button"
+          onClick={() => setNotesOpen(v => !v)}
+          aria-expanded={notesOpen}
+        >
+          {notesOpen ? 'Hide notes ▲' : 'Release notes ▼'}
+        </button>
+
+        <button
+          className={styles.dismiss}
+          onClick={() => setDismissed(true)}
+          type="button"
+          aria-label="Dismiss skills update notice"
+        >
+          ✕
+        </button>
       </div>
+
+      {/* ── Getting started / how-to-update steps ── */}
+      {stepsOpen && (
+        <div className={styles.notesPanel}>
+          <div className={styles.notesSection}>
+            <span className={styles.notesSectionLabel}>
+              {isFirstInstall
+                ? 'Run these 3 commands in your repo — forward to your developer:'
+                : 'Run these commands in your repo — forward to your developer:'}
+            </span>
+            <div className={styles.stepsList}>
+              {steps.map((s, i) => (
+                <div key={s.cmd} className={styles.stepRow}>
+                  <span className={styles.stepNum}>{i + 1}.</span>
+                  <button
+                    className={styles.codeBtn}
+                    title="Copy command"
+                    onClick={() => copy(s.cmd)}
+                    type="button"
+                  >
+                    <code>{s.cmd}</code>
+                  </button>
+                  <span className={styles.stepDesc}>{s.label}</span>
+                </div>
+              ))}
+            </div>
+            {isFirstInstall && (
+              <p className={styles.noNotes}>
+                Skills are plain Markdown and work in any language repo. Only Node.js 18+ is required to run the installer.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Release notes panel ── */}
+      {notesOpen && (
+        <div className={styles.notesPanel}>
+          {hasBreaking && (
+            <div className={styles.notesSection}>
+              <span className={styles.notesSectionLabel}>Breaking changes</span>
+              <pre className={styles.notesPre}>{latest.breakingChanges}</pre>
+            </div>
+          )}
+          {latest.releaseNotes ? (
+            <div className={styles.notesSection}>
+              <span className={styles.notesSectionLabel}>Release notes</span>
+              <pre className={styles.notesPre}>{latest.releaseNotes}</pre>
+            </div>
+          ) : !hasBreaking ? (
+            <p className={styles.noNotes}>No release notes provided for this version.</p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 };

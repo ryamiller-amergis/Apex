@@ -1,13 +1,13 @@
 ---
 name: update-changelog
-description: APEX adapter for update-changelog. Binds to APEX's public/CHANGELOG.json and app_settings sync migration.
+description: Project adapter for update-changelog. Customize for your project.
 ---
 
-# update-changelog — APEX Adapter
+# update-changelog — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/update-changelog/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Changelog: `public/CHANGELOG.json` (newest entries first)
-- Version sync: add a migration under `migrations/` that updates the current changelog version in `app_settings`
+- Changelog: `{{slot:changelogFile}}` (newest entries first)
+- Version sync: add a migration (if applicable) that updates the current changelog version in the project's settings store
 - Versioning: semver (major.minor.patch)

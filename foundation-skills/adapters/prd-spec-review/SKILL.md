@@ -1,27 +1,24 @@
 ---
 name: prd-spec-review
-description: APEX adapter for prd-spec-review. Supplies APEX rubric tables, terminology enums, persona enums, and file paths.
+description: Project adapter for prd-spec-review. Customize for your project.
 ---
 
-# prd-spec-review — APEX Adapter
+# prd-spec-review — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/prd-spec-review/SKILL.md -->
 
 **Invocation:** `/prd-spec-review {slug}`
 
 - Project: {{slot:projectName}}
-- Inputs: `.ai-pilot/output/{slug}.prd.md`, `.ai-pilot/output/{slug}.backlog.json`,
-  `context.md`, `.cursor/skills/to-prd/backlog-schema.json`, `.cursor/skills/to-prd/SKILL.md`
-- Outputs: `.ai-pilot/output/{slug}-prd-review-scorecard.json` and `{slug}-prd-review-scorecard.md`
+- Inputs: `{{slot:aiPilotDir}}output/{slug}.prd.md`, `{{slot:aiPilotDir}}output/{slug}.backlog.json`,
+  `{{slot:contextFile}}`, `{{slot:skillsDir}}to-prd/backlog-schema.json`, `{{slot:skillsDir}}to-prd/SKILL.md`
+- Outputs: `{{slot:aiPilotDir}}output/{slug}-prd-review-scorecard.json` and `{slug}-prd-review-scorecard.md`
 - Overall formula: `(prd_score × 0.50) + (backlog_score × 0.50)`
 
-## APEX enums (use ONLY these)
+## Personas and canonical terms
 
-- Persona: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
-- Target surface: `Frontend only (React client)`, `Backend only (Express server)`, `Full-stack (both client and server)`, `Shared types only`, `Database migration only`
-- Canonical terms: `Interview`, `PRD`, `Design Doc`, `Design Prototype`, `PBI`, `TBI`, `Feature Flag`, `Skill`, `Backlog`, `Epic`, `Feature`, `RBAC`, `SSE`, `Facilitator`
-
-APEX is a product-building platform — NOT a timeclock, staffing, or healthcare app.
+Use this project's own persona and surface vocabulary where defined (see
+{{slot:agentsFile}} Key Terminology section).
 
 ## Section rubrics and cross-cutting checks
 

@@ -110,6 +110,33 @@ export function useDeleteDraftFoundationSkillRelease() {
   });
 }
 
+export interface UpdateReleasePayload {
+  id: string;
+  releaseNotes?:    string | null;
+  breakingChanges?: string | null;
+  targetProjects?:  string[];
+  /** Draft-only fields */
+  version?:         string;
+  artifactVersion?: string;
+  artifactFeed?:    string | null;
+}
+
+export function useUpdateFoundationSkillRelease() {
+  const qc = useQueryClient();
+  return useMutation<{ release: FoundationSkillRelease }, Error, UpdateReleasePayload>({
+    mutationFn: ({ id, ...body }) =>
+      adminFetch(`/api/platform-admin/foundation-skills/releases/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.releases });
+      qc.invalidateQueries({ queryKey: ['foundation-skill-release', 'latest'] });
+    },
+  });
+}
+
 export function useFoundationSkillReleaseAudit(releaseId: string | null) {
   return useQuery<FoundationSkillReleaseAuditEntry[]>({
     queryKey: foundationSkillAdminKeys.audit(releaseId ?? ''),
@@ -163,7 +190,7 @@ export function useCheckFoundationSkillCompatibility() {
   return useMutation<
     { report: { status: string; errors: string[]; warnings: string[] } },
     Error,
-    { project: string; repo: string; provider?: string; branch?: string }
+    { project: string; repo: string; provider?: string; branch?: string; apexProject?: string | null }
   >({
     mutationFn: (body) =>
       adminFetch('/api/platform-admin/foundation-skills/check-compatibility', {

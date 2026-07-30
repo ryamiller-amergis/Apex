@@ -205,12 +205,14 @@ router.get('/foundation-releases', async (_req: Request, res: Response) => {
 });
 
 /**
- * GET /api/skills/foundation-releases/latest
- * Get the latest published release.
+ * GET /api/skills/foundation-releases/latest?project=<ApexProjectName>
+ * Get the latest published release visible to the given Apex project.
+ * Without ?project the first published release is returned (useful for admin contexts).
  */
-router.get('/foundation-releases/latest', async (_req: Request, res: Response) => {
+router.get('/foundation-releases/latest', async (req: Request, res: Response) => {
   try {
-    const release = await getLatestPublishedRelease();
+    const apexProject = (req.query.project as string | undefined) ?? null;
+    const release = await getLatestPublishedRelease(apexProject);
     res.json({ release: release ?? null });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to get latest foundation release' });

@@ -1,16 +1,16 @@
 ---
 name: build-test-push
-description: APEX adapter for build-test-push. Binds to APEX's npm scripts and tsconfig targets.
+description: Project adapter for build-test-push. Customize for your project.
 ---
 
-# build-test-push — APEX Adapter
+# build-test-push — Project Adapter
 
 <!-- Managed loader: loads .apex/foundation/build-test-push/SKILL.md -->
 
 - Project: {{slot:projectName}}
-- Build: `npm run build` (runs `build:server` then `build:client`)
-- Type-check server: `npx tsc -p tsconfig.server.json --noEmit`
-- Type-check client: `npx tsc -p tsconfig.client.json --noEmit`
-- Lint: `npm run lint:check`
-- Tests: `npm test`
-- Validate foundation: `node scripts/validate-foundation-skills.mjs`
+- Build: `npm run build` (or project's equivalent build command)
+- Type-check server: `npx tsc -p tsconfig.server.json --noEmit` (if applicable)
+- Type-check client: `npx tsc -p tsconfig.client.json --noEmit` (if applicable)
+- Lint: `npm run lint:check` (or project's equivalent)
+- Tests: `npm test` (or project's equivalent)
+- Validate foundation: `node scripts/validate-foundation-skills.mjs` (if present)

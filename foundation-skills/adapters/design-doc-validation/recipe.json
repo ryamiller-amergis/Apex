@@ -2,10 +2,13 @@
   "skill": "design-doc-validation",
   "scanScope": "targeted",
   "targetedGlobs": ["package.json"],
-  "detectors": ["stack"],
+  "detectors": ["stack", "repo-docs"],
   "capFiles": 100,
   "capMs": 45000,
   "slots": {
-    "projectName": { "type": "value", "detector": "stack", "key": "projectName" }
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "aiPilotDir": { "type": "value", "detector": "repo-docs", "key": "aiPilotDir" }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "suiteVersion": "0.1.0",
+  "suiteVersion": "0.2.0",
   "package": "@apex/skills",
   "contractApiVersion": 1,
   "skills": [
@@ -493,6 +493,21 @@
       "name": "create-pull-request",
       "summary": "Create a pull request from the current branch with a structured description.",
       "scanScope": "targeted",
+      "foundationFiles": [
+        "SKILL.md"
+      ],
+      "adapterFiles": [
+        "SKILL.md",
+        "apex-skill.json",
+        "recipe.json"
+      ],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "design-system",
+      "summary": "Project design system reference consumed by APEX when generating feature prototypes. Contains CSS tokens, component library, app shell, and spacing/typography conventions.",
+      "scanScope": "full-repo",
       "foundationFiles": [
         "SKILL.md"
       ],

@@ -1,6 +1,6 @@
 ---
 name: ui-lab
-description: Project design-system adapter for UI Lab. Loads the generic ui-lab foundation and supplies THIS project's design tokens, components, and conventions. Auto-drafted at install from the repo; edit freely.
+description: Project design-system adapter for UI Lab. Customize for your project.
 ---
 
 # UI Lab — Project Design System Adapter

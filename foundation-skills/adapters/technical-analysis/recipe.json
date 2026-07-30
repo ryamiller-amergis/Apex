@@ -2,11 +2,14 @@
   "skill": "technical-analysis",
   "scanScope": "targeted",
   "targetedGlobs": ["package.json"],
-  "detectors": ["stack"],
+  "detectors": ["stack", "repo-docs"],
   "capFiles": 200,
   "capMs": 45000,
   "slots": {
     "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
-    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 20 }
+    "stack": { "type": "list", "detector": "stack", "format": "- {key}: {value}", "limit": 20 },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "aiPilotDir": { "type": "value", "detector": "repo-docs", "key": "aiPilotDir" }
   }
 }
