@@ -127,12 +127,13 @@ router.put('/:id/progress', async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-// POST /:id/steps/:stepId/anchor-misses — privacy-safe miss event (FEAT-005)
+// POST /:id/steps/:stepId/anchor-misses — durable idempotent miss (FEAT-005 + FEAT-008)
 router.post(
   '/:id/steps/:stepId/anchor-misses',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const body = (req.body ?? {}) as {
+        occurrenceId?: string;
         revision?: number;
         anchorKey?: string;
         targetRoute?: string;
@@ -141,19 +142,20 @@ router.post(
       };
       const { userId: _ignored, ...safeBody } = body;
       void _ignored;
-      await walkthroughService.recordAnchorMiss(
+      const result = await walkthroughService.recordAnchorMiss(
         projectIdOf(req),
         req.params.id,
         req.params.stepId,
         callerId(req),
         {
+          occurrenceId: String(safeBody.occurrenceId ?? ''),
           revision: Number(safeBody.revision),
           anchorKey: String(safeBody.anchorKey ?? ''),
           targetRoute: String(safeBody.targetRoute ?? ''),
           reason: typeof safeBody.reason === 'string' ? safeBody.reason : undefined,
         },
       );
-      res.status(204).send();
+      res.status(202).json(result);
     } catch (err) {
       if (mapDomainError(err, res)) return;
       next(err);

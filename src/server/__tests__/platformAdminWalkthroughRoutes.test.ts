@@ -170,11 +170,16 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
     mockWt.getAcknowledgementReport.mockResolvedValue({
       walkthroughId: 'wt-1',
       revision: 1,
+      generatedAt: '2026-07-29T00:00:00.000Z',
       acknowledgedCount: 0,
       audienceCount: 0,
+      completedCount: 0,
+      dismissedCount: 0,
+      details: [],
       completed: [],
       dismissed: [],
     });
+    mockWt.listAnchorMisses.mockResolvedValue({ items: [], nextCursor: null });
 
     expect(
       (await request(buildApp()).post('/api/platform-admin/walkthroughs/wt-1/publish').send({
@@ -189,6 +194,47 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
       (await request(buildApp()).get('/api/platform-admin/walkthroughs/wt-1/reports/acknowledgement'))
         .status,
     ).toBe(200);
+    expect(
+      (await request(buildApp()).get('/api/platform-admin/walkthroughs/wt-1/reports/anchor-misses'))
+        .status,
+    ).toBe(200);
+  });
+
+  it('FEAT-008 PBI-010 AC-3 — acknowledgement report returns 403 without Super Admin', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
+    mockRequireSuperAdmin.mockImplementation((_req: any, res: any) => {
+      res.status(403).json({ error: 'Forbidden' });
+    });
+    const res = await request(buildApp()).get(
+      '/api/platform-admin/walkthroughs/wt-1/reports/acknowledgement',
+    );
+    expect(res.status).toBe(403);
+    expect(res.body.acknowledgedCount).toBeUndefined();
+    expect(res.body.details).toBeUndefined();
+    expect(mockWt.getAcknowledgementReport).not.toHaveBeenCalled();
+  });
+
+  it('FEAT-008 PBI-011 AC-3 — anchor-miss report returns 403 without Super Admin', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jest Express middleware mock signatures
+    mockRequireSuperAdmin.mockImplementation((_req: any, res: any) => {
+      res.status(403).json({ error: 'Forbidden' });
+    });
+    const res = await request(buildApp()).get(
+      '/api/platform-admin/walkthroughs/wt-1/reports/anchor-misses',
+    );
+    expect(res.status).toBe(403);
+    expect(res.body.items).toBeUndefined();
+    expect(mockWt.listAnchorMisses).not.toHaveBeenCalled();
+  });
+
+  it('FEAT-008 PBI-010 AC-1 — acknowledgement 500 has no partial count payload', async () => {
+    mockWt.getAcknowledgementReport.mockRejectedValue(new Error('boom'));
+    const res = await request(buildApp()).get(
+      '/api/platform-admin/walkthroughs/wt-1/reports/acknowledgement',
+    );
+    expect(res.status).toBe(500);
+    expect(res.body.acknowledgedCount).toBeUndefined();
+    expect(res.body.audienceCount).toBeUndefined();
   });
 
   it('POST ai-drafts/validate is a validation boundary only', async () => {

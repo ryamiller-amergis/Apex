@@ -33,6 +33,19 @@ function safeCall(fn: (() => void) | undefined): void {
   }
 }
 
+function createOccurrenceId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === 'function') {
+    return c.randomUUID();
+  }
+  // jsdom / older runtimes — RFC4122 v4 fallback for FEAT-008 occurrence idempotency
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const n = (Math.random() * 16) | 0;
+    const v = ch === 'x' ? n : (n & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   definition,
   initialStepIndex = 0,
@@ -109,6 +122,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
       targetRoute: step.anchor.targetRoute,
       reason: anchorResult.missReason,
       clientTimestamp: new Date().toISOString(),
+      occurrenceId: createOccurrenceId(),
     };
     safeCall(() => onAnchorMiss?.(payload));
   }, [

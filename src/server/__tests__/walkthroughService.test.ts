@@ -8,6 +8,7 @@ jest.mock('../db/drizzle', () => {
     values: jest.fn().mockReturnThis(),
     returning: jest.fn().mockResolvedValue([]),
     onConflictDoUpdate: jest.fn().mockReturnThis(),
+    onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
   });
   const makeUpdateChain = () => ({
     set: jest.fn().mockReturnThis(),
@@ -51,7 +52,9 @@ import {
   archiveWalkthrough,
   createWalkthrough,
   getAccessibleDefinition,
+  getAcknowledgementReport,
   getNextEligible,
+  listAnchorMisses,
   listReplay,
   publishWalkthrough,
   recordAnchorMiss,
@@ -682,7 +685,19 @@ describe('walkthroughService (TBI-002)', () => {
   });
 
   describe('FEAT-005 — recordAnchorMiss boundary', () => {
-    it('PBI-006 AC-1 — emits privacy-safe telemetry for a registered miss', async () => {
+    const occurrenceId = '11111111-1111-4111-8111-111111111111';
+
+    beforeEach(() => {
+      const makeInsertChain = () => ({
+        values: jest.fn().mockReturnThis(),
+        returning: jest.fn().mockResolvedValue([]),
+        onConflictDoUpdate: jest.fn().mockReturnThis(),
+        onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
+      });
+      mockDb.insert.mockImplementation(makeInsertChain);
+    });
+
+    it('PBI-006 AC-1 / PBI-011 AC-0 — persists miss and emits privacy-safe telemetry', async () => {
       mockTrackEvent.mockClear();
       mockDb.select.mockImplementation(() => ({
         from: jest.fn().mockReturnThis(),
@@ -706,13 +721,16 @@ describe('walkthroughService (TBI-002)', () => {
         }),
       );
 
-      await recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+      const result = await recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+        occurrenceId,
         revision: 1,
         anchorKey: 'user-menu-trigger',
         targetRoute: '/home',
         reason: 'timeout',
       });
 
+      expect(result).toEqual({ accepted: true });
+      expect(mockDb.insert).toHaveBeenCalled();
       expect(mockTrackEvent).toHaveBeenCalledWith(
         'walkthrough.anchor_missed',
         expect.objectContaining({
@@ -736,17 +754,198 @@ describe('walkthroughService (TBI-002)', () => {
           lifecycle: 'published',
           revision: 1,
           targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
-          steps: [stepRow({ id: 'step-1' })],
+          steps: [
+            stepRow({
+              id: 'step-1',
+              anchorKey: 'user-menu-trigger',
+              targetRoute: '/home',
+              placement: 'bottom',
+            }),
+          ],
         }),
       );
 
       await expect(
         recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+          occurrenceId,
           revision: 1,
           anchorKey: '#css-selector',
           targetRoute: '/home',
         }),
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('FEAT-008 — rejects non-UUID occurrenceId', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+          steps: [
+            stepRow({
+              id: 'step-1',
+              anchorKey: 'user-menu-trigger',
+              targetRoute: '/home',
+              placement: 'bottom',
+            }),
+          ],
+        }),
+      );
+
+      await expect(
+        recordAnchorMiss('Apex', 'wt-1', 'step-1', 'user-1', {
+          occurrenceId: 'not-a-uuid',
+          revision: 1,
+          anchorKey: 'user-menu-trigger',
+          targetRoute: '/home',
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+  });
+
+  describe('FEAT-008 — acknowledgement + anchor-miss reporting', () => {
+    it('PBI-010 AC-0 — returns X of Y with completed/dismissed detail for live audience', async () => {
+      mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) =>
+        fn(mockDb),
+      );
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 2,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall === 1) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockResolvedValue([
+              { userId: 'u-complete' },
+              { userId: 'u-dismiss' },
+              { userId: 'u-seen' },
+            ]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          innerJoin: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue([
+            {
+              userId: 'u-complete',
+              status: 'completed',
+              acknowledgedAt: '2026-07-29T10:00:00.000Z',
+              displayName: 'Alice',
+              email: 'a@example.com',
+            },
+            {
+              userId: 'u-dismiss',
+              status: 'dismissed',
+              acknowledgedAt: '2026-07-29T11:00:00.000Z',
+              displayName: 'Bob',
+              email: 'b@example.com',
+            },
+          ]),
+        };
+      });
+
+      const report = await getAcknowledgementReport('wt-1', 'all');
+      expect(report.audienceCount).toBe(3);
+      expect(report.acknowledgedCount).toBe(2);
+      expect(report.completedCount).toBe(1);
+      expect(report.dismissedCount).toBe(1);
+      expect(report.details).toHaveLength(2);
+      expect(report.generatedAt).toBeTruthy();
+      expect(report.completed[0].userId).toBe('u-complete');
+      expect(report.dismissed[0].userId).toBe('u-dismiss');
+    });
+
+    it('PBI-010 AC-2 — live audience excludes removed users from Y and detail', async () => {
+      mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) =>
+        fn(mockDb),
+      );
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          revision: 1,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+
+      let selectCall = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCall += 1;
+        if (selectCall === 1) {
+          return {
+            from: jest.fn().mockReturnThis(),
+            innerJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockResolvedValue([{ userId: 'still-in' }]),
+          };
+        }
+        return {
+          from: jest.fn().mockReturnThis(),
+          innerJoin: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue([
+            {
+              userId: 'still-in',
+              status: 'completed',
+              acknowledgedAt: '2026-07-29T10:00:00.000Z',
+              displayName: 'Stay',
+              email: 's@example.com',
+            },
+          ]),
+        };
+      });
+
+      const report = await getAcknowledgementReport('wt-1');
+      expect(report.audienceCount).toBe(1);
+      expect(report.details.map((d) => d.userId)).toEqual(['still-in']);
+      expect(report.details.find((d) => d.userId === 'removed')).toBeUndefined();
+    });
+
+    it('PBI-011 AC-0 — listAnchorMisses associates Walkthrough and Step', async () => {
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({ lifecycle: 'published', revision: 1 }),
+      );
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([
+          {
+            id: 'miss-1',
+            walkthroughId: 'wt-1',
+            stepId: 'step-1',
+            stepOrder: 0,
+            stepHeading: 'Welcome',
+            revision: 1,
+            anchorKey: 'user-menu-trigger',
+            targetRoute: '/home',
+            occurredAt: '2026-07-29T12:00:00.000Z',
+          },
+        ]),
+      }));
+
+      const page = await listAnchorMisses('wt-1');
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({
+        walkthroughId: 'wt-1',
+        stepId: 'step-1',
+        stepHeading: 'Welcome',
+        anchorKey: 'user-menu-trigger',
+      });
+      expect(page.nextCursor).toBeNull();
     });
   });
 });

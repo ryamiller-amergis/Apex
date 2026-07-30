@@ -605,8 +605,28 @@ router.post('/walkthroughs/ai-drafts/validate-unit', async (req: Request, res: R
 
 router.get('/walkthroughs/:id/reports/acknowledgement', async (req: Request, res: Response): Promise<void> => {
   try {
-    const report = await walkthroughService.getAcknowledgementReport(req.params.id);
+    const statusRaw = typeof req.query.status === 'string' ? req.query.status : 'all';
+    if (statusRaw !== 'all' && statusRaw !== 'completed' && statusRaw !== 'dismissed') {
+      res.status(400).json({ error: 'status must be all, completed, or dismissed' });
+      return;
+    }
+    const report = await walkthroughService.getAcknowledgementReport(req.params.id, statusRaw);
     res.json(report);
+  } catch (err) {
+    if (mapWalkthroughError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/walkthroughs/:id/reports/anchor-misses', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
+    const limit =
+      typeof req.query.limit === 'string' && req.query.limit.trim()
+        ? Number(req.query.limit)
+        : undefined;
+    const page = await walkthroughService.listAnchorMisses(req.params.id, { cursor, limit });
+    res.json(page);
   } catch (err) {
     if (mapWalkthroughError(err, res)) return;
     res.status(500).json({ error: 'Internal server error' });

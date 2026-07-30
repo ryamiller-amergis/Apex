@@ -118,11 +118,12 @@ describe('walkthroughs routes (TBI-002 DoD-1 / DoD-2)', () => {
     expect(res.body.items).toEqual([]);
   });
 
-  it('FEAT-005 / PBI-006 AC-1 — POST anchor-miss returns 204 and ignores client userId', async () => {
-    mockService.recordAnchorMiss.mockResolvedValue(undefined);
+  it('FEAT-008 / PBI-011 AC-0 — POST anchor-miss returns 202 and ignores client userId', async () => {
+    mockService.recordAnchorMiss.mockResolvedValue({ accepted: true });
     const res = await request(buildApp('user-1'))
       .post('/api/projects/Apex/walkthroughs/wt-1/steps/step-1/anchor-misses')
       .send({
+        occurrenceId: '11111111-1111-4111-8111-111111111111',
         revision: 1,
         anchorKey: 'user-menu-trigger',
         targetRoute: '/home',
@@ -130,13 +131,15 @@ describe('walkthroughs routes (TBI-002 DoD-1 / DoD-2)', () => {
         userId: 'victim',
       });
 
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ accepted: true });
     expect(mockService.recordAnchorMiss).toHaveBeenCalledWith(
       'Apex',
       'wt-1',
       'step-1',
       'user-1',
       expect.objectContaining({
+        occurrenceId: '11111111-1111-4111-8111-111111111111',
         revision: 1,
         anchorKey: 'user-menu-trigger',
         targetRoute: '/home',

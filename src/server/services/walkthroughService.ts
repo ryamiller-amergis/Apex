@@ -3,13 +3,14 @@
  * Owns lifecycle, aggregate writes, live audience, eligibility, progress, and reporting.
  */
 
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   appGroupMembers,
   appGroups,
   appUsers,
   userProjectAssignments,
+  walkthroughAnchorMisses,
   walkthroughProgress,
   walkthroughs,
   walkthroughSteps,
@@ -28,10 +29,15 @@ import {
   validateTargeting,
   validateSteps,
   WalkthroughDomainError,
+  type ListAnchorMissesQuery,
   type PublishWalkthroughCommand,
+  type RecordAnchorMissRequest,
   type UpdateWalkthroughCommand,
   type UpdateWalkthroughProgressRequest,
   type WalkthroughAcknowledgementReport,
+  type WalkthroughAcknowledgementStatusFilter,
+  type WalkthroughAcknowledgementUserRow,
+  type WalkthroughAnchorMissPage,
   type WalkthroughCatalogPage,
   type WalkthroughCatalogQuery,
   type WalkthroughDefinition,
@@ -46,6 +52,10 @@ import {
 
 const CATALOG_DEFAULT_LIMIT = 50;
 const CATALOG_MAX_LIMIT = 50;
+const ANCHOR_MISS_DEFAULT_LIMIT = 50;
+const ANCHOR_MISS_MAX_LIMIT = 100;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type DbWalkthroughRow = typeof walkthroughs.$inferSelect;
 type DbStepRow = typeof walkthroughSteps.$inferSelect;
@@ -790,16 +800,11 @@ export async function updateOwnProgress(
   return mapProgress(row);
 }
 
-export interface RecordWalkthroughAnchorMissInput {
-  revision: number;
-  anchorKey: string;
-  targetRoute: string;
-  reason?: string;
-}
+export type RecordWalkthroughAnchorMissInput = RecordAnchorMissRequest;
 
 /**
- * FEAT-005 — privacy-safe anchor-miss boundary (no durable table; FEAT-008 owns reporting store).
- * Validates caller access + registry membership, then emits telemetry only.
+ * FEAT-008 — durable, idempotent anchor-miss ingestion (extends FEAT-005 boundary).
+ * Validates caller access + Step/registry tuple, persists one row per occurrenceId, emits telemetry.
  */
 export async function recordAnchorMiss(
   projectId: string,
@@ -807,9 +812,12 @@ export async function recordAnchorMiss(
   stepId: string,
   userId: string,
   body: RecordWalkthroughAnchorMissInput,
-): Promise<void> {
+): Promise<{ accepted: true }> {
   if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'revision must be a positive integer');
+  }
+  if (typeof body.occurrenceId !== 'string' || !UUID_RE.test(body.occurrenceId.trim())) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'occurrenceId must be a UUID');
   }
   if (typeof body.anchorKey !== 'string' || !body.anchorKey.trim()) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is required');
@@ -830,13 +838,55 @@ export async function recordAnchorMiss(
   if (!step) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'stepId must belong to this Walkthrough');
   }
+  if (!step.anchor) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step is not anchored');
+  }
+  if (step.anchor.key !== body.anchorKey.trim()) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey must match the published Step');
+  }
+  if (step.anchor.targetRoute !== body.targetRoute.trim()) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'targetRoute must match the published Step');
+  }
 
   const registered = getWalkthroughAnchor(body.anchorKey.trim());
   if (!registered) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'anchorKey is not in the curated registry');
   }
-  if (registered.targetRoute !== body.targetRoute.trim()) {
-    throw new WalkthroughDomainError('VALIDATION_ERROR', 'targetRoute must match the registered anchor route');
+
+  const occurrenceId = body.occurrenceId.trim();
+  const occurredAt = nowIso();
+
+  try {
+    await db
+      .insert(walkthroughAnchorMisses)
+      .values({
+        walkthroughId,
+        stepId,
+        userId,
+        revision: body.revision,
+        projectSnapshot: projectId,
+        anchorKey: registered.key,
+        targetRoute: step.anchor.targetRoute,
+        occurrenceId,
+        occurredAt,
+      })
+      .onConflictDoNothing({
+        target: [
+          walkthroughAnchorMisses.userId,
+          walkthroughAnchorMisses.walkthroughId,
+          walkthroughAnchorMisses.stepId,
+          walkthroughAnchorMisses.revision,
+          walkthroughAnchorMisses.occurrenceId,
+        ],
+      });
+  } catch (err) {
+    trackEvent('walkthrough.anchor_miss.persist_failed', {
+      walkthroughId,
+      stepId,
+      revision: String(body.revision),
+      errorClass: err instanceof Error ? err.name : 'UnknownError',
+    });
+    throw err;
   }
 
   trackEvent('walkthrough.anchor_missed', {
@@ -844,78 +894,214 @@ export async function recordAnchorMiss(
     stepId,
     revision: String(body.revision),
     anchorKey: registered.key,
-    targetRoute: registered.targetRoute,
+    targetRoute: step.anchor.targetRoute,
     project: projectId,
     reason: typeof body.reason === 'string' ? body.reason : 'timeout',
   });
+
+  return { accepted: true };
 }
 
 // ── Admin: acknowledgement report ─────────────────────────────────────────────
 
 export async function getAcknowledgementReport(
   walkthroughId: string,
+  statusFilter: WalkthroughAcknowledgementStatusFilter = 'all',
 ): Promise<WalkthroughAcknowledgementReport> {
+  if (statusFilter !== 'all' && statusFilter !== 'completed' && statusFilter !== 'dismissed') {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'status filter must be all, completed, or dismissed',
+    );
+  }
+
+  return db.transaction(async (tx) => {
+    const row = await tx.query.walkthroughs.findFirst({
+      where: eq(walkthroughs.id, walkthroughId),
+      with: {
+        steps: { orderBy: [asc(walkthroughSteps.ordinal)] },
+        targetingRules: true,
+      },
+    });
+    if (!row) {
+      throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
+    }
+
+    const targeting = rulesToTargeting(mapRules(row.targetingRules));
+    const audienceUserIds = await loadAudienceUserIdsTx(tx, targeting);
+    const generatedAt = nowIso();
+
+    const progressRows = audienceUserIds.length
+      ? await tx
+          .select({
+            userId: walkthroughProgress.userId,
+            status: walkthroughProgress.status,
+            acknowledgedAt: walkthroughProgress.acknowledgedAt,
+            displayName: appUsers.displayName,
+            email: appUsers.email,
+          })
+          .from(walkthroughProgress)
+          .innerJoin(appUsers, eq(walkthroughProgress.userId, appUsers.oid))
+          .where(
+            and(
+              eq(walkthroughProgress.walkthroughId, walkthroughId),
+              eq(walkthroughProgress.revision, row.revision),
+              inArray(walkthroughProgress.userId, audienceUserIds),
+              inArray(walkthroughProgress.status, ['completed', 'dismissed']),
+            ),
+          )
+      : [];
+
+    const completed: WalkthroughAcknowledgementUserRow[] = progressRows
+      .filter((p) => p.status === 'completed' && p.acknowledgedAt)
+      .map((p) => ({
+        userId: p.userId,
+        displayName: p.displayName,
+        email: p.email,
+        status: 'completed' as const,
+        acknowledgedAt: p.acknowledgedAt!,
+      }));
+    const dismissed: WalkthroughAcknowledgementUserRow[] = progressRows
+      .filter((p) => p.status === 'dismissed' && p.acknowledgedAt)
+      .map((p) => ({
+        userId: p.userId,
+        displayName: p.displayName,
+        email: p.email,
+        status: 'dismissed' as const,
+        acknowledgedAt: p.acknowledgedAt!,
+      }));
+
+    const details =
+      statusFilter === 'completed'
+        ? completed
+        : statusFilter === 'dismissed'
+          ? dismissed
+          : [...completed, ...dismissed];
+
+    trackEvent('walkthrough.reporting.read', {
+      reportKind: 'acknowledgement',
+      audienceSize: String(audienceUserIds.length),
+      resultStatus: 'ok',
+    });
+
+    return {
+      walkthroughId,
+      revision: row.revision,
+      generatedAt,
+      acknowledgedCount: completed.length + dismissed.length,
+      audienceCount: audienceUserIds.length,
+      completedCount: completed.length,
+      dismissedCount: dismissed.length,
+      details,
+      completed,
+      dismissed,
+    };
+  });
+}
+
+export async function listAnchorMisses(
+  walkthroughId: string,
+  query: ListAnchorMissesQuery = {},
+): Promise<WalkthroughAnchorMissPage> {
   const row = await loadDefinition(walkthroughId);
   if (!row) {
     throw new WalkthroughDomainError('WALKTHROUGH_NOT_FOUND', 'Walkthrough not found');
   }
 
-  const targeting = rulesToTargeting(mapRules(row.targetingRules));
-  const audienceUserIds = await loadAudienceUserIds(targeting);
+  const limitRaw = query.limit ?? ANCHOR_MISS_DEFAULT_LIMIT;
+  if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > ANCHOR_MISS_MAX_LIMIT) {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'limit must be an integer from 1 to 100');
+  }
+  const limit = limitRaw;
 
-  const progressRows = audienceUserIds.length
-    ? await db
-        .select({
-          userId: walkthroughProgress.userId,
-          status: walkthroughProgress.status,
-          acknowledgedAt: walkthroughProgress.acknowledgedAt,
-          displayName: appUsers.displayName,
-          email: appUsers.email,
-        })
-        .from(walkthroughProgress)
-        .innerJoin(appUsers, eq(walkthroughProgress.userId, appUsers.oid))
-        .where(
-          and(
-            eq(walkthroughProgress.walkthroughId, walkthroughId),
-            eq(walkthroughProgress.revision, row.revision),
-            inArray(walkthroughProgress.userId, audienceUserIds),
-            inArray(walkthroughProgress.status, ['completed', 'dismissed']),
-          ),
+  let cursorOccurredAt: string | null = null;
+  let cursorId: string | null = null;
+  if (query.cursor) {
+    try {
+      const parsed = JSON.parse(Buffer.from(query.cursor, 'base64url').toString('utf8')) as {
+        occurredAt?: string;
+        id?: string;
+      };
+      if (typeof parsed.occurredAt !== 'string' || typeof parsed.id !== 'string') {
+        throw new Error('bad cursor');
+      }
+      cursorOccurredAt = parsed.occurredAt;
+      cursorId = parsed.id;
+    } catch {
+      throw new WalkthroughDomainError('VALIDATION_ERROR', 'cursor must be an opaque server cursor');
+    }
+  }
+
+  const conditions = [eq(walkthroughAnchorMisses.walkthroughId, walkthroughId)];
+  if (cursorOccurredAt && cursorId) {
+    conditions.push(
+      or(
+        lt(walkthroughAnchorMisses.occurredAt, cursorOccurredAt),
+        and(
+          eq(walkthroughAnchorMisses.occurredAt, cursorOccurredAt),
+          lt(walkthroughAnchorMisses.id, cursorId),
+        ),
+      )!,
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: walkthroughAnchorMisses.id,
+      walkthroughId: walkthroughAnchorMisses.walkthroughId,
+      stepId: walkthroughAnchorMisses.stepId,
+      stepOrder: walkthroughSteps.ordinal,
+      stepHeading: walkthroughSteps.heading,
+      revision: walkthroughAnchorMisses.revision,
+      anchorKey: walkthroughAnchorMisses.anchorKey,
+      targetRoute: walkthroughAnchorMisses.targetRoute,
+      occurredAt: walkthroughAnchorMisses.occurredAt,
+    })
+    .from(walkthroughAnchorMisses)
+    .innerJoin(walkthroughSteps, eq(walkthroughAnchorMisses.stepId, walkthroughSteps.id))
+    .where(and(...conditions))
+    .orderBy(desc(walkthroughAnchorMisses.occurredAt), desc(walkthroughAnchorMisses.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
+  const last = pageRows[pageRows.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? Buffer.from(JSON.stringify({ occurredAt: last.occurredAt, id: last.id }), 'utf8').toString(
+          'base64url',
         )
-    : [];
+      : null;
 
-  const completed = progressRows
-    .filter((p) => p.status === 'completed' && p.acknowledgedAt)
-    .map((p) => ({
-      userId: p.userId,
-      displayName: p.displayName,
-      email: p.email,
-      status: 'completed' as const,
-      acknowledgedAt: p.acknowledgedAt!,
-    }));
-  const dismissed = progressRows
-    .filter((p) => p.status === 'dismissed' && p.acknowledgedAt)
-    .map((p) => ({
-      userId: p.userId,
-      displayName: p.displayName,
-      email: p.email,
-      status: 'dismissed' as const,
-      acknowledgedAt: p.acknowledgedAt!,
-    }));
+  trackEvent('walkthrough.reporting.read', {
+    reportKind: 'anchor-misses',
+    audienceSize: String(pageRows.length),
+    resultStatus: 'ok',
+  });
 
   return {
-    walkthroughId,
-    revision: row.revision,
-    acknowledgedCount: completed.length + dismissed.length,
-    audienceCount: audienceUserIds.length,
-    completed,
-    dismissed,
+    items: pageRows.map((r) => ({
+      id: r.id,
+      walkthroughId: r.walkthroughId,
+      stepId: r.stepId,
+      stepOrder: r.stepOrder,
+      stepHeading: r.stepHeading,
+      revision: r.revision,
+      anchorKey: r.anchorKey,
+      targetRoute: r.targetRoute,
+      occurredAt: r.occurredAt,
+    })),
+    nextCursor,
   };
 }
 
-async function loadAudienceUserIds(targeting: WalkthroughTargeting): Promise<string[]> {
+async function loadAudienceUserIdsTx(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle transaction client
+  tx: any,
+  targeting: WalkthroughTargeting,
+): Promise<string[]> {
   if (targeting.groupId) {
-    const rows = await db
+    const rows = (await tx
       .select({ userId: appGroupMembers.userId })
       .from(appGroupMembers)
       .innerJoin(userProjectAssignments, eq(appGroupMembers.userId, userProjectAssignments.userId))
@@ -924,15 +1110,19 @@ async function loadAudienceUserIds(targeting: WalkthroughTargeting): Promise<str
           eq(appGroupMembers.groupId, targeting.groupId),
           eq(userProjectAssignments.project, targeting.project),
         ),
-      );
+      )) as Array<{ userId: string }>;
     return [...new Set(rows.map((r) => r.userId))];
   }
 
-  const rows = await db
+  const rows = (await tx
     .select({ userId: userProjectAssignments.userId })
     .from(userProjectAssignments)
-    .where(eq(userProjectAssignments.project, targeting.project));
+    .where(eq(userProjectAssignments.project, targeting.project))) as Array<{ userId: string }>;
   return rows.map((r) => r.userId);
+}
+
+async function loadAudienceUserIds(targeting: WalkthroughTargeting): Promise<string[]> {
+  return loadAudienceUserIdsTx(db, targeting);
 }
 
 /**

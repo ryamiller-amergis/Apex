@@ -158,6 +158,45 @@ describe('WalkthroughRenderer (TBI-004)', () => {
       reason: 'timeout',
     });
     expect(onAnchorMiss.mock.calls[0][0].clientTimestamp).toBeTruthy();
+    expect(onAnchorMiss.mock.calls[0][0].occurrenceId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    unmount();
+  });
+
+  it('PBI-011 AC-1 — centered fallback remains when onAnchorMiss throws', async () => {
+    const onAnchorMiss = jest.fn(() => {
+      throw new Error('ingest failed');
+    });
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-fail',
+      revision: 1,
+      title: 'Fail ingest',
+      steps: [
+        {
+          id: 'm0',
+          position: 0,
+          heading: 'Still usable',
+          bodyMarkdown: 'Fallback content',
+          anchor: {
+            key: 'user-menu-trigger',
+            targetRoute: '/home',
+            placement: 'bottom',
+          },
+        },
+      ],
+    };
+
+    const { unmount } = renderRenderer(def, { onAnchorMiss, playbackSessionId: 'play-fail' });
+    act(() => {
+      jest.advanceTimersByTime(ANCHOR_WAIT_MS);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('walkthrough-anchor-fallback')).toBeInTheDocument();
+      expect(screen.getByText('Still usable')).toBeInTheDocument();
+    });
+    expect(onAnchorMiss).toHaveBeenCalled();
     unmount();
   });
 
@@ -188,6 +227,43 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     expect(screen.getByTestId('walkthrough-complete')).toBeInTheDocument();
     expect(screen.queryByTestId('walkthrough-next')).toBeNull();
     unmount();
+  });
+
+  it('PBI-011 AC-2 — successful anchor resolve does not emit miss', async () => {
+    const onAnchorMiss = jest.fn();
+    const target = document.createElement('button');
+    target.setAttribute('data-testid', 'user-menu-trigger');
+    document.body.appendChild(target);
+
+    const def: WalkthroughRendererDefinition = {
+      id: 'wt-hit',
+      revision: 1,
+      title: 'Hit',
+      steps: [
+        {
+          id: 'h0',
+          position: 0,
+          heading: 'Found',
+          bodyMarkdown: 'Anchored',
+          anchor: {
+            key: 'user-menu-trigger',
+            targetRoute: '/home',
+            placement: 'bottom',
+          },
+        },
+      ],
+    };
+
+    const { unmount } = renderRenderer(def, { onAnchorMiss, playbackSessionId: 'play-hit' });
+    await waitFor(() => {
+      expect(screen.getByTestId('walkthrough-coachmark-step')).toBeInTheDocument();
+    });
+    act(() => {
+      jest.advanceTimersByTime(ANCHOR_WAIT_MS);
+    });
+    expect(onAnchorMiss).not.toHaveBeenCalled();
+    unmount();
+    target.remove();
   });
 
   it('VT-10: unregistered anchor renders centered defensively without coachmark', async () => {

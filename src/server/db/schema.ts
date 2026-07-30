@@ -1764,6 +1764,33 @@ export const walkthroughProgress = pgTable('walkthrough_progress', {
 
 export type WalkthroughNotificationAttemptState = 'pending' | 'delivered' | 'failed';
 
+export const walkthroughAnchorMisses = pgTable('walkthrough_anchor_misses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  stepId: uuid('step_id').notNull().references(() => walkthroughSteps.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  projectSnapshot: text('project_snapshot').notNull(),
+  anchorKey: text('anchor_key').notNull(),
+  targetRoute: text('target_route').notNull(),
+  occurrenceId: uuid('occurrence_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  occurrenceUq: unique('uq_walkthrough_anchor_misses_occurrence').on(
+    t.userId,
+    t.walkthroughId,
+    t.stepId,
+    t.revision,
+    t.occurrenceId,
+  ),
+  walkthroughOccurredIdx: index('idx_walkthrough_anchor_misses_walkthrough_occurred').on(
+    t.walkthroughId,
+    t.occurredAt,
+    t.id,
+  ),
+  stepRevisionIdx: index('idx_walkthrough_anchor_misses_step_revision').on(t.stepId, t.revision),
+}));
+
 export const walkthroughNotificationDeliveries = pgTable('walkthrough_notification_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
   walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
@@ -1793,6 +1820,22 @@ export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
   targetingRules: many(walkthroughTargetingRules),
   progress: many(walkthroughProgress),
   notificationDeliveries: many(walkthroughNotificationDeliveries),
+  anchorMisses: many(walkthroughAnchorMisses),
+}));
+
+export const walkthroughAnchorMissesRelations = relations(walkthroughAnchorMisses, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughAnchorMisses.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  step: one(walkthroughSteps, {
+    fields: [walkthroughAnchorMisses.stepId],
+    references: [walkthroughSteps.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughAnchorMisses.userId],
+    references: [appUsers.oid],
+  }),
 }));
 
 export const walkthroughNotificationDeliveriesRelations = relations(
@@ -1819,6 +1862,7 @@ export const walkthroughStepsRelations = relations(walkthroughSteps, ({ one, man
     references: [walkthroughs.id],
   }),
   progressRows: many(walkthroughProgress),
+  anchorMisses: many(walkthroughAnchorMisses),
 }));
 
 export const walkthroughTargetingRulesRelations = relations(walkthroughTargetingRules, ({ one }) => ({

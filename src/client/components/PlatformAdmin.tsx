@@ -26,6 +26,7 @@ import {
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
 import { WalkthroughCatalog } from './WalkthroughCatalog';
+import { WalkthroughReportingSection } from './WalkthroughReportingSection';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
@@ -48,7 +49,7 @@ const menuSchema = z.object({
 
 type MenuFormValues = z.infer<typeof menuSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'walkthroughs';
+type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'walkthroughs' | 'walkthrough-reports';
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
@@ -339,6 +340,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             >
               Walkthroughs
             </button>
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-walkthrough-reports"
+              aria-selected={activeTab === 'walkthrough-reports'}
+              aria-controls="platform-admin-panel-walkthrough-reports"
+              className={`${styles.tabButton} ${activeTab === 'walkthrough-reports' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('walkthrough-reports')}
+              {...{ 'data-testid': 'platform-admin-tab-walkthrough-reports' }}
+            >
+              Walkthrough Reports
+            </button>
           </div>
 
           {activeTab === 'access' && (
@@ -420,6 +433,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <WalkthroughCatalog />
+            </div>
+          )}
+          {activeTab === 'walkthrough-reports' && (
+            <div
+              id="platform-admin-panel-walkthrough-reports"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-walkthrough-reports"
+              className={styles.tabPanel}
+            >
+              <WalkthroughReportingSection />
             </div>
           )}
         </main>

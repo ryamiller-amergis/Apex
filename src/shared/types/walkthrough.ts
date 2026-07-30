@@ -201,13 +201,54 @@ export interface WalkthroughAcknowledgementUserRow {
   acknowledgedAt: string;
 }
 
+/** Optional detail filter for acknowledgement reporting (FEAT-008 PBI-010). */
+export type WalkthroughAcknowledgementStatusFilter = 'all' | 'completed' | 'dismissed';
+
 export interface WalkthroughAcknowledgementReport {
   walkthroughId: string;
   revision: number;
+  /** ISO timestamp for the atomic snapshot used to build this report. */
+  generatedAt: string;
   acknowledgedCount: number;
   audienceCount: number;
+  completedCount: number;
+  dismissedCount: number;
+  /** Filtered detail rows (status filter applied); never a partial count payload. */
+  details: WalkthroughAcknowledgementUserRow[];
+  /** Convenience mirrors — same snapshot as `details` when filter is `all`. */
   completed: WalkthroughAcknowledgementUserRow[];
   dismissed: WalkthroughAcknowledgementUserRow[];
+}
+
+/** Authenticated miss ingestion body (FEAT-008 PBI-011). Caller/project derived server-side. */
+export interface RecordAnchorMissRequest {
+  occurrenceId: string;
+  revision: number;
+  anchorKey: string;
+  targetRoute: string;
+  reason?: string;
+}
+
+export interface WalkthroughAnchorMissReportItem {
+  id: string;
+  walkthroughId: string;
+  stepId: string;
+  stepOrder: number;
+  stepHeading: string;
+  revision: number;
+  anchorKey: string;
+  targetRoute: string;
+  occurredAt: string;
+}
+
+export interface WalkthroughAnchorMissPage {
+  items: WalkthroughAnchorMissReportItem[];
+  nextCursor: string | null;
+}
+
+export interface ListAnchorMissesQuery {
+  cursor?: string | null;
+  limit?: number;
 }
 
 // ── Lifecycle transitions ─────────────────────────────────────────────────────
@@ -341,6 +382,8 @@ export interface WalkthroughAnchorMiss {
   targetRoute: string;
   reason: WalkthroughAnchorMissReason;
   clientTimestamp: string;
+  /** UUID created once per anchored Step render attempt (FEAT-008 idempotency). */
+  occurrenceId: string;
 }
 
 export interface WalkthroughRendererStep {

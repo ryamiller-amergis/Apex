@@ -33,6 +33,7 @@ async function postAnchorMiss(
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        occurrenceId: miss.occurrenceId,
         revision: miss.revision,
         anchorKey: miss.anchorKey,
         targetRoute: miss.targetRoute,
@@ -40,7 +41,7 @@ async function postAnchorMiss(
       }),
     },
   );
-  // Fail-open for UX: miss recording must not block centered fallback (PBI-006 AC-1 / BR-014).
+  // Fail-open for UX: miss recording must not block centered fallback (PBI-006 AC-1 / PBI-011 AC-1 / BR-014).
   if (!res.ok) {
     // swallow — caller already fell back
   }
